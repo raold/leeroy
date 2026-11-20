@@ -29,6 +29,7 @@ REASONS = {
     "dc_refused": "the run in here won't start right now",
     "no_group": "{he} isn't in a group",
     "unknown": "you're not sure yet whether it went through",
+    "superseded": "{he} asked for another lead after all",
 }
 DEFAULT_REASON = "you can't take the lead right now"
 BUSY_REASON = "you're tied up with something for the guild right now"

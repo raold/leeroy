@@ -401,6 +401,33 @@ def test_a_lost_ack_keeps_what_it_may_have_started_his_to_end(app):
     run(main())
 
 
+def test_an_older_start_never_overwrites_his_newer_one(app):
+    gate = asyncio.Event()
+
+    class Slow(Wire):
+        async def send(self, cmd, *, preserve_id=False):
+            if isinstance(cmd, LeadDo) and cmd.guid == 101:
+                self.app.leading.on_job(job(cmd))   # native started 101 ...
+                await gate.wait()                   # ... but its ack comes late
+                self.sent.append(cmd)
+                return Ack(0, cmd.id, True, "")
+            return await super().send(cmd, preserve_id=preserve_id)
+
+    async def main():
+        app.bridge = Slow(app)
+        app.leading.claims(chat("Arkon, you lead"), 560)
+        await asyncio.sleep(0)
+        app.leading.claims(chat("Belra, you lead"), 561)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        gate.set()
+        await settle(app)
+        assert app.leading.active.guid == 102
+        assert "asked for another lead after all" in told(app, 560, 101)
+        assert "you're leading his group" in told(app, 561, 102)
+    run(main())
+
+
 def test_follow_me_ends_it_and_still_is_playerbots(app):
     async def main():
         app.leading.claims(chat("you lead"), 520)

@@ -81,6 +81,7 @@ class Asked:
     ended: str = ""              # world: that lead ended (native's why) before her answer was told
     told: bool = False           # her answer's instruction has been written
     cancelled: bool = False      # his end came while it was being carried out
+    gen: int = 0                 # world, dc: its place among his asks (LeadService._gen)
     ready: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -114,6 +115,9 @@ class LeadService:
         self.handing: Active | None = None
         # his ask still being carried out (a start or a dungeon-clear start): his end waits for it
         self._pending: Asked | None = None
+        # his asks to lead, counted: only the newest may install what it started (native's lead is
+        # the last start it was sent: a newer one replaces an older)
+        self._gen = 0
         # the start in flight (its command id) and a "lead ended" native sent before its ack
         self._starting: str | None = None
         self._early: object = None
@@ -286,6 +290,8 @@ class LeadService:
         log_event("lead_read", line=line_id, activity=start.activity, who=start.who, where=where,
                   guid=leader, kind=asked.kind, code=asked.code or "-")
         if asked.kind in ("world", "dc"):
+            self._gen += 1
+            asked.gen = self._gen
             self._pending = asked
             self._spawn(self._start(asked) if asked.kind == "world" else self._dc_on(asked))
         return "lead"
@@ -326,6 +332,8 @@ class LeadService:
                          spot=start.place.name if isinstance(start.place, S.Spot) else "")
             self._starting, self._early = wire, None
             outcome, code = await self._send(cmd, job=True)
+            if asked.gen != self._gen and outcome in ("done", "unknown"):
+                outcome, code = "refused", "superseded"  # his newer ask replaced it in the game
             asked.outcome, asked.code = (("done", "") if outcome == "done" else ("", "")
                                          if outcome == "unknown" else ("refused", code))
             if outcome in ("done", "unknown"):
@@ -405,6 +413,8 @@ class LeadService:
             group = self._group()
             tanks = self._tanks({g for g in group if self._able(g)})
             outcome, code, tank = await self._dc(tanks[0] if tanks else asked.leader, "dc_on")
+            if asked.gen != self._gen and outcome in ("done", "unknown"):
+                outcome, code = "refused", "superseded"  # his newer ask leads now
             asked.outcome, asked.code, asked.tank = (
                 ("done", "", tank) if outcome == "done" else ("", "", 0) if outcome == "unknown"
                 else ("refused", code, 0))
