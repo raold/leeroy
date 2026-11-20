@@ -32,7 +32,6 @@ from leeroy_mind.logs import log as log_event
 from leeroy_mind.raidlead.designate import nights
 from leeroy_mind.talk.select import ReplyTurn
 from leeroy_mind.talk.turns import Turn, TurnKind
-from leeroy_mind.wow import DUNGEONS, RAID_INSTANCES, RAID_MAPS
 
 from . import parse as P
 from . import words as W
@@ -42,8 +41,12 @@ log = logging.getLogger(__name__)
 GAME_CHANNELS = frozenset({"party", "raid", "raid_warning", "whisper"})
 FEATURE = "lead"  # the hello feature: lead_do (LeeroyProtocol.h)
 BG_MAPS = frozenset({30, 489, 529, 559, 562, 566, 572, 607, 617, 618, 628})
-INSTANCE_MAPS = (frozenset(DUNGEONS) | frozenset(RAID_INSTANCES) | RAID_MAPS) - BG_MAPS
+# The open world: the four continents and Ebon Hold. Every other map is an instance (a dungeon or
+# a raid of any expansion, the Wrath ones boss tables leave out among them), or a battleground.
+OPEN_WORLD = frozenset({0, 1, 530, 571, 609})
 RAID_QUIET = frozenset({"combat", "wipe_silence", "wipe_debrief"})
+# raid_control refusals that mean no dungeon-clear run is left for his group to stop
+DC_GONE = frozenset({"no_group", "not_cast", "no_tank"})
 JOB_WAIT_S = 2.0     # native publishes the done job before its ack; this only covers reordering
 HANDOVER_S = 10.0    # after his group goes into an instance, before dungeon-clear is asked
 KEPT = 64            # his lines kept, newest first out
@@ -102,6 +105,11 @@ class LeadService:
         self._asked: OrderedDict[int, Asked] = OrderedDict()
         self.active: Active | None = None
         self.dc: Dc | None = None
+        # a lead native ended "instance", waiting HANDOVER_S for dungeon-clear: his end cancels it
+        self.handing: Active | None = None
+        # the start in flight (its command id) and a "lead ended" native sent before its ack
+        self._starting: str | None = None
+        self._early: object = None
         self._tasks: set[asyncio.Task] = set()
         self._closed = False
         self._hello = 0
@@ -253,7 +261,7 @@ class LeadService:
             asked.code = "in_bg"
         elif self._raid_led():
             asked.code = "raid_led"
-        elif his_map in INSTANCE_MAPS:
+        elif his_map not in OPEN_WORLD:
             asked.kind = "dc"
         elif start.activity == "travel" and not isinstance(start.place, S.Spot):
             asked.code = "unknown_place"
@@ -278,10 +286,11 @@ class LeadService:
 
     def _end(self, ev, line_id: int, end: P.End) -> str | None:
         """His end of the lead in force (only while one is): native ends it, she answers."""
-        active, dc = self.active, self.dc
-        if active is None and dc is None:
+        active, dc, handing = self.active, self.dc, self.handing
+        if active is None and dc is None and handing is None:
             return None
-        leader = active.guid if active is not None else dc.leader
+        leader = (active.guid if active is not None else dc.leader if dc is not None
+                  else handing.guid)
         if ev.channel == "whisper" and ev.to_guid != leader:
             return None  # a whisper to someone else is talk with her
         channel = "raid" if ev.channel == "raid_warning" else ev.channel
@@ -301,18 +310,25 @@ class LeadService:
         try:
             cmd = LeadDo(id=wire, action="start", guid=asked.leader, activity=start.activity,
                          spot=start.place.name if isinstance(start.place, S.Spot) else "")
+            self._starting, self._early = wire, None
             outcome, code = await self._send(cmd, job=True)
             asked.outcome, asked.code = ("done", "") if outcome == "done" else ("refused", code)
             if outcome == "done":
                 self.active = Active(wire, asked.leader, start.activity, start.place, asked.channel,
                                      self._hello)
+                self.handing = None
                 self._designate(asked)
+                early, self._early = self._early, None
+                if early is not None:
+                    self._ended(early)  # it ended before its ack: as if after
             log_event("lead_body", line=asked.line, guid=asked.leader, kind="start",
                       outcome=outcome, code=code or "-")
         except Exception as exc:
             asked.outcome, asked.code = "refused", "unknown"
             log_event("lead_failed", level=logging.WARNING, error=type(exc).__name__)
         finally:
+            if self._starting == wire:
+                self._starting = self._early = None
             asked.ready.set()
 
     async def _stop(self, asked: Asked) -> None:
@@ -327,8 +343,12 @@ class LeadService:
                 asked.was_leading = not (outcome == "refused" and code == "no_lead")
             elif self.dc is not None:
                 dc = self.dc
-                self.dc = None
                 outcome, code, _ = await self._dc(dc.tank, "dc_off")
+                if self.dc is dc and (outcome == "done" or code in DC_GONE):
+                    self.dc = None  # stopped, or there is no run left to stop
+            elif self.handing is not None:
+                self.handing = None  # dungeon-clear is never asked: he leads in there
+                outcome, code = "done", ""
             else:
                 outcome, code = "refused", "no_lead"
                 asked.was_leading = False
@@ -360,6 +380,7 @@ class LeadService:
                 ("done", "", tank) if outcome == "done" else ("refused", code, 0))
             if outcome == "done":
                 self.dc = Dc(tank, asked.leader, asked.channel)
+                self.handing = None
                 self._designate(asked)
             log_event("lead_body", line=asked.line, guid=asked.leader, kind="dc_on",
                       outcome=outcome, code=code or "-")
@@ -426,6 +447,8 @@ class LeadService:
     def _ended(self, ev) -> None:
         active = self.active
         if active is None or ev.id != active.id:
+            if ev.id == self._starting:
+                self._early = ev  # its start's ack is still on its way
             return  # not ours (an earlier mind's), or already ended by his own end
         self.active = None
         why = ev.reason if _CODE.fullmatch(ev.reason or "") else "unknown"
@@ -433,6 +456,7 @@ class LeadService:
         if self._closed or not self.app.world.human_online:
             return
         if why == "instance":
+            self.handing = active
             self._spawn(self._handover(active))
             return
         text = W.ended(why, active.place, self._forms())
@@ -442,6 +466,9 @@ class LeadService:
     async def _handover(self, active: Active) -> None:
         """His group went into an instance while she led: dungeon-clear takes it from there."""
         await self.app.clock.sleep(HANDOVER_S)
+        if self.handing is not active:
+            return  # he took the lead back meanwhile, or asked for another
+        self.handing = None
         if self._closed or not self.app.world.human_online or self._raid_led():
             return
         group = self._group()
@@ -463,7 +490,7 @@ class LeadService:
         if self.active is not None and started != self.active.hello:
             self.active = None
         if started != self._hello:
-            self.dc = None
+            self.dc = self.handing = None
         self._hello = started
         if (self.active is None and FEATURE in getattr(ev, "features", ())
                 and not self._closed):
@@ -476,8 +503,8 @@ class LeadService:
             log_event("lead_cleared", why="hello")
 
     async def on_group(self, ev) -> None:
-        if self.dc is not None and not self._group():
-            self.dc = None  # his group broke: dungeon-clear's run went with it
+        if (self.dc is not None or self.handing is not None) and not self._group():
+            self.dc = self.handing = None  # his group broke: dungeon-clear's run went with it
 
     # -- talk -----------------------------------------------------------------------------------
 
@@ -511,6 +538,8 @@ class LeadService:
         start = asked.start
         place = start.place if start is not None else None
         if asked.kind == "end":
+            if asked.outcome == "refused" and asked.was_leading:
+                return W.stop_unsure(forms)  # the game never answered: she still may be leading
             return W.stopped(forms, was_leading=asked.was_leading)
         if not asked.outcome:
             return W.pending(forms)

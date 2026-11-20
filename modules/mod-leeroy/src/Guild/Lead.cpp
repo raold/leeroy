@@ -24,6 +24,7 @@
 #include "TravelMgr.h"
 #include "WorldSession.h"
 
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <string>
@@ -269,6 +270,12 @@ void EndLead(std::string_view why, bool publish = true)
         for (std::string const& name : lead.added)
             if (ai->HasStrategy(name, BOT_STATE_NON_COMBAT))
                 ai->ChangeStrategy("-" + name, BOT_STATE_NON_COMBAT);
+        // A wait took every activity strategy off, hers from before the lead too: those go back.
+        if (lead.state.paused)
+            for (std::string const& name : Strategies(lead.state.activity))
+                if (std::find(lead.added.begin(), lead.added.end(), name) == lead.added.end()
+                    && !ai->HasStrategy(name, BOT_STATE_NON_COMBAT))
+                    ai->ChangeStrategy("+" + name, BOT_STATE_NON_COMBAT);
         ai->rpgInfo.ChangeToIdle();
         if (ai->GetMaster() == bot)
         {

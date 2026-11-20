@@ -33,6 +33,8 @@ _HE_LEADS = re.compile(
 _STOP = re.compile(
     r"^(?:ok(?:ay)? |alright |right |hey )?(?:stop(?: leading| there| here| now)?|that'?s enough|enough|"
     r"follow me(?: now| again)?|back to me|come back(?: to me)?|regroup(?: on me)?)[.!]*$")
+# Not him taking it back: "don't let me lead", "i won't lead" ("never mind, i'll lead" is his).
+_END_NEG = re.compile(r"\b(?:don'?t|dont|do not|never(?! mind)|no need to|shouldn'?t|wouldn'?t|won'?t)\b")
 # Not now, or not that.
 _NEG = re.compile(r"\b(?:don'?t|dont|do not|never|no need to|not now|nvm|never mind|shouldn'?t|wouldn'?t)\b")
 _LATER = re.compile(
@@ -95,8 +97,8 @@ def normalize(text: str) -> str:
 def ends(text: str) -> End | None:
     """His line as the end of a lead in force, or None."""
     t = normalize(text)
-    if not t or len(t) > MAX_CHARS:
-        return None
+    if not t or len(t) > MAX_CHARS or _END_NEG.search(t) or _LATER.search(t):
+        return None  # "don't let me lead", "i'll lead tomorrow": not now
     if _HE_LEADS.search(t) or _STOP.match(t):
         return End(command=looks_like_bot_command(t))
     return None

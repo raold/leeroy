@@ -94,3 +94,14 @@ def test_follow_me_is_a_playerbots_command_too():
 @pytest.mark.parametrize("text", ["stop being silly", "don't stop", "you lead", "follow the road", ""])
 def test_not_an_end(text):
     assert ends(text) is None
+
+
+@pytest.mark.parametrize("text", [
+    "i'll lead tomorrow", "i'll lead after the raid", "don't let me lead", "i won't lead",
+    "i'll lead later"])
+def test_another_time_or_a_no_is_not_his_end(text):
+    assert ends(text) is None
+
+
+def test_never_mind_is_still_his_end():
+    assert isinstance(ends("never mind, i'll lead"), End)

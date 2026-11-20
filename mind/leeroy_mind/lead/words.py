@@ -104,6 +104,12 @@ def stopped(forms, *, was_leading: bool = True) -> str:
                       "{him} again. Answer in a few words.", forms))
 
 
+def stop_unsure(forms) -> str:
+    return _cap(_fill("{he} said {he}'ll lead again; you're not sure yet whether the game let you "
+                      "stop leading. Answer in a few words; don't say you're following {him} yet.",
+                      forms))
+
+
 def not_asked(name: str, forms) -> str:
     return _cap(_fill("{he} asked " + (name or "someone else") + " to take the lead, not you. Don't "
                       "say you're leading.", forms))

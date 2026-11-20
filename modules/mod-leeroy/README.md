@@ -556,8 +556,9 @@ herself: someone else took her), `reset` (playerbots reset her strategies), `fen
 acknowledged by playerbots only once she is ours no more, so it ends at once), `timeout` (60
 minutes), `arrived` (travel, within 15 yards), `no_path`, `left` (he stayed behind 10 minutes).
 Restored from its journal, same body, AI and session only: the followers whose master is still her
-follow him again (nobody if he left their group), then she loses the strategies the lead added,
-new rpg goes idle, her master is him again and her `follow` comes back if the lead took it. A
+follow him again (nobody if he left their group), then she loses the strategies the lead added
+(and gets back her own that a wait took off), new rpg goes idle, her master is him again and her
+`follow` comes back if the lead took it. A
 follower whose body, group or master changed is let go untouched (`lead_follower_released`); one
 that logs out is forgotten. A removed `stay` is not given back (leading means moving).
 

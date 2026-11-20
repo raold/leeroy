@@ -35,8 +35,10 @@ he is offline. The lead reads his line **before** the raid lead and invitations.
   Negations ("don't lead"), "you lead a busy life", "lead ore" are talk.
 - **End** (only while a lead of his is in force): "i'll lead", "i'll take it from here", "i'm
   leading", "let me lead", "my lead", "stop leading", "stop", "that's enough", "follow me", "back
-  to me", "come back", "regroup on me". A whisper ends it only to the member who leads. "follow
-  me" is a playerbots command too: it still reaches playerbots, and nobody answers it.
+  to me", "come back", "regroup on me" (never with a no or another time: "don't let me lead",
+  "i'll lead tomorrow"). A whisper ends it only to the member who leads. "follow me" is a
+  playerbots command too: it still reaches playerbots, and nobody answers it. While a handover to
+  dungeon-clear is still waiting (below) his end cancels it.
 
 ## Who leads
 
@@ -49,7 +51,7 @@ his raid lead (`RaidLeadService.designate`, no line of her own), as "Ana, you le
 
 ## What happens
 
-**In the open world** (his chat line's map is no dungeon, raid or battleground): native `lead_do`
+**In the open world** (his chat line's map is a continent or Ebon Hold): native `lead_do`
 `start` (`Guild/Lead.cpp`, pure policy `Lib/LeeroyLead.h`). She masters herself (a self-mastered
 bot, as an offline raid's driver, so playerbots keeps her as the others' master), stops following
 him and runs playerbots' own strategies: `new rpg` with `grind` for questing (new rpg's statuses
@@ -69,10 +71,12 @@ an offline raid, a bot job), dead, in combat (hers or his group's), an instance 
 queued, travelling, he is dead, not his group, he doesn't lead it, a finder group, farther than
 100 yards from him (`too_far`), `bad_spot`, `other_map`, already there (`here`).
 
-**Inside a dungeon or raid**: guild life's `raid_control` `dc_on` for his group: dungeon-clear's
+**Inside a dungeon or raid** (any other map but a battleground's, every expansion's and the Wrath
+5-mans the boss tables leave out among them): guild life's `raid_control` `dc_on` for his group: dungeon-clear's
 tank leads the group boss to boss (native names the tank dungeon-clear elects when another,
 `leader_mismatch:<guid>`, and it is asked once more; `leader_mismatch:0` is `no_tank`). The member
-he named calls it (raid lead). His end sends `dc_off`.
+he named calls it (raid lead). His end sends `dc_off`; the run stays his to stop until the game
+confirms it stopped (or that no run is left: `no_group`, `not_cast`, `no_tank`).
 
 **Its end**: his end (native `lead_do` `end`), or native's own (published as the job `lead`,
 state `ended`, reason): `arrived` (travel), `left` (he stayed behind 10 minutes), `timeout` (60
@@ -80,7 +84,9 @@ minutes), `no_path`, `dead` (each gets one short line of hers, `source:lead`), `
 group went into an instance: after 10 seconds dungeon-clear takes it, as above, and she says
 who leads now), and the quiet ones: `logout`, `group`, `off`, `taken`, `reset`, `fenced`,
 `teleported`, `pvp`, `gone`, `replaced`, `his`. Every change native made is given back from its
-journal: the others follow him again, she follows him again and loses the strategies it added.
+journal: the others follow him again, she follows him again and loses the strategies it added
+(ones she had before the lead and a wait took off come back). An end native sends before the
+start's ack is kept and applied once the ack is in.
 
 **A restart**: at each hello with no lead of the mind's own in force, the mind sends a quiet
 `lead_do` `end` (a lead an earlier mind left has nobody to end it). A lead of an earlier

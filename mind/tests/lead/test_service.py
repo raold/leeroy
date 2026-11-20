@@ -262,6 +262,19 @@ def test_his_end_only_while_a_lead_is_in_force(app):
     run(main())
 
 
+def test_an_end_the_game_never_answered_is_not_said_as_done(app):
+    async def main():
+        app.leading.claims(chat("you lead"), 533)
+        await settle(app)
+        app.bridge.connected = False
+        app.leading.claims(chat("stop leading"), 534)
+        await settle(app)
+        said = told(app, 534, TANK)
+        assert "not sure yet" in said and "don't say you're following him" in said
+        assert app.leading.active is not None   # still hers until native says it ended
+    run(main())
+
+
 def test_follow_me_ends_it_and_still_is_playerbots(app):
     async def main():
         app.leading.claims(chat("you lead"), 520)
@@ -382,3 +395,78 @@ def test_native_codes():
     assert native_code("bad field: spot") == "unsupported"
     assert native_code("busy:training_owner") == "busy:training_owner"
     assert native_code("a long sentence") == "refused"
+
+
+def test_a_wrath_dungeon_the_boss_tables_leave_out_is_dungeon_clears(app):
+    async def main():
+        app.leading.claims(chat("you lead", at=(575, 1196)), 535)   # Utgarde Pinnacle
+        await settle(app)
+        [cmd] = app.bridge.sent
+        assert isinstance(cmd, RaidControl) and cmd.action == "dc_on"
+    run(main())
+
+
+def test_his_end_cancels_a_handover_still_waiting(app, monkeypatch):
+    async def speak(turn, *, why="speak", **kw):
+        return ["ok"]
+    monkeypatch.setattr(app.engine, "speak", speak)
+
+    async def main():
+        app.leading.claims(chat("you lead"), 536)
+        await settle(app)
+        active = app.leading.active
+        app.leading.on_job(job(SimpleNamespace(id=active.id, guid=TANK), kind="lead",
+                               state="ended", reason="instance"))
+        await asyncio.sleep(0)
+        assert app.leading.claims(chat("i'll lead", at=NAXX), 537) == "lead"
+        await settle(app, svc.HANDOVER_S + 1)
+        assert not [c for c in app.bridge.sent if isinstance(c, RaidControl)]
+        assert app.leading.dc is None and app.leading.handing is None
+        assert "taken the lead back" in told(app, 537, TANK)
+    run(main())
+
+
+def test_dungeon_clear_stays_his_to_stop_until_it_stopped(app):
+    async def main():
+        app.leading.claims(chat("you lead", at=NAXX), 538)
+        await settle(app)
+        assert app.leading.dc is not None
+        app.bridge.connected = False
+        app.leading.claims(chat("stop leading", at=NAXX), 539)
+        await settle(app)
+        assert app.leading.dc is not None and "not sure yet" in told(app, 539, TANK)
+        app.bridge.connected = True
+        app.leading.claims(chat("stop leading", at=NAXX), 540)
+        await settle(app)
+        assert app.bridge.sent[-1].action == "dc_off" and app.leading.dc is None
+    run(main())
+
+
+def test_an_end_native_sent_before_the_starts_ack_is_kept(app, monkeypatch):
+    spoken = []
+
+    async def speak(turn, *, why="speak", **kw):
+        spoken.append(turn)
+        return ["ok"]
+    monkeypatch.setattr(app.engine, "speak", speak)
+
+    def answer(cmd):
+        # native's done job, then (in the same batch) her death, then the ack
+        app.leading.on_job(job(cmd))
+        app.leading.on_job(job(cmd, kind="lead", state="ended", reason="dead"))
+        return True, ""
+
+    class Early(Wire):
+        async def send(self, cmd, *, preserve_id=False):
+            self.sent.append(cmd)
+            ok, error = answer(cmd) if isinstance(cmd, LeadDo) else (True, "")
+            return Ack(0, cmd.id, ok, error)
+
+    async def main():
+        app.bridge = Early(app)
+        app.leading.claims(chat("you lead"), 541)
+        await settle(app)
+        assert app.leading.active is None
+        [turn] = spoken
+        assert "died while leading" in turn.instruction
+    run(main())
