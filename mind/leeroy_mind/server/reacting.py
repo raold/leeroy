@@ -15,7 +15,7 @@ from collections import OrderedDict
 
 from leeroy_mind.discord import layout, store as discord_store
 from leeroy_mind.discord.channels import channel_id
-from leeroy_mind.discord.presence import RNG_SEED, local_time, presence_of
+from leeroy_mind.discord.presence import RNG_SEED, her_local, presence_of
 from leeroy_mind.storage.db import TRANSIENT_CODES, error_code
 from leeroy_mind.talk.moves import classify, main_move
 from leeroy_mind.tuning.effective import dials_of
@@ -202,7 +202,7 @@ class Reactor:
                 or guid in pulled_into_play(app)
                 or guid not in layout.audience(channel,cast=cast,officers=officers,human=app.human_guid)):
             return False
-        presence = presence_of(p,local=local_time(app.clock.local(),p.identity.region),
+        presence = presence_of(p,local=her_local(app.clock.local(), p),
             body_online=guid in world.online,body_zone=cast[guid].zone,rng_seed=RNG_SEED)
         if presence.state not in {'online','idle'}:
             return False
@@ -262,7 +262,7 @@ class Reactor:
         p = self.app.personas.get(guid)
         if p is None:
             return
-        presence = presence_of(p, local=local_time(self.app.clock.local(), p.identity.region),
+        presence = presence_of(p, local=her_local(self.app.clock.local(), p),
             body_online=guid in self.app.world.online,
             body_zone=getattr(self.app.world.discord_members().get(guid), 'zone', 0),
             rng_seed=RNG_SEED).state
@@ -276,7 +276,7 @@ class Reactor:
         p = self.app.personas.get(guid)
         member = self.app.world.discord_members().get(guid)
         if p is None or member is None or presence_of(
-                p, local=local_time(self.app.clock.local(), p.identity.region),
+                p, local=her_local(self.app.clock.local(), p),
                 body_online=guid in self.app.world.online, body_zone=member.zone,
                 rng_seed=RNG_SEED).state not in {'online', 'idle'}:
             return  # gone offline meanwhile: the intent waits for a later tick

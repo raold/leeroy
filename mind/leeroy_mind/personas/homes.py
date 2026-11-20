@@ -15,9 +15,11 @@ the console's member card and Personas line. A UK member has none and reads "UK"
 - restore: nightly.growth.undo's "home" branch (`personas undo <id>`): the home as it was, with
   the source before, while it is still what the edit left.
 
-`personas homes` plans, and with --go saves, only US members of the cast without a home. No
-prompt carries it (without_home: the night's core judge and a world seed's dump leave it out),
-and presence keeps US Eastern time for every US member."""
+`personas homes` plans, and with --go saves, only US members of the cast without a home. With
+[geography] on (geography/README.md) it reaches her own live card ("You live in Texas."), her
+"where you live, right now" line and her clock (her state's zone); no other prompt carries it
+(without_home: the night's core judge and a world seed's dump leave it out), and no prompt
+carries another member's."""
 import json
 import random
 import re
@@ -70,8 +72,9 @@ _RELATIVE = re.compile(r"\b(?:kids?|sons?|daughters?|child(?:ren)?|grandkids?|mo
 
 
 def without_home(d: dict) -> dict:
-    """A persona dict (schema.persona_to_dict) as a prompt may carry it: her home state is for
-    the console's cards only, never for a model (for most it is a draw no line of hers knows)."""
+    """A persona dict (schema.persona_to_dict) as a night or seed prompt may carry it: her home
+    state reaches only her own live turns ([geography]: geography.lines), never a dump another
+    member's scene, judge or seed reads."""
     if isinstance(d.get("identity"), dict):
         d["identity"].pop("home", None)
     return d

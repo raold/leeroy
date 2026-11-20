@@ -5,7 +5,7 @@ import json
 from typing import Mapping
 
 from leeroy_mind.arc.live import away_now
-from leeroy_mind.discord.presence import Presence, RNG_SEED, local_time, presence_of
+from leeroy_mind.discord.presence import Presence, RNG_SEED, her_local, presence_of
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.voice.rooms import BY_ID, CLASS_ROOM
 from .state import live_voice_session, pulled_into_play
@@ -63,7 +63,7 @@ def refresh_seats(app, now: float) -> None:
     # away_now uses the partial index on the single open away row.
     unavailable = pulled_into_play(app) | away_now(app.store, now)
     personas = {g:p for g in cast if g not in unavailable and (p := app.personas.get(g)) is not None}
-    presences = {g:presence_of(p, local=local_time(local, p.identity.region),
+    presences = {g:presence_of(p, local=her_local(local, p),
         body_online=g in app.world.online, body_zone=cast[g].zone, rng_seed=RNG_SEED)
         for g,p in personas.items()}
     rooms = away_seats(personas, presences, local,

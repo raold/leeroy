@@ -6,7 +6,7 @@ import re
 from leeroy_mind.discord import layout
 from leeroy_mind.culture.origins import _item_name, _safe_name
 from leeroy_mind.discord.channels import is_discord, is_group, is_private, is_restricted
-from leeroy_mind.discord.presence import local_time, OWNER_ZONE
+from leeroy_mind.discord.presence import her_local, OWNER_ZONE
 from leeroy_mind.groups.audience import visible
 from leeroy_mind.memory.privacy import GROUP
 from leeroy_mind.nightly.human_world import _provenance
@@ -30,8 +30,7 @@ def about(text):
 
 
 def member_local(local, persona):
-    return local_time(local if local.tzinfo else local.replace(tzinfo=OWNER_ZONE),
-                      persona.identity.region)
+    return her_local(local if local.tzinfo else local.replace(tzinfo=OWNER_ZONE), persona)
 
 
 def _id(ref, kind):

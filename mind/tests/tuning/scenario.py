@@ -50,6 +50,13 @@ switch) changed none of these goldens: the scenario has no Discord DM, only game
 whispers (whose trigger line was already in the Chat). tests/discord/test_dm_prompt.py and
 tests/test_romance_realism.py cover it.
 
+Re-recorded on 2026-11-20 for geography ([geography], on by default; geography/README.md): every
+whisper and DM prompt gains her "where you live, right now" line just before "Right now:" (the
+test cast is British with no place in its words, so it is the UK as a whole: "Where you live: the
+UK, ..."). Nothing else moved: their cards gain no home line (the UK as a whole has none), his
+[owner] home is unset, the clock reads the test cast's UK time as before, and the draws and the
+lines sent are unchanged.
+
 Voice sheets (Persona.speech, 2026-11-17) changed none of these four goldens: no member of the
 scenario's cast has one. golden_voice.json (record_voice) holds the same script in both prompt
 modes ("plain" and "core") with invented sheets (tests/sheets.py) on Belra (102) and Coros
@@ -62,7 +69,9 @@ is off in every rig unless a test asks (engine_rig.make_rig), so none of these g
 golden_wow.json (record_wow) holds the plain scenario over invented raid rows (wow_rows) with it
 on: each guild prompt gains the raid and guild card, her example lines and the glossary after
 the awareness slot; every whisper prompt, the lines sent and everything else are as
-golden_prompts.json recorded them (tests/tuning/test_wow_golden.py proves both)."""
+golden_prompts.json recorded them (tests/tuning/test_wow_golden.py proves both). Re-recorded with
+geography (2026-11-20): its six whisper prompts gain the place line as golden_prompts.json's do;
+the guild prompts, which carry the grounding, get no place line (a game channel)."""
 import asyncio
 import json
 import random

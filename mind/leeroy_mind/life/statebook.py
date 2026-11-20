@@ -46,7 +46,7 @@ from typing import Callable
 from leeroy_mind.clock import night_of
 from leeroy_mind.discord import layout
 from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_discord, is_group, is_public
-from leeroy_mind.discord.presence import RNG_SEED, local_time, presence_of
+from leeroy_mind.discord.presence import RNG_SEED, her_local, presence_of
 from leeroy_mind.logs import log
 from leeroy_mind.protocol import Boss, LootWon
 from leeroy_mind.wow import CAST_MIN_LEVEL
@@ -133,7 +133,7 @@ def toward_seed_of(conn, guid: int, human: int, local: datetime) -> float:
 def baseline_at(p, *, owner_local: datetime, mood: float, arousal: float,
                 toward_seed: float) -> State:
     """Her baseline at the owner's local time, in her own region's clock."""
-    her = local_time(owner_local, p.identity.region)
+    her = her_local(owner_local, p)
     return baseline(p, mood=mood, arousal=arousal, plan=day_plan(p, her.date()),
                     minute=her.hour * 60 + her.minute, toward_seed=toward_seed)
 
@@ -476,7 +476,7 @@ class StateBook:
             return False
         world = self.world
         m = world.discord_members().get(guid)
-        return presence_of(p, local=local_time(self.clock.local(), p.identity.region),
+        return presence_of(p, local=her_local(self.clock.local(), p),
                            body_online=guid in world.online, body_zone=m.zone if m else 0,
                            rng_seed=RNG_SEED,
                            in_his_group=world.human_online and world.in_group(guid)

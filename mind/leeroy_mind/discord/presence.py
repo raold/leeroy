@@ -58,6 +58,22 @@ def local_time(owner_now: datetime, region: str) -> datetime:
     return local if owner_now.tzinfo else local.replace(tzinfo=None)
 
 
+def her_local(owner_now: datetime, p: Persona, *, enabled: bool | None = None) -> datetime:
+    """Her own local time: her home's zone (geography.places.place_of: her state's, her UK
+    region's, Britain's) while [geography] is on and the sheet knows where she lives, else
+    local_time's region rule (a US member without a home keeps the owner's clock). A naive
+    `owner_now` is US Eastern and the answer stays naive, as local_time's. `enabled`: the
+    console's reading of the mind's switch (geography.config.stored); None reads the pin."""
+    from ..geography import config as geo_config
+    from ..geography.places import place_of
+    on = geo_config.on() if enabled is None else enabled
+    place = place_of(p) if on else None
+    if place is None:
+        return local_time(owner_now, p.identity.region)
+    local = (owner_now if owner_now.tzinfo else owner_now.replace(tzinfo=OWNER_ZONE)).astimezone(place.tz)
+    return local if owner_now.tzinfo else local.replace(tzinfo=None)
+
+
 def _dnd_day(guid: int, day, rng_seed: int) -> bool:
     h = hashlib.sha256(f"{rng_seed}:{guid}:{day.isoformat()}".encode()).digest()
     return int.from_bytes(h[:4], "big") % 7 == 0

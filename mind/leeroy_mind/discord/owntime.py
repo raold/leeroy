@@ -32,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 
 from ..life import config as life_config
 from ..life import presence as life_presence
-from .presence import OWNER_ZONE, RNG_SEED, local_time, presence_of
+from .presence import OWNER_ZONE, RNG_SEED, her_local, presence_of
 
 URGENT_RE = re.compile(
     r"\b(urgent|asap|emergency|right now|call me|need (?:you|help)|help me|"
@@ -78,7 +78,7 @@ def shifted(local: datetime, seconds: float) -> datetime:
 
 def state_at(p, local: datetime) -> str:
     """Her Discord presence state at owner-local time `local` (no game body: Discord only)."""
-    return presence_of(p, local=local_time(local, p.identity.region), body_online=False,
+    return presence_of(p, local=her_local(local, p), body_online=False,
                        body_zone=0, rng_seed=RNG_SEED).state
 
 
@@ -152,14 +152,14 @@ def _due_at(p, *, post_ts: float, now: float, local_now: datetime, message_id: i
 def away_words(p, local: datetime) -> str:
     """Why she did not answer at once, by her presence when he wrote (owner-local `local`)."""
     if life_config.availability() > 0:
-        her = local_time(local, p.identity.region)
+        her = her_local(local, p)
         return life_presence.away_words(
             life_presence.presence_at(p, her, medium="discord"), "discord")
     state = state_at(p, local)
-    hour = local_time(local, p.identity.region).hour
+    hour = her_local(local, p).hour
     if state == "offline":
         return "asleep" if hour >= 22 or hour < 10 else "away from your phone"
-    if state in PHONE_S and local_time(local, p.identity.region).weekday() < 5 and 9 <= hour < 17:
+    if state in PHONE_S and her_local(local, p).weekday() < 5 and 9 <= hour < 17:
         return "at work"
     return "busy"
 

@@ -541,6 +541,10 @@ class MindApp:
         from .bakeoff.capture import attach as attach_bakeoff
         # [bakeoff] capture: off captures nothing, still prunes old rows
         ext("bakeoff", lambda: attach_bakeoff(self))
+        from .geography.attach import attach as attach_geography, off as geography_off
+        # [geography] (default on) and [owner] home: her place, her clock, his home in private
+        self.geography = ext("geography", lambda: attach_geography(self),
+                             lambda: geography_off(self))
         from .nightly.prune import attach as attach_prune
         # [prune] enabled: the night's bounded retention; off adds no stage
         ext("prune", lambda: attach_prune(self.night_runner, self.data_dir))

@@ -55,7 +55,8 @@ class Identity:
     voice: Voice
     # A US member's state by its full name ("Texas"), given once by `personas homes` (owner,
     # 2026-11-15) for the console's cards; None for a UK member and a US member without one yet.
-    # No model writes it (left out of the generator's schema) and no prompt reads it.
+    # No model writes it (left out of the generator's schema); with [geography] on her own live
+    # turns read it (geography/README.md: her card, her place line, her clock), nothing else.
     home: str | None = _f(max_len=20, default=None, enrichment=True)
 
 

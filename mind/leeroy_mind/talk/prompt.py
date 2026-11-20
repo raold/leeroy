@@ -129,6 +129,10 @@ class PromptParts:
     # Her voice sheet's block (personas.speech.voice_block; "" without a sheet): the last
     # thing before the instruction in both modes, never cut
     voice: str = ""
+    # [geography] "Where you live" (geography.lines.now_parts: her place, the season there and
+    # the light, at most NOW_TOKENS together), just before "Right now:" in either mode, on her
+    # private and Discord turns. The first thing the trim lets go, its last part first
+    place: list[str] = field(default_factory=list)
     # A raid or guild turn's grounding ([talk] wow_grounding, talk/grounding.py): its whole
     # sections, highest priority first (the card, her example lines, the glossary), after the
     # awareness card; the trim drops them from the end, before memories and chat give way
@@ -889,7 +893,8 @@ def render_messages(p: PromptParts) -> list[dict]:
     system = "\n\n".join(x for x in (
         p.card.strip(), _section(SAMPLES_HEAD, p.samples), p.rules.strip()) if x)
     people = [*p.rel_cards, *([p.real_name] if p.real_name else [])]
-    right_now = _section("Right now:", [p.mood])
+    right_now = "\n\n".join(x for x in (" ".join(p.place), _section("Right now:", [p.mood]))
+                            if x)
     user = "\n\n".join(x for x in (
         *(u.strip() for u in p.untrimmed),
         _section("People here:", people),
@@ -922,6 +927,7 @@ def section_tokens(p: PromptParts) -> dict[str, int]:
         ("untrimmed", "\n\n".join(u.strip() for u in p.untrimmed if u.strip())),
         ("people", _section("People here:", [*p.rel_cards, *([p.real_name] if p.real_name else [])])),
         ("memories", _section("You remember:", p.memories)),
+        *((("place", " ".join(p.place)),) if p.place else ()),
         ("mood", _section("Right now:", [p.mood])),
         ("style", _section(STYLE_HEAD, p.style)),
         ("elsewhere", _section(ELSEWHERE_HEAD, p.elsewhere)), ("chat", _section("Chat:", p.chat)),
@@ -934,7 +940,8 @@ def section_tokens(p: PromptParts) -> dict[str, int]:
 
 
 def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
-    """A copy that fits the budget. A DM's chat rows older than his last few turns go first
+    """A copy that fits the budget. Her "where you live" line ([geography], PromptParts.place)
+    shrinks first, its last part first; then a DM's chat rows older than his last few turns go
     (old_chat), then learned style, then the awareness card is
     re-rendered into the remaining room, but never below its claims (CLAIMS_PART, kept whole).
     Then, in order: a raid or guild turn's grounding sections (wow: the glossary, her example
@@ -955,13 +962,19 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     so len(result.memories) says which recalled memories were used."""
     t = replace(p, rel_cards=list(p.rel_cards), memories=list(p.memories), chat=list(p.chat),
                 elsewhere=list(p.elsewhere), style=list(p.style), so_far=list(p.so_far),
-                own_recent=list(p.own_recent), untrimmed=list(p.untrimmed), wow=list(p.wow))
+                own_recent=list(p.own_recent), untrimmed=list(p.untrimmed), place=list(p.place),
+                wow=list(p.wow))
     pin = p.pinned if p.facts and p.pinned is not None and 0 <= p.pinned < len(p.chat) else None
     kept = p.kept if p.kept is not None and 0 <= p.kept < len(p.chat) else None
     least = 1 if kept is None else 2  # the chat the last resort leaves
 
     def over() -> bool:
         return _tokens(render_messages(t)) > budget
+
+    # Her "where you live" line shrinks first, its last part first ([geography]: her card's
+    # head still says where she lives).
+    while t.place and over():
+        t.place.pop()
 
     # A long DM's oldest chat rows go before anything else (PromptParts.old_chat).
     old = max(0, min(p.old_chat, len(t.chat) - MIN_CHAT))

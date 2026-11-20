@@ -43,7 +43,7 @@ import re
 from leeroy_mind.arc.live import away_now
 from leeroy_mind.discord import covered, layout, owntime
 from leeroy_mind.discord.channels import CHANNEL_PREFIX, is_discord, is_group
-from leeroy_mind.discord.presence import RNG_SEED, Presence, local_time, presence_of
+from leeroy_mind.discord.presence import RNG_SEED, Presence, her_local, presence_of
 from leeroy_mind.discord.transport import PAIR_LINE_SQL, DiscordTarget, channel_id
 from leeroy_mind.life import config as life_config
 from leeroy_mind.life.interrupt import BACK_FIND_S
@@ -664,7 +664,7 @@ class DiscordTalk:
     def _presence(self, g: int, p, local) -> Presence:
         world = self.app.world
         m = world.discord_members().get(g)
-        return presence_of(p, local=local_time(local, p.identity.region),
+        return presence_of(p, local=her_local(local, p),
                            body_online=g in world.online, body_zone=m.zone if m else 0,
                            rng_seed=RNG_SEED,
                            in_his_group=world.human_online and world.in_group(g))

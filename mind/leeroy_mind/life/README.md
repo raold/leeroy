@@ -27,8 +27,9 @@ shared rng, so a switch that is off draws nothing and moves no other draw.
 one block: `asleep`, `work`, `commute`, `home_duty`, `gym`, `out`, `free`, `gaming`.
 `DayPlan.spans` are contiguous `Span(start, end, block)` from 0 to 1440 (end exclusive);
 `DayPlan.block_at(minute)`, `DayPlan.workday`. `block_at(p, her_local)` gives the block and the
-day's event at a local wall-clock time. US members' local time is US Eastern and UK members'
-is UK time, as Discord presence has it (`discord.presence.local_time`).
+day's event at a local wall-clock time. Her local time is her home's (`discord.presence.her_local`,
+geography/README.md: her state's zone, UK time for a UK member) while `[geography]` is on; a US
+member without a home keeps US Eastern, as Discord presence has it (`local_time`).
 
 ### Job shape
 
@@ -227,7 +228,7 @@ login (mind.toml read again), when a world dial moves and when the night reloads
 `availability()` and `state_on()` read them, 0 and false until pinned) and writes the
 availability in force to meta `life:availability` when it changed (a missing value counts as 0).
 `LifeService.presence(guid, *, medium, in_his_group=False)` is her `LifePresence` at her local
-time (`discord.presence.local_time(clock.local(), region)`), or None at availability 0 or for a
+time (`discord.presence.her_local(clock.local(), p)`), or None at availability 0 or for a
 member without a persona.
 
 ## Presence on Discord

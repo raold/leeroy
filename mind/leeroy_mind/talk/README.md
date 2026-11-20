@@ -637,8 +637,10 @@ availability 6, state, intent and situation on, the beat off).
   before (the beat's block outside the budget, inside `num_ctx`).
 - **Her last want** (`last`) is kept per conversation when a line is said, typed or spoken in a
   voice room.
-- **Right now** (`mood_line`): with availability above 0 her own clock (`day_line` of
-  `discord.presence.local_time`) and where she is (`life.presence.WHERE_TEXT` by block, medium
+- **Right now** (`mood_line`): her own clock (`day_line` of `discord.presence.her_local`) with
+  availability above 0 or, with `[geography]` on, wherever the sheet knows where she lives
+  (geography/README.md; her "where you live, right now" line sits just before it on her private
+  and Discord turns), and where she is (`life.presence.WHERE_TEXT` by block, medium
   and kids: "You're at work, the game open on your PC.", "Your phone woke you up.", ...; "You're
   at your PC, playing." while she is in his group in game as he plays, as PM log D15 has her
   answer him then; never in a raid call, CALLOUT or URGENT, nor in a voice room he is in:
