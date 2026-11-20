@@ -126,3 +126,10 @@ def test_things_he_wants_are_no_invitation(text):
 def test_things_to_do_together_are(text, what):
     ask = read(text, channel="guild")
     assert isinstance(ask, P.Ask) and ask.what == what, text
+
+
+def test_a_named_place_none_of_ours_moves_nobody():
+    for text in ("meet me at the inn in thousand needles", "let's go fishing in nagrand"):
+        ask = read(text)
+        assert isinstance(ask, P.Ask) and ask.place is S.UNKNOWN, text
+    assert read("meet me at the inn in a bit").place.name == "org_inn"

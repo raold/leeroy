@@ -111,6 +111,53 @@ OTHER_CITIES = re.compile(
     r"wintergrasp|ebon hold|dun morogh|goldshire)\b")
 
 
+# After "in" or "at", words that name no other place: a time ("in a bit", "in 5", "in the
+# morning", "at noon"), where they already are ("in here", "in town", "in the same place"), a
+# group or a person ("in my group", "at you"), a spot inside the place ("at the back").
+_NOT_A_PLACE = frozenset((
+    "a", "an", "about", "around", "like", "maybe", "just", "prob", "probably", "some", "half",
+    "few", "bit", "sec", "secs", "second", "seconds", "min", "mins", "minute", "minutes",
+    "moment", "while", "hour", "hours", "morning", "mornin", "evening", "afternoon", "night",
+    "noon", "midnight", "once", "least", "last", "all", "time", "case", "fact", "general",
+    "tonight", "tomorrow", "today", "now", "here", "there", "town", "city", "same", "game",
+    "wow", "azeroth", "front", "back", "side", "middle", "corner", "inside", "outside", "top",
+    "bottom", "my", "your", "our", "his", "her", "their", "this", "that", "it", "me", "you",
+    "him", "us", "them", "group", "party", "raid", "guild", "chat", "discord", "voice", "vc"))
+# Where a place phrase after "in" or "at" ends: the next of these, or the end of its clause.
+_PHRASE_STOP = frozenset(("in", "at", "with", "and", "or", "but", "for", "to", "so", "if", "when",
+                          "then", "near", "by", "on", "of", "from", "after", "before"))
+_FISHING = re.compile(r"\bfish(?:ing)?\b")
+
+
+def unplaced(text: str, start: int) -> bool:
+    """He names a destination after `start` that is none of ours: "the inn in thousand needles",
+    "fishing in nagrand". Only "in" and "at" phrases of the clause that begins at `start` count
+    (up to , . ; ! ? or a dash), so "come to the inn, i'm in trouble" names none. A time, where
+    they already are, a group or a person, a spot inside the place, a kind of place, a known
+    landmark word and a city of ours are no other destination."""
+    clause = re.split(r"[,.;!?]| - ", text[start:], maxsplit=1)[0]
+    words = re.findall(r"[a-z0-9']+", clause)
+    for i, word in enumerate(words):
+        if word not in ("in", "at"):
+            continue
+        phrase = []
+        for nxt in words[i + 1:i + 4]:
+            if nxt in _PHRASE_STOP:
+                break
+            phrase.append(nxt)
+        if phrase and phrase[0] == "the":
+            phrase = phrase[1:]
+        if not phrase:
+            continue
+        first, said = phrase[0], " ".join(phrase)
+        if (first[0].isdigit() or first in _NOT_A_PLACE or kind_of(said) is not None
+                or PLACE_WORDS.match(said) or city_of(said) is not None
+                or any(rx.match(said) for rx, _ in _NAMED)):
+            continue
+        return True
+    return False
+
+
 def city_of(text: str) -> int | None:
     """The zone of a city his words name ("in dalaran", "org"), None for none."""
     for zone, rx in _CITY_RE:
@@ -121,10 +168,16 @@ def city_of(text: str) -> int | None:
 
 def kind_of(text: str) -> str | None:
     """The kind of place his words name ("the inn", "the bank"), None for none."""
+    return _kind(text)[0]
+
+
+def _kind(text: str) -> tuple[str | None, int]:
+    """The kind of place his words name and where its words end in `text` (0 for none)."""
     for kind, rx in _KIND_RE:
-        if rx.search(text):
-            return kind
-    return None
+        found = rx.search(text)
+        if found is not None:
+            return kind, found.end()
+    return None, 0
 
 
 def in_zone(zone: int, kind: str) -> Spot | None:
@@ -147,7 +200,14 @@ def resolve(text: str, *, his_zone: int, fishing: bool = False):
     city = city_of(text)
     if city is None and OTHER_CITIES.search(text):
         return UNKNOWN  # a city with no spot of ours: never his own city's place instead
-    kind = kind_of(text)
+    kind, after = _kind(text)
+    if city is None:
+        # a destination he names after the place or the fishing that is none of ours ("the inn
+        # in thousand needles", "fishing in nagrand"): she asks, never his own city's place
+        fished = _FISHING.search(text) if fishing and kind is None else None
+        start = after if kind is not None else fished.end() if fished is not None else None
+        if start is not None and unplaced(text, start):
+            return UNKNOWN
     zone = city if city is not None else his_zone
     if kind is not None:
         spot = in_zone(zone, kind) if zone else None

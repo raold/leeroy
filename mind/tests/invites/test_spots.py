@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 import struct
 
+import pytest
+
 from leeroy_mind.invites import spots as S
 from leeroy_mind.realm.places import DIST, parse_places
 
@@ -65,3 +67,32 @@ def test_a_city_with_no_spot_of_ours_is_unknown_never_his_own():
     assert S.resolve("the inn in stormwind", his_zone=org) is S.UNKNOWN
     assert S.resolve("fishing in ratchet", his_zone=org, fishing=True) is S.UNKNOWN
     assert S.resolve("the bank in dalaran", his_zone=org).name == "dal_bank"
+
+
+@pytest.mark.parametrize("text", [
+    "meet me at the inn in thousand needles", "meet me at the inn in nagrand",
+    "meet me at the bank in shattrath", "the inn in stormwind", "meet me at the inn at zul'drak",
+    "come sit with me at the inn over in hellfire peninsula",
+])
+def test_a_destination_none_of_ours_is_unknown(text):
+    assert S.resolve(text, his_zone=1637) is S.UNKNOWN
+
+
+@pytest.mark.parametrize("text", [
+    "meet me at the bank", "meet me at the inn in a bit", "meet me at the inn in 5",
+    "meet me at the inn in a few", "meet me at the inn in an hour", "meet me at the inn in 10 min",
+    "meet me at the inn in the morning", "meet me at the inn tonight", "meet me at the inn at 9pm",
+    "meet me at the inn in here", "meet me at the inn in there", "meet me at the inn in town",
+    "meet me at the inn in the city", "meet me at the inn in the same place",
+    "meet me at the inn in like 5", "meet me at the inn at the back", "come to the inn, i'm in trouble",
+    "join me at the inn in my group",
+])
+def test_an_omitted_destination_is_his_own_city(text):
+    assert S.resolve(text, his_zone=1637).zone == 1637, text
+
+
+def test_fishing_somewhere_none_of_ours_is_unknown_and_soon_is_beside_him():
+    assert S.resolve("let's go fishing in thousand needles", his_zone=1637, fishing=True) is S.UNKNOWN
+    assert S.resolve("let's go fishing in nagrand", his_zone=1637, fishing=True) is S.UNKNOWN
+    assert S.resolve("let's go fishing in a bit", his_zone=1637, fishing=True) is None
+    assert S.resolve("let's go fishing in dalaran", his_zone=1637, fishing=True).name == "dal_fountain"
