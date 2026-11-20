@@ -1156,3 +1156,67 @@ reason follows where she said she is in the conversation (`LifeService._where_sh
 or in bed never "brb boss"), and `interrupt.own_boss` reads a trade with private clients (a
 mobile hairdresser, a personal trainer, "works for herself") as her own boss. His explicit
 whisper overlay is gated exactly as before (the owner's setting; not changed here).
+
+# WoW grounding (`[talk] wow_grounding`, 2026-11-20)
+
+The live model changed from Orion to `leeroy-dark-scarlett-vision`: private talk got better, raid
+and guild talk got worse. `[talk] wow_grounding` (default **true**; anything but a boolean is off;
+read at each compose, so a login reload applies it; no migration or native rebuild) gives a raid
+or guild turn facts and her own earlier lines instead of relying on the model's game knowledge
+(`talk/grounding.py`).
+
+**Which turns.** Game guild, officer, party, raid and raid warning chat; the guild Discord's
+raiding and WoW categories (the class channels among them), `raid-schedule`, `announcements` and
+`officer-chat`; the raid, raid 2, tank, healer, caster, melee, loot, lore, officers' and class
+voice rooms (`grounding.wow_turn`). Never a whisper, a DM, a group DM, say or yell, or any other
+channel: those prompts are byte-identical with it on (`tests/tuning/test_wow_golden.py`).
+
+**What the prompt gains**, after the awareness card and before "Right now" / her voice block / the
+instruction, in this order of priority:
+
+- *The card* (`Raid and guild (facts; ...)`, at most 120 estimated tokens with its heading): her
+  class, spec (the talent tab native reports) and role; with a guild raid running or ended in the
+  last 24 hours, its instance and difficulty with kills, wipes and her seat (raided or benched),
+  the boss being fought or the last one, up to two raidplay `explain` lines for her playbook role
+  (the raid lead's brief's pick order, whole), the last wipe's top killing spells and failed
+  mechanic (the `tg_` tables and `tg:spell_names`, his own deaths left out), her loot (an item
+  she won, or one she wanted that went to someone) and her DKP and rank; otherwise the guild's
+  next posted raid night (with her signup) and its last kills, and her DKP. Lines are taken by
+  priority and left out whole, never cut. With the card on a turn, the awareness card leaves out
+  its own raid part, DKP line and raid calendar rows (`CardContext.grounded`).
+- *Her example lines* (`How you talk in raid/guild (your own past lines):`, at most 60 tokens):
+  two or three of her own lines from before `[talk] wow_exemplars_before` (default
+  `2026-11-19T14:22:45-05:00`, the first mind start with a non-Orion live model in mind.log) and
+  at least 6 hours old, typed on guild, raid or party chat or a public WoW Discord channel
+  (officer chat and `officer-chat` too, only on an officers' turn of an officer); never a whisper,
+  DM, group DM, voice line, a template line (`talk_recipe.model_id = 'none'`), a line with a
+  thumbs-down or negative reward, or a line a memory of narrower effective scope cites (#372).
+  Screened: no member's or his name, no link or URL, no stock or slop phrase
+  (`guards/stock_phrases.txt`), no model talk, no later era, 4-18 words. Ranked by his thumbs,
+  then learn rewards, then his replies, then the newest; those of the turn's medium first; the
+  best nine rotate by day, and no two shown are alike. The lines shown go to the filters' samples
+  (an exact repeat is fatal) and to the guards as `Draft.exemplars`: the phrase cooldown flags a
+  draft that copies one (`phrase_exemplar`: 4+ words of it, or 3 with two content words, however
+  old the line), and its retry is told the words.
+- *The glossary* (one line, at most 40 tokens): fixed raid words, then the guild's own active
+  slang from the lexicon, most used first, screened as the lexicon is (its era screen, never an
+  everyday word or a name of the game, never a term whose origin rests on a private or restricted
+  line).
+
+**Library facts.** When his line or the turn's topic names a boss, a raid, a place, an event, a
+faction or a bracketed item, and his game question brought no facts (that path still owns
+questions), the first answer gets the best one or two facts (at most 100 tokens) under the usual
+"Facts you know" heading, from the library's pages titled with those names only
+(`LibraryFacts.named`: `Library.titled` and the question path's gate and format, a boss's raid
+tactics page first; no search, no embedding, no model). The library has no class ability pages,
+so abilities bring no facts.
+
+**Budget.** The sections are dropped from the end (glossary, examples, card) right after the
+awareness card's own trim, before the other medium's lines, memories and chat give way; the card
+facts the trim kept may back what she says (the history tell's support). Measured on a read-only
+copy of the live mind.db (2026-11-20, 151 cast members, a raid 10 hours old): card 93-120 tokens
+(median 113), examples 0-60 (median 41; 17 members had none), glossary 32, all three 133-207
+(median 185); reads about 6 ms a turn (her example pool, the heaviest, is kept an hour).
+
+Rollback without code: `wow_grounding = false` under `[talk]`, then restart the mind (or wait for
+his next login). Older code ignores both keys with an unknown-key warning.

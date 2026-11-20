@@ -75,6 +75,9 @@ class CardContext:
     # her attendance counts under "Your standing"; the live caller turns them off outside talk
     # about raids and rosters ([talk] coherence: "5 benched" leaked into answers about anything)
     attendance: bool = True
+    # the turn carries talk/grounding.py's raid and guild card ([talk] wow_grounding), which says
+    # the raid, its loot, her DKP and the next raid night: this card leaves those out
+    grounded: bool = False
 
 
 @dataclass(frozen=True)
@@ -621,6 +624,8 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     add("claims", "Your claims", _claims(reader, guid, officer, context, now))
     raids = reader.rows(("guild_raid",), "SELECT raid_id,raid_key,started,ended,kills,wipes FROM guild_raid "
                         "WHERE started<=? ORDER BY (ended IS NULL) DESC,started DESC,raid_id DESC LIMIT 1", (now,))
+    if context.grounded:
+        raids = []  # the grounding card's
     add("raid", "Guild raid", [f"{'Recorded active' if r['ended'] is None else 'Last'} raid" +
         (f" #{r['raid_id']} " if context.names is None else " ") +
         f"({_text(r['raid_key'], 80)}): {r['kills']} kills, {r['wipes']} wipes" for r in raids])
@@ -634,6 +639,8 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         "SELECT c.id,c.kind,c.title,c.at" + signup +
         " FROM upcoming c WHERE c.id IN (SELECT id FROM selected) ORDER BY c.at,c.id",
         (now, now+14*DAY_S))
+    if context.grounded:
+        calendar = [r for r in calendar if r['kind'] != 'raid']  # the grounding card's
     next_raid = next((r['id'] for r in calendar if r['kind'] == 'raid'), None)
     add("calendar", "Upcoming calendar", [f"{'Next raid' if r['id']==next_raid else 'Event'}" +
         (f" #{r['id']} " if context.names is None else " ") +
@@ -644,7 +651,7 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
     dkp = reader.rows(("dkp_ledger",), "WITH b AS (SELECT guid,sum(delta) AS balance FROM dkp_ledger "
         "GROUP BY guid) SELECT balance,1+(SELECT count(*) FROM b other WHERE other.balance>b.balance) "
         "AS place FROM b WHERE guid=?", (guid,))
-    if dkp:
+    if dkp and not context.grounded:  # grounded: the grounding card says her DKP
         standing.append(f"DKP: {dkp[0]['balance']:g}; rank {dkp[0]['place']}")
     attendance = reader.rows(("guild_attendance",), "SELECT status,count(*) AS n FROM guild_attendance "
                              "WHERE guid=? GROUP BY status ORDER BY status", (guid,))

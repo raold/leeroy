@@ -37,6 +37,8 @@ situation = false              # the prompt as her situation: hard rules only, "
 shape = false                  # each reply's shape drawn by code: length, burst, question back, late excuse, left on read
 dm_mirror = 5                  # 0-10, with shape on: how closely a DM's length follows his (0: as full as she likes)
 coherence = false              # conversations hold together (talk/README.md): long game lines kept, her want and place hold, every waiting whisper answered; read at start and at his login
+wow_grounding = true           # raid and guild turns get facts (her class and role, the raid, its boss, the last wipe, loot and DKP), raid words and her own earlier lines; never a whisper or a DM
+wow_exemplars_before = "2026-11-19T14:22:45-05:00"  # her example lines are from before this (the live model's switch from Orion)
 invites = true                 # his invitations in game ("come to the inn", "let's go fishing"): her answer and her body agree (invites/README.md)
 
 [life]
@@ -80,6 +82,9 @@ DM_MIRROR_MAX = 10  # [talk] dm_mirror
 DM_WAIT_CAP_MAX = 3600  # [life] dm_wait_cap_s
 THINK_BUDGET_RANGE = (120, 320)  # [talk] think_budget: the beat's tokens; 320 still fits a full DM prompt
 _WARNED: set[str] = set()  # invalid [talk] and [life] values already logged in this process
+# The live model's switch from Orion (mind.log: the first start with another live model,
+# 2026-11-19 14:22:45 local): the WoW grounding's example lines are hers from before it
+EXEMPLARS_BEFORE = "2026-11-19T14:22:45-05:00"
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "voice", "training", "realm",
                                 "control", "selfies", "health", "claims", "personas", "guards",
                                 "tuning", "playstyle", "signals", "fingerprint", "callbacks", "world", "learn", "looks", "server",
@@ -91,6 +96,19 @@ _HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 class ConfigError(ValueError):
     pass
+
+
+def exemplars_time(value) -> float | None:
+    """[talk] wow_exemplars_before as Unix seconds: an ISO date and time that names its UTC
+    offset ("2026-11-19T14:22:45-05:00"); None for anything else."""
+    from datetime import datetime
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    try:
+        when = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return when.timestamp() if when.tzinfo is not None else None
 
 
 @dataclass(frozen=True)
@@ -123,6 +141,10 @@ class TalkCfg:
     shape: bool = False  # [talk] shape: talk/shape.py's drawn reply shape (core Task 9)
     dm_mirror: int = 5  # [talk] dm_mirror: with shape on, a DM's length follows his (0: today's)
     coherence: bool = False  # [talk] coherence: talk/length.py, talk/position.py (anything but true: off)
+    # [talk] wow_grounding: talk/grounding.py on raid and guild turns (anything but true: off)
+    wow_grounding: bool = True
+    # [talk] wow_exemplars_before: an ISO time with its offset; her example lines are older
+    wow_exemplars_before: str = EXEMPLARS_BEFORE
     invites: bool = True  # [talk] invites: invites/service.py (a non-boolean: off, logged once)
 
 
@@ -248,6 +270,9 @@ _RULES = {
         "shape": (lambda v: type(v) is bool, "a boolean"),
         "dm_mirror": (lambda v: _int_in(v, 0, DM_MIRROR_MAX), f"an integer 0-{DM_MIRROR_MAX}"),
         "coherence": (lambda v: type(v) is bool, "a boolean"),
+        "wow_grounding": (lambda v: type(v) is bool, "a boolean"),
+        "wow_exemplars_before": (lambda v: exemplars_time(v) is not None,
+                                 "an ISO date and time with its UTC offset"),
         "invites": (lambda v: type(v) is bool, "a boolean"),
         **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
            for k in ("whispers_per_hour", "openers_per_hour")},
@@ -325,6 +350,18 @@ def _build(data: dict, source: str) -> MindConfig:
                                              "think_private", "recall_diversity",
                                              "coherence") and type(v) is not bool:
                 v = False
+            if section == "talk" and key == "wow_grounding" and type(v) is not bool:
+                if (key, repr(v)) not in _WARNED:  # off, logged once (each login reads it again)
+                    _WARNED.add((key, repr(v)))
+                    log.warning("talk_wow_grounding_invalid key=wow_grounding want=a boolean "
+                                "default=false")
+                v = False
+            if section == "talk" and key == "wow_exemplars_before" and not check(v):
+                if (key, repr(v)) not in _WARNED:  # the default, logged once
+                    _WARNED.add((key, repr(v)))
+                    log.warning("talk_wow_exemplars_before_invalid key=wow_exemplars_before "
+                                "want=%s default=%s", want, defaults[section][key])
+                v = defaults[section][key]
             if (section == "talk" and key in ("intent", "situation", "shape", "invites")
                     and type(v) is not bool):
                 if (key, repr(v)) not in _WARNED:  # off, logged once (each login reads it again)

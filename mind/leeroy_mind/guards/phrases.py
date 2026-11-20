@@ -7,7 +7,9 @@ phrase; no member's, his or a nickname's name; no capitalised proper noun) is on
 used in 2 or more of her earlier lines in this conversation, or in one when it holds a stock
 entry (`phrase_conversation`), one she used in 2 or more of her lines in the last 24 h
 (`phrase_day`), or one 3 or more other members used in the last 48 h (`phrase_cast`, 3+
-words). The conversation's subject is never her tic (owner's live DM test, 2026-11-16: the
+words), or one her prompt showed her in one of her own earlier lines as an example
+(`phrase_exemplar`, talk/grounding.py's Draft.exemplars: 4+ words, or 3 with two content words,
+whenever they were said). The conversation's subject is never her tic (owner's live DM test, 2026-11-16: the
 place and the plans he was writing about, said back, were flagged as her tic): the content words
 he and other members wrote in this conversation in the last 3 h (each speaker's newest 10
 lines), folded so "norway"/"norwegian" and "fast"/"faster" are one word (`_subject`,
@@ -52,7 +54,11 @@ STOCK_CAST_SECONDS, STOCK_CAST_USES = 86400, 3
 LINE_LIMIT, OWN_LIMIT = 4000, 400   # the cast's lines over the longest window, newest first
 MAX_NAMED = 3
 VOCATIVE_REACH = 3                  # "you" up to this many words before a closing epithet
-CODES = ('phrase_conversation', 'phrase_day', 'stock_member', 'phrase_cast', 'stock_cast')
+CODES = ('phrase_conversation', 'phrase_day', 'stock_member', 'phrase_cast', 'stock_cast',
+         'phrase_exemplar')
+# Her own earlier lines shown as examples (Draft.exemplars, talk/grounding.py): a run of the
+# draft that copies one, of this many words, or of EXEMPLAR_SHORT with two content words
+EXEMPLAR_RUN, EXEMPLAR_SHORT = 4, 3
 
 # Function words and the chat's commonest fillers, apostrophes dropped. A phrase needs a word
 # outside this list ("i want to" has none); a two-word phrase needs two ("sitting here" has one).
@@ -410,6 +416,7 @@ def check(reader, draft, now: float, sheet=None) -> Found:
     stocked = _stock_spans(toks)
     says = sheet is not None and bool(sheet.says)
     said = says and voice.any_said(toks, sheet)  # one of her own words is in the draft
+    shown = frozenset().union(*(_seen(x)[1] for x in getattr(draft, 'exemplars', ()) or ()))
     if not phrases and not stocked and not said:
         return Found()
     cutoff = draft.line_id if draft.line_id is not None else 2**63 - 1
@@ -456,7 +463,11 @@ def check(reader, draft, now: float, sheet=None) -> Found:
                                                           or bool(uses and held))),
                 ('phrase_day', not own_word
                  and sum(words in grams for grams in day) >= DAY_USES),
-                ('phrase_cast', len(others.get(words, ())) >= CAST_MEMBERS)) if met]
+                ('phrase_cast', len(others.get(words, ())) >= CAST_MEMBERS),
+                # her example lines are to show how she talks, never to be said again
+                ('phrase_exemplar', words in shown and (
+                    len(words) >= EXEMPLAR_RUN or len(words) >= EXEMPLAR_SHORT
+                    and sum(map(_content, words)) >= CAST_CONTENT))) if met]
             if flagged and owed and held and not set(held) & sloppy:
                 pending.update(held)  # a common phrase on his answer: a hint next turn
                 continue
