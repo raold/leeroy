@@ -18,6 +18,7 @@ Nothing here calls a model, opens `mind.db` or talks to the bridge.
 | Naxxramas | 533 | `naxx` | 10, 25 | all 15 (`BOSS_NAMES` 533:0-14) |
 | Icecrown Citadel | 631 | `icc` | 10, 25, 10h, 25h | all 13 indexes (12 bosses plus Sister Svalna, 631:9) |
 | Trial of the Crusader | 649 | `toc` | 10, 25, 10h, 25h | all 5 |
+| Ruby Sanctum | 724 | `rs` | 10, 25, 10h, 25h | all 4 (`BOSS_NAMES` 724:0-2 and Halion at 6; 3-5 are his intro stages) |
 
 Ulduar (603) is not covered yet. A covered raid must have a playbook for every boss index
 `wow.BOSS_NAMES` lists as a fight (`raidplay check` fails otherwise).
@@ -71,6 +72,10 @@ Per mechanic (`[[boss.mechanic]]`):
   - `none`: nothing in stock playerbots does it.
   `playerbots` lists the registered stock action or strategy names; `raidplay check
   --playerbots-src` proves each is registered. Playerbots has no Trial of the Crusader strategy.
+  Its Ruby Sanctum one (`rs`, `src/Ai/Raid/RS`) is scripted to fixed spots: the raid shuttles between two spots
+  at each meteor, combustion and consumption are carried to fixed spots and ended there, and its bots get auras
+  the encounter does not give (its tanks Pain Suppression, everyone a barrier through each breath, and on heroic
+  through each consumption), so what bots survive there says little about the playbook.
 - The responder's reading (`respond.py`, see The responder): `area`, where the danger lies when the spell
   starts, for the kinds it responds to: `avoid_ground` `dest` (default: round the cast's destination, else its
   target), `caster` (round the caster, following it), `line` (a band `radius` either side and `range` long from
@@ -130,9 +135,10 @@ no handler, no task, no command, and native has no table, so it moves nobody (ex
 (`responder_spells`), `radius`, `range`, `angle` (cones default to 60), `duration` (the playbook's hazard time,
 else native takes the spell's own, a spread's ending with its cast) and `landing`. It is bounded to native's
 limits (64 rules, 16 spells, 100 yards, 120 seconds), and each table fits one bridge line many times over. Today
-14 mechanics qualify (45 rules across the ten covered raid difficulties): Impale (10-man), Void Zone, Meteor,
+17 mechanics qualify (54 rules across the 14 covered raid difficulties): Impale (10-man), Void Zone, Meteor,
 Holy Wrath, Detonate Mana, Coldflame, Death and Decay, Shock Vortex, Fire Bomb, Legion Flame, Infernal
-Eruption, Fel Lightning, Bladestorm and Hellfire.
+Eruption, Fel Lightning, Bladestorm, Hellfire, and Halion's Meteor Strike, its burning crater and, on heroic
+25-man, the Living Inferno's Blazing Aura.
 
 `MechanicFeed` sends every covered map and difficulty as one `raid_mechanics` command at each hello from a
 worldserver whose hello lists the `mechanics` feature (an older one gets nothing: `raidplay_respond_unsupported`),
@@ -155,6 +161,21 @@ trail burns; Fire Bomb by its 8-yard impact (the patch it leaves is a ground haz
 ordinary one only (stock dodges the empowered one), where it lands, 12 yards round for its 30 seconds; Legion
 Flame's run-out lasts its 6-second trail, 15 yards from everyone; Infernal Eruption is a ring 15 yards from the
 volcano, 10 either side; Detonate Mana binds every mana user's role.
+
+Ruby Sanctum (`data/rs.toml`): stock's `rs` strategy handles almost everything with fixed spots, so only Halion's
+fire reaches native. Meteor Strike is answered at its cast (74637, which Halion casts at a player as the server-side
+74638 hits), 12 yards round where that player stood, for the 7 seconds until the mark's impact; tanks are left to
+stock's two tank spots. The crater is answered at the impact itself (74648 and its difficulty versions, cast by the
+mark): 3 yards round the mark for the 24 seconds it still burns, so a bot stock moved with a forced move during the
+meteor's run (the responder yields to those for the rest of that mechanic) is bound again once the crater burns.
+On heroic 25-man each Living Inferno's Blazing Aura is answered at every 2-second tick (75887, the 25-man
+version of 75886), 15 yards round the inferno as it walks, each tick a fresh mechanic for 3 seconds: a forced
+move of stock's binds the bot only until the next tick, and tanks, who hold the inferno, are never moved. Native
+binds a mechanic only to bots in its caster's phase (Halion's two realms share the room), keeps the inferno in
+its hazard scan for everyone but tanks, and logs a tick's end only when it moved someone. Left to stock: Tail
+Lash (a rear cone; native's cones point forward), the breaths, the Twilight Cutter (a turning beam), Fiery
+Combustion and Soul Consumption with the fire they leave (nowhere known at a cast start; the hazard scan
+measures it), Enervating Brand, Conflagration, the adds.
 
 ## Training
 

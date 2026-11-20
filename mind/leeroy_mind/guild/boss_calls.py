@@ -17,8 +17,9 @@ class BossCall:
     lust: bool = True
 
 
-# The calls as they were before they moved into the raid playbooks; used only when the playbook
-# data cannot be read, so guild life's calls never fail with it.
+# The playbooks' calls (the ICC and Trial of the Crusader ones as they were before they moved
+# there, then Ruby Sanctum's); used only when the playbook data cannot be read, so guild life's
+# calls never fail with it. A test keeps the two equal.
 _FALLBACK = {
     (631, 0): BossCall("marrowgar: spread out, kill spikes, run from coldflame"),
     (631, 1): BossCall("deathwhisper: kill adds fast, interrupt frostbolts"),
@@ -38,6 +39,10 @@ _FALLBACK = {
     (649, 2): BossCall("champions: focus the healers, cc what you can"),
     (649, 3): BossCall("twins: match your orb colour, swap on vortex"),
     (649, 4): BossCall("anub'arak: kite the spike over frost patches"),
+    (724, 0): BossCall("baltharus: branded run out, off-tank takes the clone", False),
+    (724, 1): BossCall("zarithrian: swap on armor, kill the flamecallers", False),
+    (724, 2): BossCall("saviana: beacons spread out, dodge her breath", False),
+    (724, 6): BossCall("halion: dodge meteors, carry combustion out, even realms"),
 }
 
 

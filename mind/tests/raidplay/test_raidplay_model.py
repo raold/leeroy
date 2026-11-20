@@ -11,12 +11,13 @@ COVERED = {
     533: list(range(15)),   # Naxxramas: Patchwerk .. Kel'Thuzad
     631: list(range(13)),   # Icecrown Citadel: Marrowgar .. the Lich King, Svalna at 9
     649: list(range(5)),    # Trial of the Crusader: the Beasts .. Anub'arak
+    724: [0, 1, 2, 6],      # Ruby Sanctum: Baltharus, Zarithrian, Saviana, Halion (3-5 are his intro)
 }
 
 
 def test_coverage_lists_every_covered_boss():
     pb = raidplay.load()
-    assert pb.covered_maps() == (533, 631, 649)
+    assert pb.covered_maps() == (533, 631, 649, 724)
     assert {m: [b.index for b in pb.raids[m].bosses] for m in pb.raids} == COVERED
     assert [b.name for b in pb.raids[533].bosses] == [
         "Patchwerk", "Grobbulus", "Gluth", "Noth the Plaguebringer", "Heigan the Unclean", "Loatheb",
@@ -26,6 +27,7 @@ def test_coverage_lists_every_covered_boss():
         "marrowgar", "deathwhisper", "gunship", "saurfang", "festergut", "rotface", "putricide",
         "council", "lanathel", "svalna", "valithria", "sindragosa", "lichking"]
     assert [b.slug for b in pb.raids[649].bosses] == ["beasts", "jaraxxus", "champions", "twins", "anubarak"]
+    assert [b.slug for b in pb.raids[724].bosses] == ["baltharus", "zarithrian", "saviana", "halion"]
 
 
 def test_every_mechanic_is_well_formed():
@@ -48,6 +50,30 @@ def test_every_mechanic_is_well_formed():
     assert sum(m.handled_by == "playerbots" for m in pb.mechanics()) > 50
     # Playerbots has no Trial of the Crusader strategy: only generic stock behaviour applies there.
     assert all(m.handled_by != "playerbots" for b in pb.raids[649].bosses for m in b.mechanics)
+
+
+def test_ruby_sanctum_follows_the_scripts():
+    pb = raidplay.load()
+    assert pb.raids[724].playerbots_dir == "src/Ai/Raid/RS"
+    halion = raidplay.playbook_for(724, 6, 3)
+    assert halion.context == "724:6:3" and halion.enrage == 480 and not halion.boss.melee_behind
+    assert [p.hp_below for p in halion.boss.phases] == [None, 75, 50]
+    ids = [m.id for m in halion.mechanics]
+    assert "rs.halion.living_inferno" in ids and "rs.halion.blazing_aura" in ids
+    normal = [m.id for m in raidplay.playbook_for(724, 6, 2).mechanics]
+    assert "rs.halion.living_inferno" not in normal and "rs.halion.blazing_aura" not in normal
+    meteor = raidplay.mechanic("rs.halion.meteor_strike")
+    assert meteor.hit_ids("10") == (74648,) and meteor.hit_ids("25h") == (75879,)
+    breath = raidplay.mechanic("rs.halion.flame_breath")
+    assert breath.spell_ids("25") == (74526,) and breath.number("angle", "10") == 60
+    assert breath.number("angle", "25h") == 24      # no spell_cone row: the cone target's default
+    saviana = raidplay.mechanic("rs.saviana.flame_breath")
+    assert saviana.spell_ids("10h") == (74403,) and saviana.spell_ids("25h") == (74404,)
+    assert [m.id for m in raidplay.mechanics_for_spell(75887)] == ["rs.halion.blazing_aura"]
+    assert raidplay.mechanic("rs.halion.tail_lash").area == "none"   # a rear cone
+    assert raidplay.playbook_for(724, 3, 0) is None                   # Halion's intro, not a fight
+    stock = {m.id for b in pb.raids[724].bosses for m in b.mechanics if m.handled_by == "playerbots"}
+    assert {"rs.halion.twilight_cutter", "rs.halion.fiery_combustion", "rs.baltharus.enervating_brand"} <= stock
 
 
 def test_playbook_for_resolves_a_training_context():

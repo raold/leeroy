@@ -106,20 +106,28 @@ def test_playbooks_add_rows_after_the_originals():
     new = boss_mechanics(True)
     for key, rows in OLD_BOSS_MECHANICS.items():
         assert new[key][:len(rows)] == rows
-    assert {m for m, _ in new} == {533, 631, 649}
+    assert {m for m, _ in new} == {533, 631, 649, 724}
     assert (533, 2) in new and (533, 2) not in BOSS_MECHANICS
-    assert no_behind(True) == OLD_NO_BEHIND | {(533, 4), (533, 9), (533, 11), (533, 12)}
+    assert (724, 6) in new and (724, 6) not in BOSS_MECHANICS
+    assert no_behind(True) == OLD_NO_BEHIND | {(533, 4), (533, 9), (533, 11), (533, 12), (724, 6)}
     assert watch_names(True) == ("Inoculated",)
 
 
 # The one intended change (ruling, 2026-11-14): on normal the volcano and portal cannot be targeted.
 JARAXXUS_NORMAL = BossCall("jaraxxus: interrupt, dodge eruptions, kill the mistress")
+# Ruby Sanctum's calls, new with its playbooks (lust kept for Halion).
+RS_CALLS = {
+    (724, 0): BossCall("baltharus: branded run out, off-tank takes the clone", False),
+    (724, 1): BossCall("zarithrian: swap on armor, kill the flamecallers", False),
+    (724, 2): BossCall("saviana: beacons spread out, dodge her breath", False),
+    (724, 6): BossCall("halion: dodge meteors, carry combustion out, even realms"),
+}
 
 
 def test_the_stock_calls_are_unchanged_but_jaraxxus():
-    assert list(BOSS_CALLS) == list(OLD_BOSS_CALLS)
+    assert list(BOSS_CALLS) == list(OLD_BOSS_CALLS) + list(RS_CALLS)
     assert {k: v for k, v in BOSS_CALLS.items() if k != (649, 1)} == {
-        k: v for k, v in OLD_BOSS_CALLS.items() if k != (649, 1)}
+        k: v for k, v in OLD_BOSS_CALLS.items() if k != (649, 1)} | RS_CALLS
     assert BOSS_CALLS[649, 1] == JARAXXUS_NORMAL
     assert dict(HEROIC_CALLS) == {(649, 1): OLD_BOSS_CALLS[649, 1]}
     assert call_for(533, "Patchwerk")[1].pre == "Patchwerk next. drink up, then on the tank"
@@ -192,7 +200,7 @@ def test_the_switch_is_off_by_default():
 def test_calls_fall_back_to_the_old_values_when_the_data_cannot_load(monkeypatch, caplog):
     from leeroy_mind import raidplay
     from leeroy_mind.guild import boss_calls
-    assert boss_calls._FALLBACK == dict(BOSS_CALLS) == OLD_BOSS_CALLS | {(649, 1): JARAXXUS_NORMAL}
+    assert boss_calls._FALLBACK == dict(BOSS_CALLS) == OLD_BOSS_CALLS | {(649, 1): JARAXXUS_NORMAL} | RS_CALLS
     assert boss_calls._FALLBACK_HEROIC == dict(boss_calls.HEROIC_CALLS)
 
     def broken():
@@ -200,7 +208,7 @@ def test_calls_fall_back_to_the_old_values_when_the_data_cannot_load(monkeypatch
     monkeypatch.setattr(raidplay, "load", broken)
     calls, heroic = boss_calls._Calls(), boss_calls._Calls(heroic=True)
     with caplog.at_level("WARNING"):
-        assert dict(calls) == boss_calls._FALLBACK and len(calls) == 18
+        assert dict(calls) == boss_calls._FALLBACK and len(calls) == 22
         assert calls[631, 0].pre.startswith("marrowgar")
         assert dict(heroic) == boss_calls._FALLBACK_HEROIC
     assert [r.getMessage() for r in caplog.records] == ["boss_calls_fallback error=PlaybookError"] * 2

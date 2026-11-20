@@ -82,7 +82,7 @@ def test_every_table_is_bounded_and_fits_one_bridge_line():
     respond.register_command("raid_mechanics", RaidMechanics)
     found = tables(raidplay.load())
     assert set(found) == {(533, 0), (533, 1), (631, 0), (631, 1), (631, 2), (631, 3),
-                          (649, 0), (649, 1), (649, 2), (649, 3)}
+                          (649, 0), (649, 1), (649, 2), (649, 3), (724, 0), (724, 1), (724, 2), (724, 3)}
     for (map_id, difficulty), rules in found.items():
         assert 0 < len(rules) <= respond.MAX_RULES
         line = encode_command(RaidMechanics("m1", map_id, difficulty, rules), 1)
@@ -91,7 +91,28 @@ def test_every_table_is_bounded_and_fits_one_bridge_line():
         assert wire["type"] == "raid_mechanics" and wire["map"] == map_id and wire["difficulty"] == difficulty
         assert set(wire["mechanics"][0]) == {"id", "kind", "area", "roles", "spells", "radius", "range", "angle",
                                              "duration", "landing"}
-    assert sum(len(rules) for rules in found.values()) == 45  # 14 mechanics over the difficulties they exist in
+    assert sum(len(rules) for rules in found.values()) == 54  # 17 mechanics over the difficulties they exist in
+
+
+def test_ruby_sanctum_moves_bodies_out_of_the_fire_only():
+    """Halion: the meteor's circle until it lands, its burning crater, and on heroic 25-man each Living Inferno's
+    aura at every tick; everything else is stock's rs strategy (or not a movement)."""
+    pb = raidplay.load()
+    assert _ids(724, 0) == _ids(724, 1) == _ids(724, 2) == ["rs.halion.meteor_strike", "rs.halion.meteor_fire"]
+    assert _ids(724, 3) == ["rs.halion.meteor_strike", "rs.halion.meteor_fire", "rs.halion.blazing_aura"]
+    by_id = {r.id: r for r in actionable(pb, 724, 3)}
+    impact = by_id["rs.halion.meteor_strike"]
+    assert impact.spells == (74637,) and impact.area == "dest" and impact.radius == 12 and impact.duration == 7
+    assert "tank" not in impact.roles                               # stock's tank spots
+    fire = by_id["rs.halion.meteor_fire"]
+    assert fire.spells == (75879,) and fire.area == "caster" and fire.radius == 3 and fire.duration == 24
+    assert [r.spells for r in actionable(pb, 724, 0) if r.id == fire.id] == [(74648,)]  # the 10-man impact
+    aura = by_id["rs.halion.blazing_aura"]
+    assert aura.spells == (75887,) and aura.area == "caster" and aura.radius == 15 and aura.duration == 3
+    assert aura.roles == ("healer", "melee", "ranged")              # a tank holds the inferno
+    for m in pb.raids[724].bosses[3].mechanics:
+        if m.id not in by_id:
+            assert not m.responder_roles() or not m.responder_spells("25h")
 
 
 def test_actionable_answers_nothing_for_an_uncovered_place():

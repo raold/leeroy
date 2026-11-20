@@ -87,8 +87,11 @@ def test_exact_boss_plans_and_status_parser():
     assert call_for(631, "The Lich King")[1].pre.startswith("lich king:")
     assert call_for(631, "blood prince council")[0] == "the Blood Prince Council"
     assert "Onyxia next" in call_for(249, "Onyxia")[1].pre
-    assert len(BOSS_CALLS) == 18 and all(len(c.pre) <= 60 for c in BOSS_CALLS.values())
-    assert {key for key, call in BOSS_CALLS.items() if not call.lust} == {(631, 2), (631, 10)}
+    assert len(BOSS_CALLS) == 22 and all(len(c.pre) <= 60 for c in BOSS_CALLS.values())
+    # Ruby Sanctum's three before Halion keep lust for him.
+    assert {key for key, call in BOSS_CALLS.items() if not call.lust} == {
+        (631, 2), (631, 10), (724, 0), (724, 1), (724, 2)}
+    assert call_for(724, "Halion")[1].pre.startswith("halion:")
 
 
 @pytest.mark.parametrize("payload", [None, "BOSS\t1", "STATUS\t1", "STATUS\t1\t-1\tx\t\t0\tidle",

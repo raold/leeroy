@@ -1,0 +1,509 @@
+# Ruby Sanctum playbooks. Spell ids, timers and phases come from this server's boss scripts
+# (script_dir), Spell.dbc and the core's SpellInfoCorrections; the explanations are our own words.
+# Per-difficulty spell ids follow the core's spell difficulty table (SpellDifficulty.dbc; the world
+# database adds no rows for these spells). Stock playerbots has a Ruby Sanctum strategy ("rs",
+# playerbots_dir): fixed tank and raid spots, the two-spot meteor shuffle, combustion and consumption
+# carried to fixed spots, the cutter dodge and the portal; its actions are named where they do a job.
+# Server-side spells (spell_dbc: 74638 Meteor Strike Targeting, the 74680-74689 summons, 74696) are
+# not in Spell.dbc, so each mechanic names the client spell nearest them.
+map = 724
+key = "rs"
+difficulties = ["10", "25", "10h", "25h"]
+script_dir = "src/server/scripts/Northrend/ChamberOfAspects/RubySanctum"
+playerbots_dir = "src/Ai/Raid/RS"
+
+[[boss]]
+index = 0
+name = "Baltharus the Warborn"
+slug = "baltharus"
+creatures = [39751, 39899]
+script = "boss_baltharus_the_warborn.cpp"
+call = "baltharus: branded run out, off-tank takes the clone"
+lust = false
+phase = [{ id = "main", name = "Main fight" }]
+
+[[boss.mechanic]]
+id = "rs.baltharus.enervating_brand"
+name = "Enervating Brand"
+kind = "run_out_debuff"
+roles = ["healer", "melee", "ranged"]
+spells = [74502]
+hits = [74505]
+handled_by = "playerbots"
+playerbots = ["rs baltharus brand"]
+explain = "A branded player drains the damage of everyone within twelve yards and feeds him; the branded walk away from the raid and from him until it fades."
+check = "none"
+range = 12
+duration = 10
+first = 13
+every = 26
+targets = { "10" = 2, "25" = 4 }
+# The brand (74502) pulses 74505 every 2 s on the allies within 12 yards of its bearer, and the
+# bearer within 12 yards of Baltharus gives him Siphoned Might (74507). The clone brands 4 (10) or
+# 10 (25) at a time. Stock leaves a branded tank where it is.
+
+[[boss.mechanic]]
+id = "rs.baltharus.blade_tempest"
+name = "Blade Tempest"
+kind = "move_out_cone"
+roles = ["healer", "melee", "ranged"]
+spells = [75125]
+hits = [75126]
+handled_by = "playerbots"
+playerbots = ["rs baltharus avoid front"]
+explain = "His Blade Tempest slashes everything in front of him for four seconds; only the tank stands at his front."
+check = "none"
+radius = 15
+angle = 104
+duration = 4
+first = 15
+every = 24
+# The 4 s channel triggers 75126 every half second: a 104 degree cone (target 104, no spell_cone
+# row), 15 yards long. Stock keeps every non-tank 16 yards out of his front.
+
+[[boss.mechanic]]
+id = "rs.baltharus.repelling_wave"
+name = "Repelling Wave"
+kind = "positional"
+roles = ["healer", "ranged"]
+spells = [74509]
+handled_by = "partial"
+playerbots = ["rs baltharus healer position"]
+handled_note = "stock holds its healers at a fixed spot well outside it; ranged may stand anywhere within 35 yards of the tank"
+explain = "Each time he splits he throws back, burns and stuns everyone within twenty yards; casters stand farther out than that."
+check = "none"
+range = 20
+# 74509 is cast at 50 percent on 10-man and at 66 and 33 percent on 25-man; the core widens all three
+# of its effects to 20 yards (SpellInfoCorrections).
+
+[[boss.mechanic]]
+id = "rs.baltharus.clone"
+name = "Baltharus's clone"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = [74511]
+adds = [39899, 39922]
+handled_by = "playerbots"
+playerbots = ["rs baltharus tank position"]
+explain = "At each split a clone with his health appears; the second tank holds it away from him and the raid kills both."
+check = "none"
+
+[[boss]]
+index = 1
+name = "General Zarithrian"
+slug = "zarithrian"
+creatures = [39746]
+script = "boss_general_zarithrian.cpp"
+call = "zarithrian: swap on armor, kill the flamecallers"
+lust = false
+phase = [{ id = "main", name = "Main fight" }]
+
+[[boss.mechanic]]
+id = "rs.zarithrian.cleave_armor"
+name = "Cleave Armor"
+kind = "tank_swap_at_stacks"
+roles = ["tank"]
+spells = [74367]
+handled_by = "playerbots"
+playerbots = ["rs zarithrian tank"]
+explain = "Cleave Armor takes a fifth of the tank's armour per stack for thirty seconds; the other tank takes him before the stacks run out."
+check = "none"
+stacks = 5
+duration = 30
+first = 9
+every = 15
+# Stock swaps when its tank reaches 5 stacks (RS_ZARITHRIAN_CLEAVE_SWAP_STACKS), the aura's limit.
+
+[[boss.mechanic]]
+id = "rs.zarithrian.intimidating_roar"
+name = "Intimidating Roar"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = [74384]
+handled_by = "none"
+explain = "Every thirty seconds he roars, stunning and fearing everyone for four seconds; healers have the tank topped up before it lands."
+check = "none"
+cast = 1.5
+duration = 4
+first = 14
+every = 30
+# The core widens both effects (stun and fear) to 100 yards: nobody stands out of it.
+
+[[boss.mechanic]]
+id = "rs.zarithrian.flamecallers"
+name = "Onyx Flamecaller"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = [74398]
+adds = [39814, 39815]
+handled_by = "playerbots"
+playerbots = ["rs zarithrian adds", "rs zarithrian tank"]
+explain = "Two Onyx Flamecallers run in every forty seconds, four on 25-man; a tank gathers them and the damage dealers kill them first."
+check = "none"
+first = 18
+every = 40
+
+[[boss.mechanic]]
+id = "rs.zarithrian.lava_gout"
+name = "Lava Gout"
+kind = "interrupt"
+roles = ["melee", "ranged"]
+spells = { "10" = [74394], "25" = [74395] }
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
+explain = "Each Flamecaller hurls three Lava Gouts in a row at its target; interrupt them."
+check = "none"
+cast = 2
+every = 8
+
+[[boss.mechanic]]
+id = "rs.zarithrian.blast_nova"
+name = "Blast Nova"
+kind = "interrupt"
+roles = ["melee", "ranged"]
+spells = { "10" = [74392], "25" = [74393] }
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
+explain = "A Flamecaller's Blast Nova burns everyone within twenty yards; kick it."
+check = "none"
+radius = 20
+cast = 2.5
+every = 25
+
+[[boss]]
+index = 2
+name = "Saviana Ragefire"
+slug = "saviana"
+creatures = [39747]
+script = "boss_saviana_ragefire.cpp"
+call = "saviana: beacons spread out, dodge her breath"
+lust = false
+phase = [
+  { id = "ground", name = "On the ground" },
+  { id = "air", name = "In the air", after = 30 },
+]
+
+[[boss.mechanic]]
+id = "rs.saviana.flame_breath"
+name = "Flame Breath"
+kind = "move_out_cone"
+phase = "ground"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [74403], "25" = [74404] }
+handled_by = "playerbots"
+playerbots = ["rs saviana avoid front"]
+explain = "She breathes fire on everything in front of her; only the tank faces her."
+check = "none"
+radius = 30
+angle = { "10" = 60, "25" = 24 }
+cast = 2
+first = 10
+every = 25
+# spell_cone gives 74403 60 degrees; the 25-man 74404 has no row and its cone target's default (24)
+# applies.
+
+[[boss.mechanic]]
+id = "rs.saviana.conflagration"
+name = "Conflagration"
+kind = "run_out_debuff"
+phase = "air"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [74452]
+hits = [74456]
+handled_by = "playerbots"
+playerbots = ["rs saviana conflagration", "rs saviana melee spread"]
+explain = "When she takes to the air she marks three players, six on 25-man, with Flame Beacon; each marked player stands alone, ten yards from anyone, until the fire lands on them."
+check = "none"
+range = 10
+radius = 10
+duration = 5
+first = 30
+every = 50
+targets = { "10" = 3, "25" = 6 }
+
+[[boss.mechanic]]
+id = "rs.saviana.enrage"
+name = "Enrage"
+kind = "dispel"
+phase = "ground"
+roles = ["ranged"]
+spells = [78722]
+handled_by = "partial"
+playerbots = ["tranquilizing shot enrage"]
+handled_note = "a hunter's Tranquilizing Shot removes it when one is in the raid"
+explain = "She enrages every fifteen to twenty seconds; a hunter's Tranquilizing Shot takes it off."
+check = "none"
+first = 15
+every = 17
+
+[[boss]]
+index = 6
+name = "Halion"
+slug = "halion"
+creatures = [39863, 40142]
+script = "boss_halion.cpp"
+enrage = 480
+melee_behind = false
+no_behind_since = 2
+call = "halion: dodge meteors, carry combustion out, even realms"
+phase = [
+  { id = "physical", name = "Physical realm" },
+  { id = "twilight", name = "Twilight realm", hp_below = 75 },
+  { id = "both", name = "Both realms", hp_below = 50 },
+]
+
+[[boss.mechanic]]
+id = "rs.halion.meteor_strike"
+name = "Meteor Strike"
+kind = "avoid_ground"
+phase = ["physical", "both"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [74637]
+hits = { "10" = [74648], "25" = [75877], "10h" = [75878], "25h" = [75879] }
+handled_by = "partial"
+playerbots = ["rs halion meteor", "rs halion tank position"]
+handled_note = "stock moves non-tanks between two fixed spots after a meteor lands away from the tank's spot, and the tank only for one within 10 yards of it; nobody steps out of any other impact"
+explain = "He marks a player's spot with a Meteor Strike that lands six seconds later and hits everyone within twelve yards; get out of the circle."
+check = "rs.halion.check_avoid"
+radius = 12
+duration = 7
+first = 20
+every = 40
+# 74637 (cast at the target by the server-side 74638) summons the mark (40029) at the target's spot;
+# the mark's countdown (74641, held 6.5 s by its script) then casts the 12-yard impact (74648 and its
+# difficulty versions; the 25-man heroic one also summons a Living Inferno). Answered at its cast,
+# round its destination, until the impact; tanks are left to stock's tank spots.
+respond_roles = ["healer", "melee", "ranged"]
+
+[[boss.mechanic]]
+id = "rs.halion.meteor_fire"
+name = "Meteor Strike fire"
+kind = "avoid_ground"
+phase = ["physical", "both"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [74648], "25" = [75877], "10h" = [75878], "25h" = [75879] }
+hits = { "10" = [74712, 74717], "25" = [75947, 75950], "10h" = [75948, 75951], "25h" = [75949, 75952] }
+handled_by = "partial"
+playerbots = ["avoid aoe", "rs halion meteor"]
+handled_note = "stock avoid aoe steps out after the fire lands, and only for bots with a real-player master; the rs multipliers switch it off for tanks and while the raid changes spots"
+explain = "The meteor leaves its crater burning for the next twenty-odd seconds; never stand in the fire."
+check = "rs.halion.check_avoid"
+radius = 3
+duration = 24
+area = "caster"
+# At the impact the mark burns 3 yards round itself (74713 -> 74712) for the rest of its 30 s. The
+# script's spreading flames (40041-40044 and 40055, 74718 -> 74717, also 3 yards) are unselectable
+# trigger npcs, which the hazard scan measures whenever they burn. Answered at the impact, round the
+# mark: a bot stock moved during the meteor's run is bound again once the crater burns.
+respond_roles = ["healer", "melee", "ranged"]
+
+[[boss.mechanic]]
+id = "rs.halion.living_inferno"
+name = "Living Inferno"
+kind = "switch_adds"
+phase = ["physical", "both"]
+only = ["25h"]
+roles = ["tank", "ranged"]
+spells = [75879]
+adds = [40681, 40682]
+handled_by = "partial"
+playerbots = ["rs halion tank position"]
+handled_note = "stock marks an inferno skull for its ranged, and its boss tank holds every add only while the raid cheat is on"
+explain = "On heroic 25-man every meteor wakes a Living Inferno where it lands; a tank holds it and the ranged burn it down."
+check = "none"
+every = 40
+
+[[boss.mechanic]]
+id = "rs.halion.blazing_aura"
+name = "Blazing Aura"
+kind = "avoid_ground"
+phase = ["physical", "both"]
+only = ["25h"]
+roles = ["healer", "melee", "ranged"]
+spells = [75887]
+handled_by = "none"
+explain = "A Living Inferno burns everyone within fifteen yards every two seconds; everyone but the tank holding it keeps out of its fire."
+check = "rs.halion.check_avoid"
+radius = 15
+duration = 3
+area = "caster"
+# The inferno's aura (75885, also its creature_template_addon aura) triggers 75886 every 2 s, which
+# is 75887 on 25-man (75886's difficulty twin), hitting within 15 yards of the inferno. Answered at
+# each tick, round the inferno as it moves: a bot stock moved with a forced move is bound again at
+# the next tick. Stock's avoid aoe passes it by (a selectable unit), so the hazard scan holds it too.
+
+[[boss.mechanic]]
+id = "rs.halion.living_ember"
+name = "Living Ember"
+kind = "switch_adds"
+phase = ["physical", "both"]
+only = ["25h"]
+roles = ["melee", "ranged"]
+spells = []
+adds = [40683, 40684]
+handled_by = "partial"
+playerbots = ["rs halion tank position"]
+handled_note = "stock's boss tank holds every add only while the raid cheat is on; nobody aims area damage at them"
+explain = "On heroic 25-man embers rise from the meteor's flames and grow stronger beside an inferno; area damage clears them."
+check = "none"
+
+[[boss.mechanic]]
+id = "rs.halion.flame_breath"
+name = "Flame Breath"
+kind = "move_out_cone"
+phase = ["physical", "both"]
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [74525], "25" = [74526], "10h" = [74527], "25h" = [74528] }
+handled_by = "playerbots"
+playerbots = ["rs halion avoid cones"]
+explain = "His fire breath covers sixty yards in front of him; only the tank faces him."
+check = "none"
+radius = 60
+angle = { "10" = 60, "25" = 24, "10h" = 24, "25h" = 24 }
+cast = 2
+first = 10
+every = 11
+# spell_cone gives 74525 60 degrees; its difficulty versions have no row and take their cone
+# target's default (24).
+
+[[boss.mechanic]]
+id = "rs.halion.tail_lash"
+name = "Tail Lash"
+kind = "move_out_cone"
+roles = ["healer", "melee", "ranged"]
+spells = [74531]
+handled_by = "playerbots"
+playerbots = ["rs halion avoid cones", "rs halion p2 avoid cones"]
+explain = "His tail stuns and hurts everyone behind him every ten seconds; stand at his sides, never at his back."
+check = "none"
+radius = 30
+duration = 2
+first = 10
+every = 10
+# A rear cone of 82 degrees (spell_cone 82, and the core's back-cone visual 3879), 30 yards long, from
+# both Halions. The responder's cones point forward, so it is left to stock.
+area = "none"
+
+[[boss.mechanic]]
+id = "rs.halion.fiery_combustion"
+name = "Fiery Combustion"
+kind = "run_out_debuff"
+phase = ["physical", "both"]
+roles = ["healer", "melee", "ranged"]
+spells = [74562]
+hits = { "10" = [74562, 74607, 74630], "25" = [74562, 74607, 75882], "10h" = [74562, 74607, 75883], "25h" = [74562, 74607, 75884] }
+handled_by = "playerbots"
+playerbots = ["rs halion combustion"]
+explain = "Fiery Combustion burns its target and stacks a mark; carry it to the room's edge, because when it ends the blast and the fire it leaves grow with every stack."
+check = "none"
+range = 12
+duration = 30
+first = 15
+every = 25
+# When the debuff ends or is dispelled the mark (74567) explodes (74607, 12 yards, knockback) and
+# leaves a Combustion (40001, summoned by 74610) that burns 74630 every second, sized by the stacks:
+# an unselectable trigger npc the hazard scan measures. Stock carries the debuff to one of two fixed
+# spots far from the raid and ends it there.
+
+[[boss.mechanic]]
+id = "rs.halion.soul_consumption"
+name = "Soul Consumption"
+kind = "run_out_debuff"
+phase = ["twilight", "both"]
+roles = ["healer", "melee", "ranged"]
+spells = [74792]
+hits = { "10" = [74792, 74799, 74802], "25" = [74792, 74799, 75874], "10h" = [74792, 74799, 75875], "25h" = [74792, 74799, 75876] }
+handled_by = "playerbots"
+playerbots = ["rs halion consumption", "rs halion heal consumption"]
+explain = "In the twilight realm Soul Consumption drains its target and stacks a mark; carry it away from the raid, because when it ends it pulls in everyone close and leaves a pool of shadow."
+check = "none"
+range = 12
+duration = 30
+first = 20
+every = 20
+# The mirror of Fiery Combustion: the mark (74795) ends in 74799 (12 yards, pulls in) and a
+# Consumption (40135, summoned by 74800) burning 74802 every second, an unselectable trigger npc.
+
+[[boss.mechanic]]
+id = "rs.halion.dark_breath"
+name = "Dark Breath"
+kind = "move_out_cone"
+phase = ["twilight", "both"]
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [74806], "25" = [75954], "10h" = [75955], "25h" = [75956] }
+handled_by = "playerbots"
+playerbots = ["rs halion p2 avoid cones"]
+explain = "In the twilight realm his shadow breath covers sixty yards in front of him; only the tank faces him."
+check = "none"
+radius = 60
+angle = { "10" = 60, "25" = 24, "10h" = 24, "25h" = 24 }
+cast = 2
+first = 10
+every = 11
+
+[[boss.mechanic]]
+id = "rs.halion.twilight_cutter"
+name = "Twilight Cutter"
+kind = "avoid_ground"
+phase = ["twilight", "both"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [74768]
+hits = { "10" = [74769], "25" = [77844], "10h" = [77845], "25h" = [77846] }
+handled_by = "playerbots"
+playerbots = ["rs halion cutter"]
+explain = "The shadow orbs fire a beam between each pair, two beams on heroic, that turns for nine seconds; keep ahead of it, never between two orbs."
+check = "rs.halion.check_avoid"
+radius = 2.5
+duration = 9
+first = 21
+every = 29
+# 74768 between two orbs on the rotating carrier; 74769 hits every 0.3 s within 2.5 yards of the line
+# between them (the script's IsInBetween). The line turns with the orbs, so no cast-start place holds.
+area = "none"
+
+[[boss.mechanic]]
+id = "rs.halion.realms"
+name = "Twilight realm"
+kind = "use_object"
+phase = ["twilight", "both"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [74808, 75063]
+handled_by = "playerbots"
+playerbots = ["rs halion enter portal"]
+explain = "At seventy-five percent he steps into the twilight realm and everyone follows him through a portal; at fifty percent he returns and the raid fights him in both realms at once."
+check = "none"
+
+[[boss.mechanic]]
+id = "rs.halion.corporeality"
+name = "Corporeality"
+kind = "stop_casting"
+phase = "both"
+roles = ["melee", "ranged"]
+spells = [74826, 74827, 74828, 74829, 74830, 74831, 74832, 74833, 74834, 74835, 74836]
+handled_by = "playerbots"
+playerbots = ["rs"]
+explain = "In both realms keep the damage even: the realm that pulls ahead makes him tougher there, and a realm doing nothing lets him heal."
+check = "none"
+# Every 10 s the controller compares the two realms' damage and moves corporeality (74826-74836) a
+# step toward the realm that did less; Twilight Mending (75509) heals him when one realm did none.
+# The rs strategy's balance multiplier holds damage in the realm ahead.
+
+[[boss.mechanic]]
+id = "rs.halion.enrage"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [26662]
+handled_by = "none"
+explain = "He goes berserk after eight minutes; the kill has to come before then."
+check = "none"
+first = 480
+
+[[boss.check]]
+id = "rs.halion.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Meteor Strike", "Blazing Aura", "Twilight Cutter"]
+max_hits = 2
