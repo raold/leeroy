@@ -74,7 +74,7 @@ from .prompt import (negative_for, _PHONE_TAIL, PromptSpec, _clean, body_phrases
 from .scene import (snap_negative, _NOBODY, AGE_MORE_RE, INDOOR_RE, MINOR_MORE_RE, MINOR_RE, SNAP_NEGATIVE,
                     SNAP_NEGATIVE_LUST, _text_codes, _young_number, limb_detail, scene_from,
                     scene_renderable)
-from .safe import KIND_WORDS, POSE_WAIST_UP, alone, wearing
+from .safe import KIND_WORDS, alone, wearing
 from .scene_choices import OUTFITS, PLACES, PLAIN_PLACES
 from .style import AGE_RE, LUST, style_of
 
@@ -550,12 +550,12 @@ def build_words_prompt(p: Persona, scene: dict) -> PromptSpec:
 def _words_prompt(p: Persona, scene: dict) -> PromptSpec:
     """The prompt for a scene read from his words, in this order: the framing (0), who she is (0),
     her body (0), `wearing <outfit>` (0), the place (0; with swimwear, a waist-up framing, 0), her
-    hair and skin (0), what the owner set her to wear (1, its room reserved), the moment (1), a
-    timer photo's waist-up pose when nothing is in her hands (1), looking at the camera (3, not
-    from behind), her eyes and face details (2; none about her hands, arms, legs or feet), the
-    prop (2), the lighting (2), her glutes when seen from behind (2), the time of day (3), a
-    plain average build (1) and the phone look (1, without natural light unless the lighting is
-    daylight). fit_required shortens a selfie's framing first, then her hair's style, her skin's
+    hair and skin (0), what the owner set her to wear (1, its room reserved), the moment (1),
+    looking at the camera (3, not from behind), her eyes and face details (2; none about her
+    hands, arms, legs or feet), the prop (2), the lighting (2), her glutes when seen from behind
+    (2), the time of day (3), a plain average build (1) and the phone look (1, without natural
+    light unless the lighting is daylight). The audit's waist-up pose for a timer photo was taken
+    out again (owner, 2026-11-19); a privately styled scene keeps its own (romance_styling). fit_required shortens a selfie's framing first, then her hair's style, her skin's
     modifiers, her size and last a back view's pose; nothing at priority 0 yields. ValueError
     when scene_renderable says why not, or a code is off its list."""
     s = scene_from(scene)
@@ -587,16 +587,13 @@ def _words_prompt(p: Persona, scene: dict) -> PromptSpec:
     out += [(t, 0) for t, _ in hair_skin(p, name_re)]
     add(alone(setting), 3)
     # what the owner set her to wear, the first optional phrases (prompt.fit_clothed's order),
-    # with their room reserved; then the moment, then a timer photo's pose (nothing in her
-    # hands: the phone is propped up), as a situational photo's pose follows its activity
+    # with their room reserved; then the moment
     worn = [x for x in accessory_phrases(p, name_re) if not limb_detail(x[0])]  # the owner's
     room = reserve([x for x in out if x[1] == 1] + worn) if worn else 0
     out += worn
     if s.romance_style:  # her styled expression, after the owner's accessories, before the moment
         add(s.expression, 1, True)
     add(s.activity, 1, True)
-    if w["framing"] == "timer" and not w.get("prop"):
-        add(POSE_WAIST_UP, 1)
     if w["framing"] != BEHIND and not s.romance_pose:
         add("looking at the camera", 3)
     # none of her face details about her hands, arms, legs or feet (scene.limb_detail)

@@ -220,9 +220,10 @@ def test_the_schema_offers_only_the_lists_and_nothing_else():
     assert LUST_SCHEMA["title"] == "photo_lust" and LUST_SCHEMA["additionalProperties"] is False
     assert set(LUST_SCHEMA["required"]) == set(props) == {"kind", "framing", "setting", "outfit",
                                                           "colour", "expression"}
-    # never a mirror selfie, and waist-up or three-quarter (safe.py, the photo audit)
-    assert props["kind"]["enum"] == ["selfie", "snapshot", "headshot"]
-    assert set(props["kind"]["enum"]) < set(kind._PROPS["kind"]["enum"])
+    # every kind, the mirror selfie again (owner, 2026-11-19); waist-up or three-quarter (the
+    # photo audit)
+    assert props["kind"]["enum"] == kind._PROPS["kind"]["enum"]
+    assert "mirror_selfie" in props["kind"]["enum"]
     assert props["framing"]["enum"] == ["upper_body", "three_quarter"]
     assert props["setting"]["enum"] == list(LUST_SETTINGS)
     assert props["outfit"]["enum"] == list(LUST_OUTFITS)
@@ -360,7 +361,7 @@ def test_the_hot_tub_takes_swimwear_only(h):
 
 
 @pytest.mark.parametrize("kind_,framing,problems", [
-    ("selfie", "upper_body", []),
+    ("selfie", "upper_body", []), ("mirror_selfie", "upper_body", []),
     ("snapshot", "upper_body", []), ("selfie", "face", [3]),
     ("snapshot", "head_and_shoulders", [3]), ("headshot", "upper_body", [4]),
     ("headshot", "face", [3, 4])])
@@ -373,11 +374,12 @@ def test_swimwear_goes_only_framed_upper_body_and_never_as_a_headshot(h, kind_, 
     dressed = {**_reply("bodycon mini dress"), "kind": kind_, "framing": framing}
     assert screen_lust(p, dressed) == []                # a dressed kind may be any framing
     mirror = {**_reply("bodycon mini dress"), "kind": "mirror_selfie", "framing": framing}
-    assert screen_lust(p, mirror) == ["photo.kind: not on its list"]  # never a mirror selfie
+    assert screen_lust(p, mirror) == []  # a mirror selfie again (owner, 2026-11-19)
 
 
 @pytest.mark.parametrize("kind_,framing,stored", [
     ("selfie", "three_quarter", "three_quarter"), ("selfie", "upper_body", "upper_body"),
+    ("mirror_selfie", "three_quarter", "three_quarter"),
     ("snapshot", "three_quarter", "three_quarter"), ("headshot", "three_quarter", "three_quarter")])
 def test_a_lust_selfie_keeps_the_framing_it_was_given(h, kind_, framing, stored):
     """Every lust kind keeps the framing it was given, a selfie too (the owner lifted the

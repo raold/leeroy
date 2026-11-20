@@ -16,7 +16,6 @@ from leeroy_mind.personas.schema import (BUSTS, PersonaError, ProfilePhoto, appe
                                          persona_from_dict, persona_to_dict, validate_persona)
 from leeroy_mind.selfies import kind, varied
 from leeroy_mind.selfies.kind import EXPLICIT_RE, WEAR_RE
-from leeroy_mind.selfies.safe import selfie_framing
 from leeroy_mind.selfies.prompt import (_FRAMINGS, _KINDS, BUILD_WORDS, BUST_WORDS, FIT_MAX,
                                         FULL_BUILDS, LUST_NEGATIVE, NEGATIVE, PLAIN, SHORT,
                                         SIZE_WORDS, hair_skin_short, over_fit,
@@ -373,10 +372,9 @@ def test_the_longest_lust_prompt_fits_and_never_cuts_her_body_hair_or_skin(build
                 assert not over_fit(spec), (framing, kind_, kg)
                 _never_cut(spec, p)
                 assert f"wearing {ph.outfit}, {ph.setting}" in _texts(spec, 0)
-                # a lust kind's mirror selfie renders as a selfie (safe.kind_of), and a lust
-                # selfie waist-up (safe.selfie_framing)
-                shown = "selfie" if kind_ == "mirror_selfie" else kind_
-                for text in (_KINDS[shown], _FRAMINGS[selfie_framing(shown, framing)]):
+                # every kind renders as stored, a lust mirror selfie as one again and a lust
+                # selfie at its own framing (owner, 2026-11-19)
+                for text in (_KINDS[kind_], _FRAMINGS[framing]):
                     forms = {text, SHORT.get(text, text)}
                     assert forms & set(_texts(spec, 0)) or forms & set(_texts(spec, 1))
                 kept, dropped = fit(spec.phrases, estimate, 75)
@@ -404,16 +402,13 @@ def test_the_steps_run_in_the_rulings_order():
                 taken = [i for i, x in enumerate(steps) if x]
                 assert taken == list(range(len(taken))), (kg, bust, bool(looks), steps)
                 seen.add(len(taken) == len(steps) or len(taken))
-    # with her standing pose required (safe.POSES) the longest phrase takes every step
-    assert True in seen
+    assert True in seen and len(seen) >= 3  # from a few steps to the kind yielding
     heavy = woman(build="voluptuous", weight_kg=100, bust="very_large", **LONG_LOOKS)
     texts = _texts(build_prompt(replace(heavy, photo=ph0), kind_style=LUST), 0)
     assert "shoulder-length honey blonde with highlights hair" in texts and "olive skin" in texts
     assert build_words(heavy) in texts and "plus-size, heavyset" in texts
-    from leeroy_mind.selfies.safe import POSE_SHORT as poses
-    assert set(poses.values()) == {"standing", "walking", "walking away"}
-    assert SHORT == {**poses,  # a body shot's pose shortens before her hair's style would go
-                     "selfie, close arm's-length shot": "selfie",
+    # no pose of the audit's to shorten (owner, 2026-11-19)
+    assert SHORT == {"selfie, close arm's-length shot": "selfie",
                      "candid photo taken by a friend": "candid photo",
                      "professional headshot": "headshot",
                      "waist-up shot, upper body": "waist-up shot",

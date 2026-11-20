@@ -17,7 +17,7 @@ DATE_OUTFITS = ("fitted little dress", "low-cut cocktail dress", "bodycon mini d
     "one-shoulder top and leather trousers", "sequin party dress")
 DATE_SETTINGS = tuple(s for s in kind.LUST_SETTINGS
     if s not in kind.WATER_SETTINGS + kind.GYM_SETTINGS and s != "a park in summer")
-KINDS = ("snapshot", "selfie")  # never a mirror selfie (safe.py, the photo audit)
+KINDS = ("snapshot", "mirror_selfie", "selfie")  # the mirror selfie back (owner, 2026-11-19)
 FRAMINGS = ("three_quarter", "upper_body", "head_and_shoulders", "face")
 PAIR_CAP = 2
 MAX_CAST = 1024

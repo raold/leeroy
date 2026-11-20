@@ -529,6 +529,10 @@ plan then lists nobody.
 
 ## Compositions the photo audit designed out (2026-11-17)
 
+**Partly reverted by the owner (2026-11-19)**; see "What the owner put back" at the end of this
+section. The table below is the audit's change as made; its mirror, car-seat, concert, pose and
+negative rows no longer hold where that section says so.
+
 A visual audit of about 1,290 rendered photos (145 covers, 55 situational photos, the newest two
 sets of every member) tied each defect to the composition behind it. 8% were defective (severity
 2 or more), 1% badly (a third hand, an extra arm, the subject rendered twice, three feet).
@@ -640,3 +644,69 @@ queued for each member with a defective cover. A cover is never changed: the own
 Not verified on the GPU: every wording here was chosen from the audit's numbers and the token
 counts, not from new renders. The labels carry no pose, so the poses avoid what failed rather
 than repeat what worked. Check the first night's sets and snaps.
+
+### What the owner put back (2026-11-19)
+
+On the owner's instruction four of the audit's composition choices are as they were before it:
+
+- **The three lust settings.** `the mirror in her hallway`, `the front seat of her car` and `a
+  concert crowd` are on `kind.LUST_SETTINGS` again (24 settings: the audit's three plain places,
+  `safe.NEW_SETTINGS`, stay), and so in the lust schema, the variety balancer's date settings and
+  `selfies variety`'s re-roll. The lust situational schema takes the car seat again; the hallway
+  mirror and the crowd it never offered, before the audit too. `safe.SETTING_WORDS` no longer
+  rewrites them (a garden party, a dance floor and the gym keep their audit words). Heat gives
+  them the tiers they had before: the hallway mirror and the car seat P0, the crowd P2.
+- **Mirror selfies on the lust lists.** The lust schema, the lust situational schema, the
+  variety balancer and the re-roll offer `mirror_selfie` again, and a stored lust mirror selfie
+  renders as `mirror selfie` (`safe.kind_of` is gone), with a negative that names neither mirror
+  nor phone (`HEAD_NEGATIVE_LUST_MIRROR`, `BODY_NEGATIVE_LUST_MIRROR`; the situational one was
+  there already). A selfie of any kind still takes no body pose.
+- **The poses.** `safe.POSES`, `POSE_SHORT`, `POSE_WAIST_UP`, `pose` and `pose_priority` are gone:
+  no profile, varied, situational or request prompt carries a standing or waist-up pose, and a
+  varied candidate's pose is its view again, as before the audit (the view never yields; the
+  framing yields first). A privately styled scene keeps its own poses (`romance_styling`).
+- **The quality words in the negatives**, at their priorities before the audit:
+  - profile body shots and varied sets (`prompt.body_negative`): the style words required again
+    as the profile negative says them (`safe.BODY_STYLE`: "cartoon, anime, painting, illustration,
+    3d render, cgi"); `deformed face, bad hands`, the vintage line and `second face, crowd, group of
+    people` at 1, `watermark` at 2;
+  - situational and request photos (`scene._snap_negative`): the earlier anatomy line with its
+    limbs, fingers and eye words required (`extra limbs, ..., cross-eyed, lazy eye, asymmetric
+    eyes`), `3d render` required for a plain photo and at 2 for a lust one, `anime, cgi` and
+    `illustration, watermark` at 2, the second face and the vintage line at 1.
+
+**What did not change**, deliberately: every negative keeps its covered line required (`nsfw,
+nude, cleavage, lingerie, swimwear`; the lust line `nsfw, nude, topless, lingerie, underwear,
+see-through, sheer`, `_COVERED` / `_COVERED_LUST` taken directly, never through `NEGATIVE`),
+`child, teenager`, `celebrity, famous person` and `bottomless, shirtless`; the clothing
+requirement (`wearing ...` required, completed to a top and a bottom, `prompt.fit_clothed`,
+`safe.complete`, free text naming swimwear or underwear never required), the age guard, the
+scene screens, the NSFW gate and the pairings.
+
+**The 75-token window.** With the style or anatomy words back at 0 beside the audit's required
+lines, some sets would count over the worker's 75 and every such photo would be refused. So the
+audit's lines the owner did not name move to priority 1, first among the optional phrases, where
+they no longer fit: `mirror, phone` in the lust body negative, `another person, duplicate
+person` in the varied one, and `extra hands`, `duplicate person`, `mirror, phone` in the
+situational ones (`another person` stays required there, as before the audit). In the
+situational negatives `bottomless, shirtless` stays required too, which leaves one part of the
+revert undone: `mutated, disfigured` waits at 1 (first among the optional phrases); with it the
+required sets would count 77 (plain) and 79 (lust).
+
+Measured on the real tokenizers with the worker's fit:
+
+| negative | required | optional words the fit keeps (no "never" words set) |
+|---|---|---|
+| plain body | 71 | `plastic skin` |
+| mirror body | 67 | `plastic skin`, `airbrushed, doll` |
+| lust body, lust mirror body | 73, 73 | none |
+| varied | 74 | none |
+| situational plain / mirror | 71 / 71 | `extra hands` |
+| situational lust / lust mirror | 73 / 73 | none |
+| head (plain, lust, mirror, lust mirror) | 38, 44, 34, 40 | the realism and vintage lines (and the watermark line beside the mirror one) |
+
+So on body shots most of the quality words at 1 and 2 are still dropped by the window, and the
+owner's "never" words (`prompt.negative_for`, ahead of the optional phrases) have less room than
+under the audit's negatives: all four in the mirror body negative, glasses and tattoo in the plain
+body and situational ones, glasses alone in the lust ones, none in the varied one (the audit's:
+all four, and two in the varied one). On 2026-11-18 no stored persona set one (#362).

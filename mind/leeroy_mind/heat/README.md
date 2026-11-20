@@ -116,18 +116,19 @@ string from one tuple to another in `photos.py` is the whole edit.
 
 | Tier | Outfits added | Places added | Poses |
 |---|---|---|---|
-| P0 conservative | fitted blazer dress, cropped cardigan and wide-leg trousers, square-neck top and a pencil skirt, satin midi dress, fitted t-shirt and high-waisted jeans, flowy sundress | her living room couch, her hallway at home, a sunny window seat at home, a bookshop, a cafe terrace, a park in summer | front, side |
+| P0 conservative | fitted blazer dress, cropped cardigan and wide-leg trousers, square-neck top and a pencil skirt, satin midi dress, fitted t-shirt and high-waisted jeans, flowy sundress | her living room couch, the mirror in her hallway, the front seat of her car, her hallway at home, a sunny window seat at home, a bookshop, a cafe terrace, a park in summer | front, side |
 | P1 dressed | off-the-shoulder sweater dress, sweetheart-neckline sundress, off-the-shoulder top and jeans | a garden party, a city street at night, a ski lodge terrace | front, side |
-| P2 going out | fitted little dress, low-cut cocktail dress, crop top and high-waisted shorts, bodycon mini dress, halter top and a miniskirt, tank top and denim shorts, backless summer dress, plunging wrap dress, one-shoulder top and leather trousers, midi dress with a high slit, sequin party dress, cut-out dress, ribbed tank dress, leather jacket over a crop top, silk blouse and a leather miniskirt | a rooftop bar at night, a wine bar, a nightclub, a dance floor, a hotel balcony at dusk | plus the three-quarter rear view |
+| P2 going out | fitted little dress, low-cut cocktail dress, crop top and high-waisted shorts, bodycon mini dress, halter top and a miniskirt, tank top and denim shorts, backless summer dress, plunging wrap dress, one-shoulder top and leather trousers, midi dress with a high slit, sequin party dress, cut-out dress, ribbed tank dress, leather jacket over a crop top, silk blouse and a leather miniskirt | a rooftop bar at night, a wine bar, a nightclub, a dance floor, a hotel balcony at dusk, a concert crowd | plus the three-quarter rear view |
 | P3 gym | the gym outfits (at the gym only, as the pairings already say) | the gym | plus from behind |
 | P4 swim (today) | the swimwear (at the water only, as the pairings already say) | the six water settings | all |
 
 So the 22 dressed outfits split into 7 covered (P0 and P1) and 15 going out (P2). The places
 follow main's photo audit (`selfies/safe.py`): the three it added (`NEW_SETTINGS`) are P0, and
-the three it retired (the hallway mirror, the car's front seat, the concert crowd) are in no
-tier, so a stored scene naming one reads P4 (fail closed). The audit's rules hold at every tier:
-a selfie is waist-up and takes no pose, a varied set has `body_shot_share`'s number of body
-shots below P4 as at P4 (never more), and heat's check on a kind runs after main's framing.
+the three it had taken off the lists, which the owner put back on 2026-11-19, have the tiers they
+had before it: the hallway mirror and the car's front seat P0, the concert crowd P2. The audit's
+rules that remain hold at every tier: a selfie takes no pose, a varied set has
+`body_shot_share`'s number of body shots below P4 as at P4 (never more), and heat's check on a
+kind runs after main's framing.
 
 Where the tier is read:
 
