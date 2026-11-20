@@ -51,15 +51,19 @@ from leeroy_mind.talk.realism import Realism
 from leeroy_mind.arc.live import AWAY_CACHE_S, ArcView, arc_view, away_now
 from leeroy_mind.bridge import AckTimeout, BridgeError, ConnectionLost
 from leeroy_mind.clock import Clock, night_of
-from leeroy_mind.config import MindConfig
+from leeroy_mind.config import EXEMPLARS_BEFORE, MindConfig, exemplars_time
 from leeroy_mind.discord.channels import channel_id, is_private, same_medium, is_group
 from leeroy_mind.discord.transport import PAIR_LINE_SQL
-from leeroy_mind.discord.presence import local_time
+from leeroy_mind.discord.presence import her_local
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord.text import MAX_TEXT as DISCORD_MAX_TEXT
 from leeroy_mind.discord.transport import LINES as DISCORD_LINES
 from leeroy_mind.discord.channels import channel_id
 from leeroy_mind.discord.transport import DM_PREFIX, DiscordTarget, is_discord, store_line
+from leeroy_mind.geography import config as geo_config
+from leeroy_mind.geography import lines as geo_lines
+from leeroy_mind.geography import tells as geo_tells
+from leeroy_mind.geography.places import place_of
 from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.life import state as life_state
 from leeroy_mind.life.day import Block, has_kids
@@ -106,6 +110,8 @@ from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, hint as phrase_hin
 from leeroy_mind.guards.opener import cut as cut_opener, without_question_echo
 from leeroy_mind.guards.pronouns import fix as fix_pronouns
 from leeroy_mind.talk.facts import LibraryFacts
+from leeroy_mind.talk import grounding
+from leeroy_mind.talk.grounding import wow_turn
 from leeroy_mind.talk.gearfit import for_speaker as facts_for_speaker
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
@@ -183,6 +189,9 @@ QUIET_S = 120.0
 # medium (her DMs in a whisper, their whispers in a DM), at most PAIR_LINES from PAIR_WINDOW_S
 PAIR_LINES = 6
 PAIR_WINDOW_S = 86400.0
+# [talk] wow_grounding: her example pool is read again after this long (the night's rewards move
+# it), and at most this many members' pools are kept
+WOW_POOL_S, WOW_POOLS = 3600.0, 512
 # A channel quiet this long starts a new conversation, as a thread does. Only the lines the
 # engine sees (the human's and the mind's) keep a conversation open; other players' lines and
 # his bot commands, which threads do count, don't, so this approximates the thread rule.
@@ -250,6 +259,15 @@ NEVER_MET = ("You and {name} have only ever talked online, in the game and on Di
              "the game.")
 # Cataclysm or later named in a 2009 guild (filters "era": library.wikitext.names_later).
 ERA_HINT = "It's 2009: name only places, people and things that are in the game now."
+# Her line gets her own place wrong (geography/tells.py slip: snow where it cannot fall now, a
+# beach or mountains her place has none of, a clock time that is not hers). Soft: a retry that
+# still has it is kept.
+PLACE_HINT = ("Keep to where you live: {place} Say nothing about the weather, the land or the "
+              "time there that isn't so.")
+# A line others read says where he lives (geography/tells.py his_home): asked again, dropped
+# when a retry still has it. {they}/{them}/{their} are his forms.
+HIS_HOME_HINT = ("Never say where {they} lives where others can read it: that is between you "
+                 "two.")
 # [heat] public_cap (heat/guard.py): a line to him others can read with a plainly explicit word.
 # Fatal: asked again once with this, never sent; an owed answer's fallback is screened for it too.
 from leeroy_mind.heat.guard import HINT as HEAT_PUBLIC_HINT  # noqa: E402
@@ -258,7 +276,7 @@ from leeroy_mind.heat.guard import TELL as HEAT_PUBLIC  # noqa: E402
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
                      "history", "copy", "slang", "summons", "game name", "self name",
                      "phrase: resting", "in person", "era", "own copy", "attachment",
-                     HEAT_PUBLIC})
+                     "place", "his place", HEAT_PUBLIC})
 # Guard codes a second draft may still have and lose by a cut (_without_phrases): the phrase
 # cooldown's and an opener that says his line back.
 CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
@@ -271,7 +289,7 @@ FIX_CODES = frozenset({"member_misgender"})
 DM_KEEP_TURNS = 6  # of his last messages, a DM's chat keeps whole when the prompt is over budget
 SO_FAR_WINDOW_S = 12 * 3600.0  # the stored lines talk/sofar.py reads a conversation from
 DROP_ON_RETRY = frozenset({"history", "summons", "in person", "game name", "self name",
-                           "own copy"})
+                           "own copy", "his place"})
 # A reply this far over the words its lines hold is asked again shorter (prompts C1).
 MEETING_TELLS = frozenset({"summons", "in person"})
 LONG_SLACK = 1.25
@@ -309,6 +327,7 @@ OWED_REFUSED = {
     "action": "no *actions*, only what you'd type",
     "sample": "don't copy your example lines",
     "silent": "say something back, not (nothing)",
+    "his place": "don't say where {they} lives, others can read this",
     HEAT_PUBLIC: _HEAT_OWED,
 }
 OWED_RETRY_HINT = "Not like that: {reasons}. " + OWED_FALLBACK_HINT
@@ -559,6 +578,11 @@ class TurnMeta:
     photo_finished: bool = False
     single_line_before_photo: bool = False  # restored when an owed answer goes on without it
     discord_named: bool = False  # he addressed this member in a channel: re-ask one silence
+    # [talk] wow_grounding (talk/grounding.py): the turn's prompt carries the raid and guild
+    # card (the awareness card then leaves out what it says), and the example lines of hers it
+    # showed, which the guards' phrase cooldown never lets her copy (Draft.exemplars)
+    wow_grounded: bool = False
+    wow_exemplars: tuple[str, ...] = ()
     # what recall looks for when the turn has no trigger line: for an answer to his Discord post,
     # its words and its thread's last lines (discord.talk, ruling R13); for a turn carrying an
     # outreach item, its words (outreach.service); "" for every other turn
@@ -937,6 +961,8 @@ class Pipeline:
         self._words: dict[int, str] = {}  # a said line's id -> its words before styling
         self._turn_lines: dict[str, int] = {}  # a turn id -> the lines it said
         self._compose_rng = random.Random("compose")  # compose() never draws from self.rng
+        # her example lines' pool by (speaker, officers' turn), read a while (_wow_grounding)
+        self._wow_pools: dict[tuple[int, bool], tuple[float, float, list]] = {}
         self._length_rng = random.Random()  # a channel message's length band (_discord_words)
         # her last want in each conversation (speaker, chain base), the latest WANTS_KEPT
         self._wants: dict[tuple[int, str], Intent] = {}
@@ -1023,14 +1049,47 @@ class Pipeline:
 
     def _card(self, p: Persona, topic: str = "") -> str:
         """The card a prompt shows, from the live persona (personas.card.render_prompt_card),
-        with race and class from the cast, or from the stored card for a member it lacks."""
+        with race and class from the cast, or from the stored card for a member it lacks, and
+        with [geography] on where she lives in its head ("You live in Colorado.": her own card
+        only, geography.lines.home_phrase)."""
         m = self.world.members.get(p.guid)
         if m is not None:
             race, class_name = RACES.get(m.race, ""), CLASSES.get(m.class_, "")
         else:
             race, class_name = card_race_class(self.store.get_card(p.guid) or "")
         return render_prompt_card(p, race=race, class_name=class_name, voice=True,
-                                  topic=topic)
+                                  topic=topic, home=self._home_phrase(p))
+
+    @staticmethod
+    def _her_place(p: Persona):
+        """Where she lives on the place sheet while [geography] is on (geography.places
+        .place_of), else None."""
+        return place_of(p) if geo_config.on() else None
+
+    def _home_phrase(self, p: Persona) -> str:
+        return geo_lines.home_phrase(self._her_place(p))
+
+    def _place_parts(self, turn: Turn, p: Persona) -> list[str]:
+        """Her "where you live, right now" line in parts (geography.lines.now_parts: at most
+        NOW_TOKENS, the first prompt section the trim lets go) on her private turns and her
+        Discord turns; [] in the game's channels, with [geography] off, or with no place."""
+        place = self._her_place(p)
+        if place is None or not (is_private(turn.channel) or is_discord(turn.channel)):
+            return []
+        return geo_lines.now_parts(place, her_local(self.clock.local(), p))
+
+    def _owner_home_line(self, turn: Turn, p: Persona, *, apart: bool) -> str:
+        """Where he lives ([owner] home), for her private turns with him only (the so-far
+        block's lead: _so_far keeps it to her whisper or DM to him): his place, how far from
+        hers and how his clock stands to hers. "" with [geography] off or no home set."""
+        home = geo_config.owner()
+        hg = self.human.guid
+        if home is None or not hg or turn.to_guid != hg or not is_private(turn.channel):
+            return ""
+        return geo_lines.owner_line(called=self.human.called, their=self.human.forms[2],
+                                    home=home.place, detail=home.detail,
+                                    her=self._her_place(p), instant=self.clock.local(),
+                                    apart=apart)
 
     def _voice(self, turn: Turn, meta: TurnMeta, p: Persona, *, live: bool) -> tuple[list[str], str]:
         """Her voice sheet for this turn (personas/speech.py; ([], "") without one): the sample
@@ -2957,6 +3016,18 @@ class Pipeline:
                                       else CAST_MIN_LEVEL)
             if not facts:
                 unsure = UNSURE
+        # [talk] wow_grounding: a raid or guild turn whose line of his, or whose topic, names a
+        # boss, a raid, a place or an item gets the best one or two facts about it from the
+        # library's pages titled with it (LibraryFacts.named), when his game question brought
+        # none (its own lookup is the facts then) and nobody answered before her
+        grounded = not preview and self._wow_grounding_on(turn)
+        if (grounded and not facts and not meta.facts_line and not earlier
+                and self.facts is not None and (his or meta.topic)):
+            try:
+                facts = await self.facts.named(his or meta.topic)
+            except Exception:
+                log.warning("wow_facts_failed guid=%d", turn.speaker)
+                facts = []
         pinned = next((i for i, r in enumerate(recent) if r.id == turn.trigger_line), None)
         kept = next((i for i, r in enumerate(recent) if r.id == meta.pushback_line), None
                     ) if meta.pushback_line else None
@@ -3006,10 +3077,12 @@ class Pipeline:
             channel=turn.channel, discord_words=words, length_text=length_text,
             situation=situation, typing=p.typing)
         # her day ([life] availability above 0: her own clock and where she is; never in a raid
-        # call) and her feeling ([life] state; how she feels about him only on a turn of his)
+        # call) and her feeling ([life] state; how she feels about him only on a turn of his).
+        # [geography] on, her day is on her own clock wherever the sheet knows where she lives
         today, where = day_line(local, p.identity.region), self._where_line(turn, meta)
-        if self._life_on() and meta.life_presence is not None:
-            today = day_line(local_time(local, p.identity.region), p.identity.region)
+        if (geo_config.on() and place_of(p) is not None) or (
+                self._life_on() and meta.life_presence is not None):
+            today = day_line(her_local(local, p), p.identity.region)
         # with a shape drawn, how chatty she feels is the shape's to say (review-340, D22), and
         # "a bit short" never sits beside a burst or a paragraph (review of #343, P3-7)
         feels = (life_state.words(meta.state, to_him=self._aimed_at_him(turn), forms=human.forms,
@@ -3054,9 +3127,14 @@ class Pipeline:
             real_name=real, facts=list(facts),
             facts_head=facts_head(human.forms[1]) if facts else "",
             pinned=pinned if facts else None, kept=kept, situation=situation,
+            # [owner] home ([geography] on): where he lives, after the never-met line, in her
+            # whisper or DM to him only (_so_far's own scope)
             so_far=[] if preview else self._so_far(
-                turn, meta, now, lead=(NEVER_MET.format(name=human.called),) if apart else ()),
-            old_chat=self._old_chat(recent) if dm_rows else 0)
+                turn, meta, now, lead=tuple(x for x in (
+                    NEVER_MET.format(name=human.called) if apart else "",
+                    self._owner_home_line(turn, p, apart=apart)) if x)),
+            old_chat=self._old_chat(recent) if dm_rows else 0,
+            place=self._place_parts(turn, p))
         if live and getattr(self, 'learn_enabled', False):
             from leeroy_mind.learn.apply import prepare, yield_families
             meta.learning = await prepare(self, turn, meta, p, now=now)
@@ -3067,6 +3145,11 @@ class Pipeline:
                 yield_families(meta.learning, SHAPE_YIELDS)
             if meta.learning is not None:
                 parts.style = [entry[2] for entry in meta.learning.entries]
+        # [talk] wow_grounding: the raid and guild card, her own example lines and the glossary
+        ground = await self._wow_grounding(turn, p, now) if grounded else None
+        if ground is not None:
+            parts.wow = ground.sections()
+            meta.wow_grounded = bool(ground.card)  # the awareness card leaves its part out
         if self.cfg.talk.aware or meta.review_required:
             try:
                 parts.awareness = await self.live_review.block_async(turn,meta,close=bool(real))
@@ -3083,6 +3166,16 @@ class Pipeline:
         if live:
             meta.offered_real_name, meta.romance = bool(real), bool(romance)
             meta.memory_ids = [m.id for m in memories[:len(trimmed.memories)]]
+        # the grounding's sections the trim kept (it drops them from the end: the glossary, her
+        # example lines, the card): the example lines shown are never to be copied (the filters'
+        # samples, the guards' Draft.exemplars), and the card's facts may back what she says
+        shown_examples, card_facts = [], []
+        if ground is not None:
+            n_wow = len(trimmed.wow)
+            card_facts = list(ground.card) if ground.card and n_wow >= 1 else []
+            if ground.exemplars and n_wow >= 1 + bool(ground.card):
+                shown_examples = list(ground.exemplars)
+        meta.wow_exemplars = tuple(shown_examples)
         # a bit's own text is the owner's, an aside's what is happening now: either may back
         # the history it tells ("belra is flirting with zan again"); so do her own card and
         # life, the chat she was shown and the memory a greeting quotes (fix round 1, review
@@ -3099,7 +3192,8 @@ class Pipeline:
                    *(r.text for r in pair),
                    *([follow] if follow else []),
                    *([turn.instruction] if turn.kind in (TurnKind.BIT, TurnKind.ASIDE)
-                     else [])]
+                     else []),
+                   *card_facts]  # the raid and guild card's stored facts ([talk] wow_grounding)
         callback = (meta.learning.callback if meta.learning is not None and
                     any(k == 'callback' for k,_,_ in meta.learning.used) else None)
         if callback is not None:
@@ -3124,7 +3218,7 @@ class Pipeline:
                         # the line it answers; of several waiting lines his question first
                         (list(dict.fromkeys([his, *waiting])) if waiting
                          else [trigger] if trigger else []),
-                        [r.text for r in earlier], samples,
+                        [r.text for r in earlier], [*samples, *shown_examples],
                         # a DM's copy check reads his earlier messages there (her own are the
                         # repeat check's): the audit's answer that sent his message back
                         support, [r.text for r in recent
@@ -3136,6 +3230,45 @@ class Pipeline:
                         beat_items=[x for _, x in beat_offer],
                         tail=overlaid, beat_keys=[k for k, _ in beat_offer],
                         asking=bool(his) and asks(his, buried=self._coherent()))
+
+    def _wow_grounding_on(self, turn: Turn) -> bool:
+        """[talk] wow_grounding (read at each compose) and a raid or guild turn
+        (grounding.wow_turn): never a whisper, a DM, a group DM or say, and never a template's."""
+        return (getattr(self.cfg.talk, "wow_grounding", False) is True
+                and turn.template is None and wow_turn(turn.channel))
+
+    async def _wow_grounding(self, turn: Turn, p: Persona, now: float):
+        """The turn's grounding (talk/grounding.py), plain SELECTs on the store's connection
+        (a few milliseconds a turn on the live copy; her example pool, the heaviest read, is kept
+        WOW_POOL_S, by her and whether officers' lines may be in it); None when the read fails
+        (logged with her guid only: the turn goes on without it)."""
+        m = self.world.members.get(turn.speaker)
+        officer = bool(self.world.is_officer(turn.speaker))
+        sp = grounding.Speaker(
+            turn.speaker, cls=m.class_ if m is not None else 0,
+            spec_tab=m.spec_tab if m is not None else -1,
+            raid_role=p.play.raid_role or None, officer=officer, human=self.human.guid,
+            names=dict(self._names()), protect=tuple(sorted(n.casefold() for n in self._protect())))
+        before = exemplars_time(getattr(self.cfg.talk, "wow_exemplars_before", EXEMPLARS_BEFORE))
+        if before is None:
+            before = exemplars_time(EXEMPLARS_BEFORE)
+        key = (turn.speaker, officer and turn.channel in grounding.OFFICER_CHANNELS)
+        held = self._wow_pools.get(key)
+        pool = held[2] if held is not None and 0 <= now - held[0] < WOW_POOL_S \
+            and held[1] == before else None
+        try:
+            ground, pool = grounding.build(self.store.conn, sp, turn.channel, now, before=before,
+                                           pool=pool)
+        except Exception:
+            log.warning("wow_grounding_failed guid=%d", turn.speaker)
+            return None
+        if held is None or held[2] is not pool:
+            self._wow_pools[key] = (now, before, pool)
+            while len(self._wow_pools) > WOW_POOLS:
+                self._wow_pools.pop(next(iter(self._wow_pools)))
+        log.debug("wow_grounding guid=%d card=%d examples=%d pool=%d glossary=%d", turn.speaker,
+                  len(ground.card), len(ground.exemplars), len(pool), int(bool(ground.glossary)))
+        return ground
 
     @staticmethod
     def _prompt_budget(turn: Turn) -> int:
@@ -4462,6 +4595,10 @@ class Pipeline:
                     tells.append(Tell("member flirt", True))
                 if self._invents_game_name(text):
                     tells.append(Tell("game name", False, True))
+                if self._place_slip(p, text):  # [geography]: her own place, wrong
+                    tells.append(Tell("place", False, True))
+                if self._names_his_home(turn, c, text):  # [owner] home, where others read
+                    tells.append(Tell("his place", False, True))
                 if self._heat_public(turn, meta, text):  # [heat] public_cap: never sent
                     tells.append(Tell(HEAT_PUBLIC, True))
                 if self._copies_own(turn, meta, text):
@@ -4564,6 +4701,8 @@ class Pipeline:
             refused.append(HEAT_PUBLIC)
         if self._copies_own(turn, meta, text):
             refused.append("own copy")
+        if self._names_his_home(turn, c, text):
+            refused.append("his place")
         if refused:
             return None, refused
         text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
@@ -4599,6 +4738,8 @@ class Pipeline:
                            far=summons_ok is False and not self._met_him(turn.speaker))
         if self._invents_game_name(text):
             tells.append(Tell("game name", False, True))
+        if self._names_his_home(turn, c, text):
+            tells.append(Tell("his place", False, True))
         if any(t.fatal or t.reason in DROP_ON_RETRY for t in tells):
             log.info("owed_late_draft_refused: guid=%d tells=%s", turn.speaker,
                      ",".join(sorted({t.reason for t in tells if t.fatal or t.reason in DROP_ON_RETRY})))
@@ -4724,6 +4865,37 @@ class Pipeline:
         h = self.human
         return [x for x in (h.called, h.character_name, h.nickname) if x]
 
+    def _place_slip(self, p: Persona, text: str) -> str | None:
+        """How her line gets her own place wrong at her local time (geography.tells.slip:
+        "snow", "coast", "clock"...), or None; always None with [geography] off or no place.
+        A failing check costs nothing: logged by its class."""
+        place = self._her_place(p)
+        if place is None:
+            return None
+        try:
+            return geo_tells.slip(text, place, her_local(self.clock.local(), p))
+        except Exception as e:
+            log.warning("place_slip_failed: guid=%d reason=%s", p.guid, type(e).__name__)
+            return None
+
+    def _place_hint_words(self, p: Persona) -> str:
+        """Her place line as PLACE_HINT says it (no "Where you live:" head); "" without one."""
+        place = self._her_place(p)
+        if place is None:
+            return ""
+        parts = geo_lines.now_parts(place, her_local(self.clock.local(), p))
+        return " ".join(parts).removeprefix("Where you live: ")
+
+    def _names_his_home(self, turn: Turn, c: Composed, text: str) -> bool:
+        """A line on a channel others read says where he lives ([owner] home: geography.tells
+        .his_home), when the chat it was shown did not say it already. Never on a whisper or a
+        DM (his home is in her private turns with him by design)."""
+        home = geo_config.owner()
+        if home is None or is_private(turn.channel):
+            return False
+        return geo_tells.his_home(text, home, him=self._his_names(),
+                                  shown=[*c.answers, *c.window])
+
     def _to_member(self, turn: Turn) -> bool:
         hg = self.human.guid
         return (turn.addressee is not None and turn.addressee != hg
@@ -4813,6 +4985,11 @@ class Pipeline:
             hints.append(ERA_HINT)
         if "game name" in reasons:
             hints.append(GAME_NAME_HINT)
+        if "place" in reasons and (where := self._place_hint_words(p)):
+            hints.append(PLACE_HINT.format(place=where))
+        if "his place" in reasons:
+            hints.append(HIS_HOME_HINT.format(**dict(zip(("they", "them", "their"),
+                                                         self.human.forms))))
         if HEAT_PUBLIC in reasons:
             hints.append(HEAT_PUBLIC_HINT)
         if "self name" in reasons:

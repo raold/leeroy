@@ -48,6 +48,11 @@ realm do. First names unique across every persona ran out: with 177 personas, 26
 30 commonest women's first names were held and 4-5 of each night's 12 were refused. The
 screens still watch every one of those names. Cast generation is unchanged: a cast
 member's first name stays unique within the cast.
+A refusal logs `world_persona_refused guid= error=<class>`, with `code=` when the stage
+raised its own fixed code (`world_looks_refused`, `world_adult_floor`, ...) and, when no
+rename candidate fit, how many candidates were taken by first name (`first=`), by whole
+name (`whole=`) or failed a screen or a limit under the new name (`screen=`); the same
+counts follow `persona_name_collision`. Never a name or a model's words.
 Existing native Realm actors keep their actor cards, moves, whispers and night
 beats even when they have world personas; additional world speakers are separate.
 A world bot present in an authoritative cast roster becomes eligible for the

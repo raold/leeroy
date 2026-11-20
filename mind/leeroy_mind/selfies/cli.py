@@ -620,14 +620,14 @@ async def _try_ask(root, store, cfg, scfg, clock, args, make_llm) -> int:
         def request(attempt):
             return RenderRequest(spec.phrases, spec.negative, seed_for(0, guid, attempt),
                                  scfg.steps, scfg.guidance, SIZE, (folder / "photo.jpg").absolute(),
-                                 (folder / "photo.thumb.jpg").absolute(), THUMB_PX, scfg.nsfw_max,
+                                 (folder / "photo.thumb.jpg").absolute(), THUMB_PX,
                                  identity=identity, shape="portrait",
                                  detail=detail_for(scfg, rear=from_behind(scene)))
         try:
             await ctx.arbiter.make_room()
             await start_worker(worker.worker, ctx.arbiter.make_room)
             got, _ = await render_slot(worker, request, rid=lambda attempt: f"ask:{attempt}",
-                                       make_room=ctx.arbiter.make_room)
+                                       make_room=ctx.arbiter.make_room, nsfw_max=scfg.nsfw_max)
             result.update(rendered=1, nsfw=round(got.nsfw, 4))
         except SetRefused:
             result.update(refused="flagged", nsfw=worker.last_nsfw)

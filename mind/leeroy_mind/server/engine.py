@@ -10,7 +10,7 @@ import uuid
 from leeroy_mind.discord import layout
 from leeroy_mind.discord.channels import channel_id, is_group
 from leeroy_mind.discord.talk import answer_delay, GONE
-from leeroy_mind.discord.presence import presence_of, local_time, RNG_SEED
+from leeroy_mind.discord.presence import presence_of, her_local, RNG_SEED
 from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.storage.db import TRANSIENT_CODES, error_code
@@ -316,7 +316,7 @@ class ServerEngine:
         p = self.app.personas.get(speaker)
         member = self.app.world.discord_members().get(speaker)
         if p is None or member is None or presence_of(p,
-                local=local_time(self.app.clock.local(), p.identity.region),
+                local=her_local(self.app.clock.local(), p),
                 body_online=speaker in self.app.world.online, body_zone=member.zone,
                 rng_seed=RNG_SEED).state not in ('online','idle'):
             return False

@@ -247,6 +247,16 @@ def _life_unpinned():
 
 
 @pytest.fixture(autouse=True)
+def _geography_default():
+    """[geography] is process-wide (geography/config.py): every test starts and ends with it
+    on, the default, and no [owner] home, whatever an app, a CLI or a test pinned."""
+    from leeroy_mind.geography import config as geo_config
+    geo_config.pin(True)
+    yield
+    geo_config.pin(True)
+
+
+@pytest.fixture(autouse=True)
 def _heat_off():
     """[heat] is process-wide while a mind runs (heat/live.py): every test starts and ends with
     it off, today's behaviour, whatever an app or a rig attached."""

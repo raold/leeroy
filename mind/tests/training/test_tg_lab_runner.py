@@ -37,6 +37,7 @@ def lab(fake, monkeypatch):
     applier = SimpleNamespace(apply_standing=AsyncMock(return_value=0))
     schedule = lambda: LabSchedule(fake.clock.now(), fake.clock.now() - 3600, False, False, None, None)
     runner = LabRunner(fake, fake.cfg, SimpleNamespace(book=lambda: object()), applier, schedule=schedule)
+    runner.feed(Hello(1, "mod-leeroy", "0.1.0", 21, 0, features=(module.DUMMY_FEATURE,)))
     return runner, refresh, applier
 
 
@@ -642,3 +643,22 @@ def test_hello_records_the_worldserver_start_once_per_process(fake, lab):
     assert _get(fake.conn, module.NATIVE_START_KEY) == stored
     runner.feed(replace(hello, started_ms=1794400000000))
     assert _get(fake.conn, module.NATIVE_START_KEY)["started_ms"] == 1794400000000
+
+
+def test_lab_starts_only_on_a_native_that_forms_the_party_at_the_dummy(fake, lab, caplog):
+    # An older native forms each bot's solo party before the teleport, and the core disbands a one-member
+    # group as its bot lands on another map: every trial it accepted failed ownership_changed (2026-11-10..14).
+    runner, refresh, _ = lab
+    fresh = LabRunner(fake, fake.cfg, runner.ground, runner.applier, schedule=runner.schedule)
+    asyncio.run(fresh.tick())  # No hello yet: nothing is claimed, probed or sent.
+    assert fresh.reason == "native_dummy_unsupported" and not fresh.active and not fake.sent
+    old = Hello(2, "mod-leeroy", "0.1.0", 21, 0, features=("item_links", "regear"), started_ms=1794300000000)
+    fresh.feed(old)
+    asyncio.run(fresh.tick())
+    asyncio.run(fresh.tick())
+    assert fresh.reason == "native_dummy_unsupported" and not fresh.active
+    assert not fake.sent and not refresh.await_count and _get(fake.conn, OWNED_KEY) is None
+    assert caplog.text.count("training_lab_native_unsupported missing=dummy_party_on_arrival") == 1
+    fresh.feed(replace(old, ts=3, features=old.features + (module.DUMMY_FEATURE,)))
+    asyncio.run(start(fresh))
+    assert fresh.active and fresh.members() == set(fake.members)

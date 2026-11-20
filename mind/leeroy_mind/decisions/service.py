@@ -21,7 +21,7 @@ RECORD_TRIES = 3        # writes of his overrule after the game was undone, befo
 def presences(app, guids, now: float) -> dict[int, str]:
     """Discord presence (online, idle, dnd, offline) of these members, as server.state computes it
     but from the presence inputs only: no message scan and no database read on the loop."""
-    from leeroy_mind.discord.presence import RNG_SEED, local_time, presence_of
+    from leeroy_mind.discord.presence import RNG_SEED, her_local, presence_of
     from leeroy_mind.server.state import pulled_into_play
     cast = dict(app.world.discord_members())
     online, playing = frozenset(app.world.online), pulled_into_play(app)
@@ -30,7 +30,7 @@ def presences(app, guids, now: float) -> dict[int, str]:
     for guid in guids:
         p = app.personas.get(guid)
         out[guid] = 'offline' if p is None else presence_of(
-            p, local=local_time(owner_now, p.identity.region), body_online=guid in online,
+            p, local=her_local(owner_now, p), body_online=guid in online,
             body_zone=getattr(cast.get(guid), 'zone', 0), rng_seed=RNG_SEED, in_his_group=guid in playing).state
     return out
 

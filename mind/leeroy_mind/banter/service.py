@@ -9,7 +9,7 @@ from leeroy_mind.culture.config import app_enabled
 from leeroy_mind.culture.tease import tease_ok, _tease_ok, mark_teased, OWNER_KEY
 from leeroy_mind.clock import night_of, local_at
 from leeroy_mind.discord.channels import is_discord, same_medium
-from leeroy_mind.discord.presence import presence_of, local_time, RNG_SEED
+from leeroy_mind.discord.presence import presence_of, her_local, RNG_SEED
 from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.fingerprint import fingerprint, render_style_hint
 from leeroy_mind.talk.pipeline import TurnMeta
@@ -170,7 +170,7 @@ class Banter:
             if p is None or g in away or getattr(e, "_stepped_away", lambda g: False)(g):
                 continue
             member = app.world.members.get(g)
-            presence = presence_of(p,local=local_time(app.clock.local(),p.identity.region),
+            presence = presence_of(p,local=her_local(app.clock.local(), p),
                 body_online=g in app.world.online,body_zone=getattr(member,"zone",0),rng_seed=RNG_SEED,
                 in_his_group=app.world.human_online and app.world.in_group(g) and app.world.in_group(app.human_guid))
             if presence.state in {"online","idle"}:

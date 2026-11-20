@@ -1297,3 +1297,19 @@ def test_the_screens_watch_whole_names_as_they_watch_taken_names(how):
                              **{how: frozenset({"Sam Carter"})}))
     assert any("romance involving another member" in call["messages"][-1]["content"]
                for call in llm.calls[2:])
+
+
+def test_a_failed_rename_counts_what_its_candidates_ran_into(caplog):
+    """A refusal says whether the candidates were taken (by first or whole name) or failed a
+    screen or a limit under the new name, by count and fixed code only."""
+    long = "Abcdefghijklmnopqrstu Abcdefghijklmnopqrstuv"  # a name, but over real_name's 40
+    llm = FakeLLM(script_from(["profile", _persona_json("Pat Reeve"), _persona_json("Pat Reeve"),
+                               _names_json("Pat Moss", "Sam Carter", long),
+                               _names_json("Pat Moss")]))
+    with caplog.at_level(logging.WARNING), pytest.raises(NameCollision) as e:
+        run(generate_persona(llm, "m", _slot(), _member_char(), "", GENERATION_RULES,
+                             taken_names=frozenset({"Pat Reeve"}),
+                             full_names=frozenset({"Sam Carter"}), private_logs=False))
+    assert e.value.outcomes == {"first": 2, "whole": 1, "screen": 1}
+    assert "persona_name_collision: guid=201 first=2 whole=1 screen=1" in caplog.text
+    assert not any(n in caplog.text for n in ("Pat", "Sam", "Abcdef"))

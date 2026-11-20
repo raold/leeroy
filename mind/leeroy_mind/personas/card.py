@@ -94,13 +94,15 @@ def _identity_line(p: Persona, race: str, class_name: str) -> str:
     return f"You are {who}. {_play(p, race, class_name)}"
 
 
-def about_lines(p: Persona, race: str, class_name: str) -> str:
+def about_lines(p: Persona, race: str, class_name: str, home: str = "") -> str:
     """The prompt card's head, the "About you" block (identity audit, 2026-11-15: whatever was on
     the card stayed consistent and whatever was off it got invented, so a woman whose card never
     said she was one took his body in explicit talk, and married women said they were single):
     her name, her age and sex in words with her pronouns ("a 31-year-old woman from the UK
     (she/her)"), whom she plays, then who she lives with (her household: a partner, kids and
-    their ages, pets), her job and her rhythm. It is never dropped nor cut for the budget."""
+    their ages, pets), her job and her rhythm. It is never dropped nor cut for the budget.
+    `home` (geography.lines.home_phrase, "You live in Colorado.": a live turn's own card only)
+    follows who she is."""
     from .facts import GENDER_WORD, pronoun_pair
     first = _one_line(p.identity.real_name).split(" ")[0]
     gender = p.identity.player_gender
@@ -111,11 +113,12 @@ def about_lines(p: Persona, race: str, class_name: str) -> str:
     pair = pronoun_pair(gender)
     if pair:
         who += f" ({pair})"
-    ident = f"You are {first + ', ' if first else ''}{who}. {_play(p, race, class_name)}"
-    home = " ".join(x for x in (_field("At home", p.real_life.household),
+    ident = " ".join(x for x in (f"You are {first + ', ' if first else ''}{who}.", home,
+                                 _play(p, race, class_name)) if x)
+    life = " ".join(x for x in (_field("At home", p.real_life.household),
                                 _field("Work", p.real_life.job),
                                 _field("Rhythm", p.real_life.rhythm)) if x)
-    return "\n".join(x for x in (ident, home) if x)
+    return "\n".join(x for x in (ident, life) if x)
 
 
 def _wants(p: Persona) -> str:
@@ -139,7 +142,7 @@ def _prompt_mind(p: Persona) -> tuple[str, str]:
 
 def _render(p: Persona, race: str, class_name: str, mind: str, view: str, *,
             budget: int = CARD_BUDGET, about: bool = False, temper: bool = True,
-            topic: str = "") -> str:
+            topic: str = "", home: str = "") -> str:
     """The card's sections within `budget`. With `about` (the prompt card), the identity and
     work lines give way to about_lines, kept whole, and the rest stays exactly what it was: the
     sections are fitted as before and the head's few more words come on top. Without `temper`
@@ -154,7 +157,7 @@ def _render(p: Persona, race: str, class_name: str, mind: str, view: str, *,
         return card
     old = "\n".join(x for x in (ident, work) if x)
     rest = card[len(old):].lstrip("\n") if card.startswith(old) else ""
-    return "\n".join(x for x in (about_lines(p, race, class_name), rest) if x)
+    return "\n".join(x for x in (about_lines(p, race, class_name, home), rest) if x)
 
 
 def _opinions(p: Persona, topic: str) -> tuple[list[str], bool]:
@@ -213,7 +216,7 @@ def render_core_card(p: Persona, *, race: str, class_name: str) -> str:
 
 
 def render_prompt_card(p: Persona, *, race: str, class_name: str, voice: bool = False,
-                       topic: str = "") -> str:
+                       topic: str = "", home: str = "") -> str:
     """The card a prompt shows: the "About you" head (about_lines: her sex and pronouns, her
     household and her job, never cut), then the same sections as the stored card, attachment,
     humour and how they play said as behaviour, chosen as they would be in PROMPT_CARD_BUDGET
@@ -224,12 +227,15 @@ def render_prompt_card(p: Persona, *, race: str, class_name: str, voice: bool = 
     `topic` ([talk] coherence): the line of his she answers; the opinion it touches leads the
     two shown and is then the last section dropped for the budget, not the first (self-play
     audit, 2026-11-17: an officer argued against a rule his card calls law, because the card
-    showed only his first two opinions and dropped them first)."""
+    showed only his first two opinions and dropped them first). `home` ([geography], a live
+    turn's own card: geography.lines.home_phrase) follows who she is in the head, never cut;
+    the night's cards and every other reader's go without it, so a scene or a write-up another
+    member reads never carries her home."""
     if voice and getattr(p, "speech", None) is not None:
         return _render(p, race, class_name, *_prompt_mind(p), budget=PROMPT_CARD_BUDGET,
-                       about=True, temper=False, topic=topic)
+                       about=True, temper=False, topic=topic, home=home)
     return _render(p, race, class_name, *_prompt_mind(p), budget=PROMPT_CARD_BUDGET, about=True,
-                   topic=topic)
+                   topic=topic, home=home)
 
 
 def render_night_card(p: Persona, *, race: str, class_name: str) -> str:

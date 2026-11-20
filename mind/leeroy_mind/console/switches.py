@@ -18,6 +18,7 @@ SWITCHES = (
     ('talk','think_private','Private beat before answers to him','',True),
     ('talk','coherence','Conversations hold together (read at start and at his login)',''),
     ('talk','coherence_length','Long game answers kept whole (read at start and at his login)',''),
+    ('talk','wow_grounding','Raid and guild facts and her own lines in WoW talk','',True),
     ('talk','intent','Her want for each turn',''),
     ('talk','situation','Situation prompts',''),
     ('talk','shape','Reply shapes',''),
@@ -44,6 +45,7 @@ SWITCHES = (
     ('culture','memes','Culture: memes','culture.enabled'),
     ('outreach','enabled','Outreach','restart the console too'),
     ('godmode','enabled','Godmode',''),
+    ('geography','enabled','Geography: her place and clock, his home in private','',True),
     ('decisions','enabled','Decisions','server.enabled'),
     ('voice','enabled','Voice comms','the voice service'),
     ('voice','autostart','Voice service autostart','voice.enabled'),
@@ -104,7 +106,8 @@ EXCLUDED = {
 }
 
 # mind.toml tables with no boolean switch at all (the completeness test names each).
-NO_SWITCHES = frozenset({'console','guild','dkp','health','models','cast','memory','bridge','ollama','human'})
+NO_SWITCHES = frozenset({'console','guild','dkp','health','models','cast','memory','bridge','ollama','human',
+                         'owner'})
 
 
 def default(row):

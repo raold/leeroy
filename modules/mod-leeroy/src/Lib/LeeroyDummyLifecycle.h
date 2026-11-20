@@ -23,6 +23,35 @@ inline bool DummyOwnerProven(DummyOwnerState const& state)
     return state.sameSession && !state.isHuman && state.isCast && !state.isSelfBot && state.sameGuild
         && !state.invited && !state.reserved && state.groupOwned && state.masterOwned && !state.loggingOut;
 }
+// The facts an unproved ownership lacks, in a fixed order, for the blocked-member log line.
+inline std::string DummyOwnerMissing(DummyOwnerState const& state)
+{
+    std::string missing;
+    auto add = [&missing](bool failed, char const* name)
+    {
+        if (!failed) return;
+        if (!missing.empty()) missing += ',';
+        missing += name;
+    };
+    add(!state.sameSession, "session");
+    add(state.isHuman, "human");
+    add(!state.isCast, "cast");
+    add(state.isSelfBot, "selfbot");
+    add(!state.sameGuild, "guild");
+    add(state.invited, "invite");
+    add(state.reserved, "reserved");
+    add(!state.groupOwned, "group");
+    add(!state.masterOwned, "master");
+    add(state.loggingOut, "logout");
+    return missing;
+}
+// The core's LFGPlayerScript::OnPlayerMapChanged runs each time a player is added to a map (every far
+// teleport) and, outside an LFG dungeon, disbands the player's group if one member or fewer is left in it.
+// A trial's solo party therefore never survives a move to another map: it is formed at the dummy.
+inline bool DummySoloPartySurvivesMapEntry(std::uint32_t members, bool lfgDungeonMap)
+{
+    return lfgDungeonMap || members > 1;
+}
 // Group::Create sends the new leader an empty group list, and playerbots' stock "reset botAI"
 // answers it by dropping any master outside the bot's group (the driver always is) and resetting
 // its strategies. Put the driver back only while our solo party still holds the body and every
@@ -40,6 +69,30 @@ inline bool DummyGroupProven(bool released, bool botGrouped, bool exactIdentity,
     if (released) return !botGrouped;
     return exactIdentity && ordinaryParty && !invites && !nonPermanentBound
         && ((members == 1 && botGrouped && soleMemberAndLeader) || (members == 0 && !botGrouped));
+}
+// Moving, per member. The trial moves the untouched body first (no party, no master), so nothing of ours is
+// on it when the core may disband a one-member group at a map change (DummySoloPartySurvivesMapEntry). At the
+// dummy it forms the solo party and takes the driver as master. That party's group list makes playerbots'
+// stock "reset botAI" drop the driver on the bot's next AI pass (1-5 s after a teleport); the controller puts
+// it back (master_reasserted). The member counts as arrived once that has happened, or after kDummySettleMs
+// with no reset, so the reset does not land mid-fight and cost the member its trial (ai_reset).
+inline constexpr std::uint64_t kDummySettleMs = 8000;
+struct DummyMoveState
+{
+    bool teleporting = false, owned = false, alive = true, inCombat = false, atTrial = false, setUp = false,
+        reasserted = false;
+    std::uint64_t sinceSetupMs = 0;
+};
+enum class DummyMoveStep { Wait, Block, Died, Attacked, Setup, Settle, Arrived };
+inline DummyMoveStep DecideDummyMove(DummyMoveState const& state)
+{
+    if (state.teleporting) return DummyMoveStep::Wait;
+    if (!state.owned) return DummyMoveStep::Block;
+    if (!state.alive) return DummyMoveStep::Died;
+    if (state.inCombat) return DummyMoveStep::Attacked;
+    if (!state.atTrial) return DummyMoveStep::Wait;
+    if (!state.setUp) return DummyMoveStep::Setup;
+    return state.reasserted || state.sinceSetupMs >= kDummySettleMs ? DummyMoveStep::Arrived : DummyMoveStep::Settle;
 }
 struct DummyReturnState
 {

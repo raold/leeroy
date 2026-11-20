@@ -1,8 +1,9 @@
-"""`python -m leeroy_mind life day|now|intents|shapes|state`: the members' day plans, where
-they are now, what they want on a turn (talk/intent.py), their reply shapes and how they feel
-right now (life/statebook.py), read-only on mind.db opened mode=ro (shapes also reads
-mind.toml). Prints guids, codes, times, numbers, counts and percentages only, never persona
-text, names or the line given with --line.
+"""`python -m leeroy_mind life day|now|intents|shapes|state|places`: the members' day plans,
+where they are now, what they want on a turn (talk/intent.py), their reply shapes, how they feel
+right now (life/statebook.py) and where they live (geography/: her place, zone and local time),
+read-only on mind.db opened mode=ro (shapes also reads mind.toml). Prints guids, codes, times,
+numbers, counts and percentages only (places --guid adds her code-built "where you live" line),
+never persona text, names, his [owner] home or the line given with --line.
 
 `shapes --guid N --family dm --his-words 28 [--owed] [--samples 1000]` draws her reply shapes
 (talk/shape.py) from her stored typing profile and prints, as JSON, each shape's share and the
@@ -22,7 +23,7 @@ from pathlib import Path
 
 from leeroy_mind.clock import local_at
 from leeroy_mind.config import ConfigError, default_data_dir, load_config
-from leeroy_mind.discord.presence import local_time
+from leeroy_mind.discord.presence import her_local
 from leeroy_mind.personas.schema import Persona, persona_from_dict
 from leeroy_mind.personas.tiers import cast_sql
 from leeroy_mind.talk.intent import Intent, IntentContext, draw_intent
@@ -96,8 +97,11 @@ def _personas(conn) -> tuple[dict[int, Persona], int]:
 
 def _switch(root: Path) -> None:
     """[talk] coherence for this command, as the running mind has it (LifeService.configure):
-    a process that builds no LifeService reads the day plan's module switch."""
+    a process that builds no LifeService reads the day plan's module switch. [geography] too:
+    her own clock as the running mind keeps it (never his [owner] home: nothing here shows it)."""
     from . import day as day_module
+    from leeroy_mind.geography import config as geo_config
+    geo_config.pin(geo_config.load_geography_config(root / "mind.toml").enabled)
     try:
         talk = load_config(root / "mind.toml").talk
     except (ConfigError, OSError):
@@ -120,6 +124,33 @@ def _day(personas: dict[int, Persona], args) -> int:
     return 0
 
 
+def _places(personas: dict[int, Persona], args) -> int:
+    """Where each member lives ([geography]): her place on the sheet, its zone and her local time
+    now; with --guid, her "where you live, right now" line too."""
+    from leeroy_mind.geography import config as geo_config
+    from leeroy_mind.geography.lines import now_parts
+    from leeroy_mind.geography.places import place_of
+    if args.guid is not None:
+        if args.guid not in personas:
+            print(f"life places: no persona for guid {args.guid}", file=sys.stderr)
+            return 1
+        personas = {args.guid: personas[args.guid]}
+    owner_now = args.at or local_at(time.time())
+    on = geo_config.on()
+    counts = Counter()
+    for guid, p in sorted(personas.items()):
+        place = place_of(p) if on else None
+        her = her_local(owner_now, p)
+        counts[place.zone if place else "owner clock"] += 1
+        print(f"{guid} {p.identity.region} place={place.key if place else '-'} "
+              f"zone={place.zone if place else 'owner clock'} local={her:%Y-%m-%d %H:%M}")
+        if args.guid is not None and place is not None:
+            print(" ".join(now_parts(place, her)))
+    print(f"geography {'on' if on else 'off'}: "
+          + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    return 0
+
+
 def _counts(counter: Counter, keys) -> str:
     return " ".join(f"{k}={counter[k]}" for k in keys)
 
@@ -128,7 +159,7 @@ def _now(personas: dict[int, Persona], args) -> int:
     owner_now = args.at or local_at(time.time())
     where, game, discord, events = Counter(), Counter(), Counter(), Counter()
     for p in personas.values():
-        her = local_time(owner_now, p.identity.region)
+        her = her_local(owner_now, p)
         on_game = presence_at(p, her, medium="game")
         where[on_game.where] += 1
         events[on_game.event] += 1
@@ -167,7 +198,7 @@ def _intents(personas: dict[int, Persona], args) -> int:
         return 1
     kind = TurnKind(args.kind)
     owed = kind is TurnKind.REPLY_HUMAN if args.owed is None else args.owed
-    her = local_time(args.at or local_at(time.time()), p.identity.region)
+    her = her_local(args.at or local_at(time.time()), p)
     lp = presence_at(p, her, medium="discord" if args.family in DISCORD_FAMILIES else "game")
     ctx = intent_context(p, lp, kind=kind, family=args.family, owed=owed,
                          his_line=args.line or "", tail=args.tail, event=args.event)
@@ -252,7 +283,7 @@ def _state(db: Path, personas: dict[int, Persona], args) -> int:
     return 0
 
 
-ACTIONS = {"day": _day, "now": _now, "intents": _intents}  # shapes also reads mind.toml (root)
+ACTIONS = {"day": _day, "now": _now, "intents": _intents, "places": _places}  # shapes also reads mind.toml (root)
 
 
 def life_main(argv=None) -> int:
@@ -292,7 +323,10 @@ def life_main(argv=None) -> int:
     p_shapes.add_argument("--samples", type=_samples, default=1000)
     p_state = sub.add_parser("state", help="how each member feels right now, and her baseline")
     p_state.add_argument("--guid", type=int)
-    for p in (p_day, p_now, p_int, p_shapes, p_state):
+    p_places = sub.add_parser("places", help="where each member lives, her zone and local time")
+    p_places.add_argument("--guid", type=int)
+    p_places.add_argument("--at", type=_at, help="YYYY-MM-DDTHH:MM on this PC's clock (default: now)")
+    for p in (p_day, p_now, p_int, p_shapes, p_state, p_places):
         p.add_argument("--data-dir", default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     root = Path(args.data_dir).resolve() if args.data_dir else default_data_dir()

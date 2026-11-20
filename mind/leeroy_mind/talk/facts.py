@@ -41,18 +41,19 @@ from typing import Callable, Sequence
 from leeroy_mind.library.chunks import Chunk, split_sentences
 from leeroy_mind.library.search_worker import SearchBusy, SearchClosed
 from leeroy_mind.llm.scheduler import Priority
-from leeroy_mind.talk.names import (NEUTRAL_FACTIONS, name_level, name_pattern, sides_named,
-                                    words_re)
+from leeroy_mind.talk.names import (NEUTRAL_FACTIONS, WORDLIKE, expand, name_level, name_pattern,
+                                    names_in, respell, sides_named, words_re)
 from leeroy_mind.talk.questions import GameQuestion, game_question
 from leeroy_mind.talk.reference import (REFERENCE_KINDS, preferred_reference_language,
                                         reference_candidates, reference_lines)
 from leeroy_mind.talk.style import to_ascii
-from leeroy_mind.text import estimate_tokens, truncate_words
-from leeroy_mind.wow import ENCOUNTER_MEMBERS
+from leeroy_mind.text import estimate_tokens, strip_wow_markup, truncate_words
+from leeroy_mind.wow import BOSS_NAMES, ENCOUNTER_MEMBERS, RAID_INSTANCES
 
-__all__ = ["FACTS_CAP_S", "FACTS_TOKENS", "GameQuestion", "LibraryFacts", "boss_mechanics",
-           "chunk_faction", "clean_text", "fact_lines", "for_side", "game_question",
-           "most_specific", "relevant", "salient", "title_names"]
+__all__ = ["ENTITY_LINES", "ENTITY_TOKENS", "FACTS_CAP_S", "FACTS_TOKENS", "GameQuestion",
+           "LibraryFacts", "boss_mechanics", "chunk_faction", "clean_text", "entity_question",
+           "entity_titles", "fact_lines", "for_side", "game_question", "most_specific", "relevant",
+           "salient", "title_names"]
 
 log = logging.getLogger("leeroy_mind.talk")
 
@@ -68,6 +69,14 @@ KEEP_LINES = 32  # the lines whose lookups are kept for their replies
 TITLE_NAMES = 120  # the names and word runs of his line looked up as titles, at most
 STRICT_TOPICS = frozenset({"item", "class"})  # what's good is an opinion: relevant(strict=)
 MECHANICS_LINES = 3
+# A WoW turn's facts about what his line or its topic names ([talk] wow_grounding, entity_question):
+# the best ENTITY_LINES, ENTITY_TOKENS at most, from the pages titled with those names only
+ENTITY_LINES, ENTITY_TOKENS = 2, 100
+ENTITY_KINDS = ("strategy", "loot", "item", "zone", "lore", "event")
+_BRACKETED = re.compile(r"\[([^\[\]\n|]{3,80})\]")
+_WORDLIKE = re.compile(r"(?<![\w'-])(?:" + "|".join(sorted(map(re.escape, WORDLIKE), key=len,
+                                                          reverse=True)) + r")(?![\w'-])",
+                       re.IGNORECASE)
 MECHANIC_WORDS = (6, 28)
 # Words of his that never tie a fact to his question on their own (the probe: "entrance"
 # brought the Nexus Vault and Dalaran's mailboxes): question and chat words, game words every
@@ -569,6 +578,35 @@ def title_names(q: GameQuestion) -> list[str]:
     return list(dict.fromkeys(x.casefold() for x in out))[:TITLE_NAMES]
 
 
+def entity_question(text: str) -> GameQuestion | None:
+    """His line, or a turn's topic, as a lookup of the WoW things it names, for a turn the
+    question path does not cover ([talk] wow_grounding): the bosses, raids, places, events and
+    factions names.names_in reads (raider shorthand written out, never a WORDLIKE one: "hol up"
+    is no dungeon) and the items it gives in brackets (a link reads as [Name]). None for a game
+    question (game_question: its lookup has the facts) or for text that names nothing."""
+    plain = " ".join(strip_wow_markup(text or "").split())
+    if not plain or game_question(plain) is not None:
+        return None
+    query = respell(expand(plain, keep=[m.span() for m in _WORDLIKE.finditer(plain)]))
+    found = [*names_in(query), *(m.group(1).strip() for m in _BRACKETED.finditer(plain))]
+    names = tuple(dict.fromkeys(n for n in found if n))
+    if not names:
+        return None
+    return GameQuestion("lore", ENTITY_KINDS, query, names)
+
+
+def entity_titles(q: GameQuestion) -> list[str]:
+    """The page titles an entity lookup asks Library.titled for: its names only (title_names
+    without the word runs, which a chat line is full of), each also singular and plural."""
+    out = [x for n in q.names for x in (n, " ".join(_singular(w) for w in n.split()), _plural(n))]
+    # a raid boss's own tactics page is titled with its raid ("Anub'arak (Trial of the Crusader
+    # tactics)"); its plain "(tactics)" page may be a dungeon namesake's
+    bosses = {name.casefold(): RAID_INSTANCES[m] for (m, _), name in BOSS_NAMES.items()
+              if m in RAID_INSTANCES}
+    out += [f"{n} ({bosses[n.casefold()]} tactics)" for n in q.names if n.casefold() in bosses]
+    return list(dict.fromkeys(x.casefold() for x in out))[:TITLE_NAMES]
+
+
 def _proper(title: str) -> bool:
     """A page about something with a name ("Tier 10", "Deathbringer's Will"), not about a kind
     of thing ("Frost wyrm"): every word of four letters or more starts with a capital."""
@@ -786,6 +824,23 @@ def _lore_fact_lines(q: GameQuestion, hits: Sequence[Chunk], named: Sequence[Chu
     return _LoreFactResult(tuple(lines), len(hits), len(named), found)
 
 
+def _entity_fact_lines(q: GameQuestion, named: Sequence[Chunk], side: str | None) -> list[str]:
+    """An entity lookup's facts: the titled pages' lines through the question's gate and
+    format (_lore_fact_lines' policy), at most ENTITY_LINES and ENTITY_TOKENS."""
+    named = for_side([c for c in named if _proper(c.title)], side)
+    names = list(dict.fromkeys([*q.names, *(_title_name(c.title) for c in named)]))
+    words, terms = salient(q.query), his_words(q.query)
+    raids = tuple(n.casefold() for n in RAID_INSTANCES.values())
+    # a boss's raid tactics before its dungeon namesake's, then its loot, the item, the place
+    # and the story (a raid turn wants what the fight is, not the boss's biography)
+    ordered = sorted(named, key=lambda c: (
+        ENTITY_KINDS.index(c.kind) if c.kind in ENTITY_KINDS else len(ENTITY_KINDS),
+        not any(r in c.title.casefold() for r in raids), -len(_terms(c.text) & terms), c.id))
+    lines = fact_lines(by_place(ordered, names), q.query, budget=ENTITY_TOKENS, names=names,
+                       keep=lambda c, line: relevant(c, line, names, words))
+    return lines[:ENTITY_LINES]
+
+
 class _InlineSearch:
     """Compatibility for existing libraries/fakes, including loop-owned asyncio.Events."""
     def __init__(self, library):
@@ -836,6 +891,7 @@ class LibraryFacts:
         self._lines: OrderedDict[int, asyncio.Task] = OrderedDict()
         self._tasks: set[asyncio.Task] = set()  # includes cancelled/evicted work until done
         self._mechanics: dict[tuple[str, str | None], list[str]] = {}
+        self._named: OrderedDict[str, asyncio.Task] = OrderedDict()  # entity lookups, by query
         self._closed = False
         self._close_task: asyncio.Task | None = None
         self._providers: list[Callable[[str], list[str]]] = []
@@ -877,6 +933,49 @@ class LibraryFacts:
             if task.cancelled() and not (me is not None and me.cancelling()):
                 return []
             raise
+
+    async def named(self, text: str) -> list[str]:
+        """The facts about the WoW things `text` names (entity_question; [] when it names
+        none or is a game question): the pages titled with those names only (Library.titled:
+        no search, no embedding, no model), gated and formatted as a question's facts are
+        (_entity_fact_lines). One lookup per text while KEEP_LINES are kept, shared by every
+        turn that asks; [] when the reader is busy, closed or fails (logged as counts only)."""
+        q = entity_question(text)
+        if q is None or self._closed:
+            return []
+        key = q.query.casefold()
+        task = self._named.get(key)
+        if task is None:
+            task = asyncio.get_running_loop().create_task(self._named_lookup(q),
+                                                          name="mind-facts-named")
+            self._named[key] = task
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+            while len(self._named) > KEEP_LINES:
+                self._named.popitem(last=False)[1].cancel()
+        try:
+            return list(await asyncio.shield(task))
+        except asyncio.CancelledError:
+            me = asyncio.current_task()
+            if task.cancelled() and not (me is not None and me.cancelling()):
+                return []
+            raise
+
+    async def _named_lookup(self, q: GameQuestion) -> list[str]:
+        t0 = self.timer()
+        try:
+            named = await self.search.titled(entity_titles(q), list(q.kinds))
+            said = sides_named(q.query)
+            side = (next(iter(said)) if len(said) == 1 else None) if said else self.faction()
+            lines = list(await self.search._format(_entity_fact_lines, q, named, side))
+        except (SearchBusy, SearchClosed):
+            return []
+        except Exception as e:  # a broken library: the turn goes on without these facts
+            log.warning("facts_named_failed: error=%s", type(e).__name__)
+            return []
+        log.debug("facts_named: names=%d titled=%d facts=%d ms=%d", len(q.names), len(named),
+                  len(lines), round((self.timer() - t0) * 1000))
+        return lines
 
     async def _lookup(self, line_id: int, q: GameQuestion) -> list[str]:
         try:
@@ -1012,6 +1111,7 @@ class LibraryFacts:
             if not task.cancelling():
                 task.cancel()
         self._lines.clear()
+        self._named.clear()
         self._mechanics.clear()
 
     async def reset_session(self) -> None:

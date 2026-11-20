@@ -20,11 +20,13 @@ class SetRefused(Exception):
 
 async def render_slot(worker, request: Callable[[int], RenderRequest], *,
                       rid: Callable[[int], str], make_room: Callable[[], Awaitable[None]],
-                      tries: int = TRIES) -> tuple[Rendered, int]:
+                      tries: int = TRIES, nsfw_max: float | None = None) -> tuple[Rendered, int]:
     """(the rendered answer, the attempts used). `request(attempt)` and `rid(attempt)` build
     attempt n's request and id (attempt counts from 0). An answer flagged, or scoring its
-    request's nsfw_max or more, is never kept (its files are removed) and the next attempt
-    runs; `tries` of them raise SetRefused. The first WorkerError("oom") awaits make_room() and
+    cutoff or more, is never kept (its files are removed) and the next attempt runs. The optional
+    local cutoff keeps the caller's score check without sending it on each wire request; a legacy
+    request can still supply its explicit cutoff. `tries` refusals raise SetRefused.
+    The first WorkerError("oom") awaits make_room() and
     repeats that attempt once; a second propagates, as does any other WorkerError."""
     roomed = False
     for attempt in range(tries):
@@ -38,7 +40,8 @@ async def render_slot(worker, request: Callable[[int], RenderRequest], *,
             roomed = True
             await make_room()
             got = await worker.render(req, rid=name)
-        if not got.flagged and got.nsfw < req.nsfw_max:
+        limit = req.nsfw_max if req.nsfw_max is not None else nsfw_max
+        if not got.flagged and (limit is None or got.nsfw < limit):
             return got, attempt + 1
         for path in (req.out, req.thumb):  # never kept, whatever a worker wrote
             with suppress(FileNotFoundError):
