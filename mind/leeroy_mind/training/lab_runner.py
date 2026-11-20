@@ -42,6 +42,11 @@ ERROR_LIMIT = 256
 # Native logs the DC test driver in on the first dummy_trial after a worldserver start and refuses
 # it driver_pending; the lab tries that leg once more this much later, once per lab.
 DRIVER_RETRY_SECONDS = 60
+# A native whose dummy_trial forms each bot's solo party at the dummy. An older one forms it before the
+# teleport, and the core disbands a one-member group as its bot lands on another map, so every trial it
+# accepts fails ownership_changed and blocks the lab (2026-11-10..14). The lab starts only on a hello
+# that lists this feature.
+DUMMY_FEATURE = "dummy_party_on_arrival"
 _CODE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 INPUT_LIMIT = 64
 ACK_SECONDS = 60
@@ -178,6 +183,8 @@ class LabRunner:
         self._stopping = False
         self._owned = _get(ports.conn, OWNED_KEY)
         self.reason = ""
+        self._native_dummy = None  # Unknown until this process's first hello.
+        self._native_dummy_noted = False
         if self.active:
             # A new process cannot prove what a previous bridge await changed.
             self._halt("process_restart")
@@ -304,6 +311,12 @@ class LabRunner:
         return ack
 
     async def _start(self):
+        if not self._native_dummy:
+            self.reason = "native_dummy_unsupported"
+            if self._native_dummy is False and not self._native_dummy_noted:
+                self._native_dummy_noted = True
+                log.warning("training_lab_native_unsupported missing=%s", DUMMY_FEATURE)
+            return
         book = self.ground.book()
         if book is None:
             self.reason = "spellbook_unavailable"
@@ -424,7 +437,11 @@ class LabRunner:
                  len(event.unfinished))
 
     def _native_start(self, event):
-        """Record which worldserver process the latest hello came from (0: an older native)."""
+        """Record which worldserver process the latest hello came from (0: an older native).
+
+        Also note whether its dummy_trial forms the party at the dummy (DUMMY_FEATURE).
+        """
+        self._native_dummy = DUMMY_FEATURE in event.features
         started = event.started_ms
         if type(started) is not int or started <= 0:
             return
