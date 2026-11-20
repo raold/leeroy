@@ -218,7 +218,7 @@ def raidplay_main(argv=None) -> int:
     _add_data_dir(parser)
     subs = parser.add_subparsers(dest="command", required=True)
     show = subs.add_parser("show", help="print a raid's or a boss's playbook")
-    show.add_argument("map", help="map id or raid key (533, naxx, 631, icc, 649, toc)")
+    show.add_argument("map", help="map id or raid key (533, naxx, 631, icc, 649, toc, 724, rs)")
     show.add_argument("boss", nargs="?", help="boss index, slug or name")
     show.add_argument("--difficulty", type=int, choices=sorted(DIFFICULTIES),
                       help="0 10-man, 1 25-man, 2 10 heroic, 3 25 heroic")

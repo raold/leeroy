@@ -406,6 +406,11 @@ bool MechanicYieldsToStock(bool lastMoveForced, bool sinceMechanicBegan, bool la
     return lastMoveForced && sinceMechanicBegan && !lastMoveOurs;
 }
 
+bool MechanicEndLogged(bool periodic, std::size_t members, bool cancelled)
+{
+    return !periodic || members > 0 || cancelled;
+}
+
 std::uint32_t MechanicLifetimeMs(MechanicRule const& rule, std::uint32_t castMs, std::uint32_t spellDurationMs)
 {
     std::uint64_t linger = kMechanicDefaultLingerMs;

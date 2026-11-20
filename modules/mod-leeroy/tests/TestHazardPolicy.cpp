@@ -583,3 +583,75 @@ LEEROY_TEST(Hazard_AWaypointInsideFollowsStopDistanceIsNeverTaken)
     CHECK(FollowWalk(from, goal, zones, reach, step, noProgress) == Walk::Reached);
     CHECK_EQ(noProgress, 0);
 }
+
+// Ruby Sanctum, heroic 25-man Halion: a Living Inferno is a selectable add, so stock's trigger npc case never sees
+// its Blazing Aura (75885 -> 75886, 75887 on 25-man, 15 yards).
+LEEROY_TEST(Hazard_OnlyTheMeasuredAddsBurningAurasAreHeld)
+{
+    CHECK(HeldAuraHazard(Ids(75886, 75886)));
+    CHECK(HeldAuraHazard(Ids(75887, 75886))); // the 25-man tick by its 10-man twin
+    CHECK(HeldAuraHazard(Ids(75887)));
+    CHECK(!HeldAuraHazard(Ids(74717, 74717))); // a meteor flame: a trigger npc, stock's own case
+    CHECK(!HeldAuraHazard(Ids(69789, 69789))); // Ooze Flood: a large hazard, not an add's aura
+    CHECK(!HeldAuraHazard(Ids(0)));
+    CHECK_EQ(HazardHeldAuraRadius(Ids(75887, 75886), 15.0f, 1.5f, false), 16.5f); // its own reach counts
+    CHECK_EQ(HazardHeldAuraRadius(Ids(75887, 75886), 15.0f, 1.5f, true), 0.0f);   // whitelisted: never
+    CHECK_EQ(HazardHeldAuraRadius(Ids(1234), 15.0f, 1.5f, false), 0.0f);          // any other add's aura
+    CHECK_EQ(HazardHeldAuraRadius(Ids(75886), 0.0f, 1.5f, false), 0.0f);
+    CHECK_EQ(HazardHeldAuraRadius(Ids(75886), 36.0f, 1.5f, false), 0.0f); // past the large cap
+}
+
+LEEROY_TEST(Hazard_ATankHoldsAnAddInItsOwnFire)
+{
+    HazardZone fire{0, 0, 0, 4.5f, 1};
+    HazardZone inferno{10, 0, 0, 16.5f, 2};
+    inferno.held = true;
+    std::vector<HazardZone> const zones{fire, inferno};
+    CHECK(HazardApplies(inferno, 1, false));
+    CHECK(!HazardApplies(inferno, 1, true));
+    CHECK(HazardApplies(fire, 1, true)); // a tank still keeps out of ground fire
+    auto const mine = HazardZonesFor(zones, 1, true);
+    CHECK_EQ(mine.size(), std::size_t(1));
+    CHECK_EQ(mine.front().id, std::uint64_t(1));
+    CHECK_EQ(HazardZonesFor(zones, 1, false).size(), std::size_t(2));
+
+    // A healer beside the inferno steps out of its fire; its tank stays.
+    HazardPoint const at{14, 0, 0};
+    auto const exits = HazardExitSpots(at, std::nullopt, at, HazardZonesFor(zones, 1, false), kReach, 3);
+    CHECK(!exits.empty());
+    for (auto const& spot : exits)
+        CHECK(Dist(spot, {10, 0, 0}) >= 16.5f + kReach + kHazardMarginYards);
+    CHECK(HazardExitSpots(at, std::nullopt, at, HazardZonesFor(zones, 1, true), kReach, 3).empty());
+}
+
+LEEROY_TEST(Hazard_AZoneInAnotherPhaseNeverConcernsABody)
+{
+    // Halion's realms: the physical realm is phase 1, the twilight realm 32; heroic combustions burn in both (33).
+    HazardZone physical{0, 0, 0, 3, 1, 1};
+    HazardZone twilight{0, 0, 0, 6, 2, 32};
+    HazardZone both{20, 0, 0, 6, 3, 33};
+    HazardZone any{40, 0, 0, 3, 4, 0};
+    std::vector<HazardZone> const zones{physical, twilight, both, any};
+    std::vector<std::uint64_t> ids;
+    for (auto const& zone : HazardZonesFor(zones, 32, false))
+        ids.push_back(zone.id);
+    CHECK(ids == std::vector<std::uint64_t>({2, 3, 4}));
+    ids.clear();
+    for (auto const& zone : HazardZonesFor(zones, 1, false))
+        ids.push_back(zone.id);
+    CHECK(ids == std::vector<std::uint64_t>({1, 3, 4}));
+    // The crater in the physical realm is no hazard to a twilight body standing on the same spot.
+    CHECK(!HazardAt({0, 0, 0}, HazardZonesFor({physical}, 32, false), kReach).has_value());
+    CHECK(HazardAt({0, 0, 0}, HazardZonesFor({physical}, 1, false), kReach).has_value());
+}
+
+// Review of #392: a follow goal memoised in one realm must not be reused in the other, nor across a tank reading.
+LEEROY_TEST(Hazard_AnAnswerIsMemoisedPerPhaseAndTankReading)
+{
+    std::uint64_t const physical = HazardSelectionKey(7, 1, false);
+    CHECK_EQ(physical, HazardSelectionKey(7, 1, false));
+    CHECK(physical != HazardSelectionKey(7, 32, false)); // into the twilight realm
+    CHECK(physical != HazardSelectionKey(7, 1, true));   // now read as a tank
+    CHECK(physical != HazardSelectionKey(8, 1, false));  // the zones changed
+    CHECK(HazardSelectionKey(1, 0xFFFFFFFFu, true) != HazardSelectionKey(2, 0xFFFFFFFFu, true));
+}

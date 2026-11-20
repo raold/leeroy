@@ -647,3 +647,83 @@ LEEROY_TEST(Mechanic_KindNamesMatchTheWire)
     CHECK_EQ(MechanicKindName(MechanicKind::RunOutDebuff), std::string_view("run_out_debuff"));
     CHECK_EQ(MechanicKindName(MechanicKind::Los), std::string_view("los"));
 }
+
+LEEROY_TEST(Mechanic_APeriodicTickLogsOnlyWhenItMovedSomeone)
+{
+    CHECK(MechanicEndLogged(false, 0, false)); // a cast: always
+    CHECK(MechanicEndLogged(true, 3, false));  // an inferno's tick that moved three
+    CHECK(MechanicEndLogged(true, 0, true));
+    CHECK(!MechanicEndLogged(true, 0, false)); // its next tick, nobody left in it
+}
+
+// Ruby Sanctum, heroic 25-man Halion, as the mind sends it (raidplay/data/rs.toml).
+LEEROY_TEST(Mechanic_HalionsMeteorAndInfernoRules)
+{
+    json meteor = Rule("rs.halion.meteor_strike");
+    meteor["roles"] = json::array({"healer", "melee", "ranged"});
+    meteor["spells"] = json::array({74637});
+    meteor["radius"] = 12;
+    meteor["duration"] = 7;
+    json fire = Rule("rs.halion.meteor_fire", "avoid_ground", "caster");
+    fire["roles"] = meteor["roles"];
+    fire["spells"] = json::array({75879});
+    fire["radius"] = 3;
+    fire["duration"] = 24;
+    json aura = Rule("rs.halion.blazing_aura", "avoid_ground", "caster");
+    aura["roles"] = meteor["roles"];
+    aura["spells"] = json::array({75887});
+    aura["radius"] = 15;
+    aura["duration"] = 3;
+    json message = Table(json::array({meteor, fire, aura}));
+    message["map"] = 724;
+    std::string error;
+    auto table = ParseRaidMechanics(message, error);
+    CHECK(table.has_value());
+    CHECK_EQ(table->map, 724u);
+    CHECK_EQ(MechanicRulesFor(*table, 74637).size(), std::size_t(1));
+    CHECK_EQ(MechanicRulesFor(*table, 75887).size(), std::size_t(1));
+    MechanicRule const& impact = table->rules[0];
+    MechanicRule const& blazing = table->rules[2];
+    CHECK(!MechanicBinds(impact, kMechanicTank, 1, 0)); // stock's tank spots
+    CHECK(MechanicBinds(impact, kMechanicMelee, 1, 0));
+    CHECK(!MechanicBinds(blazing, kMechanicTank, 1, 0)); // a tank holds the inferno
+    CHECK_EQ(MechanicLifetimeMs(impact, 0, 30000), 7000u); // the countdown, not the mark's 30 s
+    CHECK_EQ(MechanicLifetimeMs(blazing, 0, 0), 3000u);     // past the next 2 s tick
+
+    // The meteor lands where its target stood at the cast.
+    auto circle = MechanicLeaveArea(impact, CastAt({0, 0, 0}, HazardPoint{30, 0, 0}, HazardPoint{30, 0, 0}),
+        {0, 0, 0});
+    CHECK(circle.has_value());
+    CHECK_EQ(circle->origin.x, 30.0f);
+    CHECK(InMechanicShape({40, 0, 0}, *circle, kReach));
+    CHECK(!InMechanicShape({44, 0, 0}, *circle, kReach));
+
+    // The inferno walks to its tank; its fire goes with it, and a healer's ordinary move back into it is refused.
+    auto burning = MechanicLeaveArea(blazing, CastAt({0, 0, 0}), {-20, 5, 0});
+    CHECK(burning.has_value());
+    CHECK_EQ(burning->origin.x, -20.0f);
+    std::vector<MechanicDuty> const duties{Leave(*burning)};
+    CHECK(MechanicRefusesMove({-40, 5, 0}, {-25, 5, 0}, duties, {}, kReach));
+    CHECK(!MechanicRefusesMove({-40, 5, 0}, {-37, 5, 0}, duties, {}, kReach));
+    auto spots = MechanicSpots({-22, 5, 0}, duties, {}, {}, kReach, 3, nullptr);
+    CHECK(!spots.empty());
+    for (auto const& spot : spots)
+        CHECK(Dist(spot, {-20, 5, 0}) >= 15 + kReach + kMechanicMarginYards);
+}
+
+LEEROY_TEST(Mechanic_ASpotNeverLiesInAnInfernosFireForANonTank)
+{
+    // A ranged leaving the meteor's circle must not step into an inferno's held zone beside it.
+    std::vector<MechanicDuty> const duties{Leave(Circle({0, 0, 0}, 12))};
+    HazardZone inferno{16, 0, 0, 16.5f, 9};
+    inferno.held = true;
+    std::vector<HazardZone> const hazards{inferno};
+    auto const mine = HazardZonesFor(hazards, 1, false);
+    auto spots = MechanicSpots({4, 0, 0}, duties, {}, mine, kReach, 6, nullptr);
+    CHECK(!spots.empty());
+    for (auto const& spot : spots)
+    {
+        CHECK(HazardClear(spot, mine, kReach));
+        CHECK(Dist(spot, {0, 0, 0}) >= 12 + kReach);
+    }
+}

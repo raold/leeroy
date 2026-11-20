@@ -133,6 +133,10 @@ bool MechanicOfflineFenced(MechanicOfflineFence const& fence);
 // it for the rest of that mechanic instead of pushing it back out (never fight stock).
 bool MechanicYieldsToStock(bool lastMoveForced, bool sinceMechanicBegan, bool lastMoveOurs);
 
+// Whether a mechanic's end is logged (mechanic_response): always, except one an aura's periodic tick started (an
+// add's burning aura every 2 s) that moved nobody and was not cancelled, which would only repeat the last line.
+bool MechanicEndLogged(bool periodic, std::size_t members, bool cancelled);
+
 // What the map thread saw when the boss started the cast.
 struct MechanicCast
 {

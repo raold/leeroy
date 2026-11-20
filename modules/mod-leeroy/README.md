@@ -287,8 +287,13 @@ training state or pending bot command leaves the body to its owner (nothing adde
   to edge distance counts it). Each counts up to `Playerbots.MaxAoeAvoidRadius`, never one on
   `Playerbots.AoeAvoidSpellWhitelist`, plus the allow-list below, which matches a spell's difficulty versions
   (and, for a trigger npc, the spell its aura's first difficulty version triggers) as well as the listed id.
-  Map threads read that snapshot; its version changes only when the zones do, so answers are reused between
-  passes.
+  A fourth kind stock never sees: an add (a selectable, attackable unit) whose own periodic aura triggers an
+  allow-listed damage spell (`HeldAuraHazard`; today the Living Inferno's Blazing Aura, 75886/75887, heroic 25-man
+  Halion), that spell's radius plus the add's reach, up to 35 yards. A tank holds such an add in its fire, so its
+  zone concerns everyone but bots playerbots reads as tanks (`held`). Each zone keeps its object's phase mask and
+  a body meets only the zones of its own phases (Halion's two realms share the room; `HazardApplies`), where the
+  scan used to keep only what the owner's phase saw. Map threads read that snapshot; its version changes only
+  when the zones do, so answers are reused between passes.
 - **Follow spots and detours.** `FollowAction` lets the filter move a formation spot that lies within a zone's
   radius plus the bot's reach plus 1.5 yards to the nearest spot clear of every zone (straight out first, then
   rings of 2 yards up to 40 yards, ties toward the bot), checked against the navmesh. While the straight walk
@@ -323,6 +328,14 @@ Eye of Eternity and the Vault of Archavon, the ground-effect damage spells with 
 | 62016 -> 62017 Lightning Shock | Ulduar, Thorim's charged pillar | 35 | no: arena mechanic |
 | 62393 -> 62392 Lightning Destruction | Ulduar, Thorim's gauntlet orb | 35 | no: an orb sweeping a corridor |
 | 29350 -> 30122 Plague Cloud, 61887/61869 Tendrils/Overload, 62546 Scorch, 64167 Lunatic Gaze, 65084 Self Destruct | Heigan, Brundir, Ignis, Yogg-Saron, a mob | 18-30 | no: on a selectable boss or mob, not a ground hazard |
+
+**Burning adds (Ruby Sanctum, 2026-11-20).** The Living Inferno (40681) that each heroic 25-man meteor wakes
+carries Blazing Aura (75885, also its creature addon aura), triggering 75886 every 2 s (75887 on 25-man), 15
+yards round it; the boss tank holds it beside Halion, where his melee stand. Stock's trigger npc case and this
+scan's skip it (it is selectable), so it is allow-listed as a held hazard: 15 yards plus its reach, never for a
+tank. Halion's meteor crater (40029, 74713 -> 74712) and the flames its script spreads (40041-40044, 40055,
+74718 -> 74717), Combustion (40001) and Consumption (40135) are unselectable trigger npcs within 15 yards and
+were measured already.
 
 Rotface's own playerbots strategy (`IccRotfaceMultiplier`) zeroes every `avoid aoe` action, this exit included,
 for a bot with Rotface on its threat list, so in that fight Ooze Flood mainly moves the follow spots of members
@@ -406,6 +419,10 @@ unavailable and nobody moves). Hello lists `features: [..., "mechanics"]`.
   mechanic in force makes the bot leave, and nothing else: never while the bot stands in a known ground hazard
   (stock `avoid aoe`'s one way out comes first), never for spacing or a gather (the mechanic move serves those),
   and never a forced move.
+- **Phases.** A mechanic binds only bots in its caster's phase while the caster is there (Halion's physical and
+  twilight realms share the room: a meteor or an inferno in one never moves a body in the other), and the known
+  ground hazards a bot's spots keep clear of are those of its own phases; an add's own burning aura
+  (`HeldAuraHazard`) is no hazard for a tank, who holds the add in it.
 - **Never fight stock.** A bot whose last move is a forced move the guard did not issue, made since a mechanic
   began (a stock raid strategy's own positioning), is yielded from that mechanic for the rest of it: the guard
   stamps its own forced moves through `MechanicMoved`. The raid lead's `spread`, `run_out` and `back_off` orders
@@ -413,7 +430,8 @@ unavailable and nobody moves). Hello lists `features: [..., "mechanics"]`.
   neither reports the other as a failure.
 - Logs: `mechanic_response id=<playbook mechanic> spell= kind= members=<moved> map= instance= cancelled=` when
   each ends, `members` counting the bots whose forced move was issued (the training ground's per-mechanic checks
-  measure the effect), and once a minute while there are responders,
+  measure the effect); one an aura's periodic tick started (Blazing Aura, every 2 s) only when it moved someone
+  or was cancelled (`MechanicEndLogged`). Once a minute while there are responders,
   `mechanics_minute responders= instances= held= fenced= dropped=`. Ids, counts and codes only.
 
 Limits: a spell whose place is chosen after cast start without a landing to read (Putricide's bombs, the Beasts'

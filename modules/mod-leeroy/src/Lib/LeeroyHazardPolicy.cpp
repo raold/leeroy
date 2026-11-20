@@ -29,6 +29,11 @@ constexpr std::array<LargeHazard, 6> kLargeHazards{{
     {71588, LargeHazardRadius::Spell},
 }};
 
+// Measured from Spell.dbc and the core's scripts (Ruby Sanctum): adds that carry a burning aura and are tanked in
+// the raid's way. Living Inferno (40681, heroic 25-man Halion): Blazing Aura 75885 triggers 75886 every 2 s, 75887
+// on 25-man, 15 yards round the inferno.
+constexpr std::array<std::uint32_t, 2> kHeldAuraHazards{{75886, 75887}};
+
 float constexpr kPi = 3.14159265358979f;
 
 float Distance2d(HazardPoint a, float x, float y)
@@ -147,6 +152,43 @@ float HazardTriggerZoneRadius(HazardSpellIds const& ids, float spellRadius, floa
     if (radius <= 0.0f || LargeHazardRule(ids) == LargeHazardRadius::CasterReach)
         return radius;
     return radius + unitReach;
+}
+
+bool HeldAuraHazard(HazardSpellIds const& ids)
+{
+    for (std::uint32_t id : ids)
+        if (id && std::find(kHeldAuraHazards.begin(), kHeldAuraHazards.end(), id) != kHeldAuraHazards.end())
+            return true;
+    return false;
+}
+
+float HazardHeldAuraRadius(HazardSpellIds const& ids, float spellRadius, float unitReach, bool whitelisted)
+{
+    if (whitelisted || !HeldAuraHazard(ids) || spellRadius <= 0.0f || spellRadius > kHazardLargeCapYards)
+        return 0.0f;
+    return spellRadius + std::max(0.0f, unitReach);
+}
+
+bool HazardApplies(HazardZone const& zone, std::uint32_t phaseMask, bool tank)
+{
+    if (zone.phase && !(zone.phase & phaseMask))
+        return false;
+    return !(zone.held && tank);
+}
+
+std::vector<HazardZone> HazardZonesFor(std::vector<HazardZone> const& zones, std::uint32_t phaseMask, bool tank)
+{
+    std::vector<HazardZone> out;
+    out.reserve(zones.size());
+    for (HazardZone const& zone : zones)
+        if (HazardApplies(zone, phaseMask, tank))
+            out.push_back(zone);
+    return out;
+}
+
+std::uint64_t HazardSelectionKey(std::uint64_t zonesVersion, std::uint32_t phaseMask, bool tank)
+{
+    return (zonesVersion << 33) | (static_cast<std::uint64_t>(phaseMask) << 1) | (tank ? 1u : 0u);
 }
 
 bool InHazard(HazardPoint p, HazardZone const& zone, float reach)

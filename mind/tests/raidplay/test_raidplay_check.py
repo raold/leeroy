@@ -159,8 +159,8 @@ def test_the_console_panel_serves_the_playbooks(tmp_path):
     from console.rig import http, make_app, running
     from leeroy_mind.console.playbookview import playbook_view
     view = playbook_view()
-    assert view["totals"]["raids"] == 3 and view["totals"]["bosses"] == 33
-    assert [r["key"] for r in view["raids"]] == ["naxx", "icc", "toc"]
+    assert view["totals"]["raids"] == 4 and view["totals"]["bosses"] == 37
+    assert [r["key"] for r in view["raids"]] == ["naxx", "icc", "toc", "rs"]
     first = view["raids"][0]["bosses"][0]["mechanics"][0]
     assert set(first) == {"id", "name", "kind", "roles", "phase", "only", "handled_by", "handled_note",
                           "check", "explain"}

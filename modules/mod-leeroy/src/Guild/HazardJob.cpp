@@ -32,6 +32,7 @@
 #include <optional>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -75,6 +76,7 @@ struct Snapshot
 {
     std::uint64_t version = 0;
     std::unordered_map<std::uint32_t, MapKey> aware;
+    std::unordered_set<std::uint32_t> tanks; // aware members playerbots reads as tanks: they hold an add in its fire
     std::map<MapKey, std::vector<HazardZone>> zones;
     std::size_t zoneCount = 0;
 };
@@ -238,16 +240,18 @@ struct HazardScanner
     std::set<ObjectGuid>& seen;
     std::vector<HazardZone>& zones;
 
+    // Every phase: each zone keeps its object's phase mask, and a body meets only the zones of its own phases
+    // (HazardApplies), so members split between Halion's two realms each see their own.
     bool Near(WorldObject const* object) const
     {
-        return object->IsInWorld() && reference->InSamePhase(object) && object->GetExactDist2d(x, y) <= kScanYards;
+        return object->IsInWorld() && object->GetExactDist2d(x, y) <= kScanYards;
     }
 
-    void Note(WorldObject const* object, float radius)
+    void Note(WorldObject const* object, float radius, bool held = false)
     {
         if (radius > 0.0f && seen.insert(object->GetGUID()).second)
             zones.push_back({object->GetPositionX(), object->GetPositionY(), object->GetPositionZ(), radius,
-                object->GetGUID().GetRawValue()});
+                object->GetGUID().GetRawValue(), object->GetPhaseMask(), held});
     }
 
     void Visit(DynamicObjectMapType& m)
@@ -292,31 +296,37 @@ struct HazardScanner
         for (auto itr = m.begin(); itr != m.end(); ++itr)
         {
             Creature* unit = itr->GetSource();
-            if (!unit || !Near(unit) || !unit->IsAlive() || unit->IsCritter()
-                || !unit->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE) || reference->IsFriendlyTo(unit))
+            if (!unit || !Near(unit) || !unit->IsAlive() || unit->IsCritter() || reference->IsFriendlyTo(unit))
                 continue;
+            // An unselectable trigger npc, as stock; any other unit only for an allow-listed burning aura of an add
+            // (HeldAuraHazard), which tanks stand in.
+            bool const trigger = unit->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE);
             float radius = 0.0f;
             for (AuraType type : {SPELL_AURA_PERIODIC_TRIGGER_SPELL, SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE})
                 for (AuraEffect const* effect : unit->GetAuraEffectsByType(type))
                 {
                     SpellInfo const* aura = effect->GetSpellInfo();
-                    SpellInfo const* trigger =
+                    SpellInfo const* damage =
                         aura ? sSpellMgr->GetSpellInfo(aura->Effects[effect->GetEffIndex()].TriggerSpell) : nullptr;
-                    if (!trigger)
+                    if (!damage)
                         continue;
                     // A 25-man aura (54362) triggers its own spell (54363): its 10-man twin's trigger names it too.
                     SpellInfo const* firstAura = sSpellMgr->GetSpellInfo(FirstVersion(aura->Id));
-                    HazardSpellIds ids = Ids(trigger->Id);
+                    HazardSpellIds ids = Ids(damage->Id);
                     ids[2] = firstAura ? firstAura->Effects[effect->GetEffIndex()].TriggerSpell : 0;
                     for (std::uint8_t j = 0; j < MAX_SPELL_EFFECTS; ++j)
-                        if (trigger->Effects[j].Effect == SPELL_EFFECT_SCHOOL_DAMAGE)
+                        if (damage->Effects[j].Effect == SPELL_EFFECT_SCHOOL_DAMAGE)
                         {
-                            radius = std::max(radius, HazardTriggerZoneRadius(ids, trigger->Effects[j].CalcRadius(),
-                                unit->GetCombatReach(), stockCap, whitelist.contains(trigger->Id)));
+                            float const spellRadius = damage->Effects[j].CalcRadius();
+                            float const reach = unit->GetCombatReach();
+                            bool const whitelisted = whitelist.contains(damage->Id);
+                            radius = std::max(radius, trigger
+                                ? HazardTriggerZoneRadius(ids, spellRadius, reach, stockCap, whitelisted)
+                                : HazardHeldAuraRadius(ids, spellRadius, reach, whitelisted));
                             break;
                         }
                 }
-            Note(unit, radius);
+            Note(unit, radius, !trigger);
         }
     }
 
@@ -338,6 +348,8 @@ void Publish(Player* owner, std::vector<Player*> const& aware, bool on)
         for (Player* bot : aware)
         {
             next->aware[bot->GetGUID().GetCounter()] = KeyOf(bot);
+            if (PlayerbotAI::IsTank(bot, true))
+                next->tanks.insert(bot->GetGUID().GetCounter());
             byMap[KeyOf(bot)].push_back(bot);
         }
         for (auto const& [key, bots] : byMap)
@@ -422,8 +434,11 @@ std::uint64_t NowMs()
         std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
-// Map thread. The zones on the bot's map when the last pass found it aware, else null; `hold` keeps them alive.
-std::vector<HazardZone> const* ZonesFor(Player* bot, PlayerbotAI*& ai, std::shared_ptr<Snapshot const>& hold)
+// Map thread. The zones on the bot's map that concern it (its phases; an add's own aura not for a tank) when the
+// last pass found it aware, else null; `hold` keeps them alive, `own` holds the bot's share when it differs, and
+// `selection` is what answers from that share are memoised against (HazardSelectionKey).
+std::vector<HazardZone> const* ZonesFor(Player* bot, PlayerbotAI*& ai, std::shared_ptr<Snapshot const>& hold,
+    std::vector<HazardZone>& own, std::uint64_t& selection)
 {
     if (!enabled.load(std::memory_order_relaxed))
         return nullptr;
@@ -441,7 +456,16 @@ std::vector<HazardZone> const* ZonesFor(Player* bot, PlayerbotAI*& ai, std::shar
     if (member == hold->aware.end() || member->second != KeyOf(bot))
         return nullptr;
     auto const zones = hold->zones.find(member->second);
-    return zones == hold->zones.end() || zones->second.empty() ? nullptr : &zones->second;
+    if (zones == hold->zones.end() || zones->second.empty())
+        return nullptr;
+    std::uint32_t const phase = bot->GetPhaseMask();
+    bool const tank = hold->tanks.contains(member->first);
+    selection = HazardSelectionKey(hold->version, phase, tank);
+    if (std::all_of(zones->second.begin(), zones->second.end(),
+            [&](HazardZone const& zone) { return HazardApplies(zone, phase, tank); }))
+        return &zones->second;
+    own = HazardZonesFor(zones->second, phase, tank);
+    return own.empty() ? nullptr : &own;
 }
 
 // The first candidate the navmesh reaches from `from` that lands clear, no farther than the maximum shift and,
@@ -476,7 +500,9 @@ public:
     {
         PlayerbotAI* ai = nullptr;
         std::shared_ptr<Snapshot const> hold;
-        std::vector<HazardZone> const* zones = ZonesFor(bot, ai, hold);
+        std::vector<HazardZone> own;
+        std::uint64_t selection = 0;
+        std::vector<HazardZone> const* zones = ZonesFor(bot, ai, hold, own, selection);
         if (!zones)
             return false;
         std::uint32_t const guid = bot->GetGUID().GetCounter();
@@ -484,12 +510,12 @@ public:
         HazardPoint const spot{x, y, z};
         HazardPoint const at = PointOf(bot);
 
-        Memo goal{hold->version, spot, false, spot};
+        Memo goal{selection, spot, false, spot};
         bool known = false;
         {
             std::lock_guard<std::mutex> lock(memoLock);
             auto const found = spotMemo.find(guid);
-            if (found != spotMemo.end() && found->second.version == hold->version && Close(found->second.asked, spot))
+            if (found != spotMemo.end() && found->second.version == selection && Close(found->second.asked, spot))
             {
                 goal = found->second;
                 known = true;
@@ -508,7 +534,7 @@ public:
 
         HazardPoint target = goal.answer;
         bool changed = goal.moved;
-        if (auto const waypoint = Detour(bot, guid, at, goal.answer, *zones, reach, hold->version))
+        if (auto const waypoint = Detour(bot, guid, at, goal.answer, *zones, reach, selection))
         {
             target = *waypoint;
             changed = true;
@@ -525,7 +551,9 @@ public:
     {
         PlayerbotAI* ai = nullptr;
         std::shared_ptr<Snapshot const> hold;
-        std::vector<HazardZone> const* zones = ZonesFor(bot, ai, hold);
+        std::vector<HazardZone> own;
+        std::uint64_t selection = 0;
+        std::vector<HazardZone> const* zones = ZonesFor(bot, ai, hold, own, selection);
         if (!zones)
             return false;
         std::uint32_t const guid = bot->GetGUID().GetCounter();
@@ -543,7 +571,7 @@ public:
         }
         std::uint64_t const now = NowMs();
 
-        Memo memo{hold->version, at, false, at};
+        Memo memo{selection, at, false, at};
         std::optional<HazardPoint> goal;
         bool known = false;
         bool yielded = false;
@@ -559,7 +587,7 @@ public:
                 memo = found->second; // keep walking to the exit already chosen: no new path every tick
                 known = true;
             }
-            else if (found != exitMemo.end() && !found->second.moved && found->second.version == hold->version
+            else if (found != exitMemo.end() && !found->second.moved && found->second.version == selection
                 && Close(found->second.asked, at))
                 known = true; // nothing reachable a moment ago
             else if (HazardEntry const entry = NoteHazardEntry(guard, inside, now); entry != HazardEntry::Exit)
