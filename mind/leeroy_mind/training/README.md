@@ -111,3 +111,10 @@ ground fills with the names of the spells its stored pulls name and of every
 avoidable effect's spells. Its pass at each book load reads only pulls stored
 since the last one (meta `tg:spell_names:rowid`). The console's Training tab
 shows the same report for the 12 most recently fought bosses.
+
+The rotation lab (`[training] lab`) starts a night only after this process has seen a hello whose
+`features` list `dummy_party_on_arrival` (`lab_runner.DUMMY_FEATURE`). A native without it formed each
+dummy-trial bot's solo party before the teleport to Orgrimmar, and the core disbands a one-member group as
+its bot lands on another map, so every trial it accepted failed `ownership_changed` and blocked the lab
+(2026-11-10..14). Against such a native the lab claims nothing, sends nothing and logs
+`training_lab_native_unsupported` once; its reason reads `native_dummy_unsupported`.
