@@ -23,6 +23,7 @@ SWITCHES = (
     ('talk','shape','Reply shapes',''),
     ('talk','dm_mirror','DM length mirror (0-10)','talk.shape',NUMBER),
     ('talk','dm_own_time','DM answers on her own time',''),
+    ('talk','invites','His invitations in game carried out','Leeroy.Invites.Enable = 1',True),
     ('life','availability','Availability (0-10; the world dial overrides it)','',NUMBER),
     ('life','state','Her feeling through the day',''),
     ('signals','enabled','Signals',''), ('fingerprint','enabled','Typing fingerprint',''),

@@ -6,12 +6,14 @@
 
 namespace Leeroy::Guild
 {
-// Leeroy.Strings.Enable: the owner's strings in game (string_do, pure policy LeeroyStrings.h). World thread.
+// Leeroy.Strings.Enable: the owner's strings in game (string_do, pure policy LeeroyStrings.h); Leeroy.Invites.Enable:
+// his invitations in game (the same command marked "via": "invite", and go_to and fish). World thread.
 void ReloadStrings();
 // OnStartup: registers string_do.
 void RegisterStringsHandler();
-// Once a second: lifts come_to_me's stay when it ends, follow's when the group does, and stands a sitting member up
-// when her seat ends. A body another owner holds is never touched; its hold waits until it is free again.
+// Once a second: lifts come_to_me's and go_to's stay when it ends, follow's when the group does, ends a fishing when
+// its time is up or he came and went, and stands a sitting member up when her seat ends. A body another owner holds
+// is never touched; its hold waits until it is free again.
 void TickStrings(std::uint32_t diffMs);
 // At her logout: her holds and seat end with that life.
 void ForgetStrings(std::uint32_t guid);

@@ -509,6 +509,10 @@ class MindApp:
         self.banter = ext("banter", lambda: attach_banter(self))
         from .gpucontrol import GpuControl
         self.gpu = GpuControl(self)
+        from .invites.service import attach as attach_invites
+        # his invitations in game: [talk] invites, read at each line (on by default; it does
+        # nothing until he invites); before the Realm and the server, which attach last
+        self.invites = ext("invites", lambda: attach_invites(self))
         self.realm = ext("realm", lambda: attach_realm(self))
         from .server.attach import attach_server
         self.server = ext("server", lambda: attach_server(self))  # Last; disabled adds no handlers or tasks.
@@ -1089,6 +1093,15 @@ class MindApp:
             command, held = claim == "order", claim == "held"
         if not command and not held:
             command = his_command(ev.channel, ev.text)
+        invites = getattr(self, "invites", None)
+        if not command and not held and not backlog and invites is not None:
+            # his invitation in game (invites/): read now, her body sent at once, her answer
+            # planned by talk below; a line the model reads first is held and goes to talk later
+            try:
+                await invites.before_his_line()
+                held = invites.claims(ev, line_id) == "held"
+            except Exception:  # never in the way of his line: it fails open to talk
+                log.warning("invites_claim_failed")
         if not backlog and self.signals is not None and not held:
             self.signals.owner_line(line_id, len(ev.text), command=command, chat=ev)
         if command or held:
