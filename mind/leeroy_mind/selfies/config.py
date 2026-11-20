@@ -175,6 +175,7 @@ def worker_command(cfg: SelfieCfg, *, identity: bool = False, embedding: bool = 
             *(["--embed-only"] if embedding else []),
             *(["--identity"] if identity else []),
             *(["--backend", cfg.backend] if cfg.backend != "realvisxl" and not embedding else []),
+            *(["--nsfw-max", f"{cfg.nsfw_max:g}"] if not embedding else []),
             "--data", str(worker_data(cfg)), "--min-free-gib", f"{free:g}"]
 
 

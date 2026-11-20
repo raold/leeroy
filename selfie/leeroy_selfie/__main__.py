@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import models
 from .paths import data_dir
+from .protocol import DEFAULT_NSFW_MAX, screening_limit
 
 MARK = {True: "ok", False: "FAIL", None: "note"}
 
@@ -103,7 +104,8 @@ def cmd_worker(args) -> int:
         lambda: render.load(root, min_free_gib=args.min_free_gib, identity=args.identity,
                             **_backend(args)))
     code = worker.serve(load,
-        stdin=stdin, out=out, on_eof=lambda: os._exit(0), identity=args.identity)
+        stdin=stdin, out=out, on_eof=lambda: os._exit(0), identity=args.identity,
+        nsfw_max=args.nsfw_max)
     # the reader thread still holds stdin's lock; a normal return would crash in finalization
     out.flush()
     sys.stderr.flush()
@@ -130,7 +132,7 @@ def cmd_smoke(args) -> int:
     req = Render("smoke", tuple(map(tuple, SMOKE_PHRASES)), tuple(map(tuple, SMOKE_NEGATIVE)),
                  1234, 30, 3.5 if args.backend == "flux1-dev" else 5.0,
                  1024, str(out_dir.resolve() / "smoke.jpg"),
-                 str(out_dir.resolve() / "smoke-thumb.jpg"), 256, 0.2, identity,
+                 str(out_dir.resolve() / "smoke-thumb.jpg"), 256, DEFAULT_NSFW_MAX, identity,
                  "portrait" if identity else "square",
                  Detail(True, True) if args.detail else None)
     try:
@@ -249,6 +251,8 @@ def main(argv: list[str] | None = None) -> int:
     p_worker.add_argument("--embed-only", action="store_true",
                           help="load only the fetched image encoder; use CPU if VRAM is occupied")
     p_worker.add_argument("--backend", choices=models.BACKENDS, default="realvisxl")
+    p_worker.add_argument("--nsfw-max", type=float, default=DEFAULT_NSFW_MAX,
+                          help="screening cutoff for requests that omit it (default: 0.2)")
     p_worker.set_defaults(func=cmd_worker)
     p_smoke = sub.add_parser("smoke", help="render one invented person into --out")
     p_smoke.add_argument("--out", metavar="DIR", required=True)
@@ -289,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
     p_detail.add_argument("--prompt", default=DETAIL_FACE_PROMPT, help="the face crops' prompt")
     p_detail.add_argument("--hand-prompt", default=DETAIL_HAND_PROMPT)
     p_detail.add_argument("--negative", default=DETAIL_NEGATIVE)
-    p_detail.add_argument("--nsfw-max", type=float, default=0.2)
+    p_detail.add_argument("--nsfw-max", type=float, default=DEFAULT_NSFW_MAX)
     p_detail.add_argument("--min-free-gib", type=float, default=8.0)
     p_detail.add_argument("--data", metavar="DIR", help="the data dir with the models")
     p_detail.add_argument("--backend", choices=models.BACKENDS, default="realvisxl")
@@ -303,6 +307,11 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--lora-scale", type=float, default=None,
                              help="LoRA strength, 0-2 (default: 1); requires --lora")
     args = parser.parse_args(argv)
+    if hasattr(args, "nsfw_max"):
+        try:
+            args.nsfw_max = screening_limit(args.nsfw_max)
+        except ValueError:
+            parser.error("--nsfw-max must be a finite number from 0.01 to 0.9")
     if getattr(args, "lora_scale", None) is not None:
         if getattr(args, "lora", None) is None or not 0 <= args.lora_scale <= 2:
             parser.error("--lora-scale requires --lora and a finite strength from 0 to 2")
