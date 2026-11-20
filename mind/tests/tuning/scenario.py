@@ -55,7 +55,14 @@ scenario's cast has one. golden_voice.json (record_voice) holds the same script 
 modes ("plain" and "core") with invented sheets (tests/sheets.py) on Belra (102) and Coros
 (103): their cards without the trait sentences and the attachment and humour lines, no "How you
 type" samples, and the voice block just before each of their instructions. The other three
-members' prompts in it are the ones the other goldens hold."""
+members' prompts in it are the ones the other goldens hold.
+
+WoW grounding ([talk] wow_grounding, talk/grounding.py, 2026-11-20; on by default in mind.toml)
+is off in every rig unless a test asks (engine_rig.make_rig), so none of these goldens moved.
+golden_wow.json (record_wow) holds the plain scenario over invented raid rows (wow_rows) with it
+on: each guild prompt gains the raid and guild card, her example lines and the glossary after
+the awareness slot; every whisper prompt, the lines sent and everything else are as
+golden_prompts.json recorded them (tests/tuning/test_wow_golden.py proves both)."""
 import asyncio
 import json
 import random
@@ -98,10 +105,10 @@ def cast(store) -> None:
 
 
 async def _run(store, clock, data_dir, core: bool = False, *, realism: bool = False,
-               heat=None) -> dict:
+               heat=None, wow: bool = False) -> dict:
     r = make_rig(store, clock, data_dir, script=numbered("ok so line {n} then"), seed=7,
                  availability=6 if core else 0, life_state=core, intent=core, situation=core,
-                 shape=core, romance_realism=realism)
+                 shape=core, romance_realism=realism, wow_grounding=wow)
     if heat is not None:  # [heat] on (tests/heat): a function that attaches it to the rig
         heat(r)
     # the initiation clocks came later and have their own tests (test_initiate.py): off here,
@@ -216,6 +223,79 @@ def golden_romance() -> dict:
     return json.loads(ROMANCE_GOLDEN.read_text(encoding="utf-8"))
 
 
+WOW_GOLDEN = Path(__file__).with_name("golden_wow.json")
+# The scenario's members' guild lines from before the switch, two days before it starts (the
+# grounding's example lines), and the guild's slang
+WOW_EXAMPLES = {101: ("pulling the next pack in five, stay behind me",
+                      "who has the soulstone tonight anyway"),
+                102: ("drink up before the boss please, i need mana",
+                      "healers ready, pull when you want"),
+                103: ("my dps was way better on that last pull",),
+                104: ("anyone selling frost lotus for the flasks",
+                      "brez is on cooldown so dont die on me"),
+                105: ("bubble hearth if it goes wrong again lol",)}
+
+
+def wow_rows(store, clock) -> None:
+    """What the WoW golden's grounding reads, invented: a Naxxramas 25 that ended three hours
+    before the scenario (Kel'Thuzad killed after a wipe to Frost Blast), Belra's loot from it,
+    everyone's DKP and attendance, her example lines and one slang term."""
+    now = clock.now()
+    with store.transaction():
+        c = store.conn
+        raid = c.execute("INSERT INTO guild_raid(started,ended,raid_key,size,heroic,offline,"
+                         "lead_guid,tank_guid,loot_guid,kills,wipes) VALUES (?,?,'naxx',25,0,0,"
+                         "104,101,104,13,1)", (now - 6 * 3600, now - 3 * 3600)).lastrowid
+        for guid in TEST_CAST:
+            c.execute("INSERT INTO guild_attendance(raid_id,guid,status) VALUES (?,?,?)",
+                      (raid, guid, "benched" if guid == 105 else "raided"))
+            c.execute("INSERT INTO dkp_ledger(ts,guid,delta,reason,raid_id) VALUES (?,?,?,'kill',?)",
+                      (now - 3 * 3600, guid, 20 + guid % 100 * 5, raid))
+        for ts, state in ((now - 4 * 3600, "wiped"), (now - 3.5 * 3600, "killed")):
+            c.execute("INSERT INTO game_event(ts,type,guid,payload) VALUES (?,'boss',0,?)",
+                      (ts, json.dumps({"map": 533, "instance_id": 9, "boss_id": 14, "boss_name": "",
+                                       "state": state, "members": list(TEST_CAST)})))
+        c.execute("INSERT INTO tg_pull(id,context,map,instance_id,boss_id,difficulty,size,outcome,"
+                  "start_ms,end_ms,members,assisted,boss_entry,upd_mean_ms,kind,complete,scoreable,"
+                  "received) VALUES ('wow-1','533:14:1',533,9,14,1,25,'wiped',?,?,25,0,0,0,'his',"
+                  "1,1,?)", (int((now - 4 * 3600 - 300) * 1000), int(now - 4 * 3600) * 1000, now))
+        for guid in (101, 103, 104):
+            c.execute("INSERT INTO tg_death(pull,guid,at_ms,spell,source,x,y,hits) "
+                      "VALUES ('wow-1',?,0,27808,0,0,0,'[]')", (guid,))
+        c.execute("INSERT INTO meta(key,value) VALUES ('tg:spell_names',?)",
+                  (json.dumps({"27808": "Frost Blast"}),))
+        c.execute("INSERT INTO meta(key,value) VALUES (?,?)", (f"guild:loot:{raid}:wow", json.dumps(
+            {"name": "Ring of Invention", "award": {"guid": 102, "paid": 35}})))
+        first = None
+        for guid, lines in WOW_EXAMPLES.items():
+            for i, text in enumerate(lines):
+                row = c.execute("INSERT INTO chat_line(ts,channel,from_guid,from_name,to_guid,text,"
+                                "origin) VALUES (?,?,?,?,0,?,'mind')",
+                                (now - 2 * 86400 + guid * 60 + i, "raid" if i else "guild", guid,
+                                 TEST_CAST[guid][0], text)).lastrowid
+                first = first or row
+        c.execute("INSERT INTO lexicon(kind,term,origin_ref,originator,born,uses,last_used) "
+                  "VALUES ('slang','gnomed',?,101,?,4,?)", (f"chat:{first}", now - 86400, now))
+
+
+def record_wow(store, clock, data_dir, grounding: bool = True) -> dict:
+    """The plain scenario over wow_rows with [talk] wow_grounding on (golden_wow.json), or off
+    (which must record golden_prompts.json: the rows alone change no prompt)."""
+    cast(store)
+    wow_rows(store, clock)
+    got = asyncio.run(_run(store, clock, data_dir, wow=grounding))
+    return {"prompts": got["prompts"], "sent": got["sent"]}
+
+
+def write_golden_wow(result: dict) -> None:
+    WOW_GOLDEN.write_text(json.dumps(result, indent=1, sort_keys=True) + "\n", encoding="utf-8",
+                          newline="\n")
+
+
+def golden_wow() -> dict:
+    return json.loads(WOW_GOLDEN.read_text(encoding="utf-8"))
+
+
 def write_golden(result: dict) -> None:
     GOLDEN.write_text(json.dumps(result, indent=1, sort_keys=True) + "\n", encoding="utf-8",
                       newline="\n")
@@ -281,4 +361,5 @@ def golden_beat() -> dict:
 __all__ = ["TEST_CAST", "VOICED", "cast", "engine_clock", "golden", "golden_beat", "golden_core",
            "golden_romance", "golden_voice", "record", "record_beat", "record_romance",
            "record_voice", "voiced_cast", "write_golden", "write_golden_beat",
-           "write_golden_core", "write_golden_romance", "write_golden_voice"]
+           "write_golden_core", "write_golden_romance", "write_golden_voice", "golden_wow",
+           "record_wow", "wow_rows", "write_golden_wow"]
