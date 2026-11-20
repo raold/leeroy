@@ -7,15 +7,22 @@ reviews of #370 showed that no test of tokens can say where an answer is (it cam
 third; the lead-in held a number, a clock time or a quoted "yes"; the answer held no token at
 all: "after the officers' meeting", "a couple", "can't make it"). So (controller ruling):
 
-- **his line asks anything** (a question mark, a question, a request to explain): never cut.
+- **his line asks anything** (a question mark, a question, one buried in his line with no
+  question mark, a request to explain): never cut.
   The reply is "kept" as written, whatever its length; the pipeline sends it when it fits her
   turn's game lines by whole clauses (`split_lines`), else asks again with her own draft
   (SHORTER_HINT), and when that is still too long lays it on up to three lines or sends its
-  tail (`tail_lines`), never its head;
+  tail (`tail_lines`), never its head. In a game whisper to him a kept answer that fits but
+  runs past KEEP_SLACK times her turn's words is asked again once (USUAL_HINT: her usual
+  length, the answer kept); the retry is sent as this rule reads it, and if it fails the first
+  draft goes: it costs a call, never the answer;
 - his line asks nothing, or the turn answers nothing (idle talk): her leading whole clauses
   that fit, as many as fit;
 - the turn has a subject of its own (an opener's topic, an outreach item's words): only after
   the sentence of the last clause that shares a content word with it.
+
+The pipeline reads this module only with `[talk] coherence_length` on (default off): with it
+off, game lines keep main's length handling whatever `[talk] coherence` says.
 
 A cut never ends on a dangling word or inside a quotation and never leaves fewer than
 MIN_WORDS words (or the low end of her voice sheet's range). With no cut a line that asks
@@ -45,6 +52,10 @@ MIN_WORDS = 3  # a cut never leaves fewer words than this
 LINE_BYTES = 230  # a game line's words before her typing (the bridge takes 255 bytes)
 SHORTER_HINT = ('You wrote: "{draft}" Say the same thing shorter, in at most about {words} '
                 "words. Keep the answer in it.")
+# a kept answer in a whisper far over her usual length (blind sandbox test, 2026-11-20: whisper
+# lines grew from a median 8 words to 13, 26 of 127 over 25 words, and invented more game facts)
+USUAL_DRAFT = 'You wrote: "{draft}"'
+USUAL_HINT = "Say it in your usual length, about {words} words, and keep the answer in it."
 # A content question's words past a question word: "explain the fight", "tell me about ulduar"
 _EXPLAIN = re.compile(r"\b(?:explain|describe|tell me (?:about|how|why|what|who|where|when)|"
                       r"remind me|walk me through)\b", re.IGNORECASE)
@@ -68,16 +79,19 @@ def content_question(line: str) -> bool:
         return False
     if _EXPLAIN.search(text):
         return True
-    # the whole line, or one clause of it ("nerd question, who ruled the ogres before the war")
-    return any(is_question(part) and bool(_WH.search(part))
-               for part in (text, *re.split(r"[,.;:!]\s+", text)))
+    # the whole line, or one clause of it ("nerd question, who ruled the ogres before the war"),
+    # a line of a post that has several among them
+    parts = [p for x in (line or "").splitlines() for p in re.split(r"[,.;:!]\s+", x.strip())]
+    return any(is_question(part) and bool(_WH.search(part)) for part in (text, *parts))
 
 
 def asks(his: str) -> bool:
-    """His line asks her anything: a question mark anywhere in it, a question, or a request to
-    explain. The reply to it is never cut."""
-    his = " ".join((his or "").split())
-    return bool(his) and ("?" in his or is_question(his) or content_question(his))
+    """His line asks her anything: a question mark anywhere in it, a question (one buried in
+    the line with no question mark too: "...so did you eat yet", "you ever been out west";
+    asking.buried_question), or a request to explain. The reply to it is never cut."""
+    if not (his or "").strip():
+        return False  # his own text below: its line breaks end clauses
+    return "?" in his or is_question(his, buried=True) or content_question(his)
 
 
 def _shares(words: list[str], other: str) -> bool:
@@ -211,5 +225,6 @@ def tail_lines(text: str, lines: int, max_bytes: int = LINE_BYTES) -> list[str] 
     return None
 
 
-__all__ = ["Fit", "KEEP_SLACK", "LINE_BYTES", "LONG_SLACK", "MIN_WORDS", "SHORTER_HINT", "asks",
-           "content_question", "fit_answer", "split_lines", "tail_lines"]
+__all__ = ["Fit", "KEEP_SLACK", "LINE_BYTES", "LONG_SLACK", "MIN_WORDS", "SHORTER_HINT",
+           "USUAL_DRAFT", "USUAL_HINT", "asks", "content_question", "fit_answer", "split_lines",
+           "tail_lines"]

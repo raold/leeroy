@@ -17,6 +17,7 @@ SWITCHES = (
     ('talk','recall_diversity','Recall diversity',''),
     ('talk','think_private','Private beat before answers to him','',True),
     ('talk','coherence','Conversations hold together (read at start and at his login)',''),
+    ('talk','coherence_length','Long game answers kept whole (read at start and at his login)',''),
     ('talk','wow_grounding','Raid and guild facts and her own lines in WoW talk','',True),
     ('talk','intent','Her want for each turn',''),
     ('talk','situation','Situation prompts',''),

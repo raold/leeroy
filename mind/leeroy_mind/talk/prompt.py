@@ -336,12 +336,16 @@ def unanswered_text(lines: list[str], human: HumanIdentity) -> str:
     """The instruction for an answer that covers several of his lines (oldest first); "" for
     fewer than two."""
     from leeroy_mind.talk.asking import is_question
-    lines = [" ".join(x.split()) for x in lines if x and x.strip()][-UNANSWERED_MOST:]
+    raw = [x for x in lines if x and x.strip()][-UNANSWERED_MOST:]
+    lines = [" ".join(x.split()) for x in raw]
     if len(lines) < 2:
         return ""
     he, _, their = human.forms
     quoted = " / ".join('"' + " ".join(x.split()[:UNANSWERED_WORDS]) + '"' for x in lines)
-    first = (UNANSWERED_QUESTION.format(their=their) if any(is_question(x) for x in lines)
+    # ([talk] coherence's own instruction: a question buried in a line counts too, read in his
+    # own text, whose line breaks end clauses)
+    first = (UNANSWERED_QUESTION.format(their=their)
+             if any(is_question(x, buried=True) for x in raw)
              else UNANSWERED_OLDEST)
     return UNANSWERED.format(He=he.capitalize(), n=len(lines), lines=quoted, first=first)
 

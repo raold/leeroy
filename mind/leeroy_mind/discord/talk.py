@@ -1001,7 +1001,10 @@ class DiscordTalk:
             target = meta.discord = DiscordTarget(reply_to=ids[-1], thread=target.thread)
         meta.covers = ids
         meta.his_words = sum(len(text.split()) for _, text in waiting)
-        meta.covers_ask = any(asks(text) for _, text in waiting)
+        # [talk] coherence: a question buried in a post with no question mark asks too
+        coherent = getattr(getattr(self.app, "engine", None), "_coherent", None)
+        buried = bool(callable(coherent) and coherent())
+        meta.covers_ask = any(asks(text, buried=buried) for _, text in waiting)
         self._building[cid] = [*live, (frozenset(ids), turn, now)]
         return target, waiting
 

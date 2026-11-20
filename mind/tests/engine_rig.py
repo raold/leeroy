@@ -274,7 +274,8 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
              greeters: tuple[int, int] | None = None, beat: bool = False,
              availability: int = 0, life_state: bool = False, intent: bool = False,
              situation: bool = False, romance_realism: bool = False, shape: bool = False,
-             dm_mirror: int = 5, coherence: bool = False, wow_grounding: bool = False) -> Rig:
+             dm_mirror: int = 5, coherence: bool = False,
+             coherence_length: bool = False, wow_grounding: bool = False) -> Rig:
     """A fresh engine over `store` (the test cast is seeded if the store has no personas).
     The FakeLLM answers `reply` unless a `script` is given; `send` replaces the recording
     send; `library` (a FakeLibrary) gives the engine the library's facts; `dial` is the
@@ -292,10 +293,12 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
     (talk/romance.py REALISM_LEAD), off unless a test asks (tests/test_romance_realism.py).
     `shape` and `dm_mirror`: [talk] shape and dm_mirror (core plan Task 9), off and 5 unless a
     test asks (tests/life/test_shape_pipeline.py and the core golden cover them). `coherence`:
-    [talk] coherence, off unless a test asks (tests/test_length.py, tests/test_position.py).
-    `wow_grounding`: [talk] wow_grounding (talk/grounding.py), on by default in mind.toml but off
-    here unless a test asks, so every other test's prompts are the ones it was written for
-    (tests/test_wow_grounding_pipeline.py and the WoW golden, golden_wow.json, cover it)."""
+    [talk] coherence, off unless a test asks (tests/test_position.py); `coherence_length`: [talk]
+    coherence_length, the length rule, off unless a test asks (tests/test_length.py,
+    tests/test_coherence_split.py). `wow_grounding`: [talk] wow_grounding (talk/grounding.py), on
+    by default in mind.toml but off here unless a test asks, so every other test's prompts are
+    the ones it was written for (tests/test_wow_grounding_pipeline.py and the WoW golden,
+    golden_wow.json, cover it)."""
     if not store.persona_versions():
         seed_test_cast(store)
     store.upsert_cast([Member(guid=HUMAN, name=HUMAN_NAME, race=1, class_=8, gender=0, level=80,
@@ -307,6 +310,7 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
     cfg = replace(base, talk=TalkCfg(chattiness, base.talk.raid_rule, think_private=beat,
                                        intent=intent, situation=situation, shape=shape,
                                        dm_mirror=dm_mirror, coherence=coherence,
+                                       coherence_length=coherence_length,
                                        wow_grounding=wow_grounding),
                   romance=RomanceCfg(dial, jealousy, realism=romance_realism),
                   human=HumanCfg(NICK, real_name, "he"),

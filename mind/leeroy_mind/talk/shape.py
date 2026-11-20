@@ -165,7 +165,7 @@ class ShapeContext:
     # her answer to him waited out a time she stepped away (life/interrupt.py, core plan Task
     # 10): LATE, in game or her DM, its excuse "away" (Pipeline._waited_away)
     away: bool = False
-    # his line asks for content ([talk] coherence; Pipeline._shape): CONTENT_WORDS
+    # his line asks for content ([talk] coherence_length; Pipeline._shape): CONTENT_WORDS
     content: bool = False
     # her DM answer waited for her own time (discord/owntime.py) owntime.LATE_OWN_S or more:
     # LATE, its excuse where she was when he wrote (Pipeline._waited_own_time)

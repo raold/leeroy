@@ -1064,22 +1064,47 @@ switch that `LifeService.configure` sets). The rules that change a prompt also n
 switch on (`[talk] intent`, `[talk] situation` or `[life] availability`/`state`), so
 no golden prompt changes: with the switch off (the default) every golden file is main's.
 
-**A game line that is only too long is kept** (`talk/length.py`, `Pipeline._generate_serial`).
+**The length rule has its own switch, `[talk] coherence_length`** (a boolean, default
+**false**; anything but `true` is off; read at the mind's start and at his logins, as
+`coherence` is; 2026-11-20). A blind sandbox test of `coherence` found Discord DMs better (time
+and place errors 21 to 11) and game whispers worse (12 of 16 conversations preferred it off):
+the rule's "kept" path never shortens an answer to his question, so whisper lines grew from a
+median 8 words to 13 (26 of 127 over 25 words) and invented more game facts. Everything game-
+line length does is `coherence_length`'s alone (`Pipeline._length_rule`): the kept, cut and
+retry actions, `split_lines`, `tail_lines`, the owed three-line burst, the voice sheet's room
+(`_voice_room`), a content question's shape words (`ShapeContext.content`), a kept draft's
+room in the styling (`_room`) and a model burst's own line break (`_style`). With `coherence`
+on and `coherence_length` off every game line's length is handled exactly as with both off
+(main's "long" tell: a fresh line at her length); every other part below stays on. With
+`coherence_length` on and `coherence` off the length rule works and nothing else of coherence
+does (not even the question echo cut, which is coherence's). `tests/test_coherence_split.py`
+holds both halves apart, byte for byte.
+
+**A game line that is only too long is kept** (`[talk] coherence_length`; `talk/length.py`,
+`Pipeline._generate_serial`).
 The "long" tell used to ask for a fresh generation at her line's length ("Shorter: 2-8 words"),
 which lost correct answers. The owner's rule is absolute: a cut that removes the answer is
 never acceptable, and three reviews of #370 showed no test of tokens can say where an answer
 is. So **an answer to a line of his that asks anything is never cut in code** (`length.asks`: a
-question mark, a question, a request to explain). It is sent as written when
-`length.split_lines` fits it on the game lines her turn has by whole clauses, each within
+question mark, a question, one buried in his line with no question mark, a request to
+explain). It is sent as written when `length.split_lines` fits it on the game lines her turn
+has by whole clauses, each within
 `LINE_BYTES` (230) bytes; else the model is asked again once with her own draft: `You wrote:
 "..." Say the same thing shorter, in at most about N words. Keep the answer in it.` **When
 that is still too long and the answer is owed to him** it is never byte-trimmed: its whole
 clauses go on up to `OWED_LINES` (3) game lines, nothing dropped, as a short burst through her
 typing (`TurnMeta.keep_lines`); only if it still does not fit, its tail goes
 (`length.tail_lines`: the last sentences that fit, never the head). A turn that is not owed to
-him keeps main's behaviour there. A line that asks nothing keeps her leading whole clauses, as
-many as fit (never ending on a dangling word or inside a quotation, never under 3 words), goes
-as written within twice the turn's words when there is no clean cut, and past that is asked
+him keeps main's behaviour there. **In a game whisper to him only, a kept answer that fits her
+lines but runs past `KEEP_SLACK` (2) times her turn's words is asked again once** with her
+draft and `length.USUAL_HINT` ("Say it in your usual length, about N words, and keep the answer
+in it."); the retry goes as the rule reads it (never asked a third time), and a retry that is
+silent or refused, or whose call fails or runs late (`say_usual_failed reason=llm_error|expired`),
+sends the first draft whole (the owed answer's kept draft, styled with its room), never the owed
+rescue's fresh line: it costs a call, never the answer (log `say_length: ... action=usual`). A
+line that asks nothing keeps her leading whole clauses, as many as fit (never ending on a
+dangling word or inside a quotation, never under 3 words), goes as written within twice the
+turn's words when there is no clean cut, and past that is asked
 again with the draft; a turn with its own subject (an opener's topic, an outreach item's
 words) is cut only after the last clause that names it. A draft of the turn's words or more
 that "fits" is also checked against her lines, so the styling never repacks its last clause
@@ -1106,8 +1131,11 @@ want. **What she has said so far has one presentation**: the "So far between you
 her whispers and DMs with him (`talk/sofar.py`). Its lines for where and how she said she is
 stay as they are; while `[talk] coherence` and a core switch are on her claims
 (`position.claims_so_far`: her own sentences with a number beside a word, or a statement of
-herself) follow them as "- You said: ..." lines, without a claim that repeats the place, the
-oldest dropped until they are within `sofar.CLAIM_TOKENS` (50); when the block is over its 120
+herself) follow them as "- You said: ..." lines, without a claim that repeats a line the block
+shows (`sofar.repeats`: one holding the first `LEAD_WORDS` (3) words of her place or state line,
+the whole of a plan of hers, or whose words such a line holds; a clipped place's "..." no longer
+hides the repeat, which 10 of 56 sandbox prompts showed), the oldest dropped until they are
+within `sofar.CLAIM_TOKENS` (50); when the block is over its 120
 tokens the claims are the first lines to go, so none of main's lines is dropped for one. The line's prompt and the beat (which reads the same prompt) both see that one
 block; nothing here adds a second. When his line touches an opinion on her card that
 reads as a rule ("never", "not optional", "the law"), the line's block and the beat get `You
@@ -1124,6 +1152,23 @@ hands them and names the kind of what they read) holds: the situation line says 
 logged on from there, then that she is at her PC in his group or raid with him and in which
 instance. Her brb's reason stays in "Right now" for 30 minutes after she is back
 (`presence.away_note`).
+
+**His question without a question mark** (`talk/asking.py` `buried_question`, 2026-11-20). With
+`coherence` on, every place the pipeline decides whether his line asks something also finds a
+question clause buried in it with no "?": "...i have not eaten yet so did you eat yet", "you
+ever been out west", "im good, you", "wanna raid later". His line is split at punctuation, at
+its line breaks (a Discord post's "long day at work" then "did you eat yet" on the next line:
+every reader takes his text as it came, never with its breaks folded to spaces) and at joining
+words; a clause after the first asks by stricter rules than the line's start, so "and
+when i got home", "and did the dishes" and "so do you" stay statements. Those places: answer
+his question first (`question_first`), the beat's answering wants (`Composed.asking`,
+`intent.allowed`, the answer-first weights), the position hold, the shape's `his_asks`, his
+first question among several waiting lines and their instruction, the "So far" block's open
+questions and a DM's `covers_ask`. `length.asks` (the length rule's) always reads them. This
+needs no core switch; with `coherence` off every reading is main's (`is_question`/`asks` with
+`buried=False`), so no golden changes. Of the sandbox's 59 scripted lines of his it reads all 39
+that ask (main's reading: 32) and none of the 20 that do not (`tests/test_buried_questions.py`
+holds 32 buried questions and 32 statements).
 
 **Every waiting whisper is answered** (`talk/engine.py` `_life_waiting`, `Pipeline._his_waiting`,
 `prompt.unanswered_text`). A whisper that joins her waiting answer is added to

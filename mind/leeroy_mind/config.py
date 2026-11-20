@@ -36,7 +36,8 @@ intent = false                 # her want for each turn, drawn by code, in the b
 situation = false              # the prompt as her situation: hard rules only, "Right now" by the instruction
 shape = false                  # each reply's shape drawn by code: length, burst, question back, late excuse, left on read
 dm_mirror = 5                  # 0-10, with shape on: how closely a DM's length follows his (0: as full as she likes)
-coherence = false              # conversations hold together (talk/README.md): long game lines kept, her want and place hold, every waiting whisper answered; read at start and at his login
+coherence = false              # conversations hold together (talk/README.md): her want and place hold, every waiting whisper answered; read at start and at his login
+coherence_length = false       # the length rule on game lines (talk/length.py): a long answer to his question kept, never cut; read at start and at his login
 wow_grounding = true           # raid and guild turns get facts (her class and role, the raid, its boss, the last wipe, loot and DKP), raid words and her own earlier lines; never a whisper or a DM
 wow_exemplars_before = "2026-11-19T14:22:45-05:00"  # her example lines are from before this (the live model's switch from Orion)
 invites = true                 # his invitations in game ("come to the inn", "let's go fishing"): her answer and her body agree (invites/README.md)
@@ -140,7 +141,8 @@ class TalkCfg:
     situation: bool = False  # [talk] situation: talk/prompt.py's situation mode (core Task 8)
     shape: bool = False  # [talk] shape: talk/shape.py's drawn reply shape (core Task 9)
     dm_mirror: int = 5  # [talk] dm_mirror: with shape on, a DM's length follows his (0: today's)
-    coherence: bool = False  # [talk] coherence: talk/length.py, talk/position.py (anything but true: off)
+    coherence: bool = False  # [talk] coherence: talk/position.py, talk/sofar.py (anything but true: off)
+    coherence_length: bool = False  # [talk] coherence_length: talk/length.py (anything but true: off)
     # [talk] wow_grounding: talk/grounding.py on raid and guild turns (anything but true: off)
     wow_grounding: bool = True
     # [talk] wow_exemplars_before: an ISO time with its offset; her example lines are older
@@ -270,6 +272,7 @@ _RULES = {
         "shape": (lambda v: type(v) is bool, "a boolean"),
         "dm_mirror": (lambda v: _int_in(v, 0, DM_MIRROR_MAX), f"an integer 0-{DM_MIRROR_MAX}"),
         "coherence": (lambda v: type(v) is bool, "a boolean"),
+        "coherence_length": (lambda v: type(v) is bool, "a boolean"),
         "wow_grounding": (lambda v: type(v) is bool, "a boolean"),
         "wow_exemplars_before": (lambda v: exemplars_time(v) is not None,
                                  "an ISO date and time with its UTC offset"),
@@ -346,9 +349,10 @@ def _build(data: dict, source: str) -> MindConfig:
         values = {}
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
-            if section == "talk" and key in ("realism", "texture", "dm_own_time",
-                                             "think_private", "recall_diversity",
-                                             "coherence") and type(v) is not bool:
+            if (section == "talk" and key in ("realism", "texture", "dm_own_time",
+                                              "think_private", "recall_diversity",
+                                              "coherence", "coherence_length")
+                    and type(v) is not bool):
                 v = False
             if section == "talk" and key == "wow_grounding" and type(v) is not bool:
                 if (key, repr(v)) not in _WARNED:  # off, logged once (each login reads it again)
