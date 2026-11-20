@@ -219,3 +219,27 @@ def test_an_opener_on_the_raid_channel_while_he_raids_brings_up_the_game(store, 
         assert not off.game_topic
     finally:
         r.close()
+
+
+def test_a_game_line_cut_off_by_its_num_predict_goes_back_to_its_last_sentence(
+        store, clock, tmp_path, caplog):
+    from leeroy_mind.llm.diagnostics import capture_response
+    caplog.set_level(logging.INFO, logger="leeroy_mind")
+    seed_test_cast(store)
+    save_member(store, 102, player_gender="female", words_per_line=[3, 12], split_rate=0.0,
+                typo_rate=0.0, emoticon_rate=0.0, abbreviations={})
+    r = make_rig(store, clock, tmp_path, wow_topic=True, reply="on my way. bringing the flasks and the")
+    original = r.llm.chat
+
+    async def chat(model, messages, *, options, think=None, **kw):
+        result = await original(model, messages, options=options, think=think, **kw)
+        return replace(result, diagnostics=capture_response(
+            {"message": {"content": result.text}, "done": True, "done_reason": "length"}))
+    r.llm.chat = chat
+    try:
+        row = his_line(r, "go when ready")
+        lines = r.speak_turn(reply(102, trigger=row.id))
+        assert " ".join(lines).startswith("on my way") and "flasks" not in " ".join(lines)
+        assert any("wow_line_cutoff: guid=102" in rec.getMessage() for rec in caplog.records)
+    finally:
+        r.close()

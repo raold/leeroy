@@ -4507,7 +4507,7 @@ class Pipeline:
         finally:
             self.timing.model(trace, attempt, outcome)
         text = result.text
-        cutoff = getattr(result.diagnostics, "done_reason", None) == "length"
+        cutoff = getattr(getattr(result, "diagnostics", None), "done_reason", None) == "length"
         if words and cutoff:
             # cut off by num_predict: back to its last full sentence (none: as it is)
             cut = trim_to_sentence(text)
