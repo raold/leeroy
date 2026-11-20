@@ -929,6 +929,15 @@ class RaidLeadService:
                       outcome="done")
         return done, missed
 
+    def designate(self, guid: int) -> bool:
+        """His "you lead" inside an instance named her (lead/service.py): she calls his raid, as
+        his chat designation would ("Ana leads"), without a line of her own (her answer to his
+        "you lead" says it). False when the raid lead may not act or she is not of his group."""
+        if self.blocked() is not None or not self._speakable(guid):
+            return False
+        self._set(guid, "chat")
+        return True
+
     # -- the console ---------------------------------------------------------------------------------
 
     def console_status(self) -> dict:

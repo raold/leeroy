@@ -40,6 +40,7 @@ coherence = false              # conversations hold together (talk/README.md): l
 wow_grounding = true           # raid and guild turns get facts (her class and role, the raid, its boss, the last wipe, loot and DKP), raid words and her own earlier lines; never a whisper or a DM
 wow_exemplars_before = "2026-11-19T14:22:45-05:00"  # her example lines are from before this (the live model's switch from Orion)
 invites = true                 # his invitations in game ("come to the inn", "let's go fishing"): her answer and her body agree (invites/README.md)
+lead = true                    # his "you lead" in game ("take the lead", "take us questing", "lead us to the inn"): a member of his group leads it and he follows (lead/README.md)
 
 [life]
 availability = 0              # 0-10: how often members are away, busy or slow to answer by their day (0: always there)
@@ -146,6 +147,7 @@ class TalkCfg:
     # [talk] wow_exemplars_before: an ISO time with its offset; her example lines are older
     wow_exemplars_before: str = EXEMPLARS_BEFORE
     invites: bool = True  # [talk] invites: invites/service.py (a non-boolean: off, logged once)
+    lead: bool = True  # [talk] lead: lead/service.py (a non-boolean: off, logged once)
 
 
 @dataclass(frozen=True)
@@ -274,6 +276,7 @@ _RULES = {
         "wow_exemplars_before": (lambda v: exemplars_time(v) is not None,
                                  "an ISO date and time with its UTC offset"),
         "invites": (lambda v: type(v) is bool, "a boolean"),
+        "lead": (lambda v: type(v) is bool, "a boolean"),
         **{k: (lambda v: _num_in(v, 0, MAX_PER_HOUR), f"a number 0-{MAX_PER_HOUR}")
            for k in ("whispers_per_hour", "openers_per_hour")},
         "openers_to_him": (lambda v: _num_in(v, 0, 1), "a number 0-1"),
@@ -362,7 +365,7 @@ def _build(data: dict, source: str) -> MindConfig:
                     log.warning("talk_wow_exemplars_before_invalid key=wow_exemplars_before "
                                 "want=%s default=%s", want, defaults[section][key])
                 v = defaults[section][key]
-            if (section == "talk" and key in ("intent", "situation", "shape", "invites")
+            if (section == "talk" and key in ("intent", "situation", "shape", "invites", "lead")
                     and type(v) is not bool):
                 if (key, repr(v)) not in _WARNED:  # off, logged once (each login reads it again)
                     _WARNED.add((key, repr(v)))

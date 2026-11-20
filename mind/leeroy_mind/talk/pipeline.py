@@ -452,7 +452,8 @@ class TurnMeta:
       engine._pushback), topic_fit (put in to answer his game question: facts.fit_tier),
       memory (put in to answer his question about the guild's past, which she remembers:
       engine._plan_lore), reason_pool (drawn first for a real reason to speak),
-      weighted_draw or invite (a member his invitation asked: invites/service.py);
+      weighted_draw, invite (a member his invitation asked: invites/service.py) or lead (the
+      member his "you lead" asked: lead/service.py);
     - greet:<how> (his login) and gz:<how> (an achievement): reason_pool or weighted_draw;
     - gz_loot:weighted_draw (his loot), kill_gz:weighted_draw, wipe_react:weighted_draw or
       wipe_react:died_first (offered to whoever died first);
@@ -470,7 +471,8 @@ class TurnMeta:
       joined his social emote; talk/emotes.py): the second part is his emote;
     - source:<TurnSource class>, say_as and speak: turns from outside the engine's planning
       (source:invite, her follow-up after his invitation when her body did more or less than
-      her answer said)."""
+      her answer said; source:lead, her line when a lead of hers ended or was handed over by
+      itself)."""
     turn_id: str
     topic: str = ""
     answers_human: bool = False

@@ -513,6 +513,10 @@ class MindApp:
         # his invitations in game: [talk] invites, read at each line (on by default; it does
         # nothing until he invites); before the Realm and the server, which attach last
         self.invites = ext("invites", lambda: attach_invites(self))
+        from .lead.service import attach as attach_lead
+        # his "you lead" (lead/): [talk] lead, read at each line (on by default; it does nothing
+        # until he asks a member to lead); before the Realm and the server, which attach last
+        self.leading = ext("leading", lambda: attach_lead(self))
         self.realm = ext("realm", lambda: attach_realm(self))
         from .server.attach import attach_server
         self.server = ext("server", lambda: attach_server(self))  # Last; disabled adds no handlers or tasks.
@@ -1081,6 +1085,15 @@ class MindApp:
         self._note_human_name(ev.from_name)
         command = self.voice.echoes_command(ev)
         held = False
+        led = False
+        leading = getattr(self, "leading", None)
+        if not command and not backlog and leading is not None:
+            # his "you lead" or its end (lead/): read before the raid lead's designations and
+            # invitations; its answer is planned by talk below (none for a playerbots command)
+            try:
+                led = leading.claims(ev, line_id) == "lead"
+            except Exception:  # never in the way of his line: it fails open to talk
+                log.warning("lead_claim_failed")
         raidlead = getattr(self, "raidlead", None)
         if not command and not backlog and raidlead is not None:
             # An order to his group is the raid lead's before playerbots' command words; a line it
@@ -1089,8 +1102,9 @@ class MindApp:
                 await raidlead.before_his_line()
             except Exception:  # never in the way of his line: it fails open to talk
                 log.warning("raidlead_before_line_failed")
-            claim = raidlead.claims(ev, line_id)
-            command, held = claim == "order", claim == "held"
+            if not led:
+                claim = raidlead.claims(ev, line_id)
+                command, held = claim == "order", claim == "held"
         if not command and not held:
             command = his_command(ev.channel, ev.text)
         invites = getattr(self, "invites", None)
@@ -1099,7 +1113,8 @@ class MindApp:
             # planned by talk below; a line the model reads first is held and goes to talk later
             try:
                 await invites.before_his_line()
-                held = invites.claims(ev, line_id) == "held"
+                if not led:
+                    held = invites.claims(ev, line_id) == "held"
             except Exception:  # never in the way of his line: it fails open to talk
                 log.warning("invites_claim_failed")
         if not backlog and self.signals is not None and not held:
