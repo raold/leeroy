@@ -26,8 +26,10 @@ inline constexpr std::string_view kModuleVersion = "0.1.0";
 // one-member-group disband on a map change cannot take it (DummyTrialJob.cpp); a mind runs its lab only on such a build.
 // invites: string_do's go_to and fish kinds and its "via": "invite" mark (Leeroy.Invites.Enable, LeeroyStrings.h); a
 // mind sends them only to a hello that lists it.
+// lead: lead_do, a cast member of his group leading it in the open world while he follows (Leeroy.Lead.Enable,
+// LeeroyLead.h); a mind sends it only to a hello that lists it.
 inline constexpr std::string_view kFeatures[] = {"item_links", "playstyle", "raidlead", "mechanics", "regear",
-    "dummy_party_on_arrival", "invites"};
+    "dummy_party_on_arrival", "invites", "lead"};
 
 std::int64_t NowUnixMs();
 
