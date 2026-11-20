@@ -61,6 +61,36 @@ def test_serve_answers_ready_then_each_request(tmp_path):
     assert fake.seen == ["a", "b"]
 
 
+def test_worker_applies_its_startup_policy_to_render_and_caption_requests(tmp_path):
+    class Screened(Fake):
+        def render(self, request):
+            self.seen.append(request.nsfw_max)
+            return {'flagged': 0.15 >= request.nsfw_max, 'nsfw': 0.15}
+
+        caption = render
+
+    render = json.loads(req(tmp_path))
+    del render['nsfw_max']
+    caption = {'id': 'c', 'op': 'caption', 'base_path': str(tmp_path/'base.jpg'),
+               'out_path': str(tmp_path/'caption.jpg'), 'top': 'HELLO', 'bottom': ''}
+    fake, output = Screened(), io.BytesIO()
+    data = b'\n'.join(json.dumps(x).encode() for x in (render, caption))
+    assert serve(lambda: fake, stdin=io.BytesIO(data), out=output, on_eof=lambda: None,
+                 nsfw_max=0.1) == 0
+    answers = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert fake.seen == [0.1, 0.1]
+    assert all(answer['flagged'] and answer['nsfw'] == 0.15 for answer in answers[1:])
+
+
+@pytest.mark.parametrize('bad', [None, True, 0, 1, float('nan'), float('inf')])
+def test_bad_startup_policy_refuses_before_loading_any_model(bad):
+    loaded = []
+    with pytest.raises(ValueError):
+        serve(lambda: loaded.append(1), stdin=io.BytesIO(), out=io.BytesIO(),
+              on_eof=lambda: None, nsfw_max=bad)
+    assert not loaded
+
+
 def test_a_failed_load_answers_ready_false_with_its_reason_only():
     def bad():
         raise ReadyError("vram")

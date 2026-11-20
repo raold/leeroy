@@ -148,7 +148,7 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
         room.check()
         tries = attempt + 1
         return RenderRequest(spec.phrases, spec.negative, seed_for(snap.request, snap.guid, attempt),
-            cfg.steps, cfg.guidance, SIZE, staged, small, THUMB_PX, cfg.nsfw_max,
+            cfg.steps, cfg.guidance, SIZE, staged, small, THUMB_PX,
             identity=identity, shape="portrait",
             detail=detail_for(cfg, rear=from_behind(snap.scene)))
 
@@ -163,7 +163,8 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
         began = time.perf_counter()
         try:
             got, tries = await render_slot(worker, request,
-                rid=lambda attempt: f"request:{snap.request}:{attempt}", make_room=room.make_room)
+                rid=lambda attempt: f"request:{snap.request}:{attempt}", make_room=room.make_room,
+                nsfw_max=cfg.nsfw_max)
         finally:
             render_ms = (time.perf_counter() - began) * 1000
             room.timings["render_ms"] = render_ms
@@ -287,13 +288,13 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
                 return RenderRequest(spec.phrases, spec.negative,
                                      seed_for(snap.request, snap.guid, k * TRIES + attempt),
                                      params.steps, cfg.guidance, SIZE, cand, small, THUMB_PX,
-                                     cfg.nsfw_max, identity=identity, shape="portrait",
+                                     identity=identity, shape="portrait",
                                      detail=detail_for(cfg, rear=from_behind(snap.scene)))
             began = time.perf_counter()
             try:
                 got, tries = await render_slot(
                     worker, request, rid=lambda attempt, k=k: f"request:{snap.request}:{k}:{attempt}",
-                    make_room=room.make_room)
+                    make_room=room.make_room, nsfw_max=cfg.nsfw_max)
             except SetRefused:
                 state["tries"] += TRIES
                 continue

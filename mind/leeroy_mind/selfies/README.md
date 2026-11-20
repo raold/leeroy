@@ -1,5 +1,18 @@
 # Private photo styling
 
+## Worker screening policy
+
+The mind passes the configured `[selfies] nsfw_max` once when starting an image worker.
+The setting is optional in TOML; screening is always active. Render and caption callers omit
+the cutoff and use that worker policy. Legacy explicit request values remain supported and
+validated. Result flags and real scores stay in the response and database, including retries,
+delivery checks and meme reuse. Before publishing, the mind still checks the returned score
+against its configuration even if the worker reports an image as unflagged. Missing or invalid
+result scores are never replaced with zero.
+Install the mind and worker changes together; no migration or native rebuild is needed.
+
+## Styling
+
 `[selfies] romance_styling = true` opts new private situational and requested photos into
 512 additional clothed outfit templates in `kind.py`, with twelve colour choices. It defaults
 to false and is read when the mind starts. An invalid table does not enable it. It needs the

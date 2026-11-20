@@ -201,6 +201,7 @@ one of its phrases is:
 | `phrase_cast` | one 3 or more other members used in the last 48 hours; 3+ words with 2 outside STOP |
 | `stock_member` | a line of `stock_phrases.txt` she used in the last 72 hours |
 | `stock_cast` | a line of `stock_phrases.txt` the cast used 3 or more times in the last 24 hours |
+| `phrase_exemplar` | a run of one of her own earlier lines her prompt showed as an example (`Draft.exemplars`, `[talk] wow_grounding`, talk/grounding.py): 4+ words, or 3 with 2 outside STOP, however long ago the line was said |
 
 A phrase is 2-5 words inside one comma clause, with a word outside `STOP` (two for a
 two-word phrase), no member's, his or an active nickname's name, no boss, raid, dungeon,

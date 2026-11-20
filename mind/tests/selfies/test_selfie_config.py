@@ -79,8 +79,18 @@ def test_the_worker_command_runs_the_selfie_package_isolated(tmp_path):
     assert worker_command(SelfieCfg())[1:7] == ["-I", "-X", "utf8", "-m", "leeroy_selfie",
                                                 "worker"]
     assert cmd == [str(tmp_path / "python.exe"), "-I", "-X", "utf8", "-m", "leeroy_selfie",
-                   "worker", "--data", str(tmp_path / "sd"), "--min-free-gib", "12"]
+                   "worker", "--nsfw-max", "0.2", "--data", str(tmp_path / "sd"),
+                   "--min-free-gib", "12"]
     assert worker_command(SelfieCfg(min_free_gib=11.5))[-1] == "11.5"
+
+
+def test_screening_policy_is_supplied_once_at_worker_start():
+    cfg = SelfieCfg(nsfw_max=0.1)
+    for identity in (False, True):
+        command = worker_command(cfg, identity=identity)
+        assert command.count('--nsfw-max') == 1
+        assert command[command.index('--nsfw-max') + 1] == '0.1'
+    assert '--nsfw-max' not in worker_command(cfg, embedding=True)
 
 
 def test_the_worker_env_is_this_one_offline(tmp_path, monkeypatch):

@@ -235,3 +235,19 @@ def test_tiers():
     from leeroy_mind.talk.pipeline import DROP_ON_RETRY, OWED_HARD_TELLS, OWED_REFUSED
     assert "place" not in DROP_ON_RETRY and "place" not in OWED_HARD_TELLS  # soft: a retry stays
     assert "his place" in DROP_ON_RETRY and "his place" in OWED_REFUSED
+
+
+def test_the_place_line_goes_before_a_wow_turns_grounding():
+    """A Discord WoW channel turn can carry both: her place line is let go first, the
+    grounding sections (PromptParts.wow) only after it."""
+    place = ["Where you live: Utah, red rock.", "Late October there: mild."]
+    wow = ["Raid and guild (facts; keep to them, never invent more): " + "fact " * 20,
+           "Raid words: pull, wipe."]
+    full = replace(_parts(place), wow=wow)
+
+    def size(parts):
+        return sum(estimate_tokens(m["content"]) for m in render_messages(parts))
+    t = trim_to_budget(full, budget=size(replace(full, place=[])))
+    assert t.place == [] and t.wow == wow and len(t.chat) == 20
+    t = trim_to_budget(full, budget=size(replace(full, place=[], wow=wow[:1])))
+    assert t.place == [] and t.wow == wow[:1]

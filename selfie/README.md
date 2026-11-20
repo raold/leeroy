@@ -121,6 +121,16 @@ needed; omit the options to use the previous rendering behavior.
 
 ## Worker protocol
 
+Screening is always active. `worker --nsfw-max N` sets the default cutoff once at startup;
+omitting it uses 0.2. The mind supplies its existing `[selfies] nsfw_max` value at this boundary,
+so normal render and caption requests no longer need that field. A missing TOML entry uses
+the mind's default. Older callers may still send a validated per-request cutoff for compatibility.
+An explicitly invalid value is an error, never a request to disable screening.
+
+Responses keep `flagged` and the actual `nsfw` score. A flagged image is not written, and the
+mind retains its retry, delivery and database checks. Deploy the mind and worker together:
+an older worker cannot accept the new startup option. No migration or native rebuild is needed.
+
 `python -m leeroy_selfie worker --data DIR --min-free-gib N` is the night worker, started by the
 mind and never by hand: JSON lines on stdin and stdout, one render at a time, `ready` first
 (`ok: false` with an error when it refuses, for example with too little free VRAM). Its start

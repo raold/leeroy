@@ -24,6 +24,25 @@ def test_a_render_request_parses_in_its_one_strict_form(tmp_path):
     assert parse(b'{"id": "q", "op": "quit"}') == Quit("q")
 
 
+def test_omitted_render_cutoff_uses_worker_default_and_legacy_values_still_parse(tmp_path):
+    data = json.loads(request(tmp_path))
+    del data['nsfw_max']
+    line = json.dumps(data).encode()
+    assert parse(line).nsfw_max == 0.2
+    assert parse(line, nsfw_max=0.1).nsfw_max == 0.1
+    assert parse(request(tmp_path, nsfw_max=0.15), nsfw_max=0.1).nsfw_max == 0.15
+
+
+@pytest.mark.parametrize('bad', [None, True, '0.2', 0, 1, float('nan'), float('inf')])
+def test_an_invalid_explicit_or_default_cutoff_is_never_treated_as_omission(tmp_path, bad):
+    with pytest.raises(ValueError):
+        parse(request(tmp_path, nsfw_max=bad))
+    data = json.loads(request(tmp_path))
+    del data['nsfw_max']
+    with pytest.raises(ValueError):
+        parse(json.dumps(data).encode(), nsfw_max=bad)
+
+
 @pytest.mark.parametrize("over", [
     {"extra": 1}, {"seed": -1}, {"seed": 2**32}, {"seed": True}, {"steps": 9}, {"steps": 61},
     {"cfg": 12.5}, {"cfg": "5"}, {"size": 512}, {"size": 800}, {"thumb_size": 64},

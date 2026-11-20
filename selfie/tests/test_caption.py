@@ -99,6 +99,18 @@ def test_the_captioned_image_is_scored_and_a_flagged_one_is_never_written(tmp_pa
         Scored(0.01).caption(parse(line(tmp_path, base_path=str(tmp_path / "gone.jpg"))))
 
 
+def test_caption_without_cutoff_is_still_screened_by_worker_default(tmp_path):
+    Image = pytest.importorskip('PIL.Image')
+    Image.new('RGB', (512, 512)).save(tmp_path/'base.jpg', format='JPEG')
+    data = json.loads(line(tmp_path))
+    del data['nsfw_max']
+    req = parse(json.dumps(data).encode())
+    assert req.nsfw_max == 0.2
+    assert Scored(0.25).caption(req)['flagged'] is True
+    assert not (tmp_path/'meme.jpg').exists()
+    assert parse(json.dumps(data).encode(), nsfw_max=0.1).nsfw_max == 0.1
+
+
 class Fake:
     info = {"device": "cuda", "free_gib": 13.1, "versions": {}}
 

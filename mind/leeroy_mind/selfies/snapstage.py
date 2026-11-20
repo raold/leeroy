@@ -304,12 +304,12 @@ class SnapRenderer:
             self._leases()
             return RenderRequest(spec.phrases, spec.negative,
                                  seed_for(ctx.night, guid, snap_id, idx, attempt), steps,
-                                 cfg.guidance, SIZE, out, thumb, thumb_size, cfg.nsfw_max,
+                                 cfg.guidance, SIZE, out, thumb, thumb_size,
                                  identity=identity, shape=shape,
                                  detail=detail_for(cfg) if detail else None)
         got, attempts = await render_slot(self.worker, request,
                                           rid=lambda attempt: f"{rid}:{attempt}",
-                                          make_room=lambda: self._room(snap_id))
+                                          make_room=lambda: self._room(snap_id), nsfw_max=cfg.nsfw_max)
         if not (out.is_file() and thumb.is_file()):
             raise WorkerError("unwritten")
         return got, seed_for(ctx.night, guid, snap_id, idx, attempts - 1), attempts

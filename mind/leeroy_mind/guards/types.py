@@ -26,6 +26,9 @@ class Draft:
     server: bool = False
     anchor_embedding: bytes | None = field(default=None, repr=False)
     readers: tuple[int, ...] = ()
+    # Her own earlier lines the prompt showed as examples (talk/grounding.py): a draft that
+    # copies one is `phrase_exemplar` (guards/phrases.py)
+    exemplars: tuple[str, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
