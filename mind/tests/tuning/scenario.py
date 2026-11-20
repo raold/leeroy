@@ -50,6 +50,13 @@ switch) changed none of these goldens: the scenario has no Discord DM, only game
 whispers (whose trigger line was already in the Chat). tests/discord/test_dm_prompt.py and
 tests/test_romance_realism.py cover it.
 
+Re-recorded on 2026-11-20 for geography ([geography], on by default; geography/README.md): every
+whisper and DM prompt gains her "where you live, right now" line just before "Right now:" (the
+test cast is British with no place in its words, so it is the UK as a whole: "Where you live: the
+UK, ..."). Nothing else moved: their cards gain no home line (the UK as a whole has none), his
+[owner] home is unset, the clock reads the test cast's UK time as before, and the draws and the
+lines sent are unchanged.
+
 Voice sheets (Persona.speech, 2026-11-17) changed none of these four goldens: no member of the
 scenario's cast has one. golden_voice.json (record_voice) holds the same script in both prompt
 modes ("plain" and "core") with invented sheets (tests/sheets.py) on Belra (102) and Coros
