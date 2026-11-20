@@ -353,3 +353,98 @@ LEEROY_TEST(Training_DummyAbandonedJournaledMemberStaysFencedByItsJournal)
     // With no member kept, the job is released instead of being kept until a restart.
     CHECK(DecideDummyRelease(true, kDummyReleaseMs, DummyTrialFences(fate) ? 1 : 0) == DummyRelease::Release);
 }
+
+LEEROY_TEST(Training_DummyCoreDisbandsAOneMemberPartyOnEnteringAMap)
+{
+    // LFGPlayerScript::OnPlayerMapChanged outside an LFG dungeon: a group of one member or fewer is disbanded.
+    CHECK(!DummySoloPartySurvivesMapEntry(1, false));
+    CHECK(!DummySoloPartySurvivesMapEntry(0, false));
+    CHECK(DummySoloPartySurvivesMapEntry(2, false));
+    CHECK(DummySoloPartySurvivesMapEntry(1, true));
+}
+
+LEEROY_TEST(Training_DummyPartyFormedBeforeAFarTeleportIsLostOnArrival)
+{
+    // The 2026-11-10..14 failure. The old order formed the solo party and took the driver before moving the bot from
+    // Northrend to Orgrimmar. The core disbands that party as the bot is added to Kalimdor, before its AI wakes, so
+    // the first move check finds the driver still master but no party: an ownership change, and no reassert.
+    CHECK(!DummySoloPartySurvivesMapEntry(1, false));
+    bool const groupOwned = DummyGroupProven(false, false, false, 0, false, 0, false); // Our party object is gone.
+    CHECK(!groupOwned);
+    DummyOwnerState arrived{true, false, true, false, true, false, false, groupOwned, true, false};
+    CHECK(!DummyOwnerProven(arrived));
+    CHECK_EQ(DummyOwnerMissing(arrived), "group");
+    CHECK(!DummyMasterReassertable(arrived, false, false, false)); // The master is not empty: nothing to put back.
+    CHECK(DecideDummyMove({false, DummyOwnerProven(arrived), true, false, true, true, false, 0}) == DummyMoveStep::Block);
+
+    // The fixed order moves the bot untouched: in transit it is the plain unbound body, which a map change cannot
+    // take from us, and the party is formed at the dummy on the map of the fight.
+    DummyOwnerState unbound{true, false, true, false, true, false, false,
+        DummyGroupProven(true, false, false, 0, false, 0, false), true, false};
+    CHECK(DummyOwnerProven(unbound));
+    CHECK(DecideDummyMove({false, true, true, false, true, false, false, 0}) == DummyMoveStep::Setup);
+    CHECK(DummyGroupProven(false, true, true, 1, true, 0, true)); // Our party there, until ReturnMember releases it.
+    // On the way home the party is always released before the teleport, so the rule cannot take it either.
+    for (int bits = 0; bits < 16; ++bits)
+    {
+        DummyReturnState home;
+        home.prepared = home.connected = home.sameSession = home.online = home.owned = home.atTrial = true;
+        home.groupReleased = false;
+        home.released = (bits & 1) != 0;
+        home.resetDone = (bits & 2) != 0;
+        home.leaderRestored = (bits & 4) != 0;
+        home.finalResetDone = (bits & 8) != 0;
+        CHECK(DecideDummyReturn(home) != DummyReturnStep::Teleport);
+        CHECK(DecideDummyReturn(home) != DummyReturnStep::Complete);
+    }
+    DummyReturnState done;
+    done.prepared = done.connected = done.sameSession = done.online = done.owned = done.atTrial = true;
+    done.released = done.resetDone = true;
+    CHECK(DecideDummyReturn(done) == DummyReturnStep::Teleport); // Every release done: now it may go home.
+}
+
+LEEROY_TEST(Training_DummyMoveFormsThePartyAtTheDummyThenWaitsForTheStockReset)
+{
+    DummyMoveState state{false, true, true, false, true, false, false, 0};
+    CHECK(DecideDummyMove({true, false, false, true, false, false, false, 0}) == DummyMoveStep::Wait); // Teleporting.
+    auto with = [&state](auto change) { auto copy = state; change(copy); return DecideDummyMove(copy); };
+    CHECK(with([](DummyMoveState& s) { s.owned = false; }) == DummyMoveStep::Block);
+    CHECK(with([](DummyMoveState& s) { s.alive = false; }) == DummyMoveStep::Died);
+    CHECK(with([](DummyMoveState& s) { s.inCombat = true; }) == DummyMoveStep::Attacked);
+    CHECK(with([](DummyMoveState& s) { s.atTrial = false; }) == DummyMoveStep::Wait);
+    CHECK(DecideDummyMove(state) == DummyMoveStep::Setup);
+    state.setUp = true;
+    state.sinceSetupMs = kDummySettleMs - 1;
+    CHECK(DecideDummyMove(state) == DummyMoveStep::Settle); // The stock reset has not come yet.
+    state.reasserted = true;
+    CHECK(DecideDummyMove(state) == DummyMoveStep::Arrived); // It came and the driver is back: fight now.
+    state.reasserted = false;
+    state.sinceSetupMs = kDummySettleMs;
+    CHECK(DecideDummyMove(state) == DummyMoveStep::Arrived); // No reset within the bound: fight anyway.
+    CHECK(kDummySettleMs < kDummyMoveMs); // Settling fits the move deadline.
+    state.atTrial = false;
+    CHECK(DecideDummyMove(state) == DummyMoveStep::Wait); // Wandered off before the fight: not arrived.
+}
+
+LEEROY_TEST(Training_DummyOwnerMissingNamesEachFailedFact)
+{
+    DummyOwnerState proven{true, false, true, false, true, false, false, true, true, false};
+    CHECK(DummyOwnerProven(proven));
+    CHECK_EQ(DummyOwnerMissing(proven), "");
+    struct Case { bool DummyOwnerState::*field; char const* name; };
+    for (auto [field, name] : {Case{&DummyOwnerState::sameSession, "session"}, Case{&DummyOwnerState::isHuman, "human"},
+        Case{&DummyOwnerState::isCast, "cast"}, Case{&DummyOwnerState::isSelfBot, "selfbot"},
+        Case{&DummyOwnerState::sameGuild, "guild"}, Case{&DummyOwnerState::invited, "invite"},
+        Case{&DummyOwnerState::reserved, "reserved"}, Case{&DummyOwnerState::groupOwned, "group"},
+        Case{&DummyOwnerState::masterOwned, "master"}, Case{&DummyOwnerState::loggingOut, "logout"}})
+    {
+        auto changed = proven;
+        changed.*field = !(changed.*field);
+        CHECK(!DummyOwnerProven(changed));
+        CHECK_EQ(DummyOwnerMissing(changed), name);
+    }
+    auto both = proven;
+    both.groupOwned = false;
+    both.masterOwned = false;
+    CHECK_EQ(DummyOwnerMissing(both), "group,master");
+}

@@ -22,7 +22,7 @@ Implemented pieces:
   Cleanup tracks the leader's map, instance, group and generation token. The boss-hold watchdog ignores door
   pauses and pre-existing holds, verifies the actual resume, and retains a refused resume for retry.
 - A bounded dummy-trial controller using the normal playerbots attack path. It admits idle masterless cast bots,
-  establishes a separate owned solo party and harness driver for each candidate before moving,
+  moves each untouched, then at the dummy establishes a separate owned solo party and harness driver for it,
   watches incoming damage requests and distance, and verifies
   the original location after asynchronous return. An admitted request reserves its participants through cleanup.
 
@@ -60,12 +60,19 @@ Shutdown makes one bounded cleanup attempt and reports unresolved return failure
 Strategies return through the harness's stock reset; later standing-setup application remains the mind's responsibility.
 The installed playerbots AI clears a random bot's driver whenever it is ungrouped, so trials temporarily create
 one solo party per participant. Admission still requires an ungrouped bot; candidates never share these parties.
-Creating that party sends the bot an empty group list, and playerbots' stock "reset botAI" answers it by dropping
-any master outside the bot's group (the driver always is) and resetting its strategies. That used to be read as an
-ownership change and blocked every accepted trial (`cleanup_failed:ownership_changed` on 2026-11-10).
-While the solo party is still ours and every other ownership fact holds, the controller now puts the driver back and
-strips follow again (`master_reasserted guid=`, first and every 50th); during the fight the member is dropped
-`ai_reset` instead, since the reset took its trial strategies. A foreign master is still an ownership change.
+The party is formed only at the dummy, on the map of the fight: the core's `LFGPlayerScript::OnPlayerMapChanged`
+runs whenever a player is added to a map and, outside an LFG dungeon, disbands a group of one member or fewer.
+A party formed before a far teleport is therefore gone when the teleport lands. From 2026-11-10 to 11-14 every
+accepted trial lost every member that way at its first move check (`cleanup_failed:ownership_changed`), which
+raised the global cleanup fence and left the lab blocked. Admission now only records the body and teleports it
+untouched (no party, no master, no reset); its ownership in transit is the plain unbound one (no group, no master).
+Creating the party sends the bot an empty group list, and playerbots' stock "reset botAI" answers it on the bot's
+next AI pass (1-5 s after a teleport) by dropping any master outside the bot's group (the driver always is) and
+resetting its strategies. While the solo party is still ours and every other ownership fact holds, the controller
+puts the driver back and strips follow again (`master_reasserted guid=`, first and every 50th). A member counts as
+arrived once that has happened, or 8 s after its party formed with no reset (`DecideDummyMove`), so the reset lands
+before the fight; a later one still drops the member `ai_reset`, since it took its trial strategies. A foreign
+master is still an ownership change.
 Reset completes while the exact driver/session/group still prove ownership, then cleanup removes only that solo
 member, restores the prior leader flag, rebuilds stock defaults for the restored ungrouped state and verifies return.
 AI target/engine state is cleared too, including on same-map returns; pending logout is never cancelled for cleanup.
@@ -73,7 +80,9 @@ Added members, invitations, group transfers, or a
 participant becoming the configured human block further mutation. A partially created group retains its identity
 for cleanup rather than destroying an object that may already be linked to the player. As with other in-memory
 job receipts, abnormal process termination requires reconciliation of any remaining harness parties.
-A blocked member logs why (`dummy trial <id> blocked member <guid>: <reason>`). A trial stopped because training
+A blocked member logs why (`dummy trial <id> blocked member <guid>: <reason>`); an `ownership_changed` names the
+facts that failed (`missing=` session, human, cast, selfbot, guild, invite, reserved, group, master, logout, or
+body when no online bot answers). A trial stopped because training
 cleanup is pending ends `cleanup_pending`, not `training_off`. Ten minutes after its `cleanup_failed` terminal the
 trial sorts its unreturned members (`DummyFateAfterBound`): it keeps and fences one it still holds (a group object
 or solo party of ours lists it, or its same body has the driver as master) and one it is still returning (not

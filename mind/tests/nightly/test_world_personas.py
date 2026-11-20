@@ -520,3 +520,34 @@ def test_world_real_name_still_differs_from_whole_names_and_cast_characters(h,cl
     run(stage.make_stage(lambda:CastCfg(.7,.7))(ctx))
     assert not ctx.failures
     assert load_persona(h.store,101,include_world=True).identity.real_name == "Nolan Alder"
+
+
+def test_a_world_refusal_logs_its_cause_by_code_and_count(h,caplog):
+    enabled(h)
+    observe(h,member(h,101))
+    with h.store.transaction():
+        h.store.conn.execute("DELETE FROM persona_core WHERE guid=101")
+    own = h.store.cast()[101].name
+    ctx = h.ctx()
+    ctx.settings = replace(ctx.settings,world_per_night=1)
+    ctx.reasoner.llm = FakeLLM(script_from(["synthetic world profile",_persona_json(own),
+        _persona_json(own),json.dumps({"names":[own]}),json.dumps({"names":[own]})]))
+    with caplog.at_level(logging.INFO):
+        run(stage.make_stage(lambda:CastCfg(.7,.7))(ctx))
+    assert ctx.failures["world_personas"] == 1
+    (record,) = [r for r in caplog.records if r.getMessage().startswith("world_persona_refused")]
+    assert record.getMessage() == "world_persona_refused: guid=101 error=NameCollision first=2"
+
+
+def test_a_world_refusal_names_the_stage_code_it_failed_on(h,caplog,monkeypatch):
+    enabled(h)
+    observe(h,member(h,101))
+    with h.store.transaction():
+        h.store.conn.execute("DELETE FROM persona_core WHERE guid=101")
+    async def refuse(*a,**k):
+        raise ValueError("world_looks_refused")
+    monkeypatch.setattr(stage,"looks",refuse)
+    with caplog.at_level(logging.INFO):
+        run(stage.make_stage(lambda:CastCfg(.7,.7))(named_context(h,"Nolan Alder")))
+    (record,) = [r for r in caplog.records if r.getMessage().startswith("world_persona_refused")]
+    assert record.getMessage() == "world_persona_refused: guid=101 error=ValueError code=world_looks_refused"

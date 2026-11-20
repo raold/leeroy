@@ -498,6 +498,41 @@ def test_a_failing_reminders_unit_fails_alone(h):
     assert [m.key for m in h.rows(103) if m.key] == [f"tom:101:{f}"]
 
 
+def test_hundreds_of_reminders_embed_through_ollama_in_bounded_requests(h, monkeypatch):
+    """The unit failed every night from 2026-11-16: it sent every due reminder (~500 a night,
+    then the backlog) in one /api/embed request, and Ollama's runner refused a connection
+    after 240-313 of them (HTTP 400, "dial tcp ... actively refused"). The client modelled here
+    refuses a request of more than 240 inputs, as the live one did."""
+    from leeroy_mind.llm.client import LLMError, OllamaClient
+    from leeroy_mind.llm.scheduler import LLMScheduler
+    from leeroy_mind.memory.writer import Embedder
+    from leeroy_mind.testing.fake_llm import fake_embed
+    sizes = []
+
+    def request(self, path, body, timeout, attempt):
+        assert path == "/api/embed"
+        sizes.append(len(body["input"]))
+        if len(body["input"]) > 240:
+            raise LLMError('/api/embed: HTTP 400 {"error":"Post \\"http://127.0.0.1:1/tokenize\\": '
+                           'dial tcp 127.0.0.1:1: connectex: No connection could be made because '
+                           'the target machine actively refused it."}')
+        return {"embeddings": [fake_embed(t) for t in body["input"]]}
+    monkeypatch.setattr(OllamaClient, "_request", request)
+    with h.store.transaction():
+        facts = [add_fact(h.store, kind="said_about", root=f"story:{i}", about=101,
+                          text=f"Arkon and Belra argued about pull {i}.", secret=0, now=h.T)
+                 for i in range(300)]
+        for i in range(300):
+            learn(h.store, f"story:{i}", 103, "overheard", ts=h.T)
+            believe(h.store, 101, 103, f"story:{i}", "no", now=h.T)
+    ctx = h.ctx()
+    ctx.embedder = Embedder(LLMScheduler(OllamaClient("http://x:1"), clock=h.clock), h.EMB)
+    run(stage_knows(ctx))
+    assert not ctx.failures and ctx.done("knows", "reminders")
+    assert sorted(m.key for m in h.rows(103) if m.key) == sorted(f"tom:101:{f}" for f in facts)
+    assert sum(sizes) == 300 and max(sizes) <= 32
+
+
 def test_a_reminder_written_meanwhile_is_not_written_again(h):
     f = _argued(h)
     gate = asyncio.Event()
