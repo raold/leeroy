@@ -1,6 +1,7 @@
 """Bounded world generation, separate from every cast night consumer."""
 from dataclasses import replace
 import json
+import re
 
 from leeroy_mind.logs import log
 from leeroy_mind.nightly import enrich
@@ -193,7 +194,7 @@ def make_stage(cast_config):
                 if saved:
                     ctx.personas.invalidate(guid)
                     log("world_persona_created",guid=guid)
-            except Exception:
+            except Exception as error:
                 def failed(store):
                     try:
                         n,night=failures(store,guid)
@@ -202,7 +203,11 @@ def make_stage(cast_config):
                         raise ValueError("world_failure_receipt_failed") from None
                 ctx.commit(STAGE,str(guid),failed)
                 ctx.failures[STAGE] += 1
-                log("world_persona_refused",guid=guid)
+                # The class, this stage's own fixed code and, for a name, what its candidates ran
+                # into: codes and counts only, never a name or a model's words.
+                code={"code":str(error)} if re.fullmatch(r"world_[a-z_]+",str(error)) else {}
+                log("world_persona_refused",guid=guid,error=type(error).__name__,**code,
+                    **{k:n for k,n in getattr(error,"outcomes",{}).items() if k in ("first","whole","screen")})
     return generate
 
 
