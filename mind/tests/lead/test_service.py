@@ -346,6 +346,7 @@ def test_native_ending_it_gets_one_short_line(app, monkeypatch):
     async def main():
         app.leading.claims(chat("lead us to the inn"), 524)
         await settle(app)
+        told(app, 524, TANK)   # her answer has been written: the end gets its own line
         active = app.leading.active
         app.leading.on_job(job(SimpleNamespace(id=active.id, guid=TANK), kind="lead",
                                state="ended", reason="arrived"))
@@ -357,6 +358,7 @@ def test_native_ending_it_gets_one_short_line(app, monkeypatch):
         # a quiet end says nothing
         app.leading.claims(chat("you lead"), 525)
         await settle(app)
+        told(app, 525, TANK)
         app.leading.on_job(job(SimpleNamespace(id=app.leading.active.id, guid=TANK), kind="lead",
                                state="ended", reason="group"))
         await settle(app)
@@ -509,6 +511,61 @@ def test_an_end_native_sent_before_the_starts_ack_is_kept(app, monkeypatch):
         app.leading.claims(chat("you lead"), 541)
         await settle(app)
         assert app.leading.active is None
+        assert not spoken   # her answer, not yet told, says it: no second line
+        said = told(app, 541, TANK)
+        assert "it's over already: you died" in said and "don't say you're leading" in said
+        # once told, a later end gets its own line
+        app.bridge = Wire(app)
+        app.leading.claims(chat("you lead"), 548)
+        await settle(app)
+        told(app, 548, TANK)
+        app.leading.on_job(job(SimpleNamespace(id=app.leading.active.id, guid=TANK), kind="lead",
+                               state="ended", reason="dead"))
+        await settle(app)
         [turn] = spoken
         assert "died while leading" in turn.instruction
+    run(main())
+
+
+def test_an_offline_tank_is_never_dungeon_clears_target(app):
+    app.world.online.discard(TANK)
+
+    async def main():
+        app.leading.claims(chat("Belra, you lead", at=NAXX), 549)
+        await settle(app)
+        [cmd] = [c for c in app.bridge.sent if isinstance(c, RaidControl)]
+        assert cmd.leader_guid == 102   # no tank online: hers, and native names its own
+    run(main())
+
+
+def test_his_end_while_dungeon_clear_is_being_asked_stops_it_again(app, monkeypatch):
+    async def speak(turn, *, why="speak", **kw):
+        return ["ok"]
+    monkeypatch.setattr(app.engine, "speak", speak)
+    gate = asyncio.Event()
+
+    class Slow(Wire):
+        async def send(self, cmd, *, preserve_id=False):
+            if isinstance(cmd, RaidControl) and cmd.action == "dc_on":
+                self.asked.append(cmd.action)
+                await gate.wait()
+            return await super().send(cmd, preserve_id=preserve_id)
+
+    async def main():
+        Slow.asked = []
+        app.leading.claims(chat("you lead"), 550)
+        await settle(app)
+        app.bridge = Slow(app)
+        active = app.leading.active
+        app.leading.on_job(job(SimpleNamespace(id=active.id, guid=TANK), kind="lead",
+                               state="ended", reason="instance"))
+        await app.clock.advance(svc.HANDOVER_S + 1, 1.0)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert Slow.asked == ["dc_on"] and app.leading.handing is not None
+        assert app.leading.claims(chat("stop leading", at=NAXX), 551) == "lead"
+        gate.set()
+        await settle(app)
+        assert [c.action for c in app.bridge.sent if isinstance(c, RaidControl)] == ["dc_on", "dc_off"]
+        assert app.leading.dc is None
     run(main())

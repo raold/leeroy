@@ -38,7 +38,8 @@ he is offline. The lead reads his line **before** the raid lead and invitations.
   to me", "come back", "regroup on me" (never with a no or another time: "don't let me lead",
   "i'll lead tomorrow"). A whisper ends it only to the member who leads. "follow me" is a
   playerbots command too: it still reaches playerbots, and nobody answers it. While a handover to
-  dungeon-clear is still waiting (below) his end cancels it; while his ask is still being carried
+  dungeon-clear is still waiting or being asked (below) his end cancels it (a run dungeon-clear
+  started meanwhile is stopped again); while his ask is still being carried
   out (its ack not in yet) his end waits for it, 20 s at most, and ends what it started. His "i'll
   lead" in party or raid chat also takes the raid's calling back from her
   (`RaidLeadService.take_back`, as raid chat's own "i'll lead" does), with no line of its own.
@@ -76,7 +77,8 @@ queued, travelling, he is dead, not his group, he doesn't lead it, a finder grou
 
 **Inside a dungeon or raid** (any other map but a battleground's, every expansion's and the Wrath
 5-mans the boss tables leave out among them): guild life's `raid_control` `dc_on` for his group: dungeon-clear's
-tank leads the group boss to boss (native names the tank dungeon-clear elects when another,
+tank leads the group boss to boss (asked of an online tank of his group, else of her; native
+names the tank dungeon-clear elects when another,
 `leader_mismatch:<guid>`, and it is asked once more; `leader_mismatch:0` is `no_tank`). The member
 he named calls it (raid lead). His end sends `dc_off`; the run stays his to stop until the game
 confirms it stopped (or that no run is left: `no_group`, `not_cast`, `no_tank`).
@@ -89,7 +91,8 @@ who leads now), and the quiet ones: `logout`, `group`, `off`, `taken`, `reset`, 
 `teleported`, `pvp`, `gone`, `replaced`, `his`. Every change native made is given back from its
 journal: the others follow him again, she follows him again and loses the strategies it added
 (ones she had before the lead and a wait took off come back). An end native sends before the
-start's ack is kept and applied once the ack is in.
+start's ack is kept and applied once the ack is in. A lead that ends before her answer to his
+ask is written gets no line of its own: that answer says it is over already (`words.over_already`).
 
 **A restart**: at each hello with no lead of the mind's own in force, the mind sends a quiet
 `lead_do` `end` (a lead an earlier mind left has nobody to end it). A lead of an earlier

@@ -136,6 +136,23 @@ def ended(why: str, place, forms) -> str | None:
     return _cap(_fill(text, forms, label(place))) + " One short line."
 
 
+# A lead that ended before her answer to his ask was written: why, for that answer.
+OVER = {
+    "dead": "you died",
+    "instance": "you're all inside an instance now, where the run leads",
+    "arrived": "you're there already",
+    "left": "{he} fell far behind",
+    "no_path": "you couldn't find a way to {place} from here",
+    "timeout": "it ran its hour",
+}
+
+
+def over_already(why: str, place, forms) -> str:
+    return _cap(_fill("{he} asked you to take the lead; you took it, but it's over already: "
+                      + OVER.get(why, "it ended straight away") + ". Say so plainly; don't say "
+                      "you're leading.", forms, label(place)))
+
+
 def handed_over(tank_name: str | None, code: str, forms) -> str:
     """Her line once they are inside an instance and dungeon-clear took over (or could not)."""
     if code:

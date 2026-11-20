@@ -77,6 +77,9 @@ class Asked:
     code: str = ""
     tank: int = 0                # dc: dungeon-clear's tank
     was_leading: bool = True     # end: a lead was in force when native heard it
+    lead_id: str = ""            # world: the lead its start made (lead_do's command id)
+    ended: str = ""              # world: that lead ended (native's why) before her answer was told
+    told: bool = False           # her answer's instruction has been written
     ready: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -324,6 +327,7 @@ class LeadService:
             if outcome == "done":
                 self.active = Active(wire, asked.leader, start.activity, start.place, asked.channel,
                                      self._hello)
+                asked.lead_id = wire
                 self.handing = None
                 self._designate(asked)
                 early, self._early = self._early, None
@@ -391,7 +395,7 @@ class LeadService:
     async def _dc_on(self, asked: Asked) -> None:
         try:
             group = self._group()
-            tanks = self._tanks(group)
+            tanks = self._tanks({g for g in group if self._able(g)})
             outcome, code, tank = await self._dc(tanks[0] if tanks else asked.leader, "dc_on")
             asked.outcome, asked.code, asked.tank = (
                 ("done", "", tank) if outcome == "done" else ("refused", code, 0))
@@ -472,11 +476,17 @@ class LeadService:
         self.active = None
         why = ev.reason if _CODE.fullmatch(ev.reason or "") else "unknown"
         log_event("lead_ended", guid=active.guid, why=why)
+        started = next((a for a in self._asked.values() if a.lead_id == active.id), None)
+        untold = started is not None and not started.told
+        if untold:
+            started.ended = why  # her answer, still to come, says it is over already
         if self._closed or not self.app.world.human_online:
             return
         if why == "instance":
             self.handing = active
             self._spawn(self._handover(active))
+            return
+        if untold:
             return
         text = W.ended(why, active.place, self._forms())
         if text is not None:
@@ -487,14 +497,22 @@ class LeadService:
         await self.app.clock.sleep(HANDOVER_S)
         if self.handing is not active:
             return  # he took the lead back meanwhile, or asked for another
-        self.handing = None
         if self._closed or not self.app.world.human_online or self._raid_led():
+            self.handing = None
             return
         group = self._group()
         if active.guid not in group:
+            self.handing = None
             return
-        tanks = self._tanks(group)
+        tanks = self._tanks({g for g in group if self._able(g)})
         outcome, code, tank = await self._dc(tanks[0] if tanks else active.guid, "dc_on")
+        if self.handing is not active:
+            # his end came while dungeon-clear was being asked: what it started is stopped again
+            if outcome == "done":
+                await self._dc(tank, "dc_off")
+            log_event("lead_handover", guid=active.guid, outcome="cancelled", code="-")
+            return
+        self.handing = None
         if outcome == "done":
             self.dc = Dc(tank, active.guid, active.channel)
         log_event("lead_handover", guid=active.guid, outcome=outcome, code=code or "-")
@@ -549,8 +567,11 @@ class LeadService:
         if asked is None:
             return previous
         forms = self._forms()
-        text = (self._text(asked, forms) if turn.speaker == asked.leader
-                else W.not_asked(self._name(asked.leader), forms))
+        if turn.speaker == asked.leader:
+            text = self._text(asked, forms)
+            asked.told = True
+        else:
+            text = W.not_asked(self._name(asked.leader), forms)
         return f"{previous}\n{text}" if previous else text
 
     def _text(self, asked: Asked, forms) -> str:
@@ -568,6 +589,8 @@ class LeadService:
                                     else self._name(asked.tank) or None, forms)
             return W.dc_refused(asked.code, forms)
         if asked.outcome == "done":
+            if asked.ended:
+                return W.over_already(asked.ended, place, forms)
             return W.started(start.activity, place, forms)
         return W.refused(asked.code, place, forms)
 
