@@ -11,6 +11,7 @@ from hashlib import sha256
 from datetime import datetime
 
 from leeroy_mind.discord import layout, presence, store
+from leeroy_mind.geography import config as geo_config
 from leeroy_mind.life import config as life_config
 from leeroy_mind.personas.schema import persona_from_dict
 from leeroy_mind.personas.tiers import is_cast
@@ -72,8 +73,10 @@ def _personas(conn) -> dict:
 def _members(conn, owner_now: datetime, trial_rank: int, human: int, *, server=False) -> list[dict]:
     """The cast as the mind's Discord audience has it (WorldView.audience): level
     CAST_MIN_LEVEL or more, and not him (the stored roster keeps his own row). Presence reads
-    the `[life] availability` the mind put in force (meta life:availability)."""
+    the `[life] availability` the mind put in force (meta life:availability), on each member's
+    own clock while the mind has [geography] on (meta geography:enabled)."""
     life_config.pin(life_config.stored(conn), life_config.state_on())
+    geo = geo_config.stored(conn)
     personas = _personas(conn)
     from leeroy_mind.server.state import read_play
     playing = read_play(conn, owner_now.timestamp()) if server else frozenset()
@@ -92,7 +95,7 @@ def _members(conn, owner_now: datetime, trial_rank: int, human: int, *, server=F
             state = presence.Presence("offline", False, r["zone"])
         else:
             state = presence.presence_of(
-                p, local=presence.local_time(owner_now, p.identity.region),
+                p, local=presence.her_local(owner_now, p, enabled=geo),
                 body_online=bool(r["online"]), body_zone=r["zone"], rng_seed=presence.RNG_SEED,
                 in_his_group=r['guid'] in playing)
         try:
@@ -106,7 +109,7 @@ def _members(conn, owner_now: datetime, trial_rank: int, human: int, *, server=F
                                  "zone": state.zone}})
         if server:
             out[-1]['status'] = presence.status_text(p,
-                presence.local_time(owner_now, p.identity.region), state,
+                presence.her_local(owner_now, p, enabled=geo), state,
                 rng_seed=presence.RNG_SEED) if p is not None else None
     return out
 

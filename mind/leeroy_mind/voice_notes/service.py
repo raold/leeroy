@@ -10,7 +10,7 @@ import uuid
 
 from leeroy_mind.discord import layout, store as discord
 from leeroy_mind.discord.channels import channel_id
-from leeroy_mind.discord.presence import presence_of, local_time, RNG_SEED
+from leeroy_mind.discord.presence import presence_of, her_local, RNG_SEED
 from leeroy_mind.discord.text import TextRefused, clean_text
 from leeroy_mind.logs import log
 from leeroy_mind.protocol import Chat
@@ -125,7 +125,7 @@ class VoiceNotes:
         if not talkative:
             return False
         member=app.world.discord_members().get(turn.speaker)
-        if member is None or presence_of(p,local=local_time(app.clock.local(),p.identity.region),
+        if member is None or presence_of(p,local=her_local(app.clock.local(), p),
             body_online=turn.speaker in app.world.online,body_zone=member.zone,rng_seed=RNG_SEED,
             in_his_group=app.world.human_online and app.world.in_group(turn.speaker)).state!='online':
             return False

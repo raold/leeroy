@@ -41,7 +41,7 @@ import sqlite3
 from dataclasses import replace
 
 from leeroy_mind.clock import night_of
-from leeroy_mind.discord.presence import local_time
+from leeroy_mind.discord.presence import her_local
 from leeroy_mind.logs import log as log_event
 
 from . import config as life_config
@@ -138,8 +138,8 @@ class LifeService:
         p = self.personas.get(guid)
         if p is None:
             return None
-        her_local = local_time(self.clock.local(), p.identity.region)
-        return presence_at(p, her_local, medium=medium, in_his_group=in_his_group)
+        her = her_local(self.clock.local(), p)
+        return presence_at(p, her, medium=medium, in_his_group=in_his_group)
 
     def _in_group(self, guid: int) -> bool:
         in_group = getattr(self.world, "in_group", None)

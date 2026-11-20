@@ -6,7 +6,7 @@ import re
 
 from leeroy_mind.discord import layout
 from leeroy_mind.discord.channels import is_private
-from leeroy_mind.discord.presence import Presence, RNG_SEED, STATUS_SHARE, local_time, presence_of, status_text
+from leeroy_mind.discord.presence import Presence, RNG_SEED, STATUS_SHARE, her_local, presence_of, status_text
 
 PLAY_KEY = 'server:playing'
 PLAY_STALE_S = 180
@@ -100,7 +100,7 @@ def state_of(app, guid: int, now: float, *, conn=None, observed=None) -> Discord
     cast = observed.cast
     p, member = observed.persona, cast.get(guid)
     owner_now = datetime.fromtimestamp(now, observed.timezone)
-    local = local_time(owner_now, p.identity.region) if p is not None else owner_now
+    local = her_local(owner_now, p) if p is not None else owner_now
     presence = presence_of(p, local=local, body_online=guid in observed.online,
         body_zone=getattr(member, 'zone', 0), rng_seed=RNG_SEED,
         in_his_group=guid in observed.playing) if p is not None else Presence('offline', False, 0)
