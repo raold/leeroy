@@ -14,7 +14,8 @@ namespace Leeroy::Guild
 {
 // Ground hazards the owner's group keeps out of: the three kinds stock playerbots' avoid aoe knows (a hostile
 // area aura's dynamic object, a damaging trap, an unselectable trigger npc with a periodic damage aura), each up
-// to Playerbots.MaxAoeAvoidRadius, plus the measured larger ones a player steps out of (LargeHazardRule).
+// to Playerbots.MaxAoeAvoidRadius, plus the measured larger ones a player steps out of (LargeHazardRule) and the
+// measured adds whose own aura burns round them (HeldAuraHazard), which a tank holds in their fire.
 
 // No hazard counts above this: a bigger one covers the room, and nobody steps out of it.
 inline constexpr float kHazardLargeCapYards = 35.0f;
@@ -67,12 +68,28 @@ float HazardAvoidRadius(HazardSpellIds const& ids, float spellRadius, float cast
 float HazardTriggerZoneRadius(HazardSpellIds const& ids, float spellRadius, float unitReach, float stockCap,
     bool whitelisted);
 
+// Adds whose own periodic aura burns everyone near them (a selectable, attackable unit, so stock's trigger npc case
+// never sees it): the allow-list by damage spell id, matched as LargeHazardRule matches. A tank holds such an add
+// and stands in its fire; everyone else keeps out (HazardZone::held).
+bool HeldAuraHazard(HazardSpellIds const& ids);
+// An allow-listed add's zone: the damage spell's radius (up to kHazardLargeCapYards) plus the add's own reach; 0 for
+// any other spell, one on the stock whitelist, or no radius.
+float HazardHeldAuraRadius(HazardSpellIds const& ids, float spellRadius, float unitReach, bool whitelisted);
+
 struct HazardZone
 {
     float x = 0, y = 0, z = 0, radius = 0;
-    std::uint64_t id = 0; // the object's guid, so a zone is known again from pass to pass
+    std::uint64_t id = 0;    // the object's guid, so a zone is known again from pass to pass
+    std::uint32_t phase = 0; // the object's phase mask: a body in no shared phase never meets it (0: every phase)
+    bool held = false;       // an add's own aura (HeldAuraHazard): tanks hold the add in it
     bool operator==(HazardZone const&) const = default;
 };
+
+// Whether a zone concerns a body in these phases: a zone in another phase never does (Halion's two realms), nor an
+// add's own aura a tank (it holds the add there).
+bool HazardApplies(HazardZone const& zone, std::uint32_t phaseMask, bool tank);
+// The zones that concern one body, in order.
+std::vector<HazardZone> HazardZonesFor(std::vector<HazardZone> const& zones, std::uint32_t phaseMask, bool tank);
 
 struct HazardPoint
 {

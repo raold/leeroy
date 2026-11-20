@@ -115,6 +115,7 @@ struct Event
     std::uint64_t end = 0;
     std::uint32_t startTick = 0; // getMSTime() at the start, the clock playerbots stamps its moves with
     bool fromAura = false;  // started by the debuff landing, not by a cast
+    bool periodic = false;  // the cast was an aura's periodic tick (an add's burning aura): a fresh one every tick
     bool cancelled = false; // the boss stopped the cast or the channel: released early
     bool landed = false;    // the cast completed and its targets were read again
 };
@@ -229,6 +230,7 @@ void CastStart(Spell* spell, Unit* caster, SpellInfo const* info)
             cast.dest = HazardPoint{dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ()};
     cast.castMs = static_cast<std::uint32_t>(std::max(0, spell->GetCastTime()));
     cast.spellDurationMs = static_cast<std::uint32_t>(std::max(0, info->GetMaxDuration()));
+    bool const periodic = spell->GetTriggeredByAuraSpellInfo() != nullptr;
     std::uint64_t const now = NowMs();
     for (std::size_t index : rules)
     {
@@ -240,6 +242,7 @@ void CastStart(Spell* spell, Unit* caster, SpellInfo const* info)
         event.spell = info->Id;
         event.cast = cast;
         event.caster = caster->GetGUID();
+        event.periodic = periodic;
         if (target)
             event.target = target->GetGUID();
         if (rule.kind == MechanicKind::RunOutDebuff)
@@ -460,6 +463,8 @@ bool Resolve(Player* bot, bool full, Plan& plan)
         Creature* caster = !event.caster.IsEmpty() ? ObjectAccessor::GetCreature(*bot, event.caster) : nullptr;
         if (caster && (!caster->IsInWorld() || !caster->IsAlive()))
             caster = nullptr;
+        if (caster && !caster->InSamePhase(bot))
+            continue; // the other realm's mechanic (Halion): it never reaches this bot
         MechanicRule const& rule = event.table->rules[event.rule];
         if (rule.area == MechanicArea::Caster && !caster)
             continue; // a whirl or a hellfire ends with its caster
@@ -488,7 +493,8 @@ bool Resolve(Player* bot, bool full, Plan& plan)
                 && bot->GetExactDist2d(player) <= kOthersYards)
                 plan.others.push_back(PointOf(player));
         }
-    plan.hazards = instance->second.hazards;
+    // The hazards of its own phases; a tank holds an add in that add's own fire.
+    plan.hazards = HazardZonesFor(instance->second.hazards, bot->GetPhaseMask(), member->second.role == kMechanicTank);
     return true;
 }
 
@@ -770,6 +776,7 @@ void TickMechanics(std::uint32_t diffMs)
         std::size_t members;
         MapKey key;
         bool cancelled;
+        bool periodic;
     };
     std::vector<Ended> ended;
     std::set<MapKey> inForce;
@@ -787,7 +794,7 @@ void TickMechanics(std::uint32_t diffMs)
             MechanicRule const& rule = event.table->rules[event.rule];
             auto const found = moved.find(event.serial);
             ended.push_back({rule.id, event.spell, rule.kind, found == moved.end() ? 0 : found->second.size(),
-                event.key, event.cancelled});
+                event.key, event.cancelled, event.periodic});
             moved.erase(event.serial);
             return true;
         });
@@ -798,9 +805,11 @@ void TickMechanics(std::uint32_t diffMs)
         }
     }
     for (Ended const& end : ended)
-        LOG_INFO("module.leeroy", "mechanic_response id={} spell={} kind={} members={} map={} instance={} cancelled={}",
-            end.id, end.spell, MechanicKindName(end.kind), end.members, end.key.first, end.key.second,
-            end.cancelled ? 1 : 0);
+        if (MechanicEndLogged(end.periodic, end.members, end.cancelled))
+            LOG_INFO("module.leeroy",
+                "mechanic_response id={} spell={} kind={} members={} map={} instance={} cancelled={}", end.id,
+                end.spell, MechanicKindName(end.kind), end.members, end.key.first, end.key.second,
+                end.cancelled ? 1 : 0);
 
     // Spots keep clear of the ground hazards there while a mechanic is in force.
     for (MapKey const& key : inForce)

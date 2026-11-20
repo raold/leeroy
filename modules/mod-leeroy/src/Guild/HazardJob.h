@@ -17,7 +17,8 @@ void TickHazards(std::uint32_t diffMs);
 // RaidHabits, after its strategy reset: a member who qualifies gets its non-combat avoid aoe back at once.
 void ApplyHazards(Player* bot);
 // World thread, read-only, whatever Leeroy.Hazards.Enable says: the ground hazards this job would see around each
-// anchor on the reference's map, measured as it measures them. The mechanic responder keeps its spots clear of them.
+// anchor on the reference's map, measured as it measures them, in every phase (each zone keeps its phase mask:
+// HazardZonesFor gives one body its share). The mechanic responder keeps its spots clear of them.
 std::vector<HazardZone> ScanHazardZones(Player* reference, std::vector<HazardPoint> const& anchors);
 }
 #endif
