@@ -857,11 +857,11 @@ async def stage_realm(ctx: NightContext, *, live: Callable[[], bool] | None = No
     night = _Night(ctx, live)
     if not night.public_ready:
         # Beats, posts and write-ups wait. Reasons are codes: no blocklist file, no cached guild
-        # name, else a blocklist with no usable entry.
+        # name, else an unreadable blocklist. Readable empty lists are valid.
         reasons = (([] if night.screen.path.is_file() else ["blocklist_missing"])
                    + ([] if night.guild > 0 else ["guild_name_missing"]))
         log("realm_night_unready", level=logging.WARNING, night=ctx.night,
-            reason=",".join(reasons or ["blocklist_empty"]))
+            reason=",".join(reasons or ["blocklist_unreadable"]))
     await ctx.map_units(STAGE, plan_units(ctx, night), night.run)
 
 

@@ -1078,7 +1078,7 @@ def test_the_realm_screen_is_checked_only_while_the_realm_is_on(rig):
 
 @pytest.mark.parametrize("blocklist, guild, says", [
     (None, {"guild": 50, "name": "Testguild"}, ["blocklist.txt is missing"]),
-    ("# only a comment\n\n", {"guild": 50, "name": "Testguild"}, ["blocklist.txt has no entry"]),
+    ("", None, ["guild name is not cached"]),
     ("word\n", None, ["guild name is not cached"]),
     ("word\n", {"guild": 50, "name": "  "}, ["guild name is not cached"]),
     ("word\n", {"guild": 0, "name": "Testguild"}, ["guild name is not cached"]),
@@ -1089,6 +1089,22 @@ def test_a_realm_screen_that_cannot_be_ready_fails(rig, blocklist, guild, says):
     assert result.status == FAIL and result.text.startswith("realm screen: the Realm is on in mind.toml")
     assert all(part in result.text for part in says)
     assert rig.run()["realm-screen"].status == FAIL
+
+
+@pytest.mark.parametrize("blocklist", ["", "# no custom exclusions\n\n", "\ufeff \n"])
+def test_empty_realm_blocklist_is_ready_without_custom_exclusions(rig, blocklist):
+    realm_on(rig, blocklist=blocklist)
+    result = readonly_check(rig, health._realm_screen, rig.data)
+    assert result.status == OK
+    assert result.text == "realm screen: ready (no custom exclusions; built-in checks active)"
+    assert rig.run()["realm-screen"].status == OK
+
+
+def test_unreadable_realm_blocklist_still_fails(rig):
+    realm_on(rig, blocklist="")
+    (rig.data / "realm" / "blocklist.txt").write_bytes(b"\xff")
+    result = readonly_check(rig, health._realm_screen, rig.data)
+    assert result.status == FAIL and "cannot be read (UnicodeDecodeError)" in result.text
 
 
 def eval_result(rig, week, complete):

@@ -27,7 +27,7 @@ What it looks at:
   pulls of his raids and offline raids, or has failed), the gate still in its A/B phase with no
   new A/B evidence for 7 days (a note), a realm body hold or an unknown root older than 1 h,
   cast members without a persona. A table an older mind.db lacks is unavailable, a note;
-- the Realm on in mind.toml with a screen that cannot be ready (no realm/blocklist.txt entry, or
+- the Realm on in mind.toml with a screen that cannot be ready (realm/blocklist.txt unavailable, or
   no cached guild name: a FAIL), the newest weekly evaluation incomplete, no secret probe ever
   recorded while secrets exist, and offline raids blocked on each of the last 3 days (notes);
 - his messages of the last 24 h that no member answered within 5 minutes (talk/owed.py's
@@ -1166,7 +1166,7 @@ def _code(value) -> str:
 
 def _realm_screen(conn, data: Path) -> Check:
     """The Realm is on in mind.toml but its screen (realm.screen.Screen.ready) cannot be ready:
-    no blocklist with an entry, or no guild name cached (meta realm:guild_name, as
+    no readable blocklist, or no guild name cached (meta realm:guild_name, as
     realm.night.own_guild reads it). Every rival line, forum post and write-up then waits."""
     name = "realm-screen"
     from .realm.config import load_realm_config
@@ -1185,9 +1185,6 @@ def _realm_screen(conn, data: Path) -> Check:
             missing.append("realm/blocklist.txt is missing from the data dir")
         except (OSError, UnicodeError) as e:
             missing.append(f"realm/blocklist.txt cannot be read ({type(e).__name__})")
-        else:
-            if not any((s := line.strip()) and not s.startswith("#") for line in lines):
-                missing.append("realm/blocklist.txt has no entry")
         row = conn.execute("SELECT value FROM meta WHERE key='realm:guild_name'").fetchone()
         try:
             cached = json.loads(row[0]) if row else None
@@ -1198,10 +1195,12 @@ def _realm_screen(conn, data: Path) -> Check:
         if not (type(guild) is int and 1 <= guild <= 0xFFFFFFFF and isinstance(title, str) and title.strip()):
             missing.append("the guild name is not cached (the mind reads it at each hello)")
         if not missing:
+            if not any((s := line.strip()) and not s.startswith("#") for line in lines):
+                return Check(name, OK, "realm screen: ready (no custom exclusions; built-in checks active)")
             return Check(name, OK, "realm screen: ready (blocklist and guild name)")
         return Check(name, FAIL, "realm screen: the Realm is on in mind.toml but its screen cannot "
                      "be ready: " + "; ".join(missing) + ". Rival lines, forum posts and write-ups "
-                     "wait until it is (one word or phrase per blocklist line)")
+                     "wait until it is (a readable empty blocklist means no custom exclusions)")
     return _table_check(name, check)
 
 

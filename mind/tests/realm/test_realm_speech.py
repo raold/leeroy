@@ -442,7 +442,9 @@ def test_trade_needs_a_capital(sapp):
     run(go())
 
 
-def test_officer_speaks_from_another_capital(sapp):
+@pytest.mark.parametrize("blocklist", ["blockedword\n", "", "# no custom exclusions\n"])
+def test_officer_speaks_from_another_capital(sapp, blocklist):
+    sapp.speech.screen.path.write_text(blocklist, encoding="utf-8")
     place(sapp.store, VEX, "uc_bank")  # Undercity: the City channel is one per faction.
 
     async def go():

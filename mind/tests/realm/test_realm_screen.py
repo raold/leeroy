@@ -17,9 +17,9 @@ def make(root, *, guild=GUILD, blocklist="# synthetic tokens only\nzorbleflax\nq
     return Screen(root, name, lambda: HUMAN)
 
 
-@pytest.fixture
-def screen(tmp_path):
-    made = make(tmp_path)
+@pytest.fixture(params=["zorbleflax\nquux frob\n", "", "# no custom exclusions\n\n"])
+def screen(tmp_path, request):
+    made = make(tmp_path, blocklist=request.param)
     assert made.ready
     return made
 
@@ -37,7 +37,8 @@ def test_screen_group_insult(screen):
     assert check(screen, "gz to the canadians on the kill") is None
 
 
-def test_screen_blocklist(screen):
+def test_screen_blocklist(tmp_path):
+    screen = make(tmp_path)
     assert check(screen, "what a ZORBLEFLAX pull") == "blocklist"
     assert check(screen, "zorbleflaxing again") is None  # whole words only
     assert check(screen, "total quux  frob tank") == "blocklist"
@@ -85,7 +86,6 @@ def test_screen_fails_closed_without_blocklist(tmp_path):
     made = make(tmp_path, blocklist=None)
     assert made.ready is False
     assert check(made, "gz") == "not_ready"
-    assert make(tmp_path, blocklist="# nothing yet\n\n").ready is False
     armed = make(tmp_path)
     assert armed.ready and check(armed, "gz") is None
     (tmp_path / BLOCKLIST).unlink()
@@ -106,6 +106,18 @@ def test_screen_reloads_a_changed_blocklist(screen, tmp_path):
     assert check(screen, "what a blorptastic pull") is None
     (tmp_path / BLOCKLIST).write_text("blorptastic\n", encoding="utf-8")
     assert check(screen, "what a blorptastic pull") == "blocklist"
+    (tmp_path / BLOCKLIST).write_text("# no custom exclusions\n", encoding="utf-8")
+    assert screen.ready and check(screen, "what a blorptastic pull") is None
+    assert check(screen, "QUILLON can't heal") == "real_name"
+
+
+def test_screen_fails_closed_when_blocklist_becomes_unreadable(tmp_path):
+    screen = make(tmp_path, blocklist="")
+    assert screen.ready
+    (tmp_path / BLOCKLIST).write_bytes(b"\xff")
+    assert not screen.ready and check(screen, "gz") == "not_ready"
+    (tmp_path / BLOCKLIST).write_text("", encoding="utf-8")
+    assert screen.ready and check(screen, "gz") is None
 
 
 def test_screen_rejects_an_unknown_speaker(screen):
