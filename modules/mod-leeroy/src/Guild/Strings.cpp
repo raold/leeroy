@@ -185,6 +185,8 @@ std::array<std::uint32_t, 3> Weapons(Player* bot)
 // in its old slot (main hand first, so an off hand fits again beside it). Anything else is left as it is.
 void GiveWeaponsBack(Player* bot, Hold& hold)
 {
+    if (bot->IsNonMeleeSpellCast(false))
+        bot->InterruptNonMeleeSpells(false);   // a cast line in the water: the core equips nothing mid-cast
     for (std::size_t i = 0; i < kWeaponSlots.size(); ++i)
     {
         std::uint32_t const want = hold.weapons[i];
