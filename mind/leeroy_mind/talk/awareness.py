@@ -204,6 +204,7 @@ class LiveReview:
         member = e.world.members.get(turn.speaker)
         parent = meta.discord.reply_to if is_discord(turn.channel) and meta.discord else turn.trigger_line
         return Draft(turn.speaker, channel, text, parent_id=parent,
+            exemplars=tuple(getattr(meta, 'wow_exemplars', ()) or ()),
             thread_ids=tuple(h.id for h in history[-16:]), embedding=embedding,
             to_guid=to, room=room, now=e.clock.now(), map=0 if is_discord(turn.channel) else getattr(member, "map", 0),
             zone=0 if is_discord(turn.channel) else getattr(member, "zone", 0), real_answer_due=self.owed(turn,meta),
@@ -406,7 +407,8 @@ class LiveReview:
             discord_events=tuple(events[-4:]), now=now,names=names,
             romance_activities=bond[0] and not is_group(raw), jealousy=0 if is_group(raw) else bond[1], server=observed.server,
             here=here, self_line=self_line, holidays=getattr(e, 'culture_calendar', False),
-            intents=intents, decisions=bool(getattr(e, 'decisions_enabled', False)))
+            intents=intents, decisions=bool(getattr(e, 'decisions_enabled', False)),
+            grounded=bool(getattr(meta, 'wow_grounded', False)))
         observation = card(CardSources(conn,world=observed.world),turn.speaker,context=context)
         def clean(text):
             if not close:
