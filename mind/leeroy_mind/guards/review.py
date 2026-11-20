@@ -90,7 +90,10 @@ HINTS = {
     'voice_never': 'it uses words you never use',
     'voice_sample_copy': ('it repeats one of your example lines word for word; they show how '
                           'you sound, so say something new that way'),
+    'phrase_exemplar': ('it copies words from one of your own past lines shown as examples; they '
+                        'show how you talk, so say something new that way'),
 }
+EXEMPLARS_MAX = 8  # Draft.exemplars: talk/grounding.py shows at most 3
 FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts','fr'}, '👍'),
           'laugh': ({'lol','lmao','lulz','rofl','haha','hahaha','hehe','kek'}, '😂'),
           'grats': ({'gz','grats','gratz','congrats','nice','gg'}, '🎉'),
@@ -243,6 +246,9 @@ def _validate(draft, now):
         raise ValueError('guard_line_invalid')
     if draft.embedding is not None:
         checked_vector(draft.embedding)
+    if (not isinstance(draft.exemplars, tuple) or len(draft.exemplars) > EXEMPLARS_MAX
+            or any(not isinstance(x, str) or len(x) > MAX_TEXT for x in draft.exemplars)):
+        raise ValueError('guard_exemplars_invalid')
 
 
 def _visible(line, draft, officer):
