@@ -243,3 +243,26 @@ def test_wishes_follow_his_raids_before_the_members_offline_ones(store, cast):
     assert loot.raiders(store.conn, 1) == [101, 102]
     store.conn.execute("UPDATE guild_raid SET offline=1 WHERE raid_id=9")
     assert loot.target_raid(store.conn, now).raid_key == "ulduar"
+
+
+class TrinketArmory(FakeArmory):
+    """Lord Marrowgar drops a trinket of crit rating alone (a physical damage trinket whose
+    attack power is a proc, as the live wishes handed to healers and casters, 2026-11-20)."""
+
+    def items(self, ids):
+        found = super().items([i for i in ids if i != 1002])
+        if 1002 in ids:
+            found[1002] = ItemInfo(1002, "Invented Honed Scale", 4, 264, 12, 4, 0, -1, frozenset({32}))
+        return found
+
+    def equipped(self, guids):
+        return {101: {4: 200, 0: 245, 12: 200, 13: 200}}
+
+
+def test_a_trinket_whose_stats_say_nothing_is_nobodys_wish(store, cast):
+    raid_ahead(store)
+    roles = {g: p.play.raid_role for g, p in cast.items()}
+    value = loot.compute_wishes(store.conn, FakeLibrary(), TrinketArmory(), now=store.clock.now(),
+                                raid_roles=roles, human=1)
+    # +64 on a trinket slot would have won; it is no item of hers by its stats, so the chest is
+    assert value["wishes"] == [{"guid": 101, "item_id": 1001, "boss": "Lord Marrowgar", "gain": 51}]

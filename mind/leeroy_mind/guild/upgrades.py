@@ -40,9 +40,42 @@ _SLOTS = {
 }
 _PRIMARY = frozenset({3, 4, 5, 45})
 _FAMILY_STATS = {"str": frozenset({4}), "agi": frozenset({3}), "int": frozenset({5, 45})}
+# What a stat says about who wears it (item_template stat types). Physical: attack power, ranged
+# attack power, armour penetration, expertise. Caster: intellect, spirit, spell power, mp5,
+# spell penetration and the old healing and spell damage stats. Tank: defense, dodge, parry,
+# block and block value. Hit, crit, haste, stamina and resilience say nothing.
+_PHYSICAL = frozenset({3, 4, 37, 38, 39, 44})
+_CASTER = frozenset({5, 6, 41, 42, 43, 45, 47})
+_TANK = frozenset({12, 13, 14, 15, 48})
+_FAMILY_MARKS = {"str": _PHYSICAL, "agi": _PHYSICAL, "int": _CASTER}
+_NOT_HEALING = frozenset({31, 37, 44})  # hit, expertise, armour penetration: no healer's stats
+_TRINKET = 12
 
 
-def upgrade_gain(item: ItemInfo, cls: int, family: str, equipped: dict[int, int]) -> int | None:
+def suits(item: ItemInfo, family: str, role: str | None) -> bool:
+    """The item's stats are hers (culture's loot wishes and the raid's bids, 2026-11-20: a physical
+    damage trinket of crit rating alone, its attack power a proc, went to healers and casters):
+    no stat of another family's and none of hers is no item of hers, a tank's stats are a tank's
+    alone, a healer wears no hit, expertise or armour penetration, and a trinket must show a stat
+    of hers: its worth is its proc, which nothing here reads, so a trinket of shared stats alone
+    is nobody's (nothing is guessed). `role` None (a caller without one) skips the role rules."""
+    mine = _FAMILY_MARKS.get(family, frozenset()) | (_TANK if role == "tank" else frozenset())
+    others = (_PHYSICAL | _CASTER) - mine
+    if item.stats & others and not item.stats & mine:
+        return False
+    if role is not None and role != "tank" and item.stats & _TANK:
+        return False
+    if role == "healer" and item.stats & _NOT_HEALING:
+        return False
+    if item.item_class == 4 and item.inventory_type == _TRINKET and not item.stats & mine:
+        return False
+    return True
+
+
+def upgrade_gain(item: ItemInfo, cls: int, family: str, equipped: dict[int, int], *,
+                 role: str | None = None) -> int | None:
+    """The item levels `item` would gain her (a member of class `cls`, stat `family` and raid
+    `role`) over what she wears; None when it is no upgrade or none of hers (suits)."""
     if type(cls) is not int or cls not in _ARMOUR or family not in _FAMILY_STATS:
         return None
     if item.allowable_class != -1 and not item.allowable_class & (1 << (cls - 1)):
@@ -64,6 +97,8 @@ def upgrade_gain(item: ItemInfo, cls: int, family: str, equipped: dict[int, int]
     else:
         return None
     if item.stats & _PRIMARY and not item.stats & _FAMILY_STATS[family]:
+        return None
+    if not suits(item, family, role):
         return None
     slots = _SLOTS.get(item.inventory_type)
     if slots is None:
