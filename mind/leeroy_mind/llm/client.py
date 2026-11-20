@@ -41,6 +41,10 @@ class ChatResult:
 
 EMBED_DIMENSIONS = 512
 EMBED_NUM_CTX = 2048
+# Inputs per /api/embed request. Ollama 0.40.15's llama-server backend failed a request of
+# several hundred inputs part way (HTTP 400, its runner refusing a connection) while every
+# request of up to 160 passed; the library and the writer's backfill already send 32.
+EMBED_BATCH = 32
 
 
 class LLMClient(Protocol):
@@ -255,6 +259,16 @@ class OllamaClient:
         return ChatResult(content, thinking, count if isinstance(count, int) else 0, seconds, diagnostics)
 
     async def embed(self, model, inputs, *, dimensions=EMBED_DIMENSIONS, timeout=None):
+        """One vector per input, in order, from requests of at most EMBED_BATCH inputs each.
+        Any failed request fails the whole call; `timeout` applies to each request."""
+        inputs = list(inputs)
+        result = []
+        for at in range(0, len(inputs), EMBED_BATCH):
+            result += await self._embed_batch(model, inputs[at:at + EMBED_BATCH],
+                                              dimensions, timeout)
+        return result
+
+    async def _embed_batch(self, model, inputs, dimensions, timeout):
         out = await self._call("/api/embed", {
             "model": model, "input": inputs, "dimensions": dimensions, "keep_alive": -1,
             "options": {"num_ctx": EMBED_NUM_CTX}}, timeout)

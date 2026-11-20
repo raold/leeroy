@@ -7,6 +7,7 @@ list of candidate names."""
 import logging
 import random
 import re
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -134,7 +135,13 @@ class GenNotes:
 
 
 class NameCollision(ValueError):
-    pass
+    """No rename candidate fit. `outcomes` counts what the candidates ran into, by fixed code
+    and never by name: "first" (its first name is taken), "whole" (the whole name is) and
+    "screen" (the record under that name failed a screen or a limit)."""
+
+    def __init__(self, msg: str, outcomes: dict[str, int] | None = None):
+        super().__init__(msg)
+        self.outcomes = dict(outcomes or {})
 
 
 def spec_for(class_id: int, role: str, guid: int) -> tuple[str, str] | None:
@@ -603,15 +610,18 @@ def _with_real_name(p: Persona, new: str, ctx: _Ctx) -> tuple[Persona, int]:
 
 async def _rename(llm, model, rules, p: Persona, taken, is_taken: Callable[[str], bool],
                   ctx: _Ctx, *, private_logs: bool = True, full=(),
-                  first_taken: Callable[[str], bool] | None = None) -> Persona | None:
+                  first_taken: Callable[[str], bool] | None = None,
+                  outcomes: Counter | None = None) -> Persona | None:
     """One cheap call (no thinking, low temperature) for candidate real names; p takes the
     first that is not taken and leaves the record passing the screens and limits. None when no
     candidate does. `taken`: the first names the prompt lists (the owner's is never among them).
+    `outcomes` counts each refused candidate's code (NameCollision).
     STRUCTURE rather than EXTRACT: the same settings with the persona model's num_ctx, since
     another num_ctx makes Ollama reload that model."""
     taken, full = list(taken), list(full)
     hidden = name_keys(ctx.human.real_name) if ctx.human.real_name else set()
     first_taken = first_taken or is_taken
+    outcomes = Counter() if outcomes is None else outcomes
     for attempt in range(2):
         shown_full = len(full)
         messages = [{"role": "system", "content": rules},
@@ -621,6 +631,7 @@ async def _rename(llm, model, rules, p: Persona, taken, is_taken: Callable[[str]
                                     _candidate_names):
             if is_taken(name):
                 first = name.split()[0]
+                outcomes["first" if first_taken(name) else "whole"] += 1
                 if not first_taken(name):
                     # only the whole name is someone's: the first name stays free
                     if name not in full and not touches_real_name(name, ctx.human):
@@ -631,6 +642,7 @@ async def _rename(llm, model, rules, p: Persona, taken, is_taken: Callable[[str]
             try:
                 renamed, left = _with_real_name(p, name, ctx)
             except ValueError:
+                outcomes["screen"] += 1
                 continue
             if left and private_logs:
                 log.info("renamed %s: the old first name is still in %d field%s, in another "
@@ -709,16 +721,20 @@ async def generate_persona(llm: LLMClient, model: str, slot: GenSlot, character:
     old = again.identity.real_name
     if not is_taken(old):
         return again
+    outcomes: Counter = Counter()
     renamed = await _rename(llm, model, rules, again, first_names, is_taken, ctx,
                             private_logs=private_logs, first_taken=first_taken,
-                            full=tuple(dict.fromkeys(whole_hit(p.identity.real_name) + whole_hit(old))))
+                            full=tuple(dict.fromkeys(whole_hit(p.identity.real_name) + whole_hit(old))),
+                            outcomes=outcomes)
     if renamed is None:
+        counts = " ".join(f"{k}={outcomes[k]}" for k in ("first", "whole", "screen") if outcomes[k])
         if private_logs:
-            log.warning("name collision for %s: %s; no rename candidate fit", character.name,
-                        _shown(old, human))
+            log.warning("name collision for %s: %s; no rename candidate fit (%s)", character.name,
+                        _shown(old, human), counts or "no candidates")
         else:
-            log.warning("persona_name_collision: guid=%d", character.guid)
-        raise NameCollision(f"real name {_shown(old, human)!r} collides with a taken name")
+            log.warning("persona_name_collision: guid=%d %s", character.guid, counts)
+        raise NameCollision(f"real name {_shown(old, human)!r} collides with a taken name",
+                            outcomes)
     new = renamed.identity.real_name
     notes.renames.append((old, new))  # raw, like notes.collisions: reports redact
     if private_logs:
