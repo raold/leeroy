@@ -91,6 +91,11 @@ def test_follow_me_is_a_playerbots_command_too():
     assert not ends("stop leading").command
 
 
+def test_he_says_he_leads():
+    assert ends("i'll lead").his and ends("i'm leading now").his
+    assert not ends("stop leading").his and not ends("follow me").his
+
+
 @pytest.mark.parametrize("text", ["stop being silly", "don't stop", "you lead", "follow the road", ""])
 def test_not_an_end(text):
     assert ends(text) is None

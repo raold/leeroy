@@ -84,8 +84,10 @@ class Start:
 
 @dataclass(frozen=True, slots=True)
 class End:
-    """He takes the lead back. `command`: the line is a playerbots command as well."""
+    """He takes the lead back. `command`: the line is a playerbots command as well. `his`: he says
+    he leads ("i'll lead"), which also takes the raid's calling back from her (raidlead/)."""
     command: bool = False
+    his: bool = False
 
 
 def normalize(text: str) -> str:
@@ -100,7 +102,7 @@ def ends(text: str) -> End | None:
     if not t or len(t) > MAX_CHARS or _END_NEG.search(t) or _LATER.search(t):
         return None  # "don't let me lead", "i'll lead tomorrow": not now
     if _HE_LEADS.search(t) or _STOP.match(t):
-        return End(command=looks_like_bot_command(t))
+        return End(command=looks_like_bot_command(t), his=bool(_HE_LEADS.search(t)))
     return None
 
 

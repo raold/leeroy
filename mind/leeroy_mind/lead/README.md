@@ -38,7 +38,10 @@ he is offline. The lead reads his line **before** the raid lead and invitations.
   to me", "come back", "regroup on me" (never with a no or another time: "don't let me lead",
   "i'll lead tomorrow"). A whisper ends it only to the member who leads. "follow me" is a
   playerbots command too: it still reaches playerbots, and nobody answers it. While a handover to
-  dungeon-clear is still waiting (below) his end cancels it.
+  dungeon-clear is still waiting (below) his end cancels it; while his ask is still being carried
+  out (its ack not in yet) his end waits for it, 20 s at most, and ends what it started. His "i'll
+  lead" in party or raid chat also takes the raid's calling back from her
+  (`RaidLeadService.take_back`, as raid chat's own "i'll lead" does), with no line of its own.
 
 ## Who leads
 

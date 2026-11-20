@@ -938,6 +938,14 @@ class RaidLeadService:
         self._set(guid, "chat")
         return True
 
+    def take_back(self) -> bool:
+        """His "i'll lead" that the lead read first (lead/service.py): he leads it himself, as the
+        raid chat's own "i'll lead" (Designate(None)). False when the raid lead may not act."""
+        if self.blocked() is not None:
+            return False
+        self._set(None, None, his=True)
+        return True
+
     # -- the console ---------------------------------------------------------------------------------
 
     def console_status(self) -> dict:

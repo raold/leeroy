@@ -47,7 +47,8 @@ OPEN_WORLD = frozenset({0, 1, 530, 571, 609})
 RAID_QUIET = frozenset({"combat", "wipe_silence", "wipe_debrief"})
 # raid_control refusals that mean no dungeon-clear run is left for his group to stop
 DC_GONE = frozenset({"no_group", "not_cast", "no_tank"})
-JOB_WAIT_S = 2.0     # native publishes the done job before its ack; this only covers reordering
+JOB_WAIT_S = 2.0
+PENDING_WAIT_S = 20.0  # his end waits this long for his ask still being carried out     # native publishes the done job before its ack; this only covers reordering
 HANDOVER_S = 10.0    # after his group goes into an instance, before dungeon-clear is asked
 KEPT = 64            # his lines kept, newest first out
 _CODE = re.compile(r"[a-z_]{1,40}(:[a-z_0-9]{1,40})?")
@@ -107,6 +108,8 @@ class LeadService:
         self.dc: Dc | None = None
         # a lead native ended "instance", waiting HANDOVER_S for dungeon-clear: his end cancels it
         self.handing: Active | None = None
+        # his ask still being carried out (a start or a dungeon-clear start): his end waits for it
+        self._pending: Asked | None = None
         # the start in flight (its command id) and a "lead ended" native sent before its ack
         self._starting: str | None = None
         self._early: object = None
@@ -278,21 +281,26 @@ class LeadService:
         where = getattr(start.place, "name", "unknown" if start.place is S.UNKNOWN else "-")
         log_event("lead_read", line=line_id, activity=start.activity, who=start.who, where=where,
                   guid=leader, kind=asked.kind, code=asked.code or "-")
-        if asked.kind == "world":
-            self._spawn(self._start(asked))
-        elif asked.kind == "dc":
-            self._spawn(self._dc_on(asked))
+        if asked.kind in ("world", "dc"):
+            self._pending = asked
+            self._spawn(self._start(asked) if asked.kind == "world" else self._dc_on(asked))
         return "lead"
 
     def _end(self, ev, line_id: int, end: P.End) -> str | None:
         """His end of the lead in force (only while one is): native ends it, she answers."""
-        active, dc, handing = self.active, self.dc, self.handing
-        if active is None and dc is None and handing is None:
+        active, dc, handing, pending = self.active, self.dc, self.handing, self._pending
+        if active is None and dc is None and handing is None and pending is None:
             return None
         leader = (active.guid if active is not None else dc.leader if dc is not None
-                  else handing.guid)
+                  else handing.guid if handing is not None else pending.leader)
         if ev.channel == "whisper" and ev.to_guid != leader:
             return None  # a whisper to someone else is talk with her
+        raidlead = getattr(self.app, "raidlead", None)
+        if end.his and ev.channel != "whisper" and raidlead is not None:
+            try:
+                raidlead.take_back()  # his "i'll lead" in raid chat: nobody calls it for him now
+            except Exception as exc:
+                log_event("lead_failed", level=logging.WARNING, error=type(exc).__name__)
         channel = "raid" if ev.channel == "raid_warning" else ev.channel
         asked = Asked(line_id, channel, leader, "end")
         self._keep(asked)
@@ -329,10 +337,19 @@ class LeadService:
         finally:
             if self._starting == wire:
                 self._starting = self._early = None
+            if self._pending is asked:
+                self._pending = None
             asked.ready.set()
 
     async def _stop(self, asked: Asked) -> None:
         try:
+            pending = self._pending
+            if pending is not None:
+                # his ask is still being carried out: what it started (if anything) is then ended
+                try:
+                    await asyncio.wait_for(pending.ready.wait(), PENDING_WAIT_S)
+                except TimeoutError:
+                    pass
             if self.active is not None:
                 from .protocol import LeadDo
                 active = self.active
@@ -388,6 +405,8 @@ class LeadService:
             asked.outcome, asked.code = "refused", "unknown"
             log_event("lead_failed", level=logging.WARNING, error=type(exc).__name__)
         finally:
+            if self._pending is asked:
+                self._pending = None
             asked.ready.set()
 
     async def _dc(self, tank: int, action: str) -> tuple[str, str, int]:

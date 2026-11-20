@@ -275,6 +275,48 @@ def test_an_end_the_game_never_answered_is_not_said_as_done(app):
     run(main())
 
 
+def test_his_stop_before_the_start_is_confirmed_still_stops_it(app):
+    gate = asyncio.Event()
+
+    class Slow(Wire):
+        async def send(self, cmd, *, preserve_id=False):
+            if isinstance(cmd, LeadDo) and cmd.action == "start":
+                await gate.wait()   # the start's ack is slow
+            return await super().send(cmd, preserve_id=preserve_id)
+
+    async def main():
+        app.bridge = Slow(app)
+        app.leading.claims(chat("you lead"), 542)
+        await asyncio.sleep(0)
+        assert app.leading.claims(chat("stop leading"), 543) == "lead"
+        await asyncio.sleep(0)
+        gate.set()
+        await settle(app)
+        assert [c.action for c in app.bridge.sent] == ["start", "end"]
+        assert app.leading.active is None
+        assert "taken the lead back" in told(app, 543, TANK)
+    run(main())
+
+
+def test_his_ill_lead_also_takes_the_raids_calling_back(app):
+    calls = []
+    app.raidlead = SimpleNamespace(designate=lambda guid: True, lead=lambda: None,
+                                   take_back=lambda: calls.append("his") or True)
+
+    async def main():
+        app.leading.claims(chat("Belra, you lead"), 544)
+        await settle(app)
+        app.leading.claims(chat("stop leading"), 545)   # not his own lead: the calling stays
+        await settle(app)
+        assert calls == []
+        app.leading.claims(chat("Belra, you lead"), 546)
+        await settle(app)
+        app.leading.claims(chat("i'll lead"), 547)
+        await settle(app)
+        assert calls == ["his"]
+    run(main())
+
+
 def test_follow_me_ends_it_and_still_is_playerbots(app):
     async def main():
         app.leading.claims(chat("you lead"), 520)
