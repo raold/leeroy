@@ -271,13 +271,16 @@ def test_unready_public_units_wait(rig):
 
 @pytest.mark.parametrize("change, reason", [
     ("blocklist", "blocklist_missing"), ("guild", "guild_name_missing"),
-    ("both", "blocklist_missing,guild_name_missing"), ("empty", "blocklist_empty"), ("none", None)])
+    ("both", "blocklist_missing,guild_name_missing"), ("unreadable", "blocklist_unreadable"),
+    ("empty", None), ("none", None)])
 def test_an_unready_screen_is_a_warning_with_its_reason(rig, caplog, change, reason):
     path = rig.root / "realm" / "blocklist.txt"
     if change in ("blocklist", "both"):
         path.unlink()
     if change == "empty":
-        path.write_text("# nothing yet\n", encoding="utf-8")
+        path.write_text("# no custom exclusions\n", encoding="utf-8")
+    if change == "unreadable":
+        path.write_bytes(b"\xff")
     if change in ("guild", "both"):
         with rig.store.transaction():
             rig.store.conn.execute("DELETE FROM meta WHERE key='realm:guild_name'")
@@ -526,9 +529,11 @@ def test_writeup_is_kept_with_its_event(rig):
     assert night.plan_units(rig.ctx(night_="2026-10-30")) == ["beat:60", "beat:80", "beat:90"]
 
 
-def test_whole_night_through_the_runner(rig, monkeypatch):
+@pytest.mark.parametrize("blocklist", ["blockedword\n", "# no custom exclusions\n"])
+def test_whole_night_through_the_runner(rig, monkeypatch, blocklist):
     """A full night: every kind once, the prompts carry no real name and never his guild's."""
     full_night(rig)
+    (rig.root / "realm" / "blocklist.txt").write_text(blocklist, encoding="utf-8")
     for guid in (101, 102):
         persona(rig.store, guid, "Arkon" if guid == 101 else "Belra", motivation="competitor")
     monkeypatch.setattr(budget, "COUNTERS", {"realm": night.count_units})

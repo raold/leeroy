@@ -4,7 +4,8 @@ here, and the reason is all the caller may log.
 
 It fails closed: `ready` is false, and every line is "not_ready", while the local blocklist
 (`<data dir>/realm/blocklist.txt`, one word or phrase per line, never committed) is missing or
-holds nothing, or while the guild's name is unknown.
+unreadable, or while the guild's name is unknown. A readable empty or comment-only file means
+no custom exclusions; all built-in checks still apply.
 
 The reasons, checked in this order:
 - blocklist: a word or phrase of the blocklist, case-folded, as whole words (a plural or
@@ -36,6 +37,7 @@ from leeroy_mind.talk.filters import _DESIRE, _PET, _SUBJECT_DESIRE, find_tells,
 log = logging.getLogger(__name__)
 
 BLOCKLIST = Path("realm") / "blocklist.txt"
+_NO_CUSTOM_EXCLUSIONS = re.compile(r"(?!)")  # A valid list that matches nothing; None means unavailable.
 MAX_CHARS = 120
 GROUP_WINDOW = 4  # words between a group noun and an insult, at most
 SPEAKER_KINDS = frozenset({"officer", "member"})
@@ -137,7 +139,7 @@ class Screen:
 
     def _blocklist(self) -> re.Pattern | None:
         """The blocklist as one pattern, re-read when the file changes; None while it is
-        missing, unreadable or empty."""
+        missing or unreadable. An empty file supplies a pattern that matches nothing."""
         try:
             st = os.stat(self.path)
         except OSError:
@@ -152,7 +154,7 @@ class Screen:
                 self._loaded = None
                 return None
             words = [s for line in lines if (s := line.strip()) and not s.startswith("#")]
-            self._loaded = (key, _phrases(words, plural=True))
+            self._loaded = (key, _phrases(words, plural=True) or _NO_CUSTOM_EXCLUSIONS)
         return self._loaded[1]
 
     def _guild(self) -> re.Pattern | None:

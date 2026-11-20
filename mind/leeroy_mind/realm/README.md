@@ -1,5 +1,18 @@
 # Recall holds and operator release
 
+## Optional custom text exclusions
+
+`mind-data/realm/blocklist.txt` contains custom words or phrases excluded from Realm speech.
+A readable empty or comment-only file means no custom exclusions. The built-in real-name,
+guild-name, group-insult, departure, flirting, output-quality and length checks still apply.
+Missing or unreadable files and a missing cached guild name still hold Realm speech and fail
+the `realm-screen` health check. Entries match whole words or phrases, ignoring case; lines
+starting with `#` are comments. Changes to the file reload automatically.
+
+This change needs a mind release and restart, with no migration or native rebuild. Health
+reports an empty list as ready with built-in checks active. Rolling back to an older mind
+holds Realm speech again while the file is empty. Existing entries and files are not changed.
+
 ## Lost ACKs and native restarts
 
 A correlated terminal job takes precedence over a lost ACK. Once its transport

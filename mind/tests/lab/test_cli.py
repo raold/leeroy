@@ -45,16 +45,18 @@ def test_the_report_health_and_panel_after_a_night(tmp_path, capsys):
         panel = report.panel(conn)
         assert panel["available"] and panel["tried"] == 2 and panel["promoted"] == 0
         assert panel["runs"][0]["rubric"] == 1.0 and panel["runs"][0]["kinds"]
-        assert report.last_completed(conn) is not None
+        finished = report.last_completed(conn)
+        assert finished is not None
+        now = finished + 60  # The synthetic night has a fixed date; wall time eventually goes stale.
         from leeroy_mind.health import _conversation_lab
-        ok = _conversation_lab(conn, live, time.time())
+        ok = _conversation_lab(conn, live, now)
         assert ok.status == "ok" and "last night run finished" in ok.text
-        stale = _conversation_lab(conn, live, time.time() + 5 * 86400)
+        stale = _conversation_lab(conn, live, now + 5 * 86400)
         assert stale.status == "note" and "no night run finished in 3 nights" in stale.text
         from leeroy_mind.console.labview import _conversation, lab_view
         assert _conversation(conn)["promoted"] == 0
         conn.row_factory = sqlite3.Row
-        view = lab_view(conn, now=time.time())   # the rubric's night made no arm
+        view = lab_view(conn, now=now)   # the rubric's night made no arm
         assert "prompt.reply_human" not in view["families"]
     finally:
         conn.close()
