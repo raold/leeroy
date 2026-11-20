@@ -160,6 +160,8 @@ DEADLINE_S = {Priority.REPLY_HUMAN: 30.0}
 # the night holds, and nobody is standing in the game for it (ruling R9).
 DISCORD_DEADLINE_S = 120.0
 OTHER_DEADLINE_S = 20.0  # social talk and the raid lead; counted after the turn's delay
+# The longest a turn waits, after its delay, for the outcome its instruction tells (TurnMeta.ready)
+READY_WAIT_S = 15.0
 # A Discord line's store takes the write lock first and is tried twice; each try waits this long
 # for another connection's lock, so the two together wait no longer than the one try before.
 STORE_LOCK_WAIT_S = 2.5
@@ -430,8 +432,8 @@ class TurnMeta:
       them), pushback (his pushback that named nobody was aimed at them, the last to speak:
       engine._pushback), topic_fit (put in to answer his game question: facts.fit_tier),
       memory (put in to answer his question about the guild's past, which she remembers:
-      engine._plan_lore), reason_pool (drawn first for a real reason to speak) or
-      weighted_draw;
+      engine._plan_lore), reason_pool (drawn first for a real reason to speak),
+      weighted_draw or invite (a member his invitation asked: invites/service.py);
     - greet:<how> (his login) and gz:<how> (an achievement): reason_pool or weighted_draw;
     - gz_loot:weighted_draw (his loot), kill_gz:weighted_draw, wipe_react:weighted_draw or
       wipe_react:died_first (offered to whoever died first);
@@ -447,7 +449,9 @@ class TurnMeta:
       names what set it off, not a draw;
     - emote:<his emote> (her line after his emote at her) and emote_join:<his emote> (one who
       joined his social emote; talk/emotes.py): the second part is his emote;
-    - source:<TurnSource class>, say_as and speak: turns from outside the engine's planning."""
+    - source:<TurnSource class>, say_as and speak: turns from outside the engine's planning
+      (source:invite, her follow-up after his invitation when her body did more or less than
+      her answer said)."""
     turn_id: str
     topic: str = ""
     answers_human: bool = False
@@ -655,6 +659,10 @@ class TurnMeta:
     # his whispers a waiting answer covers, oldest first, once a later one joined it
     # (talk.engine._life_waiting); empty for an answer to one line
     coalesced: list = field(default_factory=list, repr=False)
+    # an outcome her instruction tells, set once it is known (his invitation: what her body did,
+    # invites/service.py): after its delay the turn waits for it, READY_WAIT_S at most, before
+    # she composes. None: nothing to wait for
+    ready: asyncio.Event | None = field(default=None, repr=False)
 
 
 class _ScopeChanged(SchedulerError):
@@ -3280,6 +3288,19 @@ class Pipeline:
             if self._delaying.get(task) is turn:
                 del self._delaying[task]
 
+    async def _ready(self, meta: TurnMeta) -> None:
+        """Wait for the outcome the turn's instruction tells (TurnMeta.ready: his invitation's,
+        what her body did), READY_WAIT_S at most on the clock; without one, nothing."""
+        if meta.ready is None or meta.ready.is_set():
+            return
+        sleep = asyncio.ensure_future(self.clock.sleep(READY_WAIT_S))
+        ready = asyncio.ensure_future(meta.ready.wait())
+        try:
+            await asyncio.wait({sleep, ready}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            sleep.cancel()
+            ready.cancel()
+
     def _rule_priority(self, turn: Turn, meta: TurnMeta) -> Priority:
         if meta.elsewhere:
             return Priority.BACKGROUND
@@ -3331,6 +3352,7 @@ class Pipeline:
             return self._drop(turn, meta, "scope_changed")
         with self.timing.span(meta.timing_trace, "delay"):
             await self._delay(turn, meta)
+            await self._ready(meta)
         if not _scope_valid(meta):
             return self._drop(turn, meta, "scope_changed")
         now = self.clock.now()

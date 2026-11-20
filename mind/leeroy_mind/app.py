@@ -523,6 +523,10 @@ class MindApp:
         self.godmode = ext("godmode", lambda: attach_godmode(self))  # [godmode]: off adds nothing
         from .raidlead.service import attach as attach_raidlead
         self.raidlead = ext("raidlead", lambda: attach_raidlead(self))  # None while [raidlead] is off
+        from .invites.service import attach as attach_invites
+        # his invitations in game: [talk] invites, read at each line (on by default; it does
+        # nothing until he invites)
+        self.invites = ext("invites", lambda: attach_invites(self))
         from .raidplay.respond import attach as attach_mechanics
         # [raidplay] respond: off adds nothing
         self.mechanics = ext("raidplay", lambda: attach_mechanics(self))
@@ -1085,6 +1089,15 @@ class MindApp:
             command, held = claim == "order", claim == "held"
         if not command and not held:
             command = his_command(ev.channel, ev.text)
+        invites = getattr(self, "invites", None)
+        if not command and not held and not backlog and invites is not None:
+            # his invitation in game (invites/): read now, her body sent at once, her answer
+            # planned by talk below; a line the model reads first is held and goes to talk later
+            try:
+                await invites.before_his_line()
+                held = invites.claims(ev, line_id) == "held"
+            except Exception:  # never in the way of his line: it fails open to talk
+                log.warning("invites_claim_failed")
         if not backlog and self.signals is not None and not held:
             self.signals.owner_line(line_id, len(ev.text), command=command, chat=ev)
         if command or held:

@@ -126,6 +126,11 @@ audience, and a group DM is shared only with those who were in it.
   memories, and start or end a feud, each as an overlay that undo removes
   exactly; and he can give a member something to do in Discord, which she
   carries out in her own way or reports back as not taken.
+- **Invitations**: when he says in game "come to the inn", "meet me at the
+  bank" or "let's go fishing in Dalaran", the members he asks answer in their
+  own words and actually come, go there, sit, join him or fish, by their day
+  and how they feel about him; her answer waits for the game and never says
+  she is on her way unless she is.
 - **Guild life**: raid nights from call to loot (a fair composition, a rotating
   raid lead, summons, the dungeon-clear run, DKP and an MVP vote), offline
   raids the guild runs on its own while he is away, a group he fills with
