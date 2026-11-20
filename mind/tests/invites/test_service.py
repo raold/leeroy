@@ -386,3 +386,32 @@ def test_naming_a_member_who_is_away_sends_nobody_else(app, yes):
         await settle(app)
         assert app.bridge.sent == []
     run(main())
+
+
+def test_a_slow_reading_lets_his_line_go_to_talk_and_moves_nobody(app, yes, monkeypatch):
+    released = []
+
+    async def release(ev, line_id):
+        released.append(line_id)
+    monkeypatch.setattr(app, "release_to_talk", release)
+    monkeypatch.setattr(svc.Invites, "_may_read", lambda self: True)
+
+    async def ready(self):
+        return True
+    monkeypatch.setattr(svc.Invites, "_model_ready", ready)
+
+    async def slow(priority, job, *, deadline):
+        await app.clock.sleep(60)
+        return SimpleNamespace(text='{"what": "sit", "sure": 0.95}')
+    monkeypatch.setattr(app.scheduler, "submit", slow)
+
+    async def main():
+        assert app.invites.claims(chat("the inn?"), 620) == "held"
+        await app.clock.advance(svc.MODEL_S + 2, 1.0)
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert released == [620] and app.bridge.sent == []
+        await app.clock.advance(60, 5.0)
+        await asyncio.sleep(0.01)
+        assert app.bridge.sent == []  # a late reading never moves anyone
+    run(main())

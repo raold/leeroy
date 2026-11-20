@@ -57,3 +57,11 @@ def test_resolve():
     assert S.resolve("at the auction house", his_zone=org) is S.UNKNOWN
     assert S.resolve("the inn", his_zone=0) is S.UNKNOWN
     assert S.resolve("come here", his_zone=org) is None
+
+
+def test_a_city_with_no_spot_of_ours_is_unknown_never_his_own():
+    org = 1637
+    assert S.resolve("meet me at the bank in shattrath", his_zone=org) is S.UNKNOWN
+    assert S.resolve("the inn in stormwind", his_zone=org) is S.UNKNOWN
+    assert S.resolve("fishing in ratchet", his_zone=org, fishing=True) is S.UNKNOWN
+    assert S.resolve("the bank in dalaran", his_zone=org).name == "dal_bank"

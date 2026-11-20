@@ -525,12 +525,15 @@ class Invites:
 
     async def _classify(self, text: str) -> str | None:
         """The live model's class for one line, from SCHEMA's list; None when the model is not
-        already loaded, the GPU is paused, it is not sure or the answer is not valid."""
+        already loaded, the GPU is paused, it is not sure, the answer is not valid, or it took
+        longer than MODEL_S on the clock from the start (queue and generation both: the held line
+        never waits longer, and a late reading moves nobody)."""
         from leeroy_mind.llm.client import GpuPaused
         from leeroy_mind.llm.scheduler import Priority
+        app = self.app
+        deadline = app.clock.now() + MODEL_S
         if not await self._model_ready():
             return None
-        app = self.app
         model = app.cfg.models.live
         messages = [{"role": "system", "content": SYSTEM},
                     {"role": "user", "content": P.normalize(text)}]
@@ -539,9 +542,21 @@ class Invites:
             return await llm.chat(model, messages, options={"temperature": 0.0, "num_predict": 40,
                                                              "num_ctx": 2048},
                                   think=False, format=SCHEMA)
+        asked = asyncio.ensure_future(app.scheduler.submit(Priority.REPLY_HUMAN, job,
+                                                           deadline=deadline))
+        timer = asyncio.ensure_future(app.clock.sleep(max(0.0, deadline - app.clock.now())))
         try:
-            result = await app.scheduler.submit(Priority.REPLY_HUMAN, job,
-                                                deadline=app.clock.now() + MODEL_S)
+            await asyncio.wait({asked, timer}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            timer.cancel()
+            if not asked.done():
+                asked.cancel()
+                await asyncio.gather(asked, return_exceptions=True)
+        if asked.cancelled() or app.clock.now() > deadline:
+            log_event("invite_model_late")
+            return None
+        try:
+            result = asked.result()
         except GpuPaused:
             return None
         return read_answer(getattr(result, "text", ""))

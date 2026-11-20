@@ -100,6 +100,15 @@ PLACE_WORDS = re.compile(
     r"lake|river|beach|shore|pond|square|statue|plaza|market)\b")
 _CITY_RE = [(zone, re.compile(r"\b(?:" + "|".join(re.escape(w) for w in words) + r")\b"))
             for zone, (words, _) in CITIES.items()]
+# Cities and towns he may name that have no spot of ours: a place there is UNKNOWN (she asks),
+# never the same kind of place in the city he stands in.
+OTHER_CITIES = re.compile(
+    r"\b(?:shattrath|shatt|stormwind|ironforge|darnassus|darn|exodar|gadgetzan|ratchet|everlook|"
+    r"theramore|crossroads|xroads|splintertree|tarren mill|brill|warsong hold|vengeance landing|"
+    r"valiance keep|wyrmrest|moa'?ki|agmar'?s hammer|camp winterhoof|light'?s hope|area 52|"
+    r"stonard|kargath|grom'?gol|revantusk|silverpine|sepulcher|garadar|thrallmar|zabra'?jin|"
+    r"aldor rise|scryer'?s tier|ogri'?la|sporeggar|the argent tournament|argent tournament|"
+    r"wintergrasp|ebon hold|dun morogh|goldshire)\b")
 
 
 def city_of(text: str) -> int | None:
@@ -136,6 +145,8 @@ def resolve(text: str, *, his_zone: int, fishing: bool = False):
         if rx.search(text):
             return BY_NAME[name]
     city = city_of(text)
+    if city is None and OTHER_CITIES.search(text):
+        return UNKNOWN  # a city with no spot of ours: never his own city's place instead
     kind = kind_of(text)
     zone = city if city is not None else his_zone
     if kind is not None:
