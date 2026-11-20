@@ -51,7 +51,7 @@ from leeroy_mind.talk.realism import Realism
 from leeroy_mind.arc.live import AWAY_CACHE_S, ArcView, arc_view, away_now
 from leeroy_mind.bridge import AckTimeout, BridgeError, ConnectionLost
 from leeroy_mind.clock import Clock, night_of
-from leeroy_mind.config import MindConfig
+from leeroy_mind.config import EXEMPLARS_BEFORE, MindConfig, exemplars_time
 from leeroy_mind.discord.channels import channel_id, is_private, same_medium, is_group
 from leeroy_mind.discord.transport import PAIR_LINE_SQL
 from leeroy_mind.discord.presence import local_time
@@ -105,6 +105,8 @@ from leeroy_mind.guards.phrases import CODES as PHRASE_CODES, hint as phrase_hin
 from leeroy_mind.guards.opener import cut as cut_opener, without_question_echo
 from leeroy_mind.guards.pronouns import fix as fix_pronouns
 from leeroy_mind.talk.facts import LibraryFacts
+from leeroy_mind.talk import grounding
+from leeroy_mind.talk.grounding import wow_turn
 from leeroy_mind.talk.gearfit import for_speaker as facts_for_speaker
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
@@ -182,6 +184,9 @@ QUIET_S = 120.0
 # medium (her DMs in a whisper, their whispers in a DM), at most PAIR_LINES from PAIR_WINDOW_S
 PAIR_LINES = 6
 PAIR_WINDOW_S = 86400.0
+# [talk] wow_grounding: her example pool is read again after this long (the night's rewards move
+# it), and at most this many members' pools are kept
+WOW_POOL_S, WOW_POOLS = 3600.0, 512
 # A channel quiet this long starts a new conversation, as a thread does. Only the lines the
 # engine sees (the human's and the mind's) keep a conversation open; other players' lines and
 # his bot commands, which threads do count, don't, so this approximates the thread rule.
@@ -558,6 +563,11 @@ class TurnMeta:
     photo_finished: bool = False
     single_line_before_photo: bool = False  # restored when an owed answer goes on without it
     discord_named: bool = False  # he addressed this member in a channel: re-ask one silence
+    # [talk] wow_grounding (talk/grounding.py): the turn's prompt carries the raid and guild
+    # card (the awareness card then leaves out what it says), and the example lines of hers it
+    # showed, which the guards' phrase cooldown never lets her copy (Draft.exemplars)
+    wow_grounded: bool = False
+    wow_exemplars: tuple[str, ...] = ()
     # what recall looks for when the turn has no trigger line: for an answer to his Discord post,
     # its words and its thread's last lines (discord.talk, ruling R13); for a turn carrying an
     # outreach item, its words (outreach.service); "" for every other turn
@@ -936,6 +946,8 @@ class Pipeline:
         self._words: dict[int, str] = {}  # a said line's id -> its words before styling
         self._turn_lines: dict[str, int] = {}  # a turn id -> the lines it said
         self._compose_rng = random.Random("compose")  # compose() never draws from self.rng
+        # her example lines' pool by (speaker, officers' turn), read a while (_wow_grounding)
+        self._wow_pools: dict[tuple[int, bool], tuple[float, float, list]] = {}
         self._length_rng = random.Random()  # a channel message's length band (_discord_words)
         # her last want in each conversation (speaker, chain base), the latest WANTS_KEPT
         self._wants: dict[tuple[int, str], Intent] = {}
@@ -2952,6 +2964,18 @@ class Pipeline:
                                       else CAST_MIN_LEVEL)
             if not facts:
                 unsure = UNSURE
+        # [talk] wow_grounding: a raid or guild turn whose line of his, or whose topic, names a
+        # boss, a raid, a place or an item gets the best one or two facts about it from the
+        # library's pages titled with it (LibraryFacts.named), when his game question brought
+        # none (its own lookup is the facts then) and nobody answered before her
+        grounded = not preview and self._wow_grounding_on(turn)
+        if (grounded and not facts and not meta.facts_line and not earlier
+                and self.facts is not None and (his or meta.topic)):
+            try:
+                facts = await self.facts.named(his or meta.topic)
+            except Exception:
+                log.warning("wow_facts_failed guid=%d", turn.speaker)
+                facts = []
         pinned = next((i for i, r in enumerate(recent) if r.id == turn.trigger_line), None)
         kept = next((i for i, r in enumerate(recent) if r.id == meta.pushback_line), None
                     ) if meta.pushback_line else None
@@ -3061,6 +3085,11 @@ class Pipeline:
                 yield_families(meta.learning, SHAPE_YIELDS)
             if meta.learning is not None:
                 parts.style = [entry[2] for entry in meta.learning.entries]
+        # [talk] wow_grounding: the raid and guild card, her own example lines and the glossary
+        ground = await self._wow_grounding(turn, p, now) if grounded else None
+        if ground is not None:
+            parts.wow = ground.sections()
+            meta.wow_grounded = bool(ground.card)  # the awareness card leaves its part out
         if self.cfg.talk.aware or meta.review_required:
             try:
                 parts.awareness = await self.live_review.block_async(turn,meta,close=bool(real))
@@ -3077,6 +3106,16 @@ class Pipeline:
         if live:
             meta.offered_real_name, meta.romance = bool(real), bool(romance)
             meta.memory_ids = [m.id for m in memories[:len(trimmed.memories)]]
+        # the grounding's sections the trim kept (it drops them from the end: the glossary, her
+        # example lines, the card): the example lines shown are never to be copied (the filters'
+        # samples, the guards' Draft.exemplars), and the card's facts may back what she says
+        shown_examples, card_facts = [], []
+        if ground is not None:
+            n_wow = len(trimmed.wow)
+            card_facts = list(ground.card) if ground.card and n_wow >= 1 else []
+            if ground.exemplars and n_wow >= 1 + bool(ground.card):
+                shown_examples = list(ground.exemplars)
+        meta.wow_exemplars = tuple(shown_examples)
         # a bit's own text is the owner's, an aside's what is happening now: either may back
         # the history it tells ("belra is flirting with zan again"); so do her own card and
         # life, the chat she was shown and the memory a greeting quotes (fix round 1, review
@@ -3093,7 +3132,8 @@ class Pipeline:
                    *(r.text for r in pair),
                    *([follow] if follow else []),
                    *([turn.instruction] if turn.kind in (TurnKind.BIT, TurnKind.ASIDE)
-                     else [])]
+                     else []),
+                   *card_facts]  # the raid and guild card's stored facts ([talk] wow_grounding)
         callback = (meta.learning.callback if meta.learning is not None and
                     any(k == 'callback' for k,_,_ in meta.learning.used) else None)
         if callback is not None:
@@ -3118,7 +3158,7 @@ class Pipeline:
                         # the line it answers; of several waiting lines his question first
                         (list(dict.fromkeys([his, *waiting])) if waiting
                          else [trigger] if trigger else []),
-                        [r.text for r in earlier], samples,
+                        [r.text for r in earlier], [*samples, *shown_examples],
                         # a DM's copy check reads his earlier messages there (her own are the
                         # repeat check's): the audit's answer that sent his message back
                         support, [r.text for r in recent
@@ -3130,6 +3170,45 @@ class Pipeline:
                         beat_items=[x for _, x in beat_offer],
                         tail=overlaid, beat_keys=[k for k, _ in beat_offer],
                         asking=bool(his) and asks(his))
+
+    def _wow_grounding_on(self, turn: Turn) -> bool:
+        """[talk] wow_grounding (read at each compose) and a raid or guild turn
+        (grounding.wow_turn): never a whisper, a DM, a group DM or say, and never a template's."""
+        return (getattr(self.cfg.talk, "wow_grounding", False) is True
+                and turn.template is None and wow_turn(turn.channel))
+
+    async def _wow_grounding(self, turn: Turn, p: Persona, now: float):
+        """The turn's grounding (talk/grounding.py), plain SELECTs on the store's connection
+        (a few milliseconds a turn on the live copy; her example pool, the heaviest read, is kept
+        WOW_POOL_S, by her and whether officers' lines may be in it); None when the read fails
+        (logged with her guid only: the turn goes on without it)."""
+        m = self.world.members.get(turn.speaker)
+        officer = bool(self.world.is_officer(turn.speaker))
+        sp = grounding.Speaker(
+            turn.speaker, cls=m.class_ if m is not None else 0,
+            spec_tab=m.spec_tab if m is not None else -1,
+            raid_role=p.play.raid_role or None, officer=officer, human=self.human.guid,
+            names=dict(self._names()), protect=tuple(sorted(n.casefold() for n in self._protect())))
+        before = exemplars_time(getattr(self.cfg.talk, "wow_exemplars_before", EXEMPLARS_BEFORE))
+        if before is None:
+            before = exemplars_time(EXEMPLARS_BEFORE)
+        key = (turn.speaker, officer and turn.channel in grounding.OFFICER_CHANNELS)
+        held = self._wow_pools.get(key)
+        pool = held[2] if held is not None and 0 <= now - held[0] < WOW_POOL_S \
+            and held[1] == before else None
+        try:
+            ground, pool = grounding.build(self.store.conn, sp, turn.channel, now, before=before,
+                                           pool=pool)
+        except Exception:
+            log.warning("wow_grounding_failed guid=%d", turn.speaker)
+            return None
+        if held is None or held[2] is not pool:
+            self._wow_pools[key] = (now, before, pool)
+            while len(self._wow_pools) > WOW_POOLS:
+                self._wow_pools.pop(next(iter(self._wow_pools)))
+        log.debug("wow_grounding guid=%d card=%d examples=%d pool=%d glossary=%d", turn.speaker,
+                  len(ground.card), len(ground.exemplars), len(pool), int(bool(ground.glossary)))
+        return ground
 
     @staticmethod
     def _prompt_budget(turn: Turn) -> int:

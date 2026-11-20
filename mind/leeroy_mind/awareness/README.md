@@ -68,6 +68,9 @@ Every `CardContext` content field is empty by default:
 - `names`: optional visible-member name map for model cards. This switches IDs
   and epochs to names, named places and relative ages; omitted maps retain the
   diagnostic format used by the CLI.
+- `grounded`: the turn also carries the WoW grounding card (`[talk] wow_grounding`,
+  `talk/grounding.py`), which says the raid, her DKP and the next raid night: the Guild raid
+  part, the DKP line and the calendar's raid rows are left out (false by default).
 
 Each `ContextItem` carries text, its original channel, sender/recipient ids, and
 optional `readers`. The Discord caller captures the correct audience

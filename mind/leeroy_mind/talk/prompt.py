@@ -129,6 +129,10 @@ class PromptParts:
     # Her voice sheet's block (personas.speech.voice_block; "" without a sheet): the last
     # thing before the instruction in both modes, never cut
     voice: str = ""
+    # A raid or guild turn's grounding ([talk] wow_grounding, talk/grounding.py): its whole
+    # sections, highest priority first (the card, her example lines, the glossary), after the
+    # awareness card; the trim drops them from the end, before memories and chat give way
+    wow: list[str] = field(default_factory=list)
 
 
 def replay(text: str, words: int = REPLAY_WORDS) -> str:
@@ -898,6 +902,7 @@ def render_messages(p: PromptParts) -> list[dict]:
         _section(p.facts_head or facts_head("them"), p.facts),
         _section("Your last lines (don't make the same move again):", p.own_recent),
         p.awareness.strip(),
+        *(w.strip() for w in p.wow),
         right_now if p.situation else "",
         p.voice.strip(),
         p.instruction.strip()) if x)
@@ -923,14 +928,17 @@ def section_tokens(p: PromptParts) -> dict[str, int]:
         ("so_far", _section(SO_FAR_HEAD, p.so_far)),
         ("facts", _section(p.facts_head or facts_head("them"), p.facts)),
         ("own_recent", _section("Your last lines (don't make the same move again):", p.own_recent)),
-        ("awareness", p.awareness.strip()), ("instruction", p.instruction.strip()))}
+        ("awareness", p.awareness.strip()),
+        *((("wow", "\n\n".join(w.strip() for w in p.wow)),) if p.wow else ()),
+        ("instruction", p.instruction.strip()))}
 
 
 def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     """A copy that fits the budget. A DM's chat rows older than his last few turns go first
     (old_chat), then learned style, then the awareness card is
     re-rendered into the remaining room, but never below its claims (CLAIMS_PART, kept whole).
-    Then, in order: the other medium's lines, memories down to 3 (the least relevant go), chat
+    Then, in order: a raid or guild turn's grounding sections (wow: the glossary, her example
+    lines, then the card), the other medium's lines, memories down to 3 (the least relevant go), chat
     down to 5 (the oldest go), relationship cards down to 1 (the addressee's stays), own lines
     down to 3 (the oldest go), then the oldest chat lines are shortened (never the newest).
     Past that, a logged last resort empties her own lines first, then lets the claims go, then
@@ -947,7 +955,7 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
     so len(result.memories) says which recalled memories were used."""
     t = replace(p, rel_cards=list(p.rel_cards), memories=list(p.memories), chat=list(p.chat),
                 elsewhere=list(p.elsewhere), style=list(p.style), so_far=list(p.so_far),
-                own_recent=list(p.own_recent), untrimmed=list(p.untrimmed))
+                own_recent=list(p.own_recent), untrimmed=list(p.untrimmed), wow=list(p.wow))
     pin = p.pinned if p.facts and p.pinned is not None and 0 <= p.pinned < len(p.chat) else None
     kept = p.kept if p.kept is not None and 0 <= p.kept < len(p.chat) else None
     least = 1 if kept is None else 2  # the chat the last resort leaves
@@ -999,6 +1007,7 @@ def trim_to_budget(p: PromptParts, *, budget: int = LIVE_BUDGET) -> PromptParts:
             if kept is not None and i < kept:
                 kept -= 1
 
+    drop(t.wow, 0, False)  # the grounding's lowest sections first (PromptParts.wow)
     drop(t.elsewhere, 0, True)  # the other medium's lines go first, oldest first
     if t.facts:
         drop_chat(MIN_CHAT)
@@ -1052,6 +1061,7 @@ def redact_for(parts: PromptParts, human: HumanIdentity, close: bool) -> PromptP
                    so_far=[r(x) for x in parts.so_far],
                    style=[r(x) for x in parts.style],
                    untrimmed=[r(x) for x in parts.untrimmed], voice=r(parts.voice),
+                   wow=[r(x) for x in parts.wow],
                    instruction=r(parts.instruction), awareness=(parts.awareness.redacted(r)
                        if hasattr(parts.awareness,"redacted") else r(parts.awareness)), facts=[r(x) for x in parts.facts],
                    real_name="")
