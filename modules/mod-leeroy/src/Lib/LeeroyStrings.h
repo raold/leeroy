@@ -160,7 +160,7 @@ struct StringHoldFacts
     bool humanOnline = false;
     std::uint64_t group = 0;    // her group now, 0 for none
     bool raid = false;          // that group is a raid
-    bool near = false;          // he is within kInviteFishYards of her, on her map
+    bool nearHim = false;       // he is within kInviteFishYards of her, on her map
     bool left = false;          // he is farther than kInviteLeftYards, on another map or offline
 };
 enum class StringHoldStep : std::uint8_t
