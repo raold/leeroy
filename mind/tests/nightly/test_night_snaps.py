@@ -151,7 +151,7 @@ def test_a_planned_snap_is_rendered_with_its_identity_reference_as_a_portrait(h,
     assert "chosen.jpg" not in log.read_text()
     (req,) = seen
     assert (req.shape, req.size, req.thumb_size, req.steps, req.cfg, req.nsfw_max) == (
-        "portrait", 1024, SNAP_THUMB_PX, SNAPS_CFG.steps, SNAPS_CFG.guidance, SNAPS_CFG.nsfw_max)
+        "portrait", 1024, SNAP_THUMB_PX, SNAPS_CFG.steps, SNAPS_CFG.guidance, None)
     # a waist-up scene: the face at WIDE_SCALE of identity_scale (render.scene_scale)
     assert req.identity == Identity(ref, ref_crop("upper_body"), 0.45)
     p = load_persona(h.store, 101)

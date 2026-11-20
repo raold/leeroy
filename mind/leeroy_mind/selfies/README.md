@@ -6,7 +6,9 @@ The mind passes the configured `[selfies] nsfw_max` once when starting an image 
 The setting is optional in TOML; screening is always active. Render and caption callers omit
 the cutoff and use that worker policy. Legacy explicit request values remain supported and
 validated. Result flags and real scores stay in the response and database, including retries,
-delivery checks and meme reuse. Missing or invalid result scores are never replaced with zero.
+delivery checks and meme reuse. Before publishing, the mind still checks the returned score
+against its configuration even if the worker reports an image as unflagged. Missing or invalid
+result scores are never replaced with zero.
 Install the mind and worker changes together; no migration or native rebuild is needed.
 
 ## Styling

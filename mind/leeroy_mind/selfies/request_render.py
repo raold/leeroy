@@ -163,7 +163,8 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
         began = time.perf_counter()
         try:
             got, tries = await render_slot(worker, request,
-                rid=lambda attempt: f"request:{snap.request}:{attempt}", make_room=room.make_room)
+                rid=lambda attempt: f"request:{snap.request}:{attempt}", make_room=room.make_room,
+                nsfw_max=cfg.nsfw_max)
         finally:
             render_ms = (time.perf_counter() - began) * 1000
             room.timings["render_ms"] = render_ms
@@ -293,7 +294,7 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
             try:
                 got, tries = await render_slot(
                     worker, request, rid=lambda attempt, k=k: f"request:{snap.request}:{k}:{attempt}",
-                    make_room=room.make_room)
+                    make_room=room.make_room, nsfw_max=cfg.nsfw_max)
             except SetRefused:
                 state["tries"] += TRIES
                 continue

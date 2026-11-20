@@ -254,7 +254,7 @@ async def _slot(worker, spec: PromptSpec, out_dir: Path, idx: int, *, night: str
     try:
         got, attempts = await render_slot(
             worker, request, rid=lambda attempt: f"{tag}{guid}:{set_no}:{idx}:{attempt}",
-            make_room=room)
+            make_room=room, nsfw_max=cfg.nsfw_max)
     except SetRefused:
         refused = SetRefused(f"slot {idx}: {TRIES} seeds flagged")
         refused.slot = idx
