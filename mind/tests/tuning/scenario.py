@@ -257,8 +257,9 @@ def wow_rows(store, clock) -> None:
                                        "state": state, "members": list(TEST_CAST)})))
         c.execute("INSERT INTO tg_pull(id,context,map,instance_id,boss_id,difficulty,size,outcome,"
                   "start_ms,end_ms,members,assisted,boss_entry,upd_mean_ms,kind,complete,scoreable,"
-                  "received) VALUES ('wow-1','533:14:1',533,9,14,1,25,'wiped',?,?,25,0,0,0,'his',"
-                  "1,1,?)", (int((now - 4 * 3600 - 300) * 1000), int(now - 4 * 3600) * 1000, now))
+                  "received,raid_id) VALUES ('wow-1','533:14:1',533,9,14,1,25,'wiped',?,?,25,0,0,"
+                  "0,'his',1,1,?,?)",
+                  (int((now - 4 * 3600 - 300) * 1000), int(now - 4 * 3600) * 1000, now, raid))
         for guid in (101, 103, 104):
             c.execute("INSERT INTO tg_death(pull,guid,at_ms,spell,source,x,y,hits) "
                       "VALUES ('wow-1',?,0,27808,0,0,0,'[]')", (guid,))

@@ -205,7 +205,8 @@ def _you(sp: Speaker) -> str | None:
 def _recent_raid(r: _Reader, now: float):
     # a row still open after OPEN_RAID_S is a raid nobody closed (health fails one past 6 h),
     # never one running now
-    rows = r.rows("SELECT raid_id,started,ended,raid_key,size,heroic,kills,wipes FROM guild_raid "
+    rows = r.rows("SELECT raid_id,started,ended,raid_key,size,heroic,kills,wipes,lead_guid,tank_guid "
+                  "FROM guild_raid "
                   "WHERE started<=? AND ((ended IS NULL AND started>=?) OR ended>=?) "
                   "ORDER BY (ended IS NULL) DESC,started DESC,raid_id DESC LIMIT 1",
                   (now, now - OPEN_RAID_S, now - RECENT_RAID_S))
@@ -230,11 +231,40 @@ def _raid_line(r: _Reader, raid, sp: Speaker, now: float) -> str | None:
     return f"Last raid ({_ago(now - raid['ended'])} ago): {what}, {tally}{you}."
 
 
+def _meta(r: _Reader, key: str):
+    """A meta value as guild/loot.py's _put stores it (JSON of any type); None when absent or
+    unreadable."""
+    rows = r.rows("SELECT value FROM meta WHERE key=?", (key,))
+    try:
+        return json.loads(rows[0]["value"]) if rows else None
+    except (TypeError, ValueError, RecursionError):
+        return None
+
+
+def _raid_members(r: _Reader, raid) -> set[int]:
+    """Who the guild raid holds: its stored plan's members, its attendance and its lead and
+    tank (guild/session.py)."""
+    plan = _meta(r, f"guild:raid:{raid['raid_id']}:plan")
+    members = set(plan.get("members") or ()) if isinstance(plan, dict) else set()
+    members |= {x["guid"] for x in r.rows("SELECT guid FROM guild_attendance WHERE raid_id=? "
+                                          "AND status='raided'", (raid["raid_id"],))}
+    members |= {raid.get("lead_guid"), raid.get("tank_guid")}
+    return {g for g in members if type(g) is int and g > 0}
+
+
 def _boss(r: _Reader, raid, now: float):
-    """(map, boss index, state, at) of the raid's newest boss event, or None."""
+    """(map, boss index, state, at) of the guild raid's newest boss event, or None: an event in
+    the instance the raid is bound to (meta guild:raid:<id>:instance, as guild/session.py binds
+    it), or, before it is bound, one whose members include the raid's; another group's fight on
+    the same map in the same hours is never the guild's."""
     from leeroy_mind.guild.raids import CATALOG
     known = CATALOG.get(raid["raid_key"])
     if known is None:
+        return None
+    bound = _meta(r, f"guild:raid:{raid['raid_id']}:instance")
+    bound = bound if type(bound) is int and bound > 0 else None
+    members = _raid_members(r, raid) if bound is None else set()
+    if bound is None and not members:
         return None
     end = raid["ended"] if raid["ended"] is not None else now
     start = max(raid["started"], now - RECENT_RAID_S)
@@ -242,9 +272,14 @@ def _boss(r: _Reader, raid, now: float):
                   "ORDER BY ts DESC,id DESC LIMIT 64", (start, end))
     for row in rows:
         ev = _json(row["payload"], {})
-        if ev.get("map") == known.map_id and type(ev.get("boss_id")) is int and \
-                ev.get("state") in ("engaged", "killed", "wiped"):
-            return known.map_id, ev["boss_id"], ev["state"], row["ts"]
+        if (ev.get("map") != known.map_id or type(ev.get("boss_id")) is not int
+                or ev.get("state") not in ("engaged", "killed", "wiped")):
+            continue
+        if bound is not None and ev.get("instance_id") != bound:
+            continue
+        if bound is None and not members & {g for g in ev.get("members") or () if type(g) is int}:
+            continue
+        return known.map_id, ev["boss_id"], ev["state"], row["ts"]
     return None
 
 
@@ -282,14 +317,16 @@ def _explains(map_id: int, boss_id: int, raid, sp: Speaker, name: str) -> list[s
     return out
 
 
-def _wipe_line(r: _Reader, sp: Speaker, now: float) -> str | None:
-    """The newest complete wiped pull within RECENT_RAID_S: its killing spells and its failed
-    mechanics, his own left out (training/hurt.py's reading)."""
+def _wipe_line(r: _Reader, raid, sp: Speaker, now: float) -> str | None:
+    """The guild raid's newest complete wiped pull within RECENT_RAID_S (tg_pull.raid_id is the
+    guild raid's; his raids and offline raids only, never a benchmark's or another's): its
+    killing spells and its failed mechanics, his own left out (training/hurt.py's reading)."""
     from leeroy_mind.training.hurt import MELEE, stored_names
     from leeroy_mind.wow import boss_name
     pulls = r.rows("SELECT id,map,boss_id,end_ms FROM tg_pull WHERE outcome='wiped' AND complete=1 "
-                   "AND end_ms>=? ORDER BY end_ms DESC,id DESC LIMIT 1",
-                   (int((now - RECENT_RAID_S) * 1000),))
+                   "AND raid_id=? AND kind IN ('his','offline') AND end_ms>=? "
+                   "ORDER BY end_ms DESC,id DESC LIMIT 1",
+                   (raid["raid_id"], int((now - RECENT_RAID_S) * 1000)))
     if not pulls:
         return None
     pull = pulls[0]
@@ -421,7 +458,7 @@ def card_lines(conn: sqlite3.Connection, sp: Speaker, now: float, *,
             order.append((2, boss))
         for i, x in enumerate(explains):
             order.append((3 if i == 0 else 8, x))
-        wipe = _wipe_line(r, sp, now)
+        wipe = _wipe_line(r, raid, sp, now)
         if wipe:
             order.append((4, wipe))
         loot = _loot_line(r, raid, sp)

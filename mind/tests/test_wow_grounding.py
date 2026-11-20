@@ -41,28 +41,30 @@ def raid(store, *, started, ended=None, key="toc", size=25, heroic=1, kills=3, w
                (started, ended, key, size, heroic, kills, wipes))
 
 
-def boss(store, ts, boss_id, state, map_id=649):
+def boss(store, ts, boss_id, state, map_id=649, instance=7, members=(ME, 102)):
     run(store, "INSERT INTO game_event(ts,type,guid,payload) VALUES (?,?,?,?)",
-        (ts, "boss", 0, json.dumps({"map": map_id, "instance_id": 7, "boss_id": boss_id,
-                                    "boss_name": "", "state": state, "members": [ME]})))
+        (ts, "boss", 0, json.dumps({"map": map_id, "instance_id": instance, "boss_id": boss_id,
+                                    "boss_name": "", "state": state, "members": list(members)})))
 
 
-def wipe(store, end_ts, *, boss_id=4, deaths=((66013, 3), (0, 1)), failed="toc.anubarak.pursuing_spike"):
+def wipe(store, end_ts, *, boss_id=4, deaths=((66013, 3), (0, 1)), failed="toc.anubarak.pursuing_spike",
+         raid_id=1, kind="his", pull="p1"):
     run(store, "INSERT INTO tg_pull(id,context,map,instance_id,boss_id,difficulty,size,outcome,"
                "start_ms,end_ms,members,assisted,boss_entry,upd_mean_ms,kind,complete,scoreable,"
-               "received) VALUES ('p1',?,649,7,?,3,25,'wiped',?,?,25,0,0,0,'his',1,1,?)",
-        (f"649:{boss_id}:3", boss_id, int((end_ts - 300) * 1000), int(end_ts * 1000), end_ts))
+               "received,raid_id) VALUES (?,?,649,7,?,3,25,'wiped',?,?,25,0,0,0,?,1,1,?,?)",
+        (pull, f"649:{boss_id}:3", boss_id, int((end_ts - 300) * 1000), int(end_ts * 1000), kind,
+         end_ts, raid_id))
     n = 0
     for spell, count in deaths:
         for _ in range(count):
             n += 1
             run(store, "INSERT INTO tg_death(pull,guid,at_ms,spell,source,x,y,hits) "
-                       "VALUES ('p1',?,0,?,0,0,0,'[]')", (200 + n, spell))
+                       "VALUES (?,?,0,?,0,0,0,'[]')", (pull, 200 + n, spell))
     run(store, "INSERT INTO tg_death(pull,guid,at_ms,spell,source,x,y,hits) "
-               "VALUES ('p1',?,0,99999,0,0,0,'[]')", (HUMAN,))  # his own death never counts
+               "VALUES (?,?,0,99999,0,0,0,'[]')", (pull, HUMAN))  # his own death never counts
     run(store, "INSERT INTO tg_failure(pull,kind,key,guid,count,deaths,damage_share) "
-               "VALUES ('p1','avoid',?,102,2,0,0)", (failed,))
-    run(store, "INSERT INTO meta(key,value) VALUES ('tg:spell_names',?)",
+               "VALUES (?,'avoid',?,102,2,0,0)", (pull, failed))
+    run(store, "INSERT INTO meta(key,value) VALUES ('tg:spell_names',?) ON CONFLICT(key) DO NOTHING",
         (json.dumps({"66013": "Penetrating Cold", "99999": "His Own Mistake"}),))
 
 
@@ -144,6 +146,29 @@ def test_no_recent_raid_gives_the_next_raid_night_and_the_last_kills(store):
     lines = g.card_lines(store.conn, speaker(), NOW, budget=1000)
     assert lines == ["You: Holy Paladin, healer.", "Next raid night: in 5 hours; you: signed up.",
                      "Last kills: Icecrown Citadel 10, 4 bosses, 2 days ago."]
+
+
+def test_another_groups_fight_on_the_same_map_is_never_the_guilds(store):
+    rid = raid(store, started=NOW - 3600)
+    boss(store, NOW - 900, 3, "killed")
+    boss(store, NOW - 100, 4, "engaged", instance=8, members=(900, 901))  # strangers, unbound
+    lines = g.card_lines(store.conn, speaker(), NOW, budget=1000)
+    assert "Last boss: the Twin Val'kyr, killed." in lines
+    run(store, "INSERT INTO meta(key,value) VALUES (?,'8')", (f"guild:raid:{rid}:instance",))
+    boss(store, NOW - 50, 1, "engaged", instance=7)  # the guild's members, another copy
+    lines = g.card_lines(store.conn, speaker(), NOW, budget=1000)
+    assert "Fighting now: Anub'arak." in lines  # the bound copy's newest fight
+
+
+def test_a_wipe_of_another_raid_or_a_benchmark_is_not_this_raids(store):
+    rid = raid(store, started=NOW - 3600)
+    wipe(store, NOW - 600, raid_id=rid + 1)
+    wipe(store, NOW - 500, raid_id=rid, kind="benchmark", pull="p2")
+    assert not any(x.startswith("Last wipe") for x in g.card_lines(store.conn, speaker(), NOW,
+                                                                    budget=1000))
+    wipe(store, NOW - 900, raid_id=rid, kind="offline", pull="p3")
+    assert any(x.startswith("Last wipe (Anub'arak, 15 minutes ago)")
+               for x in g.card_lines(store.conn, speaker(), NOW, budget=1000))
 
 
 def test_a_raid_left_open_for_days_is_not_running_now(store):
