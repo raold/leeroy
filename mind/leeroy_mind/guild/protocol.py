@@ -148,12 +148,18 @@ class StockItems:
 class StringDo:
     """His string in game (godmode, D6 Part B): one cast member comes to him, joins his party,
     follows him (or stops), duels him, emotes at him or sits near him. Carried out at once or
-    refused with one code in the ack; a done `job` (kind string_do) names what she did."""
+    refused with one code in the ack; a done `job` (kind string_do) names what she did.
+    His invitations in game (invites/) send it marked via="invite" (native Leeroy.Invites.Enable),
+    and add go_to {spot, slot} and fish; the three fields go only when set, so a console string's
+    wire is as it was."""
     id: str
     guid: int
     kind: str
     target_guid: int = 0
     emote: str = ""
+    spot: str = field(default="", metadata={"omit_default": True})
+    slot: int = field(default=0, metadata={"omit_default": True})
+    via: str = field(default="", metadata={"omit_default": True})
 
 
 @dataclass(frozen=True, slots=True)
