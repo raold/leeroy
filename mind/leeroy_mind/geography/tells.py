@@ -62,7 +62,10 @@ _OCEAN = re.compile(
     r" )?(?:by|on|near|at) the (?:beach|coast|ocean|sea|seaside)\b|\b(?:ocean|sea) (?:view|"
     r"breeze|air) (?:here|from (?:my|our))\b|\bsurf(?:ed|ing)? (?:this morning|before work|after"
     r" work|today)\b|\bbeach (?:near|by|behind) (?:me|my|our|us)\b")
+# The sea itself: a beach alone is no slip anywhere (lakes and reservoirs have beaches), and "the
+# coast" only where there is no big lake either
 _SALT = re.compile(r"\b(?:ocean|sea|seaside|seafront|surf\w*|salt)\b")
+_COAST = re.compile(r"\bcoast\b")
 _MOUNTAIN = re.compile(
     r"\b(?:the |our )?mountains? (?:near|by|behind|outside|around) (?:me|my|our|us|here|the "
     r"house|town)\b|\bmountains? out (?:my|the) window\b|\b(?:view of|look out at|looking out "
@@ -139,8 +142,9 @@ def slip(text: str, place: Place | None, local: datetime) -> str | None:
                 if value_f > high + HEAT_SLACK_F or value_f < low - COLD_SLACK_F:
                     return "temperature"
             m = _OCEAN.search(clause)
-            if m and (place.coast == "none"
-                      or (place.coast == "lakes" and _SALT.search(m.group(0)))):
+            if m and place.coast != "ocean" and (
+                    _SALT.search(m.group(0))
+                    or (place.coast == "none" and _COAST.search(m.group(0)))):
                 return "coast"
             if not place.mountains and _MOUNTAIN.search(clause):
                 return "mountains"

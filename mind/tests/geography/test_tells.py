@@ -29,7 +29,10 @@ JAN_LONDON = (S["uk.london"], at("uk.london", 2026, 1, 14, 15, 0))
     (JAN_MN, "its 95 degrees out today", "temperature"),
     (JAN_MN, "this heatwave is killing me", "heat"),
     (JAN_LONDON, "its 30 degrees out, proper scorcher", "temperature"),
-    (JULY_CO, "walked to the beach this morning", "coast"),
+    (JULY_CO, "walked down to the ocean this morning", "coast"),
+    (JULY_CO, "walked to the beach this morning", None),  # a lake or a reservoir has one
+    (JULY_CO, "the beach is five minutes away", None),
+    (JULY_CO, "we live on the coast", "coast"),
     (JULY_CO, "the ocean breeze here is lovely", "coast"),
     (JULY_CO, "i miss the ocean so much", None),  # no claim the sea is near her
     (JULY_CO, "i live by the sea so its always windy", "coast"),
