@@ -84,6 +84,16 @@ Leeroy.Mechanics.Enable = 0
 # and seats it added.
 Leeroy.Strings.Enable = 0
 
+# The owner's invitations in game ("come to the inn", "meet me at the bank", "let's go fishing in Dalaran"), read by
+# the mind ([talk] invites) and sent as string_do marked "via": "invite": come_to_me, join_group, follow and sit as
+# above, plus go_to (to one of the meeting spots compiled into the module: Dalaran's fountain, Krasus' Landing, inns
+# and banks of the Horde capitals and Dalaran, Booty Bay's docks; she then stays there 10 minutes, fenced as
+# come_to_me's stay) and fish (playerbots' own master fishing, beside him or at a fishing spot, for at most 15 minutes
+# or until he has come and gone again). Every fence of the strings holds. This key, not Leeroy.Strings.Enable, answers
+# for an invitation. Reloadable with .reload config; 0 refuses new invitations and takes back the stays and fishing
+# they added.
+Leeroy.Invites.Enable = 0
+
 # Pin every cast member as an online random bot.
 Leeroy.BringCastOnline = 1
 

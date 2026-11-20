@@ -24,8 +24,10 @@ inline constexpr std::string_view kModuleVersion = "0.1.0";
 // (GearUpJob.cpp); a mind sends a regear, and expects those averages, only to a hello that lists it.
 // dummy_party_on_arrival: dummy_trial moves each bot untouched and forms its solo party at the dummy, so the core's
 // one-member-group disband on a map change cannot take it (DummyTrialJob.cpp); a mind runs its lab only on such a build.
+// invites: string_do's go_to and fish kinds and its "via": "invite" mark (Leeroy.Invites.Enable, LeeroyStrings.h); a
+// mind sends them only to a hello that lists it.
 inline constexpr std::string_view kFeatures[] = {"item_links", "playstyle", "raidlead", "mechanics", "regear",
-    "dummy_party_on_arrival"};
+    "dummy_party_on_arrival", "invites"};
 
 std::int64_t NowUnixMs();
 

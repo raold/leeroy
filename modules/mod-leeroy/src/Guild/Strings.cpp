@@ -6,6 +6,7 @@
 #include "RaidAssembly.h"
 #include "LeeroyEmotes.h"
 #include "LeeroyEvents.h"
+#include "LeeroyInviteSpots.h"
 #include "LeeroySocialSit.h"
 #include "LeeroyStrings.h"
 #include "Realm/RealmModule.h"
@@ -15,10 +16,13 @@
 #include "Config.h"
 #include "DBCStores.h"
 #include "EmoteAction.h"
+#include "FishingAction.h"
+#include "FishValues.h"
 #include "Group.h"
 #include "LFGMgr.h"
 #include "Log.h"
 #include "Map.h"
+#include "MapMgr.h"
 #include "Opcodes.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
@@ -26,6 +30,7 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
+#include <algorithm>
 #include <chrono>
 #include <iterator>
 #include <map>
@@ -46,6 +51,7 @@ constexpr std::uint64_t kArriveMs = 30000;
 constexpr float kArrivedYards = 50.0f;
 
 bool enabled = false;   // Leeroy.Strings.Enable, world thread
+bool invitesOn = false; // Leeroy.Invites.Enable, world thread: his invitations (go_to, fish, "via": "invite")
 std::uint32_t untilTick = 0;
 int waived = 0;          // StringWaiver depth: his own asks pass come_to_me's fence (world thread)
 
@@ -159,12 +165,56 @@ void EndSeat(Player* bot)
         bot->SetStandState(UNIT_STAND_STATE_STAND);
 }
 
+// Our master fishing taken back (only what we added), the rest of the hold left as it is.
+void EndFishing(Hold& hold)
+{
+    StringHoldState& state = hold.state;
+    if (state.fishAdded && hold.ai && hold.ai->HasStrategy("master fishing", BOT_STATE_NON_COMBAT))
+        hold.ai->ChangeStrategy("-master fishing", BOT_STATE_NON_COMBAT);
+    state.fish = state.fishAdded = state.met = false;
+    state.fishUntil = 0;
+}
+
+// A string that moves her, or changes what she does, ends a fishing of ours first.
+void EndFishing(Player* bot)
+{
+    auto const it = holds.find(bot->GetGUID().GetCounter());
+    if (it != holds.end() && Same(it->second, bot) && it->second.state.fish)
+    {
+        EndFishing(it->second);
+        LOG_INFO("module.leeroy", "mod-leeroy: invite_fish_ended guid={} why=string", it->first);
+    }
+}
+
+// A meeting spot's point for `slot` on its own map and in its own zone (the places' ValidPlace test).
+bool SpotValid(InviteSpot const& spot, std::uint32_t slot)
+{
+    auto const [x, y] = InviteSpotPoint(spot, slot);
+    return MapMgr::IsValidMapCoord(spot.map, x, y, spot.z, spot.o)
+        && sMapMgr->GetZoneId(PHASEMASK_NORMAL, spot.map, x, y, spot.z) == spot.zone;
+}
+
+// She stands at the fishing spot a go_to of his sent her to.
+bool AtFishSpot(std::uint32_t guid, Player* bot)
+{
+    auto const it = holds.find(guid);
+    if (it == holds.end() || !Same(it->second, bot) || it->second.state.spot < 0
+        || it->second.state.spot >= static_cast<int>(kInviteSpots.size()))
+        return false;
+    InviteSpot const& spot = kInviteSpots[static_cast<std::size_t>(it->second.state.spot)];
+    return spot.fish && bot->GetMapId() == spot.map && !bot->IsBeingTeleported()
+        && bot->GetDistance(spot.x, spot.y, spot.z) <= kInviteSpotYards;
+}
+
 StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot)
 {
     StringFacts f;
     LeeroyModule& module = LeeroyModule::Instance();
-    f.enabled = module.Enabled() && enabled;
+    f.enabled = module.Enabled() && (cmd.invite ? invitesOn : enabled);
     f.emote = cmd.emote;
+    if (cmd.kind == StringKind::GoTo)
+        if (InviteSpot const* spot = FindInviteSpot(cmd.spot))
+            f.spotValid = SpotValid(*spot, cmd.slot);
     if (human)
     {
         f.humanOnline = true;
@@ -206,12 +256,17 @@ StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot)
     f.groupMembers = his ? his->GetMembersCount() : 0;
     if (cmd.kind == StringKind::JoinGroup)
         f.joinRefusal = GuildAddJoinRefusal(human, bot);
+    if (cmd.kind == StringKind::Fish)
+    {
+        f.fishing = bot->GetSkillValue(SKILL_FISHING) > 0;
+        f.atFishSpot = AtFishSpot(guid, bot);
+    }
     return f;
 }
 
 // Beside him; a member outside his group then stays there for kStringStayMs once she has arrived, so her own routine
 // does not walk her off at once. In his group, following him keeps her with him.
-std::string ComeToMe(Player* bot, Player* human, std::string& outcome)
+std::string ComeToMe(Player* bot, Player* human, bool invite, std::string& outcome)
 {
     bool const grouped = InHisGroup(bot);
     if (!GuildAddBring(bot, human))
@@ -224,8 +279,88 @@ std::string ComeToMe(Player* bot, Player* human, std::string& outcome)
         hold.state.arriveBy = now + kArriveMs;
         hold.state.group = 0;
         hold.state.follow = hold.state.unfollowed = false;
+        hold.state.spot = -1;
+        hold.state.invite = invite;
     }
     outcome = "came";
+    return {};
+}
+
+// go_to: at a meeting spot (her slot of it), where she then stays as after come_to_me: playerbots' stay for 10
+// minutes once she has landed there, fenced as busy:string. Never out of a group (his, or someone else's).
+std::string GoTo(Player* bot, StringDoCmd const& cmd, std::string& outcome)
+{
+    InviteSpot const* spot = FindInviteSpot(cmd.spot);
+    if (!spot)
+        return "bad_spot";
+    auto const [x, y] = InviteSpotPoint(*spot, cmd.slot);
+    if (!bot->TeleportTo(spot->map, x, y, spot->z, spot->o))
+        return "teleport_failed";
+    Hold& hold = Own(bot->GetGUID().GetCounter(), bot);
+    std::uint64_t const now = SteadyMs();
+    hold.state.until = now + kStringStayMs;
+    hold.state.arriveBy = now + kArriveMs;
+    hold.state.group = 0;
+    hold.state.follow = hold.state.unfollowed = false;
+    hold.state.spot = InviteSpotIndex(spot->name);
+    hold.state.invite = true;
+    outcome = "went";
+    return {};
+}
+
+// fish: playerbots' own "master fishing" (the strategy its bots take when their master fishes). In his group she
+// fishes near him as his bots do; outside it, where playerbots' search finds water from where she stands (here, or a
+// spot to walk to), with her stay put there so her own routine does not walk her off between casts. A random bot
+// without a pole is given one by playerbots itself. It ends with kInviteFishMs, once he came and went again, or a
+// later string; outside his group it fences her (busy:string) meanwhile, as come_to_me's stay does.
+std::string Fish(Player* bot, std::string& outcome)
+{
+    PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
+    if (!ai->GetAiObjectContext()->GetStrategy("master fishing"))
+        return "unsupported";
+    std::uint32_t const guid = bot->GetGUID().GetCounter();
+    std::uint64_t const now = SteadyMs();
+    bool const grouped = InHisGroup(bot);
+    std::optional<WorldPosition> water;
+    if (!grouped)
+    {
+        MoveNearWaterAction search(ai);
+        search.isPossible();   // fills "fishing spot": here when she can fish from where she stands
+        WorldPosition spot = ai->GetAiObjectContext()->GetValue<WorldPosition>("fishing spot")->Get();
+        if (!spot.IsValid() || spot.GetMapId() != bot->GetMapId())
+            return "no_water";
+        water = spot;
+    }
+    Hold& hold = Own(guid, bot);
+    StringHoldState& state = hold.state;
+    if (water)
+    {
+        if (!ai->HasStrategy("stay", BOT_STATE_NON_COMBAT))
+        {
+            ai->ChangeStrategy("+stay", BOT_STATE_NON_COMBAT);
+            state.stay = state.stay || ai->HasStrategy("stay", BOT_STATE_NON_COMBAT);
+        }
+        PositionMap& positions = ai->GetAiObjectContext()->GetValue<PositionMap&>("position")->Get();
+        positions["stay"].Set(water->GetPositionX(), water->GetPositionY(), water->GetPositionZ(), water->GetMapId());
+        state.group = 0;
+        state.follow = state.unfollowed = false;
+        state.arriveBy = 0;
+        state.until = std::max(state.until, now + kInviteFishMs);
+    }
+    else
+        state.group = bot->GetGroup()->GetGUID().GetRawValue();
+    if (!ai->HasStrategy("master fishing", BOT_STATE_NON_COMBAT))
+    {
+        ai->ChangeStrategy("+master fishing", BOT_STATE_NON_COMBAT);
+        if (!ai->HasStrategy("master fishing", BOT_STATE_NON_COMBAT))
+            return "fish_failed";
+        state.fishAdded = true;
+    }
+    state.fish = true;
+    state.met = false;
+    state.fishUntil = now + kInviteFishMs;
+    state.invite = true;
+    outcome = "fishing";
     return {};
 }
 
@@ -251,7 +386,7 @@ std::string JoinGroup(Player* bot, Player* human, std::string& outcome)
 
 // Him as her master with playerbots' follow; the same string again ends it, and she waits where she is, as playerbots'
 // own "stay" has her. Both last while that group does.
-std::string Follow(Player* bot, Player* human, std::string& outcome)
+std::string Follow(Player* bot, Player* human, bool invite, std::string& outcome)
 {
     PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
     std::uint32_t const guid = bot->GetGUID().GetCounter();
@@ -283,6 +418,7 @@ std::string Follow(Player* bot, Player* human, std::string& outcome)
     hold.state = StringHoldState();
     hold.state.follow = true;   // his ask took any stay off
     hold.state.group = group;
+    hold.state.invite = invite;
     outcome = "following";
     return {};
 }
@@ -351,14 +487,18 @@ std::string Carry(StringDoCmd const& cmd, std::string const& id, Player* human, 
 {
     if (cmd.kind != StringKind::Emote && cmd.kind != StringKind::Sit)
         EndSeat(bot);
+    if (cmd.kind != StringKind::Emote && cmd.kind != StringKind::Sit && cmd.kind != StringKind::Fish)
+        EndFishing(bot);
     switch (cmd.kind)
     {
-        case StringKind::ComeToMe: return ComeToMe(bot, human, outcome);
+        case StringKind::ComeToMe: return ComeToMe(bot, human, cmd.invite, outcome);
         case StringKind::JoinGroup: return JoinGroup(bot, human, outcome);
-        case StringKind::Follow: return Follow(bot, human, outcome);
+        case StringKind::Follow: return Follow(bot, human, cmd.invite, outcome);
         case StringKind::DuelMe: return DuelMe(bot, human, outcome);
         case StringKind::Emote: return Emote(bot, human, cmd.emote, outcome);
         case StringKind::Sit: return Sit(bot, human, id, outcome);
+        case StringKind::GoTo: return GoTo(bot, cmd, outcome);
+        case StringKind::Fish: return Fish(bot, outcome);
     }
     return "bad_kind";
 }
@@ -423,7 +563,7 @@ void TickSeats(std::uint64_t now, bool on, Player* human)
     }
 }
 
-void TickHolds(std::uint64_t now, bool on, Player* human)
+void TickHolds(std::uint64_t now, bool stringsOn, bool invitesOnNow, Player* human)
 {
     for (auto it = holds.begin(); it != holds.end();)
     {
@@ -445,11 +585,16 @@ void TickHolds(std::uint64_t now, bool on, Player* human)
         }
         StringHoldFacts facts;
         facts.now = now;
-        facts.on = on;
+        facts.on = state.invite ? invitesOnNow : stringsOn;
         facts.humanOnline = human != nullptr;
         Group* group = bot->GetGroup();
         facts.group = group ? group->GetGUID().GetRawValue() : 0;
         facts.raid = group && group->isRaidGroup();
+        bool const sameMap = human && bot->GetMap() == human->GetMap() && !bot->IsBeingTeleported();
+        float const yards = sameMap ? bot->GetDistance(human) : 0.0f;
+        facts.near = sameMap && yards <= kInviteFishYards;
+        facts.left = !human || !sameMap || yards > kInviteLeftYards;
+        NoteStringHold(state, facts);
         StringHoldStep const step = DecideStringHold(state, facts);
         if (step == StringHoldStep::Drop)
         {
@@ -463,10 +608,28 @@ void TickHolds(std::uint64_t now, bool on, Player* human)
             ++it;
             continue;
         }
+        if (step == StringHoldStep::EndFish)
+        {
+            EndFishing(hold);
+            LOG_INFO("module.leeroy", "mod-leeroy: invite_fish_ended guid={} why=done", guid);
+            ++it;
+            continue;
+        }
         if (step == StringHoldStep::Keep)
         {
-            if (state.arriveBy && human && bot->GetMap() == human->GetMap() && !bot->IsBeingTeleported()
-                && bot->IsWithinDistInMap(human, kArrivedYards))
+            // She has landed: beside him after come_to_me, at her spot after go_to.
+            bool landed = false;
+            if (state.arriveBy && !bot->IsBeingTeleported())
+            {
+                if (state.spot >= 0 && state.spot < static_cast<int>(kInviteSpots.size()))
+                {
+                    InviteSpot const& spot = kInviteSpots[static_cast<std::size_t>(state.spot)];
+                    landed = bot->GetMapId() == spot.map && bot->GetDistance(spot.x, spot.y, spot.z) <= kArrivedYards;
+                }
+                else
+                    landed = human && bot->GetMap() == human->GetMap() && bot->IsWithinDistInMap(human, kArrivedYards);
+            }
+            if (landed)
             {
                 if (!hold.ai->HasStrategy("stay", BOT_STATE_NON_COMBAT))
                 {
@@ -478,6 +641,11 @@ void TickHolds(std::uint64_t now, bool on, Player* human)
             }
             ++it;
             continue;
+        }
+        if (state.fish)
+        {
+            EndFishing(hold);
+            LOG_INFO("module.leeroy", "mod-leeroy: invite_fish_ended guid={} why=lifted", guid);
         }
         if (state.stay && hold.ai->HasStrategy("stay", BOT_STATE_NON_COMBAT))
         {
@@ -504,7 +672,11 @@ bool StringStayHeld(std::uint32_t guid)
     return it != holds.end() && StringHoldFences(it->second.state);
 }
 
-void ReloadStrings() { enabled = sConfigMgr->GetOption<bool>("Leeroy.Strings.Enable", false); }
+void ReloadStrings()
+{
+    enabled = sConfigMgr->GetOption<bool>("Leeroy.Strings.Enable", false);
+    invitesOn = sConfigMgr->GetOption<bool>("Leeroy.Invites.Enable", false);
+}
 
 void RegisterStringsHandler() { RegisterCommand(std::string(kStringDoType), HandleStringDo); }
 
@@ -527,9 +699,10 @@ void TickStrings(std::uint32_t diffMs)
     untilTick = 1000;
     StringWaiver const waiver;   // the strings' own holds are theirs to lift
     std::uint64_t const now = SteadyMs();
-    bool const on = LeeroyModule::Instance().Enabled() && enabled;
+    bool const live = LeeroyModule::Instance().Enabled();
     Player* human = FindOnline(HumanGuid());
-    TickSeats(now, on, human);
-    TickHolds(now, on, human);
+    // A seat does not know whose string it was: either switch keeps it (each refuses new strings of its own).
+    TickSeats(now, live && (enabled || invitesOn), human);
+    TickHolds(now, live && enabled, live && invitesOn, human);
 }
 }

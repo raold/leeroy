@@ -476,6 +476,41 @@ in combat, is never touched and waits; a relog, an AI replacement or (come_to_me
 untouched. Logs: `string_done guid= kind=
 outcome=`, `string_refused guid= kind= code=`, `string_stay_lifted guid=`. **Native rebuild required.**
 
+## His invitations in game (`Leeroy.Invites.Enable`)
+
+His invitations in game chat ("meet me at the bank", "let's go fishing in Dalaran"; the mind's
+`[talk] invites`, `mind/leeroy_mind/invites/README.md`) are the same `string_do` marked `"via":
+"invite"`, which answers to `Leeroy.Invites.Enable` (default 0, `.reload config`; `off` while 0)
+instead of `Leeroy.Strings.Enable`. Hello's `features` lists `invites`. Every fence and shared
+refusal above holds, and two kinds are added (pure policy `Lib/LeeroyStrings.h`, spots
+`Lib/LeeroyInviteSpots.h`):
+
+- `go_to {spot, slot}`: one of the compiled meeting spots (where a world NPC of that place stands,
+  read from the world DB's creature spawns; a spot the places whitelist also names carries exactly
+  its coordinates: `dal_fountain`, `dal_krasus`, `dal_inn`, `dal_horde_inn`, `dal_bank`, `org_inn`,
+  `org_bank`, `uc_inn`, `uc_bank`, `tb_inn`, `tb_bank`, `smc_inn`, `smc_bank`, `booty_bay_docks`),
+  slot 0 two yards in front of it, slot 1 two yards to its left. Never out of a group (`in_group`
+  when she is in his, `grouped` in another's); `bad_spot` when the point is off its map or its zone
+  (checked as the places' ValidPlace does). She is teleported there and then held as after
+  come_to_me: playerbots' `stay` once she has landed at the spot, for 10 minutes, fenced as
+  `busy:string`. Done job `went`.
+- `fish`: playerbots' own `master fishing` (the strategy its bots take when their master fishes;
+  a random bot without a pole is given one by playerbots). Needs the fishing skill (`no_fishing`),
+  her within 40 yards of him or at the fishing spot a go_to of his sent her to (`too_far`), never
+  in another group (`grouped`). In his group she fishes near him as his bots do; outside it
+  playerbots' own water search (from where she stands, or a spot to walk to) gives the spot, her
+  `stay` goes there (`no_water` when there is none) and she is fenced `busy:string` meanwhile.
+  It ends after 15 minutes, once he has come within 40 yards and gone farther than 60 (or to
+  another map, or offline), with the key at 0, or with any later string that moves her; only the
+  `master fishing` and `stay` it added are taken back (`invite_fish_ended guid= why=`). Done job
+  `fishing`.
+
+A hold records whose string it was: an invitation's lifts with `Leeroy.Invites.Enable` at 0, a
+console string's with `Leeroy.Strings.Enable`; a seat is kept while either is on. GuildFishing's
+single proved cast (`bot_do` "go fishing") is not used for invitations: it refuses a member in a
+group or with a master, and the stay a come_to_me or go_to leaves her fences her from its Realm
+queue. **Native rebuild required.**
+
 # Realm job receipts
 
 The bridge's existing `realm_job` event may include `"changed": false` on a

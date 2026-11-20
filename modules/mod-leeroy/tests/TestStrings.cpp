@@ -1,8 +1,15 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
+#include "LeeroyInviteSpots.h"
+#include "LeeroyRealmCommands.h"
 #include "LeeroyRealmFailure.h"
 #include "LeeroyStrings.h"
 #include "TestHarness.h"
 
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <set>
 #include <nlohmann/json.hpp>
 
 using namespace Leeroy::Guild;
@@ -22,6 +29,8 @@ StringFacts Free()
     f.sameMap = f.sameZone = true;
     f.distance = 5.0f;
     f.emote = "wave";
+    f.spotValid = true;   // go_to's spot lies on its map
+    f.fishing = true;     // fish: she has the skill
     return f;
 }
 
@@ -34,7 +43,7 @@ StringFacts InHisParty()
 }
 
 constexpr StringKind kAll[] = {StringKind::ComeToMe, StringKind::JoinGroup, StringKind::Follow, StringKind::DuelMe,
-    StringKind::Emote, StringKind::Sit};
+    StringKind::Emote, StringKind::Sit, StringKind::GoTo, StringKind::Fish};
 
 // The facts each kind is carried out from: follow needs her in his party, the rest are taken free.
 StringFacts Ready(StringKind kind) { return kind == StringKind::Follow ? InHisParty() : Free(); }
@@ -46,6 +55,10 @@ LEEROY_TEST(Strings_KindsRoundTripByName)
         CHECK(ParseStringKind(StringKindName(kind)) == kind);
     CHECK(!ParseStringKind("queue_arena").has_value());
     CHECK(!ParseStringKind("Come_To_Me").has_value());
+    CHECK(InviteKind(StringKind::GoTo) && InviteKind(StringKind::Fish));
+    for (auto kind : {StringKind::ComeToMe, StringKind::JoinGroup, StringKind::Follow, StringKind::DuelMe,
+             StringKind::Emote, StringKind::Sit})
+        CHECK(!InviteKind(kind));
 }
 
 LEEROY_TEST(Strings_ParseTakesGuidKindTargetAndOnlyAListedEmote)
@@ -343,4 +356,224 @@ LEEROY_TEST(Strings_ComeToMeFenceIsOneMembersOwnForARearm)
 {
     // A rearm leaves her out at its ack instead of refusing every member with her.
     CHECK(Leeroy::Realm::MemberSkipReason("busy:string"));
+}
+
+// -- his invitations: go_to, fish and the "via": "invite" mark -------------------------------------------------------
+
+LEEROY_TEST(Invites_ParseGoToNeedsAListedSpotAndASlotOfTwo)
+{
+    std::string error;
+    auto cmd = ParseStringDo(json{{"guid", 102u}, {"kind", "go_to"}, {"spot", "dal_fountain"}}, error);
+    CHECK(cmd.has_value());
+    CHECK(cmd->kind == StringKind::GoTo && cmd->spot == "dal_fountain" && cmd->slot == 0u && cmd->invite);
+    cmd = ParseStringDo(json{{"guid", 102u}, {"kind", "go_to"}, {"spot", "org_inn"}, {"slot", 1u}, {"via", "invite"}},
+        error);
+    CHECK(cmd.has_value() && cmd->slot == 1u && cmd->invite);
+    CHECK(!ParseStringDo(json{{"guid", 102u}, {"kind", "go_to"}}, error));
+    CHECK_EQ(error, std::string("bad field: spot"));
+    CHECK(!ParseStringDo(json{{"guid", 102u}, {"kind", "go_to"}, {"spot", "stormwind_trade"}}, error));
+    CHECK_EQ(error, std::string("bad field: spot"));   // a place, but no meeting spot
+    CHECK(!ParseStringDo(json{{"guid", 102u}, {"kind", "go_to"}, {"spot", 7}}, error));
+    CHECK_EQ(error, std::string("bad field: spot"));
+    CHECK(!ParseStringDo(json{{"guid", 102u}, {"kind", "go_to"}, {"spot", "dal_inn"}, {"slot", 2u}}, error));
+    CHECK_EQ(error, std::string("bad field: slot"));
+    CHECK(!ParseStringDo(json{{"guid", 102u}, {"kind", "go_to"}, {"spot", "dal_inn"}, {"slot", -1}}, error));
+    CHECK_EQ(error, std::string("bad field: slot"));
+    // Every other kind names no spot and no slot.
+    CHECK(!ParseStringDo(json{{"guid", 102u}, {"kind", "come_to_me"}, {"spot", "dal_inn"}}, error));
+    CHECK_EQ(error, std::string("bad field: spot"));
+    CHECK(!ParseStringDo(json{{"guid", 102u}, {"kind", "fish"}, {"slot", 1u}}, error));
+    CHECK_EQ(error, std::string("bad field: slot"));
+    cmd = ParseStringDo(json{{"guid", 102u}, {"kind", "fish"}, {"spot", ""}, {"slot", 0u}}, error);
+    CHECK(cmd.has_value() && cmd->invite && cmd->spot.empty());
+}
+
+LEEROY_TEST(Invites_ViaMarksAnInvitationAndNothingElse)
+{
+    std::string error;
+    auto cmd = ParseStringDo(json{{"guid", 102u}, {"kind", "come_to_me"}, {"via", "invite"}}, error);
+    CHECK(cmd.has_value() && cmd->invite);
+    cmd = ParseStringDo(json{{"guid", 102u}, {"kind", "come_to_me"}, {"via", ""}}, error);
+    CHECK(cmd.has_value() && !cmd->invite);
+    cmd = ParseStringDo(json{{"guid", 102u}, {"kind", "sit"}}, error);
+    CHECK(cmd.has_value() && !cmd->invite);
+    CHECK(!ParseStringDo(json{{"guid", 102u}, {"kind", "sit"}, {"via", "console"}}, error));
+    CHECK_EQ(error, std::string("bad field: via"));
+    CHECK(!ParseStringDo(json{{"guid", 102u}, {"kind", "sit"}, {"via", true}}, error));
+    CHECK_EQ(error, std::string("bad field: via"));
+}
+
+LEEROY_TEST(Invites_GoToNeverOutOfAGroupAndOnlyToASpotOnItsMap)
+{
+    auto f = Free();
+    f.humanArea = f.humanZone = 0;   // he need not stand in a town: the spot is one
+    CHECK_EQ(StringRefusal(StringKind::GoTo, f), std::string());
+    CHECK_EQ(StringRefusal(StringKind::GoTo, InHisParty()), std::string("in_group"));
+    f = Free();
+    f.otherGroup = true;
+    CHECK_EQ(StringRefusal(StringKind::GoTo, f), std::string("grouped"));
+    f = Free();
+    f.spotValid = false;
+    CHECK_EQ(StringRefusal(StringKind::GoTo, f), std::string("bad_spot"));
+    f = Free();
+    f.sameMap = false;   // he may be anywhere
+    CHECK_EQ(StringRefusal(StringKind::GoTo, f), std::string());
+}
+
+LEEROY_TEST(Invites_FishBesideHimOrAtHisFishingSpotWithTheSkill)
+{
+    CHECK_EQ(StringRefusal(StringKind::Fish, Free()), std::string());
+    CHECK_EQ(StringRefusal(StringKind::Fish, InHisParty()), std::string());   // fishing with him in his group
+    auto f = Free();
+    f.fishing = false;
+    CHECK_EQ(StringRefusal(StringKind::Fish, f), std::string("no_fishing"));
+    f = Free();
+    f.otherGroup = true;
+    CHECK_EQ(StringRefusal(StringKind::Fish, f), std::string("grouped"));
+    f = Free();
+    f.distance = kInviteFishYards + 1.0f;
+    CHECK_EQ(StringRefusal(StringKind::Fish, f), std::string("too_far"));
+    f.atFishSpot = true;   // where he sent her to fish, before he is there
+    CHECK_EQ(StringRefusal(StringKind::Fish, f), std::string());
+    f = Free();
+    f.sameMap = false;
+    CHECK_EQ(StringRefusal(StringKind::Fish, f), std::string("too_far"));
+    f.atFishSpot = true;
+    CHECK_EQ(StringRefusal(StringKind::Fish, f), std::string());
+    // Never in a fight, an instance, a battleground, a queue or on the way: the shared codes first.
+    f = Free();
+    f.humanCombat = true;
+    CHECK_EQ(StringRefusal(StringKind::Fish, f), std::string("combat"));
+}
+
+namespace
+{
+StringHoldState FishHold(std::uint64_t now, std::uint64_t group = 0)
+{
+    StringHoldState h;
+    h.group = group;
+    h.until = group ? 0 : now + kInviteFishMs;
+    h.fish = h.fishAdded = h.invite = true;
+    h.fishUntil = now + kInviteFishMs;
+    return h;
+}
+
+StringHoldFacts Near(StringHoldFacts f)
+{
+    f.near = true;
+    f.left = false;
+    return f;
+}
+
+StringHoldFacts Away(StringHoldFacts f)
+{
+    f.near = false;
+    f.left = true;
+    return f;
+}
+}
+
+LEEROY_TEST(Invites_FishingAloneEndsWithItsTimeOrOnceHeCameAndWent)
+{
+    auto h = FishHold(1000);
+    CHECK(StringHoldFences(h));   // outside his group she is held for it, as come_to_me holds her
+    // At a spot before he comes: his absence is no leaving.
+    CHECK(DecideStringHold(h, Away(Tick(2000))) == StringHoldStep::Keep);
+    auto near = Near(Tick(3000));
+    NoteStringHold(h, near);
+    CHECK(h.met);
+    CHECK(DecideStringHold(h, near) == StringHoldStep::Keep);
+    NoteStringHold(h, Away(Tick(4000)));
+    CHECK(h.met);   // the note never forgets that he came
+    CHECK(DecideStringHold(h, Away(Tick(4000))) == StringHoldStep::Lift);
+    h = FishHold(1000);
+    CHECK(DecideStringHold(h, Near(Tick(1000 + kInviteFishMs - 1))) == StringHoldStep::Keep);
+    CHECK(DecideStringHold(h, Near(Tick(1000 + kInviteFishMs))) == StringHoldStep::Lift);
+    auto off = Near(Tick(2000));
+    off.on = false;
+    CHECK(DecideStringHold(h, off) == StringHoldStep::Lift);
+    CHECK(DecideStringHold(h, Near(Tick(2000, 55))) == StringHoldStep::Drop);   // she joined a group
+    StringHoldState plain;
+    plain.until = 9999;
+    NoteStringHold(plain, Near(Tick(10)));
+    CHECK(!plain.met);   // only a fishing hold counts his visits
+}
+
+LEEROY_TEST(Invites_FishingInHisGroupLastsInHisRaidAndEndsAloneBesideAFollow)
+{
+    auto h = FishHold(1000, 77);
+    CHECK(!StringHoldFences(h));   // in his group: the Realm refuses her there anyway
+    CHECK(DecideStringHold(h, Near(Tick(2000, 77))) == StringHoldStep::Keep);
+    CHECK(DecideStringHold(h, Near(Tick(2000, 77, true))) == StringHoldStep::Keep);   // his raid
+    CHECK(DecideStringHold(h, Near(Tick(1000 + kInviteFishMs, 77))) == StringHoldStep::Lift);
+    CHECK(DecideStringHold(h, Near(Tick(2000, 78))) == StringHoldStep::Lift);
+    CHECK(DecideStringHold(h, Near(Tick(2000, 0))) == StringHoldStep::Lift);
+    auto off = Near(Tick(2000, 77));
+    off.on = false;
+    CHECK(DecideStringHold(h, off) == StringHoldStep::Lift);
+    // Beside a follow of his: only the fishing ends, the follow goes on (and still lifts in a raid as before).
+    h.follow = true;
+    CHECK(DecideStringHold(h, Near(Tick(1000 + kInviteFishMs, 77))) == StringHoldStep::EndFish);
+    h.fish = false;
+    CHECK(DecideStringHold(h, Near(Tick(1000 + kInviteFishMs, 77))) == StringHoldStep::Keep);
+    CHECK(DecideStringHold(h, Near(Tick(2000, 77, true))) == StringHoldStep::Lift);
+}
+
+LEEROY_TEST(Invites_GoToHoldIsAComeToMeHoldAtTheSpot)
+{
+    StringHoldState h = ComeHold(1000);
+    h.spot = InviteSpotIndex("dal_inn");
+    h.invite = true;
+    CHECK(StringHoldFences(h));
+    CHECK(DecideStringHold(h, Tick(2000)) == StringHoldStep::Keep);
+    CHECK(DecideStringHold(h, Tick(1000 + 30000)) == StringHoldStep::Lift);   // never landed
+    CHECK(DecideStringHold(h, Tick(2000, 9)) == StringHoldStep::Drop);
+}
+
+LEEROY_TEST(Invites_SpotsAreUniqueKnownAndAgreeWithThePlaces)
+{
+    std::set<std::string_view> names;
+    for (auto const& spot : kInviteSpots)
+    {
+        CHECK(names.insert(spot.name).second);
+        CHECK(FindInviteSpot(spot.name) == &spot);
+        CHECK(spot.zone != 0);
+        CHECK(spot.o >= 0.0f && spot.o <= 6.2832f);
+        CHECK(std::isfinite(spot.x) && std::isfinite(spot.y) && std::isfinite(spot.z));
+    }
+    CHECK(FindInviteSpot("nowhere") == nullptr);
+    CHECK_EQ(InviteSpotIndex("nowhere"), -1);
+    CHECK(FindInviteSpot("dal_fountain") && FindInviteSpot("dal_fountain")->fish);
+    CHECK(FindInviteSpot("dal_krasus") && !FindInviteSpot("dal_krasus")->fish);
+    // The places' whitelist and the spots agree where they share a name: one point for one place.
+    auto path = std::filesystem::path(LEEROY_TEST_FIXTURES).parent_path().parent_path() / "conf" / "leeroy_places.csv.dist";
+    std::ifstream stream(path);
+    std::string csv{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+    std::string error;
+    auto places = Leeroy::Realm::ParsePlaces(csv, error);
+    CHECK(places.has_value());
+    if (!places)
+        return;
+    int shared = 0;
+    for (auto const& place : *places)
+        if (InviteSpot const* spot = FindInviteSpot(place.name))
+        {
+            ++shared;
+            CHECK_EQ(spot->map, place.map);
+            CHECK_EQ(spot->zone, place.zone);
+            CHECK(spot->x == place.x && spot->y == place.y && spot->z == place.z && spot->o == place.o);
+            CHECK_EQ(spot->fish, place.kind == "fish");
+        }
+    CHECK_EQ(shared, 8);
+}
+
+LEEROY_TEST(Invites_TwoSlotsStandTwoYardsApartInFrontOfTheSpot)
+{
+    InviteSpot const& spot = *FindInviteSpot("org_inn");
+    auto const [x0, y0] = InviteSpotPoint(spot, 0);
+    auto const [x1, y1] = InviteSpotPoint(spot, 1);
+    CHECK(std::fabs(std::hypot(x0 - spot.x, y0 - spot.y) - kInviteSpotFront) < 0.01f);
+    CHECK(std::fabs(std::hypot(x1 - x0, y1 - y0) - kInviteSpotSide) < 0.01f);
+    // In front: along the way the spot faces.
+    CHECK((x0 - spot.x) * std::cos(spot.o) + (y0 - spot.y) * std::sin(spot.o) > 1.9f);
 }
