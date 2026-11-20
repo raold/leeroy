@@ -4772,7 +4772,7 @@ class Pipeline:
             log.warning("place_slip_failed: guid=%d reason=%s", p.guid, type(e).__name__)
             return None
 
-    def _place_words(self, p: Persona) -> str:
+    def _place_hint_words(self, p: Persona) -> str:
         """Her place line as PLACE_HINT says it (no "Where you live:" head); "" without one."""
         place = self._her_place(p)
         if place is None:
@@ -4871,7 +4871,7 @@ class Pipeline:
             hints.append(ERA_HINT)
         if "game name" in reasons:
             hints.append(GAME_NAME_HINT)
-        if "place" in reasons and (where := self._place_words(p)):
+        if "place" in reasons and (where := self._place_hint_words(p)):
             hints.append(PLACE_HINT.format(place=where))
         if "his place" in reasons:
             hints.append(HIS_HOME_HINT.format(**dict(zip(("they", "them", "their"),
