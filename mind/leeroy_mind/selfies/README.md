@@ -164,3 +164,24 @@ and delivery. It does not evaluate a classifier against real images or change th
 | Worker and detailer (`selfie/leeroy_selfie/`) | Unchanged: scoring before writing and before/after refinement, the score rounded as on main. |
 | Stock and delivery (`slot.py`, `photos/request_stock.py`, `photos/send.py`) | Retain score rechecks, current identity/style checks, audience provenance and private delivery. |
 | Files and operation | Retain checked image paths, exclusive writes, size/type checks, model hashes, GPU pause, quotas and bounded retries. These protect data and service operation. |
+
+## Local FLUX LoRA
+
+The mind can select the worker's local adapter in `[selfies]`:
+
+```toml
+backend = "flux1-dev"
+lora = "F:/path/to/selfie-data/models/loras/portrait.safetensors"
+lora_scale = 1.0
+```
+
+The adapter is off unless `lora` names an absolute local `.safetensors` path.
+Strength defaults to 1.0 and accepts 0 through 2. Install the worker's optional
+`lora` extra first. Restart the mind after changing these settings; every rendering
+worker, including identity workers, then receives the same adapter and strength.
+Embedding workers do not load it. The worker validates and hashes the file before
+loading models and reports its hash and strength in readiness metadata.
+
+To return to the base model, remove both `lora` and `lora_scale` and restart the
+mind. Setting strength to 0 still loads the adapter. Existing image screening,
+identity conditioning and render scheduling are unchanged.
