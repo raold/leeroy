@@ -372,6 +372,35 @@ def test_his_ill_lead_also_takes_the_raids_calling_back(app):
     run(main())
 
 
+def test_a_lost_ack_keeps_what_it_may_have_started_his_to_end(app):
+    from leeroy_mind.bridge import BridgeError
+
+    class Lost(Wire):
+        async def send(self, cmd, *, preserve_id=False):
+            self.sent.append(cmd)
+            if isinstance(cmd, (LeadDo, RaidControl)) and getattr(cmd, "action", "") in ("start", "dc_on"):
+                raise BridgeError("ack lost")
+            return Ack(0, cmd.id, True, "")
+
+    async def main():
+        app.bridge = Lost(app)
+        app.leading.claims(chat("you lead"), 556)
+        await settle(app)
+        assert app.leading.active is not None
+        assert "not sure yet" in told(app, 556, TANK)
+        app.leading.claims(chat("stop leading"), 557)
+        await settle(app)
+        assert app.bridge.sent[-1].action == "end" and app.leading.active is None
+        app.leading.claims(chat("you lead", at=NAXX), 558)
+        await settle(app)
+        assert app.leading.dc is not None
+        assert "not sure yet" in told(app, 558, TANK)
+        app.leading.claims(chat("stop leading", at=NAXX), 559)
+        await settle(app)
+        assert app.bridge.sent[-1].action == "dc_off" and app.leading.dc is None
+    run(main())
+
+
 def test_follow_me_ends_it_and_still_is_playerbots(app):
     async def main():
         app.leading.claims(chat("you lead"), 520)

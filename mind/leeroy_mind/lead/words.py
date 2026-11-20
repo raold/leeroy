@@ -28,6 +28,7 @@ REASONS = {
     "no_tank": "there's no tank in {his} group to lead the way in here",
     "dc_refused": "the run in here won't start right now",
     "no_group": "{he} isn't in a group",
+    "unknown": "you're not sure yet whether it went through",
 }
 DEFAULT_REASON = "you can't take the lead right now"
 BUSY_REASON = "you're tied up with something for the guild right now"

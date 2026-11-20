@@ -326,13 +326,17 @@ class LeadService:
                          spot=start.place.name if isinstance(start.place, S.Spot) else "")
             self._starting, self._early = wire, None
             outcome, code = await self._send(cmd, job=True)
-            asked.outcome, asked.code = ("done", "") if outcome == "done" else ("refused", code)
-            if outcome == "done":
+            asked.outcome, asked.code = (("done", "") if outcome == "done" else ("", "")
+                                         if outcome == "unknown" else ("refused", code))
+            if outcome in ("done", "unknown"):
+                # a lost ack may have started it: his to end all the same (native answers no_lead
+                # when it did not), and her answer is not sure yet
                 self.active = Active(wire, asked.leader, start.activity, start.place, asked.channel,
                                      self._hello)
                 asked.lead_id = wire
                 self.handing = None
-                self._designate(asked)
+                if outcome == "done":
+                    self._designate(asked)
                 early, self._early = self._early, None
                 if early is not None:
                     self._ended(early)  # it ended before its ack: as if after
@@ -402,10 +406,13 @@ class LeadService:
             tanks = self._tanks({g for g in group if self._able(g)})
             outcome, code, tank = await self._dc(tanks[0] if tanks else asked.leader, "dc_on")
             asked.outcome, asked.code, asked.tank = (
-                ("done", "", tank) if outcome == "done" else ("refused", code, 0))
-            if outcome == "done":
+                ("done", "", tank) if outcome == "done" else ("", "", 0) if outcome == "unknown"
+                else ("refused", code, 0))
+            if outcome in ("done", "unknown"):
+                # a lost ack may have started the run: his to stop all the same
                 self.dc = Dc(tank, asked.leader, asked.channel)
                 self.handing = None
+            if outcome == "done":
                 self._designate(asked)
             log_event("lead_body", line=asked.line, guid=asked.leader, kind="dc_on",
                       outcome=outcome, code=code or "-")
@@ -512,15 +519,15 @@ class LeadService:
         outcome, code, tank = await self._dc(tanks[0] if tanks else active.guid, "dc_on")
         if self.handing is not active:
             # his end came while dungeon-clear was being asked: what it started is stopped again
-            if outcome == "done":
+            if outcome in ("done", "unknown"):
                 off, code, _ = await self._dc(tank, "dc_off")
                 if off != "done" and code not in DC_GONE:
                     self.dc = Dc(tank, active.guid, active.channel)  # still his to stop again
             log_event("lead_handover", guid=active.guid, outcome="cancelled", code="-")
             return
         self.handing = None
-        if outcome == "done":
-            self.dc = Dc(tank, active.guid, active.channel)
+        if outcome in ("done", "unknown"):
+            self.dc = Dc(tank, active.guid, active.channel)  # a lost ack may have started it
         log_event("lead_handover", guid=active.guid, outcome=outcome, code=code or "-")
         name = None if tank == active.guid else self._name(tank) or None
         self._follow_up(active.guid, active.channel,
