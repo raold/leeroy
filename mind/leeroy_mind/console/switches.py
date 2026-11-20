@@ -43,6 +43,7 @@ SWITCHES = (
     ('culture','memes','Culture: memes','culture.enabled'),
     ('outreach','enabled','Outreach','restart the console too'),
     ('godmode','enabled','Godmode',''),
+    ('geography','enabled','Geography: her place and clock, his home in private','',True),
     ('decisions','enabled','Decisions','server.enabled'),
     ('voice','enabled','Voice comms','the voice service'),
     ('voice','autostart','Voice service autostart','voice.enabled'),
@@ -103,7 +104,8 @@ EXCLUDED = {
 }
 
 # mind.toml tables with no boolean switch at all (the completeness test names each).
-NO_SWITCHES = frozenset({'console','guild','dkp','health','models','cast','memory','bridge','ollama','human'})
+NO_SWITCHES = frozenset({'console','guild','dkp','health','models','cast','memory','bridge','ollama','human',
+                         'owner'})
 
 
 def default(row):

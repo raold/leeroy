@@ -1,0 +1,1051 @@
+# Where the guild's members live: the fifty US states, the District of Columbia and the UK's
+# nations and regions (geography/places.py reads it; geography/README.md says how).
+#
+# Plain, general facts only. The climate rows are typical daily highs and lows by month,
+# January first, rounded from long-run normals for where most of the place's people live (a
+# big state's other parts are colder, hotter, wetter or drier: `terrain` says so in words). A
+# US place keeps them in Fahrenheit (highs, lows), a UK one in Celsius (highs_c, lows_c).
+#
+# zone       the IANA time zone where most of its people live
+# point      [latitude, longitude] of where most of its people live: distances only, never shown
+# coast      "ocean" (a sea coast), "lakes" (Great Lakes or a big lake shore, no sea) or "none"
+# mountains  false only where nobody would call anything there a mountain
+# humid      summers are humid
+# snow       months snow can fall somewhere in the place (the guard's months: generous)
+# events     seasonal things people there talk about, with their months
+# notes      a season's weather in a few words (winter, spring, summer, autumn)
+
+[us.Alabama]
+zone = "America/Chicago"
+point = [33.52, -86.80]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "rolling hills and pine woods, Appalachian foothills in the north, a short Gulf coast"
+geography = "the Tennessee River valley in the north, Mobile Bay on the Gulf"
+cities = ["Birmingham", "Huntsville", "Montgomery", "Mobile"]
+touchstones = ["college football", "barbecue", "sweet tea"]
+snow = [12, 1, 2, 3]
+highs = [53, 58, 66, 74, 81, 87, 90, 90, 84, 75, 64, 55]
+lows = [33, 36, 43, 50, 59, 67, 71, 70, 64, 52, 41, 35]
+events = [{ what = "tornado season", months = [3, 4, 5] },
+          { what = "hurricane season on the coast", months = [8, 9, 10] }]
+
+[us.Alaska]
+zone = "America/Anchorage"
+point = [61.22, -149.90]
+coast = "ocean"
+mountains = true
+humid = false
+terrain = "mountains, glaciers, forest and tundra along a long cold coast"
+geography = "Denali, the Kenai Peninsula, the Yukon River"
+cities = ["Anchorage", "Fairbanks", "Juneau"]
+touchstones = ["moose", "salmon fishing", "long dark winters", "the midnight sun"]
+snow = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+highs = [23, 27, 34, 44, 55, 63, 65, 63, 55, 41, 28, 25]
+lows = [11, 13, 18, 29, 39, 48, 52, 50, 42, 29, 17, 13]
+notes = { winter = "dark most of the day", summer = "light nearly all night" }
+
+[us.Arizona]
+zone = "America/Phoenix"
+point = [33.45, -112.07]
+coast = "none"
+mountains = true
+humid = false
+terrain = "Sonoran desert in the south, high pine country and canyons in the north"
+geography = "the Grand Canyon, the Colorado River, the Mogollon Rim"
+cities = ["Phoenix", "Tucson", "Mesa", "Chandler", "Flagstaff"]
+touchstones = ["dry heat", "Mexican food", "spring training baseball", "no daylight saving time"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs = [67, 71, 77, 85, 95, 104, 106, 104, 100, 89, 76, 66]
+lows = [46, 49, 54, 60, 69, 78, 84, 83, 77, 65, 53, 45]
+events = [{ what = "monsoon storms some afternoons", months = [7, 8, 9] }]
+notes = { winter = "sunny and dry", summer = "dry heat" }
+
+[us.Arkansas]
+zone = "America/Chicago"
+point = [34.75, -92.29]
+coast = "none"
+mountains = true
+humid = true
+terrain = "the Ozark and Ouachita mountains in the north and west, flat Delta farmland in the east"
+geography = "the Arkansas River, the Buffalo River, Hot Springs"
+cities = ["Little Rock", "Fayetteville", "Fort Smith", "Springdale"]
+touchstones = ["the Razorbacks", "fishing and hunting", "the Ozarks"]
+snow = [11, 12, 1, 2, 3]
+highs = [51, 56, 65, 74, 82, 89, 93, 93, 86, 75, 63, 53]
+lows = [31, 35, 43, 51, 60, 69, 73, 72, 64, 52, 41, 34]
+events = [{ what = "tornado season", months = [3, 4, 5] }]
+
+[us.California]
+zone = "America/Los_Angeles"
+point = [34.05, -118.24]
+coast = "ocean"
+mountains = true
+humid = false
+terrain = "a long Pacific coast, the Sierra Nevada, the Central Valley and deserts in the southeast"
+geography = "the Sierra Nevada, the Central Valley, the Mojave Desert, the Bay Area"
+cities = ["Los Angeles", "San Diego", "San Jose", "San Francisco", "Sacramento"]
+touchstones = ["freeway traffic", "tacos", "the beach", "earthquakes now and then"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5, 6]
+highs = [68, 69, 70, 73, 75, 79, 84, 85, 84, 79, 73, 68]
+lows = [49, 50, 52, 55, 59, 62, 65, 66, 65, 60, 53, 48]
+events = [{ what = "wildfire season, sometimes smoky", months = [8, 9, 10, 11] },
+          { what = "grey June mornings on the coast", months = [5, 6] }]
+notes = { winter = "the rainy season", summer = "dry and sunny" }
+
+[us.Colorado]
+zone = "America/Denver"
+point = [39.74, -104.99]
+coast = "none"
+mountains = true
+humid = false
+terrain = "high plains in the east, the Rocky Mountains in the west"
+geography = "the Front Range, the Continental Divide, Pikes Peak"
+cities = ["Denver", "Colorado Springs", "Aurora", "Fort Collins", "Boulder"]
+touchstones = ["skiing", "hiking", "the Broncos", "green chile"]
+snow = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+highs = [45, 46, 55, 61, 71, 82, 89, 87, 79, 65, 53, 44]
+lows = [18, 19, 26, 33, 43, 52, 59, 57, 48, 36, 25, 18]
+events = [{ what = "ski season in the mountains", months = [12, 1, 2, 3] },
+          { what = "afternoon thunderstorms", months = [6, 7, 8] }]
+notes = { winter = "sunny days, snow that comes and goes" }
+
+[us.Connecticut]
+zone = "America/New_York"
+point = [41.76, -72.68]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "wooded hills, river valleys and the Long Island Sound shore"
+geography = "the Connecticut River, the Litchfield Hills, Long Island Sound"
+cities = ["Bridgeport", "New Haven", "Hartford", "Stamford"]
+touchstones = ["New Haven pizza", "fall leaves", "commuting toward New York"]
+snow = [11, 12, 1, 2, 3, 4]
+highs = [36, 39, 48, 61, 71, 80, 85, 83, 75, 63, 52, 41]
+lows = [18, 20, 28, 38, 48, 57, 63, 61, 53, 41, 32, 23]
+events = [{ what = "nor'easters", months = [12, 1, 2, 3] },
+          { what = "fall colours", months = [10] }]
+
+[us.Delaware]
+zone = "America/New_York"
+point = [39.74, -75.55]
+coast = "ocean"
+mountains = false
+humid = true
+terrain = "flat coastal plain, farmland and Atlantic beaches"
+geography = "Delaware Bay, the Atlantic beach towns"
+cities = ["Wilmington", "Dover", "Newark"]
+touchstones = ["no sales tax", "beach towns", "scrapple"]
+snow = [11, 12, 1, 2, 3]
+highs = [41, 44, 53, 64, 74, 83, 87, 85, 78, 67, 56, 45]
+lows = [25, 27, 34, 43, 53, 63, 68, 67, 59, 47, 37, 29]
+
+[us."District of Columbia"]
+zone = "America/New_York"
+point = [38.91, -77.04]
+coast = "none"
+mountains = false
+humid = true
+terrain = "a compact city on the Potomac River, low and leafy"
+geography = "the Potomac and Anacostia rivers, the National Mall"
+cities = ["Washington"]
+touchstones = ["politics", "the Metro", "cherry blossoms in spring"]
+snow = [11, 12, 1, 2, 3]
+highs = [44, 48, 57, 68, 77, 86, 90, 88, 81, 70, 59, 48]
+lows = [30, 31, 38, 48, 58, 67, 72, 71, 64, 52, 41, 33]
+
+[us.Florida]
+zone = "America/New_York"
+point = [28.54, -81.38]
+coast = "ocean"
+mountains = false
+humid = true
+terrain = "flat and low, beaches, wetlands, swamps and lakes, nowhere far from the coast"
+geography = "the Everglades, the Keys, the Panhandle, Lake Okeechobee"
+cities = ["Jacksonville", "Miami", "Tampa", "Orlando"]
+touchstones = ["theme parks", "the beach", "air conditioning", "afternoon storms"]
+snow = [12, 1, 2]
+highs = [72, 75, 80, 84, 89, 92, 93, 93, 91, 86, 79, 74]
+lows = [51, 54, 58, 63, 68, 73, 74, 74, 73, 67, 59, 53]
+events = [{ what = "hurricane season", months = [6, 7, 8, 9, 10, 11] }]
+notes = { winter = "dry and pleasant, warmer further south", summer = "afternoon thunderstorms most days" }
+
+[us.Georgia]
+zone = "America/New_York"
+point = [33.75, -84.39]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "Appalachian foothills in the north, rolling Piedmont, a flat coastal plain with marshes"
+geography = "the Blue Ridge in the north, the Okefenokee Swamp, the Sea Islands"
+cities = ["Atlanta", "Augusta", "Columbus", "Savannah"]
+touchstones = ["Atlanta traffic", "peaches", "sweet tea", "college football"]
+snow = [11, 12, 1, 2, 3]
+highs = [53, 57, 65, 73, 80, 87, 90, 89, 83, 74, 63, 55]
+lows = [35, 38, 44, 51, 60, 68, 71, 71, 65, 54, 43, 37]
+events = [{ what = "yellow pollen on everything", months = [3, 4] },
+          { what = "hurricane season on the coast", months = [8, 9, 10] }]
+
+[us.Hawaii]
+zone = "Pacific/Honolulu"
+point = [21.31, -157.86]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "volcanic islands, green mountains, beaches and reefs"
+geography = "Oahu, Maui, the Big Island's volcanoes"
+cities = ["Honolulu", "Hilo", "Kailua"]
+touchstones = ["surfing", "plate lunch", "trade winds", "no daylight saving time"]
+snow = [11, 12, 1, 2, 3, 4]
+highs = [81, 81, 82, 83, 85, 87, 88, 89, 89, 87, 84, 82]
+lows = [66, 66, 68, 69, 71, 73, 74, 75, 74, 73, 71, 68]
+notes = { winter = "more rain showers", summer = "steady trade winds" }
+
+[us.Idaho]
+zone = "America/Boise"
+point = [43.62, -116.20]
+coast = "none"
+mountains = true
+humid = false
+terrain = "mountains and forests, with the Snake River plain across the south"
+geography = "the Snake River, the Sawtooth Mountains, Hells Canyon"
+cities = ["Boise", "Meridian", "Nampa", "Idaho Falls"]
+touchstones = ["potatoes", "rivers and lakes", "skiing", "hunting"]
+snow = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
+highs = [38, 45, 55, 62, 72, 82, 93, 91, 80, 65, 49, 38]
+lows = [24, 27, 33, 38, 46, 53, 61, 59, 50, 39, 30, 23]
+events = [{ what = "wildfire smoke some summers", months = [7, 8, 9] }]
+
+[us.Illinois]
+zone = "America/Chicago"
+point = [41.88, -87.63]
+coast = "lakes"
+mountains = false
+humid = true
+terrain = "flat prairie and farmland, with Lake Michigan in the northeast"
+geography = "Lake Michigan, the Mississippi and Illinois rivers"
+cities = ["Chicago", "Aurora", "Naperville", "Rockford", "Springfield"]
+touchstones = ["deep-dish pizza", "the Cubs and the Bears", "wind off the lake"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [32, 36, 47, 59, 70, 80, 84, 82, 75, 62, 48, 36]
+lows = [18, 21, 30, 40, 50, 60, 66, 65, 57, 45, 34, 23]
+notes = { winter = "grey, windy and snowy" }
+
+[us.Indiana]
+zone = "America/Indiana/Indianapolis"
+point = [39.77, -86.16]
+coast = "lakes"
+mountains = false
+humid = true
+terrain = "flat farmland and gentle hills, a bit of Lake Michigan shore in the northwest"
+geography = "the Wabash River, the Indiana Dunes"
+cities = ["Indianapolis", "Fort Wayne", "Evansville", "South Bend"]
+touchstones = ["basketball", "the Indy 500", "cornfields"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [36, 41, 52, 64, 74, 83, 86, 84, 78, 66, 52, 40]
+lows = [21, 24, 32, 42, 53, 62, 66, 64, 56, 44, 34, 25]
+events = [{ what = "spring storms", months = [4, 5] }]
+
+[us.Iowa]
+zone = "America/Chicago"
+point = [41.59, -93.62]
+coast = "none"
+mountains = false
+humid = true
+terrain = "rolling farmland and prairie between the Mississippi and Missouri rivers"
+geography = "the Mississippi and Missouri rivers, the Loess Hills"
+cities = ["Des Moines", "Cedar Rapids", "Davenport", "Iowa City"]
+touchstones = ["cornfields", "the state fair", "Hawkeyes football"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [31, 36, 49, 62, 72, 82, 86, 84, 77, 64, 48, 35]
+lows = [14, 18, 30, 41, 52, 62, 67, 65, 56, 43, 30, 19]
+events = [{ what = "tornado season", months = [4, 5, 6] }]
+
+[us.Kansas]
+zone = "America/Chicago"
+point = [37.69, -97.34]
+coast = "none"
+mountains = false
+humid = true
+terrain = "flat to rolling plains and wheat fields under big skies"
+geography = "the Flint Hills, the Arkansas River"
+cities = ["Wichita", "Overland Park", "Kansas City", "Topeka"]
+touchstones = ["wheat fields", "barbecue", "big skies", "wind"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [42, 47, 58, 67, 77, 87, 93, 91, 82, 70, 56, 44]
+lows = [22, 26, 35, 44, 55, 65, 70, 69, 59, 46, 34, 25]
+events = [{ what = "tornado season", months = [4, 5, 6] }]
+
+[us.Kentucky]
+zone = "America/New_York"
+point = [38.25, -85.76]
+coast = "none"
+mountains = true
+humid = true
+terrain = "rolling hills and horse country, Appalachian mountains in the east"
+geography = "the Bluegrass, Mammoth Cave, the Ohio River"
+cities = ["Louisville", "Lexington", "Bowling Green"]
+touchstones = ["bourbon", "the Kentucky Derby", "college basketball"]
+snow = [11, 12, 1, 2, 3, 4]
+highs = [42, 47, 57, 68, 77, 85, 89, 88, 81, 70, 57, 46]
+lows = [26, 29, 37, 46, 56, 65, 69, 68, 60, 48, 38, 30]
+events = [{ what = "Derby season", months = [5] }]
+
+[us.Louisiana]
+zone = "America/Chicago"
+point = [29.95, -90.07]
+coast = "ocean"
+mountains = false
+humid = true
+terrain = "low and flat, bayous, swamps and marshes along the Gulf, the Mississippi River"
+geography = "the Mississippi River delta, Lake Pontchartrain, the Atchafalaya Basin"
+cities = ["New Orleans", "Baton Rouge", "Shreveport", "Lafayette"]
+touchstones = ["Cajun and Creole food", "Mardi Gras", "crawfish", "humidity"]
+snow = [12, 1, 2]
+highs = [62, 66, 72, 78, 85, 90, 91, 91, 88, 80, 71, 64]
+lows = [45, 48, 54, 60, 67, 73, 75, 75, 72, 63, 53, 47]
+events = [{ what = "hurricane season", months = [6, 7, 8, 9, 10, 11] },
+          { what = "Mardi Gras season", months = [2] },
+          { what = "crawfish season", months = [3, 4, 5] }]
+
+[us.Maine]
+zone = "America/New_York"
+point = [43.66, -70.26]
+coast = "ocean"
+mountains = true
+humid = false
+terrain = "a rocky Atlantic coast, thick forests, lakes and mountains inland"
+geography = "Acadia, Mount Katahdin, Casco Bay"
+cities = ["Portland", "Lewiston", "Bangor"]
+touchstones = ["lobster", "the rocky coast", "long winters"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs = [31, 34, 42, 53, 64, 73, 79, 78, 70, 58, 47, 36]
+lows = [13, 15, 24, 34, 44, 53, 59, 58, 50, 38, 30, 20]
+events = [{ what = "nor'easters", months = [12, 1, 2, 3] },
+          { what = "fall colours", months = [10] }]
+notes = { winter = "long, snowy and dark early" }
+
+[us.Maryland]
+zone = "America/New_York"
+point = [39.29, -76.61]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "the Chesapeake Bay and a flat Eastern Shore, rolling hills, Appalachian mountains in the west"
+geography = "the Chesapeake Bay, the Eastern Shore, the Potomac"
+cities = ["Baltimore", "Frederick", "Annapolis", "Columbia"]
+touchstones = ["blue crabs", "Old Bay", "the Orioles"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [42, 45, 54, 65, 75, 84, 88, 86, 79, 68, 57, 46]
+lows = [26, 28, 35, 45, 55, 64, 70, 68, 60, 48, 38, 30]
+events = [{ what = "crab season", months = [6, 7, 8, 9] }]
+
+[us.Massachusetts]
+zone = "America/New_York"
+point = [42.36, -71.06]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "an Atlantic coast with Cape Cod, wooded hills, the Berkshires in the west"
+geography = "Cape Cod, the islands, the Berkshires"
+cities = ["Boston", "Worcester", "Springfield", "Cambridge"]
+touchstones = ["Dunkin'", "the Red Sox", "nor'easters"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [37, 39, 46, 57, 67, 77, 82, 81, 73, 62, 52, 42]
+lows = [23, 25, 31, 41, 50, 60, 66, 65, 58, 47, 38, 29]
+events = [{ what = "nor'easters", months = [12, 1, 2, 3] },
+          { what = "fall colours", months = [10] }]
+
+[us.Michigan]
+zone = "America/Detroit"
+point = [42.33, -83.05]
+coast = "lakes"
+mountains = true
+humid = true
+terrain = "two peninsulas ringed by the Great Lakes, forests, farmland and dunes"
+geography = "the Upper Peninsula, Lake Michigan's dunes, the Mackinac Bridge"
+cities = ["Detroit", "Grand Rapids", "Lansing", "Ann Arbor"]
+touchstones = ["the Great Lakes", "the car industry", "the Lions", "lake-effect snow"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs = [32, 35, 46, 59, 70, 79, 83, 81, 74, 61, 48, 36]
+lows = [19, 21, 28, 39, 49, 59, 64, 63, 55, 43, 34, 24]
+events = [{ what = "lake-effect snow", months = [12, 1, 2] }]
+notes = { winter = "grey skies and snow" }
+
+[us.Minnesota]
+zone = "America/Chicago"
+point = [44.98, -93.27]
+coast = "lakes"
+mountains = true
+humid = true
+terrain = "lakes, prairie and forest, with Lake Superior's shore in the northeast"
+geography = "thousands of lakes, the North Shore, the Boundary Waters"
+cities = ["Minneapolis", "St. Paul", "Rochester", "Duluth"]
+touchstones = ["lakes", "hockey", "long cold winters", "mosquitoes in summer"]
+snow = [9, 10, 11, 12, 1, 2, 3, 4, 5]
+highs = [23, 28, 41, 56, 68, 78, 83, 80, 72, 58, 41, 27]
+lows = [8, 12, 24, 36, 48, 58, 64, 62, 52, 39, 26, 13]
+notes = { winter = "snow on the ground for weeks" }
+
+[us.Mississippi]
+zone = "America/Chicago"
+point = [32.30, -90.18]
+coast = "ocean"
+mountains = false
+humid = true
+terrain = "flat Delta farmland, piney woods and a short Gulf coast"
+geography = "the Mississippi Delta, the Gulf Coast"
+cities = ["Jackson", "Gulfport", "Hattiesburg", "Southaven"]
+touchstones = ["the blues", "catfish", "college football"]
+snow = [12, 1, 2, 3]
+highs = [57, 61, 69, 76, 83, 89, 92, 92, 87, 78, 67, 59]
+lows = [36, 39, 46, 53, 62, 69, 72, 71, 65, 53, 43, 38]
+events = [{ what = "tornado season", months = [3, 4, 5] },
+          { what = "hurricane season on the coast", months = [8, 9, 10] }]
+
+[us.Missouri]
+zone = "America/Chicago"
+point = [38.63, -90.20]
+coast = "none"
+mountains = true
+humid = true
+terrain = "plains in the north, the Ozark hills in the south, the Missouri and Mississippi rivers"
+geography = "the Ozarks, the Lake of the Ozarks, two great rivers"
+cities = ["Kansas City", "St. Louis", "Springfield", "Columbia"]
+touchstones = ["Kansas City barbecue", "the Cardinals", "the Ozarks"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [40, 45, 56, 67, 77, 86, 90, 88, 81, 69, 55, 44]
+lows = [24, 27, 36, 46, 56, 66, 70, 68, 60, 48, 37, 28]
+events = [{ what = "tornado season", months = [3, 4, 5] }]
+
+[us.Montana]
+zone = "America/Denver"
+point = [45.78, -108.50]
+coast = "none"
+mountains = true
+humid = false
+terrain = "the Rocky Mountains in the west, wide open plains in the east"
+geography = "Glacier National Park, the Missouri River, the Yellowstone River"
+cities = ["Billings", "Missoula", "Bozeman", "Great Falls"]
+touchstones = ["big sky", "fly fishing", "ranching", "hunting season"]
+snow = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+highs = [34, 38, 48, 57, 67, 77, 87, 86, 74, 59, 45, 35]
+lows = [16, 18, 25, 33, 42, 51, 58, 56, 47, 35, 24, 16]
+events = [{ what = "wildfire smoke some summers", months = [7, 8, 9] }]
+
+[us.Nebraska]
+zone = "America/Chicago"
+point = [41.26, -95.93]
+coast = "none"
+mountains = false
+humid = true
+terrain = "flat to rolling plains and farmland, the Sandhills in the west"
+geography = "the Platte River, the Sandhills, Chimney Rock"
+cities = ["Omaha", "Lincoln", "Bellevue", "Grand Island"]
+touchstones = ["Husker football", "corn", "big storms"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs = [34, 38, 51, 63, 73, 83, 87, 85, 77, 64, 49, 37]
+lows = [14, 18, 29, 40, 52, 62, 67, 65, 55, 42, 29, 18]
+events = [{ what = "tornado season", months = [4, 5, 6] }]
+
+[us.Nevada]
+zone = "America/Los_Angeles"
+point = [36.17, -115.14]
+coast = "none"
+mountains = true
+humid = false
+terrain = "dry desert basins and mountain ranges, the Sierra by Lake Tahoe in the west"
+geography = "the Mojave Desert, Lake Tahoe, the Great Basin"
+cities = ["Las Vegas", "Henderson", "Reno"]
+touchstones = ["the Strip", "desert heat", "Lake Tahoe"]
+snow = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
+highs = [58, 62, 70, 78, 88, 99, 104, 102, 94, 81, 67, 57]
+lows = [39, 43, 49, 56, 66, 75, 81, 79, 71, 59, 47, 39]
+notes = { summer = "dry heat", winter = "sunny days" }
+
+[us."New Hampshire"]
+zone = "America/New_York"
+point = [42.99, -71.46]
+coast = "ocean"
+mountains = true
+humid = false
+terrain = "the White Mountains, forests and lakes, a short Atlantic coast"
+geography = "the White Mountains, Mount Washington, Lake Winnipesaukee"
+cities = ["Manchester", "Nashua", "Concord"]
+touchstones = ["no sales tax", "the White Mountains", "fall leaves"]
+snow = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+highs = [31, 35, 44, 57, 69, 77, 82, 81, 72, 59, 47, 36]
+lows = [10, 13, 22, 33, 43, 52, 58, 56, 47, 35, 27, 17]
+events = [{ what = "fall colours", months = [10] },
+          { what = "mud season", months = [4] }]
+notes = { winter = "snow on the ground" }
+
+[us."New Jersey"]
+zone = "America/New_York"
+point = [40.74, -74.17]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "the Jersey Shore on the Atlantic, flat pine barrens in the south, hills in the north"
+geography = "the Jersey Shore, the Pine Barrens, the Delaware Water Gap"
+cities = ["Newark", "Jersey City", "Paterson", "Trenton"]
+touchstones = ["the shore", "diners", "traffic", "Taylor ham or pork roll"]
+snow = [11, 12, 1, 2, 3, 4]
+highs = [40, 43, 51, 63, 73, 82, 87, 85, 78, 66, 55, 44]
+lows = [26, 28, 34, 44, 54, 64, 70, 69, 61, 49, 39, 31]
+events = [{ what = "shore season", months = [6, 7, 8] },
+          { what = "nor'easters", months = [12, 1, 2, 3] }]
+
+[us."New Mexico"]
+zone = "America/Denver"
+point = [35.08, -106.65]
+coast = "none"
+mountains = true
+humid = false
+terrain = "high desert, mesas and mountains"
+geography = "the Rio Grande, the Sangre de Cristo Mountains, White Sands"
+cities = ["Albuquerque", "Las Cruces", "Rio Rancho", "Santa Fe"]
+touchstones = ["green and red chile", "adobe", "the balloon fiesta"]
+snow = [9, 10, 11, 12, 1, 2, 3, 4, 5]
+highs = [48, 54, 62, 70, 80, 90, 92, 89, 82, 71, 57, 47]
+lows = [26, 30, 35, 42, 51, 61, 66, 64, 57, 45, 33, 26]
+events = [{ what = "monsoon storms some afternoons", months = [7, 8, 9] },
+          { what = "chile roasting season", months = [8, 9] }]
+
+[us."New York"]
+zone = "America/New_York"
+point = [40.71, -74.01]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "a coastal city in the south, and upstate mountains, lakes and farmland"
+geography = "the Hudson River, the Adirondacks, the Finger Lakes, Niagara Falls"
+cities = ["New York City", "Buffalo", "Rochester", "Syracuse", "Albany"]
+touchstones = ["the subway", "pizza and bagels", "the Yankees and the Mets"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs = [39, 42, 50, 62, 72, 80, 85, 84, 77, 65, 54, 44]
+lows = [28, 29, 35, 45, 55, 64, 70, 69, 62, 51, 42, 33]
+events = [{ what = "nor'easters", months = [12, 1, 2, 3] },
+          { what = "lake-effect snow upstate", months = [12, 1, 2] }]
+
+[us."North Carolina"]
+zone = "America/New_York"
+point = [35.23, -80.84]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "the Blue Ridge in the west, rolling Piedmont, a flat coast with the Outer Banks"
+geography = "the Blue Ridge, the Great Smoky Mountains, the Outer Banks"
+cities = ["Charlotte", "Raleigh", "Greensboro", "Durham"]
+touchstones = ["barbecue", "college basketball", "the Outer Banks"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [52, 56, 64, 72, 80, 87, 90, 88, 82, 72, 62, 54]
+lows = [32, 35, 41, 49, 58, 66, 70, 69, 63, 51, 41, 35]
+events = [{ what = "yellow pollen on everything", months = [3, 4] },
+          { what = "hurricane season on the coast", months = [8, 9, 10] }]
+
+[us."North Dakota"]
+zone = "America/Chicago"
+point = [46.88, -96.79]
+coast = "none"
+mountains = true
+humid = false
+terrain = "flat prairie and farmland, badlands in the west"
+geography = "the Red River valley, the badlands, Lake Sakakawea"
+cities = ["Fargo", "Bismarck", "Grand Forks", "Minot"]
+touchstones = ["harsh winters", "farming", "wide open prairie"]
+snow = [9, 10, 11, 12, 1, 2, 3, 4, 5]
+highs = [18, 23, 37, 54, 68, 77, 82, 81, 71, 55, 37, 22]
+lows = [0, 4, 18, 31, 44, 55, 59, 57, 47, 34, 19, 5]
+notes = { winter = "biting wind" }
+
+[us.Ohio]
+zone = "America/New_York"
+point = [39.96, -83.00]
+coast = "lakes"
+mountains = false
+humid = true
+terrain = "flat farmland in the north and west, hills in the southeast, Lake Erie in the north"
+geography = "Lake Erie, the Ohio River, the Hocking Hills"
+cities = ["Columbus", "Cleveland", "Cincinnati", "Toledo", "Akron"]
+touchstones = ["Ohio State football", "Cincinnati chili", "lake-effect snow near Cleveland"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [37, 41, 51, 63, 73, 81, 85, 83, 77, 65, 52, 41]
+lows = [22, 24, 32, 42, 52, 61, 65, 64, 56, 45, 35, 27]
+notes = { winter = "grey skies" }
+
+[us.Oklahoma]
+zone = "America/Chicago"
+point = [35.47, -97.52]
+coast = "none"
+mountains = true
+humid = true
+terrain = "plains and prairie, hills and low mountains in the east"
+geography = "the Wichita Mountains, the Ouachitas, the Red River"
+cities = ["Oklahoma City", "Tulsa", "Norman", "Broken Arrow"]
+touchstones = ["college football", "red dirt", "storm chasers"]
+snow = [11, 12, 1, 2, 3, 4]
+highs = [49, 54, 63, 72, 80, 89, 94, 93, 85, 74, 61, 50]
+lows = [28, 32, 40, 49, 59, 68, 72, 71, 63, 51, 39, 30]
+events = [{ what = "tornado season", months = [4, 5, 6] }]
+
+[us.Oregon]
+zone = "America/Los_Angeles"
+point = [45.52, -122.68]
+coast = "ocean"
+mountains = true
+humid = false
+terrain = "a rugged Pacific coast, the Cascade mountains, dry high desert in the east"
+geography = "Mount Hood, Crater Lake, the Columbia River Gorge"
+cities = ["Portland", "Eugene", "Salem", "Bend"]
+touchstones = ["rain", "coffee and craft beer", "hiking"]
+snow = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
+highs = [47, 51, 56, 61, 67, 73, 82, 82, 76, 63, 52, 46]
+lows = [36, 36, 39, 42, 48, 53, 58, 58, 53, 46, 40, 35]
+events = [{ what = "wildfire smoke some summers", months = [8, 9] }]
+notes = { winter = "grey and drizzly", summer = "dry and sunny" }
+
+[us.Pennsylvania]
+zone = "America/New_York"
+point = [39.95, -75.17]
+coast = "lakes"
+mountains = true
+humid = true
+terrain = "rolling hills and Appalachian ridges, farmland and forest"
+geography = "the Poconos, the Allegheny Mountains, the Susquehanna River"
+cities = ["Philadelphia", "Pittsburgh", "Allentown", "Erie"]
+touchstones = ["cheesesteaks", "the Eagles and the Steelers", "Wawa and Sheetz"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [41, 44, 53, 64, 74, 83, 88, 86, 79, 67, 56, 45]
+lows = [26, 28, 35, 45, 55, 65, 70, 69, 61, 49, 39, 31]
+
+[us."Rhode Island"]
+zone = "America/New_York"
+point = [41.82, -71.41]
+coast = "ocean"
+mountains = false
+humid = true
+terrain = "small and coastal, with bays and beaches"
+geography = "Narragansett Bay, Block Island, Newport"
+cities = ["Providence", "Warwick", "Cranston"]
+touchstones = ["coffee milk", "clam chowder", "the coast"]
+snow = [11, 12, 1, 2, 3, 4]
+highs = [38, 41, 48, 59, 69, 78, 84, 82, 75, 64, 53, 43]
+lows = [21, 23, 30, 39, 49, 58, 65, 63, 56, 44, 35, 27]
+events = [{ what = "nor'easters", months = [12, 1, 2, 3] }]
+
+[us."South Carolina"]
+zone = "America/New_York"
+point = [34.00, -81.03]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "Blue Ridge foothills in the northwest, a flat Lowcountry and beaches on the coast"
+geography = "the Lowcountry, the Grand Strand, the Blue Ridge foothills"
+cities = ["Charleston", "Columbia", "Greenville", "Myrtle Beach"]
+touchstones = ["shrimp and grits", "beaches", "college football"]
+snow = [12, 1, 2, 3]
+highs = [56, 60, 68, 77, 84, 90, 93, 91, 86, 77, 67, 58]
+lows = [34, 37, 43, 51, 60, 68, 72, 71, 65, 53, 42, 36]
+events = [{ what = "hurricane season", months = [8, 9, 10] }]
+
+[us."South Dakota"]
+zone = "America/Chicago"
+point = [43.54, -96.73]
+coast = "none"
+mountains = true
+humid = false
+terrain = "prairie in the east, the Black Hills and badlands in the west"
+geography = "the Black Hills, Mount Rushmore, the Badlands, the Missouri River"
+cities = ["Sioux Falls", "Rapid City", "Aberdeen"]
+touchstones = ["Mount Rushmore", "pheasant hunting", "the Sturgis rally"]
+snow = [9, 10, 11, 12, 1, 2, 3, 4, 5]
+highs = [27, 31, 44, 58, 70, 80, 85, 82, 75, 61, 44, 30]
+lows = [7, 11, 23, 34, 46, 57, 62, 60, 50, 37, 23, 11]
+
+[us.Tennessee]
+zone = "America/Chicago"
+point = [36.16, -86.78]
+coast = "none"
+mountains = true
+humid = true
+terrain = "the Smoky Mountains in the east, rolling hills in the middle, flat land by the Mississippi"
+geography = "the Great Smoky Mountains, the Tennessee River, the Cumberland Plateau"
+cities = ["Nashville", "Memphis", "Knoxville", "Chattanooga"]
+touchstones = ["country music", "hot chicken", "barbecue", "the Smokies"]
+snow = [11, 12, 1, 2, 3, 4]
+highs = [48, 53, 62, 72, 80, 87, 90, 90, 84, 73, 61, 51]
+lows = [30, 33, 40, 48, 58, 66, 70, 69, 62, 50, 39, 32]
+events = [{ what = "tornado season", months = [3, 4, 5] }]
+
+[us.Texas]
+zone = "America/Chicago"
+point = [32.78, -96.80]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "plains, Hill Country and piney woods, a Gulf coast, desert mountains in the far west"
+geography = "the Gulf Coast, the Hill Country, the Panhandle, Big Bend"
+cities = ["Houston", "San Antonio", "Dallas", "Austin", "Fort Worth", "El Paso"]
+touchstones = ["Tex-Mex", "football", "summer heat", "big distances"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [57, 61, 69, 77, 84, 92, 96, 97, 89, 79, 67, 58]
+lows = [37, 41, 49, 57, 66, 73, 77, 77, 70, 59, 48, 39]
+events = [{ what = "spring storms and hail", months = [4, 5] },
+          { what = "hurricane season on the coast", months = [8, 9, 10] }]
+notes = { summer = "summer goes on and on", winter = "the odd hard freeze" }
+
+[us.Utah]
+zone = "America/Denver"
+point = [40.76, -111.89]
+coast = "none"
+mountains = true
+humid = false
+terrain = "mountains, red rock canyons and desert, the Great Salt Lake in the north"
+geography = "the Wasatch Range, the Great Salt Lake, Zion and Arches"
+cities = ["Salt Lake City", "West Valley City", "Provo", "Ogden"]
+touchstones = ["skiing", "national parks", "red rock"]
+snow = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
+highs = [38, 44, 54, 61, 71, 83, 93, 91, 79, 64, 50, 38]
+lows = [23, 27, 34, 40, 48, 57, 66, 64, 54, 42, 31, 23]
+events = [{ what = "ski season", months = [12, 1, 2, 3] },
+          { what = "winter inversions", months = [12, 1] }]
+
+[us.Vermont]
+zone = "America/New_York"
+point = [44.48, -73.21]
+coast = "lakes"
+mountains = true
+humid = false
+terrain = "the Green Mountains, forests and farms, Lake Champlain in the west"
+geography = "the Green Mountains, Lake Champlain"
+cities = ["Burlington", "South Burlington", "Rutland"]
+touchstones = ["maple syrup", "skiing", "fall leaves"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs = [27, 30, 40, 54, 67, 76, 81, 79, 70, 57, 45, 33]
+lows = [11, 13, 22, 34, 46, 55, 61, 59, 51, 40, 30, 18]
+events = [{ what = "fall colours", months = [10] },
+          { what = "mud season", months = [4] },
+          { what = "sugaring season", months = [3] }]
+
+[us.Virginia]
+zone = "America/New_York"
+point = [37.54, -77.44]
+coast = "ocean"
+mountains = true
+humid = true
+terrain = "an Atlantic coast and the Chesapeake Bay, rolling Piedmont, the Blue Ridge in the west"
+geography = "the Blue Ridge, the Shenandoah Valley, Chesapeake Bay"
+cities = ["Virginia Beach", "Chesapeake", "Norfolk", "Richmond", "Arlington"]
+touchstones = ["history everywhere", "Chesapeake seafood", "the Blue Ridge"]
+snow = [10, 11, 12, 1, 2, 3, 4]
+highs = [48, 52, 61, 71, 79, 87, 90, 88, 82, 72, 62, 51]
+lows = [29, 31, 38, 47, 56, 65, 70, 68, 61, 49, 39, 32]
+events = [{ what = "fall colours in the mountains", months = [10] }]
+
+[us.Washington]
+zone = "America/Los_Angeles"
+point = [47.61, -122.33]
+coast = "ocean"
+mountains = true
+humid = false
+terrain = "Puget Sound and the Cascades in the west, dry plains and farmland in the east"
+geography = "Puget Sound, Mount Rainier, the Olympic Peninsula, the Columbia River"
+cities = ["Seattle", "Spokane", "Tacoma", "Vancouver"]
+touchstones = ["rain and grey skies", "coffee", "the Seahawks"]
+snow = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+highs = [48, 50, 54, 59, 65, 70, 77, 77, 71, 60, 52, 47]
+lows = [37, 37, 40, 43, 48, 52, 56, 57, 53, 47, 41, 36]
+events = [{ what = "wildfire smoke some summers", months = [8, 9] }]
+notes = { winter = "grey, drizzly and dark early", summer = "dry and sunny" }
+
+[us."West Virginia"]
+zone = "America/New_York"
+point = [38.35, -81.63]
+coast = "none"
+mountains = true
+humid = true
+terrain = "steep mountains and hollows nearly everywhere"
+geography = "the Allegheny Mountains, the New River Gorge"
+cities = ["Charleston", "Huntington", "Morgantown"]
+touchstones = ["the mountains", "pepperoni rolls", "coal country"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs = [44, 48, 58, 69, 77, 83, 86, 85, 79, 69, 58, 47]
+lows = [26, 28, 35, 43, 53, 61, 65, 64, 57, 46, 36, 29]
+events = [{ what = "fall colours", months = [10] }]
+
+[us.Wisconsin]
+zone = "America/Chicago"
+point = [43.04, -87.91]
+coast = "lakes"
+mountains = true
+humid = true
+terrain = "lakes, farmland and forest, between Lake Michigan and Lake Superior"
+geography = "Lake Michigan, Door County, the Northwoods"
+cities = ["Milwaukee", "Madison", "Green Bay", "Kenosha"]
+touchstones = ["cheese", "the Packers", "supper clubs", "lakes"]
+snow = [9, 10, 11, 12, 1, 2, 3, 4, 5]
+highs = [29, 32, 42, 53, 64, 75, 80, 79, 71, 59, 46, 34]
+lows = [16, 19, 27, 36, 45, 56, 63, 63, 55, 43, 32, 21]
+notes = { winter = "long and snowy" }
+
+[us.Wyoming]
+zone = "America/Denver"
+point = [41.14, -104.82]
+coast = "none"
+mountains = true
+humid = false
+terrain = "high windy plains and the Rocky Mountains"
+geography = "Yellowstone, the Grand Tetons, the Wind River Range"
+cities = ["Cheyenne", "Casper", "Laramie", "Gillette"]
+touchstones = ["wind", "Yellowstone", "ranching", "rodeo"]
+snow = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+highs = [40, 41, 49, 55, 65, 77, 84, 81, 72, 58, 46, 38]
+lows = [18, 19, 25, 31, 40, 49, 56, 54, 45, 34, 24, 17]
+notes = { winter = "very windy" }
+
+# The UK: its nations and England's regions, and the UK as a whole for a member whose own
+# words name no part of it. `words` are the places in her words that put her in one (the
+# cities first, then counties, nations and their adjectives).
+
+[uk.uk]
+label = "the UK"
+zone = "Europe/London"
+point = [52.49, -1.89]
+coast = "ocean"
+mountains = true
+humid = false
+terrain = "green and rolling, never far from the sea"
+geography = "hills and moors in the north and west, flatter farmland in the south and east"
+cities = ["London", "Birmingham", "Manchester", "Glasgow", "Leeds"]
+words = []
+touchstones = ["the weather", "the pub", "football", "a cup of tea"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs_c = [7, 8, 10, 13, 17, 20, 22, 21, 18, 14, 10, 8]
+lows_c = [2, 2, 3, 5, 7, 10, 12, 12, 10, 7, 4, 2]
+notes = { winter = "grey, wet and dark by late afternoon", summer = "long light evenings, showers" }
+
+[uk.london]
+label = "London"
+zone = "Europe/London"
+point = [51.51, -0.13]
+coast = "none"
+mountains = false
+humid = false
+terrain = "a huge city on the Thames, flat to gently hilly"
+geography = "the Thames, the parks, the Green Belt around it"
+cities = ["London"]
+words = ["London", "Croydon", "Hackney", "Islington", "Camden", "Peckham", "Brixton",
+         "Greenwich", "Wimbledon", "Ealing", "Stratford", "Walthamstow"]
+touchstones = ["the Tube", "the pub", "Premier League football", "commuting"]
+snow = [11, 12, 1, 2, 3, 4]
+highs_c = [8, 9, 12, 15, 18, 22, 24, 23, 20, 16, 11, 9]
+lows_c = [3, 2, 4, 6, 9, 12, 14, 14, 12, 9, 5, 3]
+notes = { winter = "grey, damp and dark by late afternoon", summer = "long light evenings, the odd heatwave" }
+
+[uk.south_east]
+label = "the South East of England"
+zone = "Europe/London"
+point = [51.10, -0.80]
+coast = "ocean"
+mountains = false
+humid = false
+terrain = "green rolling countryside, the Downs and the south coast"
+geography = "the South Downs, the Isle of Wight, the white cliffs of Dover"
+cities = ["Brighton", "Southampton", "Portsmouth", "Reading", "Oxford"]
+words = ["Brighton", "Southampton", "Portsmouth", "Reading", "Oxford", "Milton Keynes",
+         "Canterbury", "Guildford", "Kent", "Surrey", "Sussex", "Hampshire", "Berkshire",
+         "Oxfordshire", "Buckinghamshire"]
+touchstones = ["the seaside", "commuting into London", "country pubs"]
+snow = [11, 12, 1, 2, 3, 4]
+highs_c = [8, 9, 11, 14, 18, 21, 23, 23, 20, 16, 11, 9]
+lows_c = [2, 2, 3, 5, 8, 11, 13, 13, 11, 8, 5, 3]
+notes = { winter = "grey, wet and dark by late afternoon", summer = "long light evenings" }
+
+[uk.south_west]
+label = "the South West of England"
+zone = "Europe/London"
+point = [51.45, -2.59]
+coast = "ocean"
+mountains = false
+humid = false
+terrain = "rolling hills and moors, with long coasts in Devon and Cornwall"
+geography = "Dartmoor, Exmoor, the Cornish coast, the Cotswolds"
+cities = ["Bristol", "Plymouth", "Exeter", "Bath", "Swindon"]
+words = ["Bristol", "Plymouth", "Exeter", "Swindon", "Gloucester", "Cheltenham",
+         "Bournemouth", "Cornwall", "Devon", "Somerset", "Dorset", "Wiltshire",
+         "Gloucestershire", "Cornish"]
+touchstones = ["cream teas", "cider", "surfing in Cornwall", "the coast"]
+snow = [11, 12, 1, 2, 3, 4]
+highs_c = [8, 9, 11, 14, 17, 20, 22, 22, 19, 15, 11, 9]
+lows_c = [3, 3, 4, 6, 9, 11, 13, 13, 11, 9, 5, 3]
+notes = { winter = "mild, wet and windy", summer = "long light evenings, busy beaches" }
+
+[uk.east]
+label = "the East of England"
+zone = "Europe/London"
+point = [52.21, 0.12]
+coast = "ocean"
+mountains = false
+humid = false
+terrain = "flat farmland and fens, with a North Sea coast"
+geography = "the Fens, the Norfolk Broads, the Suffolk coast"
+cities = ["Norwich", "Cambridge", "Ipswich", "Peterborough", "Colchester"]
+words = ["Norwich", "Cambridge", "Ipswich", "Peterborough", "Colchester", "Luton",
+         "Chelmsford", "Norfolk", "Suffolk", "Essex", "Hertfordshire", "Cambridgeshire",
+         "Bedfordshire"]
+touchstones = ["big skies", "the Broads", "commuting into London"]
+snow = [11, 12, 1, 2, 3, 4]
+highs_c = [7, 8, 11, 14, 18, 21, 23, 23, 20, 15, 11, 8]
+lows_c = [1, 1, 3, 4, 7, 10, 12, 12, 10, 7, 4, 2]
+notes = { winter = "raw winds off the North Sea", summer = "one of the driest, sunniest parts" }
+
+[uk.east_midlands]
+label = "the East Midlands"
+zone = "Europe/London"
+point = [52.95, -1.15]
+coast = "ocean"
+mountains = false
+humid = false
+terrain = "rolling farmland, Peak District hills in the north west, a flat Lincolnshire coast"
+geography = "the Peak District, Sherwood Forest, the Lincolnshire Wolds"
+cities = ["Nottingham", "Leicester", "Derby", "Lincoln", "Northampton"]
+words = ["Nottingham", "Leicester", "Derby", "Lincoln", "Northampton", "Mansfield",
+         "Lincolnshire", "Nottinghamshire", "Derbyshire", "Leicestershire",
+         "Northamptonshire", "East Midlands"]
+touchstones = ["the Peak District", "football", "the pub"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs_c = [7, 8, 11, 14, 17, 20, 22, 22, 19, 14, 10, 7]
+lows_c = [1, 1, 3, 4, 7, 10, 12, 12, 10, 7, 4, 2]
+notes = { winter = "grey and dark by late afternoon", summer = "long light evenings" }
+
+[uk.west_midlands]
+label = "the West Midlands"
+zone = "Europe/London"
+point = [52.49, -1.89]
+coast = "none"
+mountains = false
+humid = false
+terrain = "a big urban middle ringed by countryside and hills, far from the sea"
+geography = "the Black Country, the Malvern Hills, the Shropshire hills"
+cities = ["Birmingham", "Coventry", "Wolverhampton", "Stoke-on-Trent"]
+words = ["Birmingham", "Coventry", "Wolverhampton", "Stoke", "Walsall", "Dudley",
+         "Solihull", "Worcester", "Telford", "Shrewsbury", "Staffordshire", "Shropshire",
+         "Warwickshire", "Worcestershire", "Herefordshire", "West Midlands", "Midlands",
+         "Brummie", "Black Country"]
+touchstones = ["balti curry", "the canals", "football"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs_c = [7, 8, 10, 13, 17, 20, 22, 21, 18, 14, 10, 7]
+lows_c = [2, 2, 3, 4, 7, 10, 12, 12, 10, 7, 4, 2]
+notes = { winter = "grey and dark by late afternoon", summer = "long light evenings" }
+
+[uk.yorkshire]
+label = "Yorkshire"
+zone = "Europe/London"
+point = [53.80, -1.55]
+coast = "ocean"
+mountains = false
+humid = false
+terrain = "the Dales and the moors, big northern cities, a North Sea coast"
+geography = "the Yorkshire Dales, the North York Moors, the Humber"
+cities = ["Leeds", "Sheffield", "Bradford", "Hull", "York"]
+words = ["Leeds", "Sheffield", "Bradford", "Hull", "York", "Rotherham", "Doncaster",
+         "Barnsley", "Wakefield", "Huddersfield", "Halifax", "Harrogate", "Scarborough",
+         "Yorkshire"]
+touchstones = ["Yorkshire tea", "fish and chips", "the Dales", "a Sunday roast"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs_c = [7, 8, 10, 13, 16, 19, 21, 21, 18, 14, 10, 7]
+lows_c = [2, 2, 3, 4, 7, 10, 12, 12, 10, 7, 4, 2]
+notes = { winter = "grey and dark by late afternoon", summer = "long light evenings" }
+
+[uk.north_west]
+label = "the North West of England"
+zone = "Europe/London"
+point = [53.48, -2.24]
+coast = "ocean"
+mountains = true
+humid = false
+terrain = "big cities by the Pennine hills, the Lake District to the north, an Irish Sea coast"
+geography = "the Lake District, the Pennines, the Mersey"
+cities = ["Manchester", "Liverpool", "Preston", "Blackpool", "Bolton"]
+words = ["Manchester", "Liverpool", "Salford", "Bolton", "Wigan", "Stockport", "Oldham",
+         "Rochdale", "Preston", "Blackpool", "Blackburn", "Warrington", "Chester",
+         "Lancaster", "Carlisle", "Lancashire", "Merseyside", "Cumbria", "Cheshire",
+         "Lake District", "Mancunian", "Scouse"]
+touchstones = ["football", "rain", "the Lake District", "gravy on chips"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs_c = [7, 8, 10, 13, 16, 19, 21, 20, 18, 14, 10, 7]
+lows_c = [2, 2, 3, 5, 8, 11, 13, 13, 11, 8, 5, 2]
+notes = { winter = "wet, grey and dark by late afternoon", summer = "long light evenings, and rain" }
+
+[uk.north_east]
+label = "the North East of England"
+zone = "Europe/London"
+point = [54.98, -1.61]
+coast = "ocean"
+mountains = false
+humid = false
+terrain = "a North Sea coast, moors and hills, cities on the Tyne and the Wear"
+geography = "the Tyne, Northumberland's coast and castles, Hadrian's Wall"
+cities = ["Newcastle", "Sunderland", "Middlesbrough", "Durham"]
+words = ["Newcastle", "Sunderland", "Middlesbrough", "Durham", "Gateshead", "Darlington",
+         "Hartlepool", "Teesside", "Northumberland", "Tyneside", "Geordie"]
+touchstones = ["football", "the coast", "a night out on the Toon"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs_c = [7, 7, 9, 12, 14, 17, 20, 19, 17, 13, 9, 7]
+lows_c = [2, 2, 3, 4, 6, 9, 11, 11, 9, 7, 4, 2]
+notes = { winter = "biting winds, dark by late afternoon", summer = "long light evenings" }
+
+[uk.wales]
+label = "Wales"
+zone = "Europe/London"
+point = [51.48, -3.18]
+coast = "ocean"
+mountains = true
+humid = false
+terrain = "mountains and valleys, with coast on three sides"
+geography = "Snowdonia, the Brecon Beacons, the Gower, the valleys"
+cities = ["Cardiff", "Swansea", "Newport", "Wrexham"]
+words = ["Cardiff", "Swansea", "Newport", "Wrexham", "Bangor", "Aberystwyth", "Wales",
+         "Welsh"]
+touchstones = ["rugby", "rain", "Welsh cakes", "the valleys"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs_c = [8, 9, 11, 14, 17, 20, 22, 21, 19, 15, 11, 9]
+lows_c = [3, 2, 4, 5, 8, 11, 13, 13, 11, 8, 5, 3]
+notes = { winter = "wet, windy and dark by late afternoon", summer = "long light evenings, showers" }
+
+[uk.scotland]
+label = "Scotland"
+zone = "Europe/London"
+point = [55.90, -3.70]
+coast = "ocean"
+mountains = true
+humid = false
+terrain = "the Highlands and islands, lochs, and the cities of the Central Belt"
+geography = "the Highlands, the islands, Loch Lomond, Ben Nevis"
+cities = ["Glasgow", "Edinburgh", "Aberdeen", "Dundee", "Inverness"]
+words = ["Glasgow", "Edinburgh", "Aberdeen", "Dundee", "Inverness", "Stirling", "Perth",
+         "Paisley", "Highlands", "Scotland", "Scottish", "Glaswegian"]
+touchstones = ["rain", "midges in summer", "Irn-Bru", "football"]
+snow = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
+highs_c = [7, 7, 9, 12, 15, 17, 19, 19, 16, 13, 9, 7]
+lows_c = [1, 1, 2, 4, 6, 9, 11, 11, 9, 6, 3, 1]
+notes = { winter = "wet and dark by mid-afternoon", summer = "light until late at night" }
+
+[uk.northern_ireland]
+label = "Northern Ireland"
+zone = "Europe/London"
+point = [54.60, -5.93]
+coast = "ocean"
+mountains = true
+humid = false
+terrain = "green hills, loughs and a rugged coast"
+geography = "Lough Neagh, the Mourne Mountains, the Causeway Coast"
+cities = ["Belfast", "Derry", "Lisburn", "Newry"]
+words = ["Belfast", "Derry", "Londonderry", "Lisburn", "Newry", "Northern Ireland"]
+touchstones = ["the Causeway Coast", "an Ulster fry", "rain"]
+snow = [10, 11, 12, 1, 2, 3, 4, 5]
+highs_c = [8, 8, 10, 12, 15, 17, 19, 19, 17, 14, 10, 8]
+lows_c = [2, 2, 3, 4, 6, 9, 11, 11, 9, 7, 4, 2]
+notes = { winter = "wet, windy and dark by late afternoon", summer = "long light evenings, showers" }
