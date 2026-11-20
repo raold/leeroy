@@ -64,9 +64,9 @@ struct Member
     bool prepared = false, moved = false, arrived = false, attacking = false, frozen = false,
         released = true, resetDone = true, returned = false, returnIssued = false, blocked = false,
         groupReleased = true, groupReleaseStarted = false, leaderFlag = false, leaderRestored = true,
-        finalResetDone = true, abandoned = false;
+        finalResetDone = true, abandoned = false, setUp = false;
     uint32 reasserted = 0;
-    uint64 started = 0, ms = 0, damage = 0, hits = 0, retryAt = 0;
+    uint64 started = 0, ms = 0, damage = 0, hits = 0, retryAt = 0, setupAt = 0;
     std::optional<uint64> outsideSince;
 };
 struct Job
@@ -160,6 +160,12 @@ bool Owned(Job const& job, Member const& member, Player* bot)
     return bot && GET_PLAYERBOT_AI(bot) && DummyOwnerProven(OwnerState(job, member, bot));
 }
 
+// Why Owned is false, for the log: "body" when there is no online bot with an AI to ask.
+std::string MissingOwnership(Job const& job, Member const& member, Player* bot)
+{
+    return bot && GET_PLAYERBOT_AI(bot) ? DummyOwnerMissing(OwnerState(job, member, bot)) : std::string("body");
+}
+
 Player* Driver(Job const& job);
 
 // Our solo party's creation makes the bot's stock "reset botAI" drop the driver as master and reset
@@ -245,11 +251,12 @@ void Drop(Job const& job, Member& member, std::string reason, uint64 now)
     if (member.dropped.empty()) member.dropped = std::move(reason);
 }
 
-void Block(Job const& job, Member& member, std::string reason)
+void Block(Job const& job, Member& member, std::string reason, std::string const& missing = {})
 {
     if (!member.blocked)
-        LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} blocked member {}: {}; its return stops and "
-            "training cleanup is required", job.event.id, member.guid, reason);
+        LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} blocked member {}: {}{}{}; its return stops and "
+            "training cleanup is required", job.event.id, member.guid, reason, missing.empty() ? "" : " missing=",
+            missing);
     member.blocked = true;
     member.cleanupError = std::move(reason);
     RequireTrainingCleanup();
@@ -284,10 +291,14 @@ void ReturnMember(Job& job, Member& member, uint64 now)
                     : state.teleporting ? "teleport_pending" : "offline";
                 return;
             case DummyReturnStep::Block:
-                Block(job, member, !state.sameSession ? "session_changed"
+            {
+                std::string reason = !state.sameSession ? "session_changed"
                     : !member.groupReleased && HasNonPermanentBind(member.guid) ? "instance_binding_changed"
-                    : !state.owned ? "ownership_changed" : "location_changed");
+                    : !state.owned ? "ownership_changed" : "location_changed";
+                std::string const missing = reason == "ownership_changed" ? MissingOwnership(job, member, bot) : "";
+                Block(job, member, std::move(reason), missing);
                 return;
+            }
             case DummyReturnStep::ReleaseMaster:
                 bot->AttackStop();
                 bot->CombatStopWithPets(true);
@@ -360,42 +371,13 @@ void Prepare(Job& job, uint64 now)
             member.frozen = true;
             continue;
         }
-        auto* ai = GET_PLAYERBOT_AI(bot);
         member.origin = WorldLocation(bot->GetMapId(), bot->GetPosition());
         member.player = Identity(bot);
-        member.ai = Identity(ai);
+        member.ai = Identity(GET_PLAYERBOT_AI(bot));
         member.session = Identity(bot->GetSession());
         member.prepared = true;
-        member.creatingGroup = std::make_unique<Group>();
-        member.groupIdentity = Identity(member.creatingGroup.get());
-        member.leaderFlag = bot->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
-        member.leaderRestored = false;
-        member.finalResetDone = false;
-        member.groupReleased = false; // Creation intent precedes Create, including its leader-insertion side effects.
-        bool created = false;
-        try { created = member.creatingGroup->Create(bot); }
-        catch (...) { PublishCreatedGroup(member); throw; }
-        PublishCreatedGroup(member);
-        if (!created || member.creatingGroup || !Owned(job, member, bot) || !bot->GetGroup())
-        {
-            Drop(job, member, "group_create_failed", now);
-            continue;
-        }
-        member.released = false;
-        member.resetDone = false;
-        ai->SetMaster(driver);
-        // Random bots clear an ungrouped master every AI tick. Each candidate gets its own exact solo party.
-        // Harness ownership is established before moving; stock follow must not drag a ported bot to the driver.
-        ai->ResetStrategies();
-        JournalReset(member.guid);
-        ai->ChangeStrategy("-follow", BOT_STATE_COMBAT);
-        ai->ChangeStrategy("-follow", BOT_STATE_NON_COMBAT);
-        if (!Owned(job, member, bot) || ai->HasStrategy("follow", BOT_STATE_COMBAT)
-            || ai->HasStrategy("follow", BOT_STATE_NON_COMBAT))
-        {
-            Drop(job, member, "setup_failed", now);
-            continue;
-        }
+        // The body moves untouched: no party, no master, no reset (Setup does that at the dummy). A one-member
+        // party formed here would be disbanded by the core when the far teleport lands (see Setup).
         double angle = 2.0 * pi * static_cast<double>(index) / static_cast<double>(count);
         member.moved = true; // Record intent before a possibly partially applied/throwing core operation.
         bool accepted = bot->TeleportTo(place.map, place.x + static_cast<float>(radius * std::cos(angle)),
@@ -404,6 +386,50 @@ void Prepare(Job& job, uint64 now)
         if (!accepted) Drop(job, member, "move_failed", now);
     }
     job.life.Moving();
+}
+
+// At the dummy, on the map the fight happens on. The core's LFGPlayerScript::OnPlayerMapChanged disbands a
+// group of one member or fewer whenever its player is added to a map outside an LFG dungeon
+// (DummySoloPartySurvivesMapEntry), so a party formed before a far teleport is gone when it lands; from
+// 2026-11-10 to 11-14 every trial lost every member that way (ownership_changed). Formed here, the party
+// lives until ReturnMember releases it, before the teleport home. Random bots clear an ungrouped master every
+// AI tick, so each candidate gets its own exact solo party.
+void Setup(Job& job, Member& member, Player* bot, uint64 now)
+{
+    auto* driver = Driver(job);
+    if (!driver) { job.life.Stop("driver_offline", now); return; }
+    auto* ai = GET_PLAYERBOT_AI(bot);
+    member.creatingGroup = std::make_unique<Group>();
+    member.groupIdentity = Identity(member.creatingGroup.get());
+    member.leaderFlag = bot->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
+    member.leaderRestored = false;
+    member.finalResetDone = false;
+    member.groupReleased = false; // Creation intent precedes Create, including its leader-insertion side effects.
+    bool created = false;
+    try { created = member.creatingGroup->Create(bot); }
+    catch (...) { PublishCreatedGroup(member); throw; }
+    PublishCreatedGroup(member);
+    if (!created || member.creatingGroup || !Owned(job, member, bot) || !bot->GetGroup())
+    {
+        Drop(job, member, "group_create_failed", now);
+        return;
+    }
+    member.released = false;
+    member.resetDone = false;
+    ai->SetMaster(driver);
+    // Stock follow must not drag the bot to the driver parked elsewhere.
+    ai->ResetStrategies();
+    JournalReset(member.guid);
+    ai->ChangeStrategy("-follow", BOT_STATE_COMBAT);
+    ai->ChangeStrategy("-follow", BOT_STATE_NON_COMBAT);
+    if (!Owned(job, member, bot) || ai->HasStrategy("follow", BOT_STATE_COMBAT)
+        || ai->HasStrategy("follow", BOT_STATE_NON_COMBAT))
+    {
+        Drop(job, member, "setup_failed", now);
+        return;
+    }
+    member.setUp = true;
+    member.setupAt = now;
 }
 
 void Move(Job& job, uint64 now)
@@ -418,17 +444,27 @@ void Move(Job& job, uint64 now)
             if (connected) Block(job, member, "session_changed");
             continue;
         }
-        if (connected->IsBeingTeleported()) continue;
-        auto* bot = Guild::FindOnline(member.guid);
-        Reassert(job, member, bot); // Trial strategies are applied only at StartFight, so nothing is lost yet.
-        if (!Owned(job, member, bot))
+        bool const teleporting = connected->IsBeingTeleported();
+        auto* bot = teleporting ? nullptr : Guild::FindOnline(member.guid);
+        if (bot) Reassert(job, member, bot); // Trial strategies are applied only at StartFight, so nothing is lost yet.
+        bool const owned = !teleporting && Owned(job, member, bot);
+        DummyMoveState state{teleporting, owned, owned && bot->IsAlive(), owned && bot->IsInCombat(),
+            owned && AtTrial(job, bot), member.setUp, member.reasserted > 0,
+            now >= member.setupAt ? now - member.setupAt : 0};
+        switch (DecideDummyMove(state))
         {
-            Drop(job, member, "ownership_changed", now);
-            Block(job, member, "ownership_changed");
+            case DummyMoveStep::Wait:
+            case DummyMoveStep::Settle:
+                break;
+            case DummyMoveStep::Block:
+                Drop(job, member, "ownership_changed", now);
+                Block(job, member, "ownership_changed", MissingOwnership(job, member, bot));
+                break;
+            case DummyMoveStep::Died: Drop(job, member, "died", now); break;
+            case DummyMoveStep::Attacked: Drop(job, member, "attacked", now); break;
+            case DummyMoveStep::Setup: Setup(job, member, bot, now); break;
+            case DummyMoveStep::Arrived: member.arrived = true; break;
         }
-        else if (!bot->IsAlive()) Drop(job, member, "died", now);
-        else if (bot->IsInCombat()) Drop(job, member, "attacked", now);
-        else if (AtTrial(job, bot)) member.arrived = true;
     }
 }
 
@@ -498,7 +534,7 @@ void Fight(Job& job, uint64 now)
         else if (!Owned(job, member, bot))
         {
             Drop(job, member, "ownership_changed", now);
-            Block(job, member, "ownership_changed");
+            Block(job, member, "ownership_changed", MissingOwnership(job, member, bot));
         }
         else if (!bot->IsAlive()) Drop(job, member, "died", now);
         else if (tap.DummyAttacked(job.slot, member.guid)) Drop(job, member, "attacked", now);
