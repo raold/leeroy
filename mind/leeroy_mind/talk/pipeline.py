@@ -95,8 +95,9 @@ from leeroy_mind.talk.filters import (Tell, aimed_off_him, find_tells, flirty, i
                                       strip_copied, supported)
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk import position
-from leeroy_mind.talk.length import (KEEP_SLACK, SHORTER_HINT, content_question,
-                                     fit_answer, split_lines, tail_lines)
+from leeroy_mind.talk.length import (KEEP_SLACK, SHORTER_HINT, USUAL_DRAFT, USUAL_HINT,
+                                     asks as length_asks, content_question, fit_answer,
+                                     split_lines, tail_lines)
 from leeroy_mind.talk.intent import (INTENT_KINDS, Intent, IntentContext, allowed, draw_intent,
                                      ordered, topic_for)
 from leeroy_mind.guards.owncopy import LINES as OWN_COPY_LINES, asked_again, copies_any
@@ -644,8 +645,8 @@ class TurnMeta:
     covers_ask: bool = False
     # what a draw changed (turn.max_lines, meta.burst), put back before the next draw
     shape_saved: tuple[int, bool] | None = None
-    # [talk] coherence (talk/length.py): the words of a draft kept past her line's cap (a cut that
-    # carries the answer, or one sent as written), which the styling then leaves whole; 0 none
+    # [talk] coherence_length (talk/length.py): the words of a draft kept past her line's cap (a
+    # cut that carries the answer, or one sent as written), which the styling leaves whole; 0 none
     keep_words: int = 0
     keep_lines: int = 0  # ...and the game lines it takes when it is an owed answer laid out
     # on more lines than her turn has (_generate_serial: still too long after the retry)
@@ -1532,9 +1533,11 @@ class Pipeline:
                 raw = self.store.get_meta(f"discord:line:{meta.discord.reply_to}")
                 skip = int(raw) if isinstance(raw, str) and raw.isdecimal() else 0
             # [talk] coherence, a core switch on: "You said" lists her claims in this
-            # conversation (position.claims_so_far), the one presentation of what she said
+            # conversation (position.claims_so_far), the one presentation of what she said;
+            # with coherence his questions with no question mark are still owed too
             return self.so_far.lines(turn.speaker, now, forms=self.human.forms, skip=skip,
-                                     lead=lead, claims=self._coherent() and self._core_on())
+                                     lead=lead, claims=self._coherent() and self._core_on(),
+                                     buried=self._coherent())
         except Exception as e:
             log.warning("so_far_failed: guid=%d reason=%s", turn.speaker, type(e).__name__)
             return [f"- {x}" for x in lead if x]
@@ -1933,7 +1936,7 @@ class Pipeline:
         so the turn is weighed as an answer to it. Read only to weigh it; never shown from here."""
         waiting = self._his_waiting(turn, meta) or self._dm_waiting(turn, meta)
         if waiting:
-            return next((t for t in waiting if is_question(t)), waiting[-1])
+            return next((t for t in waiting if is_question(t, buried=True)), waiting[-1])
         return self._his_one_line(turn, meta)
 
     def _his_one_line(self, turn: Turn, meta: TurnMeta) -> str:
@@ -2196,9 +2199,10 @@ class Pipeline:
             dm_words=talk.dm_words, dm_mirror=mirror,
             realism=self.realism.eligible(self, turn, meta), two_lines=two,
             away=self._waited_away(turn, meta, now),
-            content=self._coherent() and content_question(self._his_line(turn, meta)),
+            content=self._length_rule() and content_question(self._his_line(turn, meta)),
             waited=self._waited_own_time(turn, meta, now),
-            his_asks=meta.covers_ask or asks(self._his_line(turn, meta)),
+            his_asks=meta.covers_ask or asks(self._his_line(turn, meta),
+                                             buried=self._coherent()),
             voice_words=_voice_words(p))
         local = self.clock.local()
         trigger = turn.trigger_line or (meta.discord.reply_to if meta.discord is not None
@@ -2415,7 +2419,8 @@ class Pipeline:
         old = self._holds.pop(key, None)
         if (self._coherent() and isinstance(ctx, IntentContext) and ctx.to_him
                 and ctx.his_line.strip() and not position.settled(ctx.his_line)
-                and (ctx.hold is not None or ctx.pushback or asks(ctx.his_line))):
+                and (ctx.hold is not None or ctx.pushback
+                     or asks(ctx.his_line, buried=True))):
             now = self.clock.now()
             if ctx.hold is not None and old is not None:  # held on: its first words and time
                 hold = position.Hold(meta.intent, now, old.words, old.first, old.turns + 1)
@@ -2850,7 +2855,7 @@ class Pipeline:
         waiting = self._his_waiting(turn, meta) if to_human and not preview else []
         unanswered = ""
         if waiting:
-            asked = next((t for t in waiting if is_question(t)), "")
+            asked = next((t for t in waiting if is_question(t, buried=True)), "")
             his = asked or his
             unanswered = unanswered_text(waiting, human)
         if not preview and to_human:
@@ -2974,7 +2979,8 @@ class Pipeline:
         # instruction already says to answer him plainly); a question or a request leads the
         # beat's answering wants (Composed.asking)
         his = his if to_human else ""
-        if his and is_question(his) and not before and not meta.pushback_line:
+        if (his and is_question(his, buried=self._coherent()) and not before
+                and not meta.pushback_line):
             after = question_first(after, human.forms[2])
         if live and not preview:  # her last owed answer's common stock phrases, named now
             named = self._pending_phrases(turn.speaker, now)
@@ -3129,7 +3135,7 @@ class Pipeline:
                         # others' earlier lines, never hers nor the line she answers
                         beat_items=[x for _, x in beat_offer],
                         tail=overlaid, beat_keys=[k for k, _ in beat_offer],
-                        asking=bool(his) and asks(his))
+                        asking=bool(his) and asks(his, buried=self._coherent()))
 
     @staticmethod
     def _prompt_budget(turn: Turn) -> int:
@@ -4343,18 +4349,29 @@ class Pipeline:
         # when he asked her to leave her husband): a draft with soft tells only is kept and sent
         # when the retry is worse or silent, else owed_fallback asks once more, simply.
         owed = max_attempts > 1 and self.live_review.owed(turn, meta)
-        # [talk] coherence: a draft that is only too long is cut in code or sent as written
-        # (talk/length.py fit_answer), never asked again from nothing
-        # (game lines only: a Discord turn keeps its own length rules, fit_words and its bands)
-        keeps = (self._coherent() and not emoji and turn.template is None
-                 and turn.kind is not TurnKind.BIT)
+        # [talk] coherence_length: a draft that is only too long is cut in code or sent as
+        # written (talk/length.py fit_answer), never asked again from nothing (game lines only:
+        # a Discord turn keeps its own length rules, fit_words and its bands). Off: main's
+        # "long" tell, whatever [talk] coherence says
+        game = not emoji and turn.template is None and turn.kind is not TurnKind.BIT
+        keeps = self._length_rule() and game
+        # [talk] coherence: his short line said back as a question is cut from her opening
+        echoes = self._coherent() and game
         fit = (int(LONG_SLACK * self._word_budget(turn, p, meta.two_lines))
                if owed and emoji else 0)  # an owed Discord answer is cut, never asked again
         # what a turn that answers nothing is about: an opener's topic, an outreach item's words
         subject = meta.topic or (meta.recall_query if meta.outreach_item is not None else "")
-        asked_line = (self._asked_line(turn, meta, c) if keeps else "")
+        asked_line = (self._asked_line(turn, meta, c) if keeps or echoes else "")
+        # [talk] coherence_length, a game whisper to him only: a kept answer to his question
+        # over KEEP_SLACK times her turn's words is asked once more at her usual length
+        # (USUAL_HINT); it costs a call, never the answer (the owed answer keeps the first)
+        usual_ok = (keeps and owed and turn.channel == "whisper" and bool(hg)
+                    and turn.to_guid == hg and length_asks(asked_line))
         meta.keep_words = meta.keep_lines = 0
         kept, why = "", "tells"
+        # the kept draft's lines are the length rule's (a kept or cut answer that fits her
+        # lines): when it is what goes, the styling leaves it whole as the return below would
+        kept_lines: int | None = None
         blocking: set[str] = set()  # the last draft's tells that kept it from going
         for attempt in range(max_attempts):
             if not _scope_valid(meta):
@@ -4389,9 +4406,9 @@ class Pipeline:
                 silent = quiet(text)  # a line that was only a command at him included
             if not silent and fit and len(text.split()) > fit:
                 text = fit_words(text, fit)
-            if not silent and keeps and asked_line:
+            if not silent and echoes and asked_line:
                 text = without_question_echo(text, asked_line)
-            length, draft = "", text
+            length, draft, usual = "", text, False
             if not silent and keeps:
                 budget = self._word_budget(turn, p, meta.two_lines)
                 voiced = _voice_words(p)  # never cut below the line her sheet names
@@ -4424,9 +4441,13 @@ class Pipeline:
                         length = "kept" if parts is not None else "cut"
                         text = text if parts is not None else " ".join(tail)
                         meta.keep_lines = len(parts or tail)
+                if (usual_ok and attempt == 0 and length == "kept"
+                        and len(text.split()) > KEEP_SLACK * budget):
+                    usual = True  # once: the retry is sent as the length rule reads it
                 if length != "fits":
                     log.info("say_length: guid=%d kind=%s attempt=%d action=%s words=%d limit=%d",
-                             turn.speaker, turn.kind, attempt, length, len(draft.split()), budget)
+                             turn.speaker, turn.kind, attempt,
+                             "usual" if usual else length, len(draft.split()), budget)
             if not silent:
                 tells = find_tells(text, recent_own=self._own_lines(turn), speaker=name,
                                    answers=c.answers, others=c.others, samples=c.samples,
@@ -4434,7 +4455,7 @@ class Pipeline:
                                    window=c.window, held=c.held, tonight=meta.again_tonight,
                                    recent_moves=moves, summons_ok=summons_ok,
                                    keep_emoji=emoji, far=far)
-                if (length == "retry" if keeps else
+                if (length == "retry" or usual if keeps else
                         len(text.split()) > LONG_SLACK * self._word_budget(turn, p, meta.two_lines)):
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
@@ -4462,6 +4483,9 @@ class Pipeline:
                     silent = True
                 elif not kept and not any(t.fatal or t.reason in DROP_ON_RETRY for t in tells):
                     kept = text  # soft tells only: what a retry may still not beat
+                    if length in ("cut", "kept") or (
+                            length == "fits" and len(text.split()) >= budget):
+                        kept_lines = meta.keep_lines
                 blocking = {t.reason for t in tells if t.fatal or t.reason in DROP_ON_RETRY}
             if silent:
                 dm = self._answers_his_dm(turn, meta)
@@ -4482,16 +4506,19 @@ class Pipeline:
                 break
             log.info("say_tells: guid=%d kind=%s attempt=%d tells=%s", turn.speaker, turn.kind,
                      attempt, ",".join(t.reason for t in tells))
-            only_long = length == "retry" and all(
+            only_long = (length == "retry" or usual) and all(
                 t.reason == "long" or not (t.fatal or t.soft) for t in tells)
             messages = asking(" ".join(x for x in (
                 self._retry_hint(tells, p, turn, draft=draft if only_long else "",
-                                 words=self._word_budget(turn, p, meta.two_lines)), rest_hint)
+                                 words=self._word_budget(turn, p, meta.two_lines),
+                                 usual=usual), rest_hint)
                 if x))
         if owed:
             if kept and not quiet(best := repair(kept, speaker=name, aliases=own, him=his,
                                                  keep_emoji=emoji)):
                 log.info("say_owed_kept: guid=%d kind=%s", turn.speaker, turn.kind)
+                if kept_lines is not None:
+                    meta.keep_words, meta.keep_lines = len(best.split()), kept_lines
                 return best, None
             if blocking and blocking <= MEETING_TELLS and why == "tells":
                 # her rewrite still asks him over or says they have met: those sentences go and
@@ -4709,15 +4736,23 @@ class Pipeline:
                              or (turn.channel == "whisper" and turn.to_guid == hg))
 
     def _coherent(self) -> bool:
-        """[talk] coherence (default off; anything but true is off): a long draft is kept, her
-        want and place hold through a conversation, every waiting line of his is answered."""
+        """[talk] coherence (default off; anything but true is off): her want and place hold
+        through a conversation, every waiting line of his is answered. Never the length rule
+        (_length_rule)."""
         return getattr(getattr(self.cfg, "talk", None), "coherence", False) is True
+
+    def _length_rule(self) -> bool:
+        """[talk] coherence_length (default off; anything but true is off), whatever [talk]
+        coherence says: game-line length by talk/length.py (a long answer to his question kept,
+        cut, split on her lines or laid on up to OWED_LINES; a content answer's shape words, her
+        voice sheet's room, a burst's own line break). Off: main's length handling."""
+        return getattr(getattr(self.cfg, "talk", None), "coherence_length", False) is True
 
     def _room(self, turn: Turn, meta: TurnMeta) -> int:
         """The words the turn's lines must have room for past her habit (0: her line's cap, as
         ever): a draft the length rule kept (TurnMeta.keep_words), or a game shape whose words
         were raised for a content answer (talk.shape CONTENT_WORDS)."""
-        if not self._coherent():
+        if not self._length_rule():
             return 0
         draw = turn.shape
         shaped = draw.words if isinstance(draw, ShapeDraw) and draw.content else 0
@@ -4736,7 +4771,7 @@ class Pipeline:
             return ""
 
     def _retry_hint(self, tells: list[Tell], p: Persona, turn: Turn | None = None, *,
-                    draft: str = "", words: int = 0) -> str:
+                    draft: str = "", words: int = 0, usual: bool = False) -> str:
         reasons = {t.reason for t in tells if t.fatal or t.soft}
         repeated = {r.removeprefix(MOVE_REPEAT) for r in reasons if r.startswith(MOVE_REPEAT)}
         unhinted = {r for r in reasons - _HINTED if not r.startswith(MOVE_REPEAT)}
@@ -4782,7 +4817,14 @@ class Pipeline:
             hints.append(HEAT_PUBLIC_HINT)
         if "self name" in reasons:
             hints.append(SELF_NAME_HINT.format(name=p.character_name))
-        if "long" in reasons and draft and turn is not None:
+        if "long" in reasons and usual and turn is not None:
+            # a kept answer far over her usual length ([talk] coherence_length, a whisper to
+            # him): her own draft when it is only long, said at her usual length with its answer
+            hint = USUAL_HINT.format(words=limit or self._word_budget(turn, p))
+            hints.append(USUAL_DRAFT.format(
+                draft=" ".join(draft.split()[:int(4 * KEEP_SLACK * 30)])) + " " + hint
+                if draft else hint)
+        elif "long" in reasons and draft and turn is not None:
             # only too long, with no cut that keeps the answer: her own draft, said shorter
             hints.append(SHORTER_HINT.format(
                 draft=" ".join(draft.split()[:int(4 * KEEP_SLACK * 30)]),
@@ -4848,10 +4890,10 @@ class Pipeline:
         return max(cap * max(1, lines), self._voice_room(p) * max(1, lines))
 
     def _voice_room(self, p: Persona) -> int:
-        """[talk] coherence: the longest line her voice sheet names (0 without one), at most
-        VOICE_LINE_WORDS (what one game line holds): a line inside her sheet's range is never
-        long, so the length rule never cuts her below it."""
-        voiced = _voice_words(p) if self._coherent() else None
+        """[talk] coherence_length: the longest line her voice sheet names (0 without one), at
+        most VOICE_LINE_WORDS (what one game line holds): a line inside her sheet's range is
+        never long, so the length rule never cuts her below it."""
+        voiced = _voice_words(p) if self._length_rule() else None
         return min(max(voiced), VOICE_LINE_WORDS) if voiced else 0
 
     def _lines_allowed(self, turn: Turn, p: Persona, meta: TurnMeta) -> int:
@@ -4908,22 +4950,24 @@ class Pipeline:
         paragraph of up to LONG_SLACK times its words, whatever her game line. `room`: the words
         a kept draft holds (TurnMeta.keep_words, talk/length.py) or a content answer's shape
         asks for, which her lines then have room for: the length rule already chose the cut.
-        `plain` ([talk] coherence): her brb or back line, typed without slips or an emoticon."""
+        `plain` ([talk] coherence): her brb or back line, typed without slips or an emoticon. The
+        line breaks a model burst keeps and a kept draft's split are the length rule's ([talk]
+        coherence_length)."""
         discord = is_discord(turn.channel)
         words = self._discord_words(turn)
         phase = day_phase(self.clock.local())
         keep = self._real_name_spelling() if close else frozenset()
         pieces = ([x for x in text.split("\n") if x.strip()]
                   if turn.kind is TurnKind.BIT and turn.max_lines > 1 and not words else [text])
-        coherent = self._coherent()
+        coherent, length_on = self._coherent(), self._length_rule()
         own_lines = [x for x in text.split("\n") if x.strip()]
-        if (coherent and len(pieces) == 1 and two_lines and not words and turn.max_lines > 1
+        if (length_on and len(pieces) == 1 and two_lines and not words and turn.max_lines > 1
                 and len(own_lines) > 1):
             # a game burst the model wrote as two lines keeps its own break, each line laid out
             # on its own: repacked as one text its clauses ran together and the rest was dropped
             # (hard-case audit, 2026-11-17)
             pieces = own_lines[:turn.max_lines]
-        if coherent and room and not words and len(pieces) == 1 and turn.kind is not TurnKind.BIT:
+        if length_on and room and not words and len(pieces) == 1 and turn.kind is not TurnKind.BIT:
             # a kept draft longer than one game line: its whole clauses on the lines she has
             # (talk.length.split_lines; _generate only keeps a draft that fits them)
             allowed = max(lines, max(1, turn.max_lines) if two_lines else turn_lines(

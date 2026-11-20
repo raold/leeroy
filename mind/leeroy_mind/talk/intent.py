@@ -123,8 +123,9 @@ class IntentContext:
     reassure: bool = True  # [heat]: at heat 0 she seeks no reassurance about the two of them
     # [talk] coherence (talk/position.py; the pipeline fills them, all off by default): his line
     # pushes back on her; it carries bad news of his; an explicit scene is running (his overlay
-    # applies); `answer_first`, the answer-first rule below applies; `hold`, her want while his
-    # question or disagreement is open
+    # applies); `answer_first`, the answer-first rule below applies (and a question buried in
+    # his line with no question mark is his question: asking.buried_question); `hold`, her want
+    # while his question or disagreement is open
     pushback: bool = False
     bad_news: bool = False
     scene: bool = False
@@ -272,7 +273,7 @@ def weights(ctx: IntentContext) -> dict[Intent, float]:
     if ctx.family in ("dm", "whisper") and not ctx.to_him:
         w[Intent.GOSSIP] = 0.0
     if ctx.answer_first and ctx.to_him and ctx.his_line.strip() and (
-            ctx.pushback or asks(ctx.his_line)):
+            ctx.pushback or asks(ctx.his_line, buried=True)):
         for i in ANSWER_OFF:
             w[i] = 0.0
     if ctx.to_him and ctx.bad_news:
@@ -300,7 +301,8 @@ def allowed(ctx: IntentContext) -> tuple[Intent, ...]:
     w = weights(ctx)
     if (hold := _held(ctx, w)) is not None:
         return (hold,)  # his question or disagreement is still open: she stays on it
-    return ordered((i for i in Intent if w[i] > 0), ctx.to_him and asks(ctx.his_line))
+    return ordered((i for i in Intent if w[i] > 0),
+                   ctx.to_him and asks(ctx.his_line, buried=ctx.answer_first))
 
 
 def draw_intent(ctx: IntentContext, rng: random.Random) -> Intent | None:

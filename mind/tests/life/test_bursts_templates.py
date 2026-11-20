@@ -1,6 +1,7 @@
-"""[talk] coherence, the hard-case audit's fixes: a game burst keeps the model's own line break,
-her brb and back lines take no slips and no emoticon, a hurried answer makes no late excuse,
-and her brb's reason follows where she said she is. Fakes only; invented lines."""
+"""[talk] coherence, the hard-case audit's fixes: her brb and back lines take no slips and no
+emoticon, a hurried answer makes no late excuse, and her brb's reason follows where she said she
+is; and [talk] coherence_length's: a game burst keeps the model's own line break (game-line
+layout is the length rule's). Fakes only; invented lines."""
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -49,13 +50,13 @@ def whisper(**kw):
 
 
 def test_a_game_burst_keeps_the_models_line_break(store, clock, tmp_path):
-    for coherence in (True, False):
-        r = rig(store, clock, tmp_path / str(coherence), coherence=coherence)
+    for length in (True, False):  # [talk] coherence on in both: the break is the length rule's
+        r = rig(store, clock, tmp_path / str(length), coherence_length=length)
         try:
             p = member(r)
             lines = [s.plain for s in r.engine._style(whisper(), p, BURST, close=False,
                                                       two_lines=True)]
-            if coherence:
+            if length:
                 assert lines == ["check your addons list, it might be switched off",
                                  "lost my keys last night and climbed in through my own window"]
             else:  # as before: one text repacked, the second line's start run into the first

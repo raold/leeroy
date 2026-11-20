@@ -313,3 +313,38 @@ def test_claims_are_the_first_lines_dropped_from_a_block_over_its_budget(monkeyp
     assert [x for x in on if not x.startswith("- You said: claim number")] == plain
     from leeroy_mind.text import estimate_tokens
     assert estimate_tokens("\n".join(on)) <= sofar.MAX_TOKENS or on == plain
+
+
+def test_a_claim_that_repeats_her_place_or_state_or_plan_is_left_out():
+    """Blind sandbox test, 2026-11-20: 10 of 56 prompts showed her place line clipped ("...")
+    and then the same words again as a claim. The place, the state and her plan lines stay;
+    a claim that says them again goes, one that says something else stays."""
+    lines = talk(("s", "yeah im at the station right now just waiting around between calls"),
+                 ("h", "nice, quiet night?"),
+                 ("s", "i did 3 call outs before lunch. ill be off at 6 tomorrow so talk then"),
+                 ("h", "ok"))
+    out = block(lines, forms=HE, skip=4, claims=True)
+    assert out[0] == "- You said you're at the station right now just waiting around...."
+    assert not any("waiting around between calls" in x for x in out[1:])
+    assert "- You said: i did 3 call outs before lunch." in out
+    # her plan is shown as a plan, never again as a claim
+    assert sum("ill be off at 6 tomorrow" in x for x in out) == 1
+    # her state line likewise
+    state = talk(("s", "just got changed, my shirt is off now"),
+                 ("s", "my shirt is off now and im on the sofa with 2 dogs"), ("h", "ha"))
+    shown = block(state, forms=HE, skip=3, claims=True)
+    assert sum("shirt is off" in x for x in shown) == 1
+
+
+def test_repeats_reads_words_not_letters():
+    assert sofar.repeats("im at my desk at the dmv and i think the spreadsheet",
+                         ["at my desk at the dmv and i..."])
+    assert sofar.repeats("yeah im at the office", ["at the office and just sorting through..."])
+    assert not sofar.repeats("i finished my homework at 9", ["home"])  # never inside a word
+    assert sofar.repeats("got home at 6 and fed the 3 cats", ["home"])
+    assert not sofar.repeats("i did 3 call outs before lunch", ["at the station", ""])
+    # a plan of hers only as a whole: "i will be" alone is no repeat of it
+    plan = ["i will be online after raid tonight"]
+    assert not sofar.repeats("i will be at the gym at 6", plan, lead=0)
+    assert sofar.repeats("i will be online after raid tonight", ["i will be online after..."],
+                         lead=0)

@@ -1,7 +1,9 @@
-"""[talk] coherence, the length rule (talk/length.py): an answer to a line of his that asks
-anything is never cut (sent as written when it fits her lines, else asked again with the draft,
-then laid on up to three lines or sent by its tail); a line that asks nothing keeps its leading
-clauses. Invented lines (length_drafts.py holds the reviews' 92 drafts); the test cast."""
+"""[talk] coherence_length, the length rule (talk/length.py): an answer to a line of his that
+asks anything is never cut (sent as written when it fits her lines, else asked again with the
+draft, then laid on up to three lines or sent by its tail); a line that asks nothing keeps its
+leading clauses. Invented lines (length_drafts.py holds the reviews' 92 drafts); the test cast.
+[talk] coherence is on too, as the owner ran both before the split (tests/test_coherence_split.py
+holds each on its own)."""
 import asyncio
 
 import pytest
@@ -12,7 +14,8 @@ from engine_rig import make_rig as _make_rig
 
 
 def make_rig(*args, **kw):
-    kw.setdefault("coherence", True)  # the switch under test; a test of "off" says so
+    kw.setdefault("coherence_length", True)  # the switch under test; a test of "off" says so
+    kw.setdefault("coherence", True)
     return _make_rig(*args, **kw)
 from leeroy_mind.testing.fake_llm import script_from
 from leeroy_mind.personas.io import PersonaCache
@@ -183,8 +186,10 @@ def test_content_question():
 
 def test_a_long_whisper_answer_goes_as_written_and_is_never_asked_again(store, clock,
                                                                         tmp_path):
-    draft = ("we have 22 now. the calendar looked thin this morning and most of them are alts "
-             "anyway so who knows what we end up with on the night")
+    # past her line's words but within twice them (past that a whisper is asked once more at
+    # her usual length: tests/test_coherence_split.py)
+    draft = "we have 22 now. the calendar looked thin this morning and most are alts"
+    assert 8 * 1.25 < len(draft.split()) <= 8 * KEEP_SLACK
     async def main():
         seed_test_cast(store)
         save_member(store, 102, typo_rate=0.0, emoticon_rate=0.0, split_rate=0.0,
@@ -301,12 +306,14 @@ def test_a_draft_far_too_long_with_no_cut_is_asked_again_with_itself(store, cloc
     run(main())
 
 
-def test_with_coherence_off_the_long_tell_asks_afresh(store, clock, tmp_path):
+def test_with_the_length_rule_off_the_long_tell_asks_afresh(store, clock, tmp_path):
+    """[talk] coherence on, coherence_length off: main's "long" tell (a fresh line at her
+    length), never the length rule's kept draft."""
     async def main():
         seed_test_cast(store)
         save_member(store, 102, typo_rate=0.0, emoticon_rate=0.0, words_per_line=[1, 4])
         r = make_rig(store, clock, tmp_path, script=script_from([LORE_DRAFT, "gorak"]),
-                     coherence=False)
+                     coherence_length=False)
         assert await spoken(r, answer()) == ["gorak"]
         assert "Shorter: 1-4 words" in r.prompts()[1]
     run(main())

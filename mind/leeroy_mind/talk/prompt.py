@@ -333,7 +333,9 @@ def unanswered_text(lines: list[str], human: HumanIdentity) -> str:
         return ""
     he, _, their = human.forms
     quoted = " / ".join('"' + " ".join(x.split()[:UNANSWERED_WORDS]) + '"' for x in lines)
-    first = (UNANSWERED_QUESTION.format(their=their) if any(is_question(x) for x in lines)
+    # ([talk] coherence's own instruction: a question buried in a line counts too)
+    first = (UNANSWERED_QUESTION.format(their=their)
+             if any(is_question(x, buried=True) for x in lines)
              else UNANSWERED_OLDEST)
     return UNANSWERED.format(He=he.capitalize(), n=len(lines), lines=quoted, first=first)
 
