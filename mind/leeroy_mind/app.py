@@ -509,6 +509,10 @@ class MindApp:
         self.banter = ext("banter", lambda: attach_banter(self))
         from .gpucontrol import GpuControl
         self.gpu = GpuControl(self)
+        from .invites.service import attach as attach_invites
+        # his invitations in game: [talk] invites, read at each line (on by default; it does
+        # nothing until he invites); before the Realm and the server, which attach last
+        self.invites = ext("invites", lambda: attach_invites(self))
         self.realm = ext("realm", lambda: attach_realm(self))
         from .server.attach import attach_server
         self.server = ext("server", lambda: attach_server(self))  # Last; disabled adds no handlers or tasks.
@@ -523,10 +527,6 @@ class MindApp:
         self.godmode = ext("godmode", lambda: attach_godmode(self))  # [godmode]: off adds nothing
         from .raidlead.service import attach as attach_raidlead
         self.raidlead = ext("raidlead", lambda: attach_raidlead(self))  # None while [raidlead] is off
-        from .invites.service import attach as attach_invites
-        # his invitations in game: [talk] invites, read at each line (on by default; it does
-        # nothing until he invites)
-        self.invites = ext("invites", lambda: attach_invites(self))
         from .raidplay.respond import attach as attach_mechanics
         # [raidplay] respond: off adds nothing
         self.mechanics = ext("raidplay", lambda: attach_mechanics(self))
