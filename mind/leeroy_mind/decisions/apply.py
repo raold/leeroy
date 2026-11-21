@@ -15,7 +15,10 @@ from .ledger import KINDS
 
 # Kind modules the console imports to learn reversibility: "module:factory" (Parts B and C add theirs)
 BUILTIN: tuple[str, ...] = ('leeroy_mind.decisions.lineup:lineup_rules',
-                            'leeroy_mind.decisions.loot_rules:loot_rules')
+                            'leeroy_mind.decisions.loot_rules:loot_rules',
+                            'leeroy_mind.decisions.bank:bank_rules',
+                            'leeroy_mind.decisions.strategy:strategy_rules',
+                            'leeroy_mind.decisions.ranks:rank_rules')
 # Bank requests and ranks are the officers' business; their posts live in officers' channels
 OFFICER_KINDS = frozenset({'bank', 'rank'})
 # Kinds an officers' poll settles: who argued what stays with the officers until the poll is linked
@@ -219,3 +222,10 @@ def effects(row) -> list[str]:
             shown = _word(value)
         out.append(f'{label}: {shown}')
     return out
+
+
+def held(app):
+    from leeroy_mind.talk.budget import _HOLD
+    engine = getattr(app, "engine", None)
+    raid = getattr(engine, "raid", None)
+    return bool(raid and (raid.phase(app.clock.now()) in _HOLD or engine._in_boss_fight(app.clock.now())))

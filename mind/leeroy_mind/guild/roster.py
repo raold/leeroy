@@ -57,17 +57,19 @@ def _members(members):
     return members.values() if hasattr(members, "values") else members
 
 
-def desired_rank(persona, ranks):
+def desired_rank(persona, ranks, overlay=None):
     if persona is None:
         return None
     rank = ranks.get(persona.play.guild_role)
+    if overlay:
+        rank = overlay.get(persona.guid, rank)
     return rank if type(rank) is int and 1 <= rank <= 9 else None
 
 
-def rank_changes(members, persona_of, human_guid, ranks):
+def rank_changes(members, persona_of, human_guid, ranks, overlay=None):
     return [(m.guid, rank) for m in sorted(_members(members), key=lambda m: m.guid)
             if m.guid != human_guid and m.rank != 0
-            and (rank := desired_rank(persona_of(m.guid), ranks)) is not None and rank != m.rank]
+            and (rank := desired_rank(persona_of(m.guid), ranks, overlay)) is not None and rank != m.rank]
 
 
 def gear_up_targets(members, avg_ilvl, geared, cfg):
@@ -302,14 +304,31 @@ class Roster:
                     with self.ports.conn:
                         record["state"] = "observed"
                         self._put(name, record)
-            changes = rank_changes(self._cast(), self.ports.persona, self._human, self.cfg.ranks)
+            app = getattr(self.ports, "app", None)
+            decisions = getattr(app, "decisions", None)
+            def overlay():
+                if decisions is None:
+                    return {}
+                from leeroy_mind.decisions.ranks import rank_overlay
+                return rank_overlay(self.ports.conn)
+            def holding():
+                if decisions is None:
+                    return False
+                from leeroy_mind.decisions.strategy import held
+                return held(app) or not decisions.rules_for("rank").seen
+            if holding():
+                self._ranks_due = True
+                return
+            changes = rank_changes(self._cast(), self.ports.persona, self._human, self.cfg.ranks, overlay())
             self._ranks_due = len(changes) > MAX_BATCH
             for guid, rank in changes[:MAX_BATCH]:
-                if not self._same_owner() or epoch != self._epoch:
+                if not self._same_owner() or epoch != self._epoch or holding():
                     self._ranks_due = True
                     break
                 m = self._cast().get(guid)
-                if m is None or m.rank == rank or desired_rank(self.ports.persona(guid), self.cfg.ranks) != rank:
+                if decisions and (guid not in app.world.members or not app.world.members[guid].rank):
+                    continue
+                if m is None or m.rank == rank or desired_rank(self.ports.persona(guid), self.cfg.ranks, overlay()) != rank:
                     continue
                 await self._send(SetRank(uuid4().hex, guid, rank), f"rank:{guid}", {"rank": rank})
 

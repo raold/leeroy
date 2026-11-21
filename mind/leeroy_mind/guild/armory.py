@@ -12,6 +12,7 @@ from .upgrades import ItemInfo
 
 class Armory(Protocol):
     def items(self, ids) -> dict[int, ItemInfo]: ...
+    def bank_items(self, ids) -> dict[int, ItemInfo]: ...
     def equipped(self, guids) -> dict[int, dict[int, int]]: ...
     def human_tier(self, guid) -> int: ...
     def name(self, guid) -> str | None: ...
@@ -50,12 +51,12 @@ def parse_items(rows) -> dict[int, ItemInfo]:
     found = {}
     for number, row in enumerate(rows, 1):
         try:
-            if len(row) != 18:
-                raise ValueError("expected 18 columns")
+            if len(row) not in (18, 19):
+                raise ValueError("expected item fields")
             entry = _id(_numeric(row[0]))
             values = [_numeric(value) for value in row[2:8]]
-            stats = frozenset(value for field in row[8:] if (value := _numeric(field, nullable=True)))
-            found[entry] = ItemInfo(entry, row[1], *values, stats)
+            stats = frozenset(value for field in row[8:18] if (value := _numeric(field, nullable=True)))
+            found[entry] = ItemInfo(entry, row[1], *values, stats, _numeric(row[18]) if len(row) == 19 else None)
         except (TypeError, ValueError):
             raise RosterError(f"item row {number}: invalid columns") from None
     return found
@@ -115,16 +116,25 @@ class MysqlArmory:
         self.mysql_exe = mysql_exe
         self._items: dict[int, ItemInfo] = {}
 
-    def items(self, ids) -> dict[int, ItemInfo]:
-        wanted = _ids(ids)
-        missing = tuple(entry for entry in wanted if entry not in self._items)
-        for chunk in _chunks(missing):
+    def _read_items(self, ids, *, binding=False):
+        items = {}
+        for chunk in _chunks(ids):
             sql = ("SELECT entry, name, Quality, ItemLevel, InventoryType, class, subclass, AllowableClass, "
                    + ", ".join(f"stat_type{index}" for index in range(1, 11))
+                   + (", bonding" if binding else "")
                    + " FROM item_template WHERE entry IN (" + ",".join(map(str, chunk)) + ")")
             fetched = parse_items(run_mysql(self.world, sql, self.mysql_exe))
-            self._items.update({entry: item for entry, item in fetched.items() if entry in chunk})
+            items.update({entry: item for entry, item in fetched.items() if entry in chunk})
+        return items
+
+    def items(self, ids) -> dict[int, ItemInfo]:
+        wanted = _ids(ids)
+        self._items.update(self._read_items(tuple(entry for entry in wanted if entry not in self._items)))
         return {entry: self._items[entry] for entry in wanted if entry in self._items}
+
+    def bank_items(self, ids) -> dict[int, ItemInfo]:
+        """A fresh template/bonding read for a proposed transfer, independent of the gear cache."""
+        return self._read_items(_ids(ids), binding=True)
 
     def equipped(self, guids) -> dict[int, dict[int, int]]:
         wanted = _ids(guids)

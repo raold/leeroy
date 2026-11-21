@@ -16,6 +16,14 @@ LEEROY_TEST(Protocol_HelloShape)
     CHECK(j["features"].is_array());
     CHECK(j["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
         "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest"}));
+    auto stockOnly = json::parse(EncodeHello(1, 21, 0, 0, {}, false, false, true))["features"];
+    auto expected = j["features"];
+    expected.push_back("bank_stock_target");
+    CHECK(stockOnly == expected);
+    auto mailOnly = json::parse(EncodeHello(1, 21, 0, 0, {}, true, false, false))["features"];
+    expected = j["features"];
+    expected.push_back("member_bank_mail");
+    CHECK(mailOnly == expected);
     CHECK(!j.contains("started_ms"));
     CHECK_EQ(json::parse(EncodeHello(1700000000000, 21, 0, 1699999990000))["started_ms"], 1699999990000LL);
 }
@@ -24,8 +32,12 @@ LEEROY_TEST(Protocol_HelloAppendsTheBuildsOwnFeaturesOnce)
 {
     auto j = json::parse(EncodeHello(1700000000000, 21, 0, 0, {"dc_toc", "dc_ulduar", "regear", "", "dc_toc"}));
     CHECK(j["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
-        "dummy_party_on_arrival", "invites", "lead", "dc_toc", "dc_ulduar"}));
+        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "dc_toc", "dc_ulduar"}));
     CHECK(!j.contains("started_ms"));
+    auto combined = json::parse(EncodeHello(1, 21, 0, 0, {"dc_toc", "dc_ulduar"}, true, true, true));
+    CHECK(combined["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
+        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "bank_stock_target",
+        "member_bank_mail", "training_enabled", "dc_toc", "dc_ulduar"}));
 }
 
 LEEROY_TEST(Protocol_ChatShapeAndOneLine)

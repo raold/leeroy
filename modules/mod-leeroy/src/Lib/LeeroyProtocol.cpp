@@ -347,7 +347,7 @@ std::string DumpLine(json const& j)
 }
 
 std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid, std::int64_t startedMs,
-    std::vector<std::string> const& extra)
+    std::vector<std::string> const& extra, bool memberBankMail, bool trainingOn, bool bankRestock)
 {
     json j = Envelope(ts, "hello");
     j["server"] = "mod-leeroy";
@@ -359,6 +359,9 @@ std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t hu
     j["features"] = json::array();
     for (std::string_view feature : kFeatures)
         j["features"].push_back(std::string(feature));
+    if (bankRestock) j["features"].push_back("bank_stock_target");
+    if (memberBankMail) j["features"].push_back("member_bank_mail");
+    if (trainingOn) j["features"].push_back("training_enabled");
     for (std::string const& feature : extra)
         if (!feature.empty() && std::find(j["features"].begin(), j["features"].end(), feature) == j["features"].end())
             j["features"].push_back(feature);

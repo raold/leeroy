@@ -215,3 +215,11 @@ def test_cli_hurt_never_migrates(tmp_path, monkeypatch):
     before = (tmp_path / "mind.db").read_bytes()
     assert cli.training_main(["hurt", "--data-dir", str(tmp_path)]) == 1
     assert (tmp_path / "mind.db").read_bytes() == before
+
+
+def test_hurt_separates_the_played_guild_strategy(fake):
+    save(fake, "base", start=1000)
+    save(fake, "modified", start=5000, outcome="killed")
+    fake.conn.execute("""UPDATE tg_pull SET covariates='{"guild_strategy":19}' WHERE id='modified'""")
+    report = hurt_report(fake.conn, last=1)
+    assert [(r.get("guild_strategy"),r["kills"],r["wipes"]) for r in report["contexts"]] == [(19,1,0),(None,0,1)]

@@ -99,7 +99,7 @@ def _options(seeds: Sequence[Seed], *, local: datetime, officers_free: int, hang
                 from leeroy_mind.groups.conversations import definition
                 channel = definition(name)
             if (channel is None or channel.category == 'info' or seed.weight <= 0 or
-                    channel.officers_only and officers_free < 2 or seed.officers_only and not channel.officers_only):
+                    channel.officers_only and officers_free < (1 if seed.bank_announcement(name) else 2) or seed.officers_only and not channel.officers_only):
                 continue
             weight = .3 if is_group(name) else CHANNEL_BASE.get(name, CLASS_CHANNEL_BASE if name in layout.CLASS_CHANNEL.values() else 0)
             weight *= seed.weight * (3 if index == 0 else 1.5)
@@ -154,6 +154,8 @@ def choose_cast(channel: str, seed: Seed, states: Mapping[int, DiscordState],
             weight *= 4
         weight *= edits_of(p).channel_weight(channel)  # godmode hangouts; 0: she avoids it
         weights[guid] = weight
+    if seed.bank_announcement(channel):
+        return pick_speakers({g:w for g,w in weights.items() if g in officers and g in seed.about[:1]}, 1, rng)
     if sum(w > 0 for w in weights.values()) < 2:
         return []
     openers = {g:w for g,w in weights.items() if seed.openers is None or g in seed.openers}

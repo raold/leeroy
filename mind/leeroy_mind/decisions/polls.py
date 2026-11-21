@@ -133,15 +133,19 @@ def winner(counts: dict[str, int]) -> str | None:
     return ranked[0][0]
 
 
+def _closing_result(conn, poll):
+    # Rank ballots freeze at the deadline. The rank hook adjudicates with a fresh cast.
+    return None if poll["kind"] == "rank" else winner(tally(conn, poll["id"]))
+
+
 def close_due(store, *, now) -> list[tuple[int, str | None]]:
     """Close every open poll whose closing time has come: (poll, the winning option or None)."""
     ts = _time(now)
     out = []
     with store.transaction():
-        for row in store.conn.execute("SELECT id FROM guild_poll WHERE status='open' AND closes<=? ORDER BY id",
+        for row in store.conn.execute("SELECT id,kind FROM guild_poll WHERE status='open' AND closes<=? ORDER BY id",
                                       (ts,)).fetchall():
-            counts = tally(store.conn, row['id'])
-            result = winner(counts)
+            result = _closing_result(store.conn, row)
             store.conn.execute("UPDATE guild_poll SET status='closed', result=? WHERE id=? AND status='open'",
                                (result, row['id']))
             out.append((row['id'], result))
@@ -158,7 +162,7 @@ def close_early(store, poll: int, *, now) -> tuple[int, str | None] | None:
         row = get_poll(store.conn, poll)
         if row is None or row['status'] != 'open':
             return None
-        result = winner(tally(store.conn, poll))
+        result = _closing_result(store.conn, row)
         store.conn.execute("UPDATE guild_poll SET status='closed', result=? WHERE id=? AND status='open'",
                            (result, poll))
     log.info('poll_closed id=%d result=%s votes=%d early=1', poll, result or '-', sum(tally(store.conn, poll).values()))

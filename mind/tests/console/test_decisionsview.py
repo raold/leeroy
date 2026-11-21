@@ -72,11 +72,8 @@ def test_decisions_view_renders_effects(console, data):
     assert loot['changed'] == ['DKP ledger rows: 12, 13', 'receipts: guild:loot:7:ab']
     assert (loot['settler'], loot['state'], loot['summary']) == ('a poll', 'in effect', 'mode loot_council')
     assert loot['positions'] == [{'guid': 102, 'name': 'Belra', 'side': 'loot_council', 'why': 'low_attendance'}]
-    # The loot rule (Part B) is undone by putting the rule it replaced back; a kind with no rules yet
-    # (the strategy, Part C) can't be undone in game
-    assert loot['action']['kind'] == 'undo' and loot['action']['permanent'] is False
-    assert strategy['action']['kind'] == 'overrule' and "can't be undone in game" in strategy['action']['words'].lower()
-    assert strategy['action']['permanent'] is True and lineup['action'] is None
+    for reversible in (loot, strategy):
+        assert reversible['action']['kind'] == 'undo' and reversible['action']['permanent'] is False
     assert lineup['changed'] == ['talk only: no_raid'] and lineup['action'] is None
     assert bank['officers_only'] is True and bank['action']['kind'] == 'overrule'
     assert bank['action']['words'].startswith('Not in effect yet')

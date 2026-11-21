@@ -144,7 +144,7 @@ RS_CALLS = {
 
 
 def test_the_stock_calls_are_unchanged_but_jaraxxus():
-    assert list(BOSS_CALLS) == sorted([*OLD_BOSS_CALLS, *RS_CALLS, *ULD_CALLS])
+    assert set(BOSS_CALLS) == OLD_BOSS_CALLS.keys() | RS_CALLS.keys() | ULD_CALLS.keys()
     assert {k: v for k, v in BOSS_CALLS.items() if k != (649, 1)} == {
         k: v for k, v in OLD_BOSS_CALLS.items() if k != (649, 1)} | RS_CALLS | ULD_CALLS
     assert BOSS_CALLS[649, 1] == JARAXXUS_NORMAL

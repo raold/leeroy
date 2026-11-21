@@ -252,3 +252,18 @@ def test_saved_sizes_reads_only_the_owners_permanent_saves_of_that_map(monkeypat
     for args in (("1", 533), (1, 0), (True, 533)):
         with pytest.raises(ValueError, match="uint32"):
             armory.saved_sizes(*args)
+
+
+def test_bank_binding_is_read_again_at_dispatch_without_changing_cached_items(monkeypatch):
+    armory = MysqlArmory("world", "characters", Path("mysql.exe"))
+    calls = []
+    binding_reads = iter(("2", "1"))
+    def read(db, sql, exe):
+        calls.append(sql)
+        base = ["1001","Synthetic gear","4","250","2","4","0","-1"] + ["0"] * 10
+        return [base + ([next(binding_reads)] if ", bonding FROM" in sql else [])]
+    monkeypatch.setattr(module, "run_mysql", read)
+    assert armory.items([1001])[1001].bonding is None
+    assert armory.bank_items([1001])[1001].bonding == 2
+    assert armory.bank_items([1001])[1001].bonding == 1
+    assert armory.items([1001])[1001].bonding is None and len(calls) == 3

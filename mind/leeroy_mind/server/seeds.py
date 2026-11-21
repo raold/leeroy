@@ -18,7 +18,7 @@ from leeroy_mind.wow import boss_name
 
 SEED_KINDS = ('raid_before', 'raid_after', 'loot', 'life', 'plan', 'calendar', 'birthday',
               'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo', 'joke',
-              'wow_event', 'loot_close', 'loot_wish', 'intent', 'decision', 'his_loot', 'meme', 'meme_image')
+              'wow_event', 'loot_close', 'loot_wish', 'intent', 'decision', 'his_loot', 'meme', 'meme_image', 'bank_request', 'restock')
 # An intent (godmode.intents) is tried again half an hour after an opener that was dropped.
 # A decision's stage is argued once (its keys name the stage): never fresh again once used
 FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0, 'loot_close': 7 * 86400.0,
@@ -33,7 +33,7 @@ SUBJECTS = {'raid': ('raid_before', 'raid_after', 'reset', 'his_day'),
             'life': ('life', 'weekend', 'photo'),
             'meme': ('joke', 'meme', 'meme_image'),
             'rival': ('rival',),
-            'officer': ('officer', 'decision'),
+            'officer': ('officer', 'decision', 'bank_request', 'restock'),
             'calendar': ('calendar', 'birthday', 'wow_event'),
             'chat': ('plan', 'purpose')}
 _SUBJECT_OF = {kind: subject for subject, kinds in SUBJECTS.items() for kind in kinds}
@@ -94,10 +94,13 @@ class Seed:
     weight: float = 1.0
     witnesses: tuple[int, ...] = ()
 
+    def bank_announcement(self, channel):
+        return self.kind in ("bank_request", "restock") and self.officers_only and channel == "bank-requests"
+
     @property
     def openers(self) -> tuple[int, ...] | None:
         """Who already knows a subject before any of it is posted in the channel."""
-        if self.kind in ('life', 'photo', 'group_start', 'loot_wish', 'intent'):
+        if self.kind in ('life', 'photo', 'group_start', 'loot_wish', 'intent', 'bank_request', 'restock'):
             return self.about
         if self.kind == 'his_day':
             return self.witnesses

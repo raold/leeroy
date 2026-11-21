@@ -13,6 +13,7 @@ import statistics
 
 from leeroy_mind.guild.raids import CATALOG
 
+from .score import strategy_id
 from . import bandit, drift, store
 from .cards import Card, LEVERS, stock_card
 from .report import _meta
@@ -42,7 +43,7 @@ class Experimenter:
     def _rows(self, context=None, basis=None):
         now = self.ports.clock.now()
         return [r for r in _scored_rows(store.pull_rows(self.conn, context=context))
-                if r["kind"] in {"offline", "his"} and _finite(r["received"])
+                if strategy_id(r) == 0 and r["kind"] in {"offline", "his"} and _finite(r["received"])
                 and 0 <= r["received"] <= now and r["end_ms"] <= now * 1000
                 and (basis is None or r["score_basis"] == basis)]
 
@@ -286,7 +287,7 @@ class Experimenter:
             for obs in selected:
                 receipt = _meta(self.conn, f"tg:obs:{obs['arm']}:{obs['pull']}")
                 if (not isinstance(receipt, dict) or receipt.get("id") != obs["pull"]
-                        or receipt.get("score_basis") != meta["basis"]
+                        or strategy_id(receipt) != 0 or receipt.get("score_basis") != meta["basis"]
                         or receipt.get("context") != context):
                     raise ValueError("missing or incompatible immutable observation receipt")
                 receipts.append(receipt)
@@ -361,8 +362,8 @@ class Experimenter:
                 continue
             arms = self._arms(trial["id"])
             # Raw observed wipes bench even when scoring has not run yet.
-            arms = [a for a in arms if not self.conn.execute(
-                "SELECT 1 FROM tg_pull WHERE raid_id=? AND arm_id=? AND outcome='wiped'", (raid_id, a["id"])).fetchone()]
+            arms = [a for a in arms if not any(strategy_id(row) == 0 for row in self.conn.execute(
+                "SELECT covariates FROM tg_pull WHERE raid_id=? AND arm_id=? AND outcome='wiped'", (raid_id, a["id"])))]
             if not arms:
                 continue
             candidates.append((trial, arms))

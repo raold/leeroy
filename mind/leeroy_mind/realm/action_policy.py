@@ -174,11 +174,18 @@ def classify(cmd, *, child=False):
             if type(item) is not p.MailItem: raise ValueError("invalid mail item")
             integer(item.item_id); integer(item.count, 1, 20)
             if text(item.from_, 1, 64) not in {"new", "bags"}: raise ValueError("invalid mail source")
+        if cmd.to_guid is not None and (n("to_guid") == cmd.from_guid or cmd.money or not cmd.items
+                                        or any(item.from_ != "bags" for item in cmd.items)):
+            raise ValueError("invalid member delivery")
     elif kind == "bank_tab_buy":
         scope = (n("officer_guid"),); n("tab", 0, 5); s("name", 1, 16); s("icon", 0, 32)
     elif kind == "bank_money": n("amount", 1, 60000)
     elif kind in {"bank_deposit", "bank_withdraw", "bank_stock"}:
-        if kind == "bank_stock": scope, policy = (n("officer_guid"),), "ordinary"
+        if kind == "bank_withdraw" and cmd.requester is not None: n("requester")
+        if kind == "bank_stock":
+            scope, policy = (n("officer_guid"),), "ordinary"
+            if cmd.target is not None or cmd.maker is not None:
+                n("maker"); n("target", 1, 60000)
         n("item_id"); n("count", 0 if kind == "bank_deposit" else 1, 1000); n("tab", 0, 5)
     elif kind == "grant_achievement":
         scope = (n("guid"),)

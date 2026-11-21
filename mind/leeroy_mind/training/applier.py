@@ -29,8 +29,8 @@ from .vocab import Vocab
 
 
 log = logging.getLogger(__name__)
-Layer = Literal["standing", "pooled", "boss", "arm"]
-_RANK = {"pooled": 0, "standing": 1, "boss": 2, "arm": 3}
+Layer = Literal["standing", "pooled", "guild", "boss", "arm"]
+_RANK = {"pooled": 0, "standing": 1, "guild": 1.5, "boss": 2, "arm": 3}
 _TYPES = {c.__name__: c for c in (BotDo, CustomStrategy, DcSetting, RaidControl)}
 _DRIFT = {"not_primed", "no_target", "failed", "unknown_strategy", "unknown_action",
           "not_in_vocab", "bad_value", "bad_key", "bad_lines"}
@@ -87,6 +87,7 @@ class _Entry:
     member: MemberInfo
     directives: tuple[Directive, ...]
     receipts: list[int] = field(default_factory=list)
+    guild_strategy: int | None = None
 
 
 def _encode(command):
@@ -141,6 +142,8 @@ class Applier:
         self.ports, self.ledger = ports, ledger
         self.state_provider = state_provider
         self.application_allowed = application_allowed
+        self.guild_allowed = lambda context, ident: False
+        self.guild_hold = lambda: False
         self._lock = asyncio.Lock()
         self._entries: list[_Entry] = []
         self._receipts: dict[int, _Receipt] = {}
@@ -395,6 +398,28 @@ class Applier:
         # Old unresolved mutations are not safe to forget after an arbitrary TTL.
         return [r for r in store.open_applied(self.ports.conn, 0) if run is None or r["run"] == run]
 
+    def guild_carrier(self, run, card, *, tank, human_lead):
+        state = self._state(run)
+        if state is None:
+            return False
+        if all(d.lever == "lust_at" for d in card.directives):
+            return any(m.cls == 7 and self._available(state, (g,)) for g, m in state.members.items())
+        return not human_lead and self._available(state, (tank,))
+
+    def guild_evidence(self, run):
+        """Outstanding physical guild settings, including unconfirmed cleanup after a restart."""
+        evidence = []
+        for row in self._rows(run):
+            if row["layer"] == "guild":
+                envelope = json.loads(row["command"])
+                strategy = envelope.get("guild_strategy")
+                receipt = self._receipts.get(row["id"])
+                evidence.append((row["context"], strategy[1] if strategy else None, bool(receipt and receipt.ok)))
+        return evidence
+
+    def guild_pending(self, run):
+        return any(r["layer"] == "guild" for r in self._rows(run))
+
     def _top(self, run, key):
         rows = [e for e in self._entries if e.run == run and e.key == key]
         return max(rows, key=lambda e: (_RANK[e.layer], e.serial), default=None)
@@ -447,6 +472,8 @@ class Applier:
             state = self._state(scope["run_key"])
             guids = _command_guids(command)
             if (receipt.provider is not self.state_provider or not self._matches(scope)
+                    or receipt.envelope.get("guild_inverse") and self.guild_hold()
+                    or "guild_strategy" in receipt.envelope and not self.guild_allowed(*receipt.envelope["guild_strategy"])
                     or not self._available(state, guids)
                     or any(g not in state.members or asdict(state.members[g]) != receipt.envelope["members"].get(str(g))
                            for g in guids)
@@ -512,8 +539,8 @@ class Applier:
             self._write_receipt(receipt)
 
     async def _send(self, run, layer, context, command, inverse, scope, keys=(), *,
-                    resume_held=False, application=False):
-        if not self._matches(scope):
+                    resume_held=False, application=False, guild_strategy=None, guild_inverse=False):
+        if not self._matches(scope) or guild_strategy is not None and not self.guild_allowed(context, guild_strategy):
             return _Receipt(0, {}, settled=True, reason="stale")
         native = scope.get("native")
         if native is not None:
@@ -531,6 +558,10 @@ class Applier:
                         resume_held=resume_held, application=application,
                         members={str(g): asdict(state.members[g]) for g in _command_guids(command)
                                  if state is not None and g in state.members})
+        if guild_inverse:
+            envelope["guild_inverse"] = True
+        if guild_strategy is not None:
+            envelope["guild_strategy"] = [context, guild_strategy]
         ident = store.log_applied(self.ports.conn, run, layer, context, envelope,
                                  _encode(inverse), self.ports.clock.now())
         receipt = self._receipts[ident] = _Receipt(ident, envelope, provider=self.state_provider, run=run)
@@ -579,7 +610,8 @@ class Applier:
                     or any(validate_directive(d, state.vocab) for d in entry.directives)):
                 return False, "ownership"
             receipt = await self._send(entry.run, entry.layer, entry.context,
-                applied.command, applied.inverse, entry.scope, (entry.key,), application=application)
+                applied.command, applied.inverse, entry.scope, (entry.key,), application=application,
+                guild_strategy=entry.guild_strategy)
             entry.receipts.append(receipt.id)
             if (hello != self._hello or not self._matches(entry.scope) or not receipt.settled or not receipt.ok
                     or not self._available(self._state(entry.scope["run_key"]), (entry.key[0],))):
@@ -590,14 +622,14 @@ class Applier:
                 return True, "skipped"
         return True, ""
 
-    async def apply(self, run_key, layer, context, card, members, *, tank_guid, lead_is_human):
+    async def apply(self, run_key, layer, context, card, members, *, tank_guid, lead_is_human, guild_strategy=None):
         with self._operation(run_key):
             async with self._lock:
                 return await self._apply(run_key, layer, context, card, members,
-                                         tank_guid=tank_guid, lead_is_human=lead_is_human)
+                                         tank_guid=tank_guid, lead_is_human=lead_is_human, guild_strategy=guild_strategy)
 
     async def _apply(self, run_key, layer, context, card, members, *, tank_guid, lead_is_human,
-                     outside=False):
+                     outside=False, guild_strategy=None):
         state = self._state(None if outside else run_key)
         if (type(run_key) is not str or not run_key or type(context) is not str or not _CONTEXT.fullmatch(context)
                 or layer not in _RANK or not isinstance(card, Card) or card.context != context
@@ -605,6 +637,8 @@ class Applier:
                 or not state or not self.acting(self.ports.clock.now())
                 or self._blocked or run_key in self._stopped or self._pending()
                 or tank_guid != state.tank_guid or lead_is_human != state.lead_is_human):
+            return False
+        if layer == "guild" and (card.id is not None or not guild_strategy or not self.guild_allowed(context, guild_strategy)):
             return False
         if outside and state.run_key is not None:
             return False
@@ -641,6 +675,8 @@ class Applier:
                         checks.setdefault(key, []).append(directive)
         except (ValueError, KeyError, TypeError):
             return False
+        if layer == "guild" and any(d.lever != "lust_at" for d in card.directives) and not grouped:
+            return False
         if any(e.run != run_key and e.key in grouped for e in self._entries):
             return False
         if not self._available(state, tuple(k[0] for k in grouped)):
@@ -653,7 +689,8 @@ class Applier:
                 previous = self._top(run_key, key)
                 self._serial += 1
                 entry = _Entry(run_key, layer, context, key, tuple(commands), self._serial, scope,
-                               state.members[key[0]], tuple(checks[key]))
+                               state.members[key[0]], tuple(checks[key]),
+                               guild_strategy=guild_strategy)
                 self._entries.append(entry)
                 added.append(entry)
                 if self._top(run_key, key) is not entry:
@@ -677,6 +714,8 @@ class Applier:
                     if entry in self._entries or run_key in self._blocked:
                         return False
                     added.remove(entry)
+                    if layer == "guild":
+                        return False
                 elif not ok:
                     if reason in _DRIFT and card.id is not None:
                         store.set_card_status(self.ports.conn, card.id, "suspended", ts=self.ports.clock.now())
@@ -703,7 +742,7 @@ class Applier:
             # The restore itself is journaled: cancellation while restoring keeps
             # both the original receipt and this retryable cleanup receipt open.
             receipt = await self._send(row["run"], row["layer"], row["context"], inverse,
-                inverse, self._scope(state), envelope.get("keys", ()))
+                inverse, self._scope(state), envelope.get("keys", ()), guild_inverse=row["layer"] == "guild")
             if receipt.settled and receipt.ok and not receipt.skipped and self._matches(self._scope(state)):
                 # One server restore consumes its snapshot. Repeating a value
                 # restore can fall back to stock instead of the original value.

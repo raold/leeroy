@@ -66,6 +66,9 @@ class DecisionsService:
         for ident in sorted(self._unrecorded):
             await self._record_undo(ident)
         await self.kinds(now)
+        if getattr(app, "realm", None) and getattr(self.config, "bank_restock_per_week", 0):
+            from .restock import run
+            await run(app)
 
     async def kinds(self, now: float) -> None:
         """Each registered kind's own minute work (proposing, posting, taking effect, ending): a
@@ -97,7 +100,8 @@ class DecisionsService:
     async def deliver(self) -> None:
         """Hand each closed poll's result to its kind, once. A kind should write
         polls.mark_handled in the transaction that records its decision; otherwise the receipt is
-        written when the hook returns. A failed hook is tried again on later ticks, at most
+        written when the hook returns. Explicit False defers a hook awaiting fresh evidence.
+        A failed hook is tried again on later ticks, at most
         MAX_HOOK_TRIES times; a poll whose kind has no hook (yet) waits for one."""
         store = self.app.store
         for row in polls.unhandled(store.conn):
@@ -105,7 +109,8 @@ class DecisionsService:
             if hook is None:
                 continue
             try:
-                await hook(self.app, row, row['result'])
+                if await hook(self.app, row, row['result']) is False:
+                    continue
             except Exception as error:
                 tries = polls.hook_failed(store, row['id'])
                 if tries >= MAX_HOOK_TRIES:
@@ -161,6 +166,12 @@ class DecisionsService:
             return {'ok': False, 'error': 'There is no such decision.'}
         if row['status'] not in ledger.LIVE:
             return {'ok': False, 'error': 'That decision is no longer live.'}
+        if row['kind'] == 'bank':
+            from .bank import delivery
+            _, words = delivery(store.conn, row)
+            ledger.overrule(store, row['id'], now=now)
+            return {'ok': True, 'outcome': 'overruled', 'undone': False,
+                    'message': 'Overruled. ' + words + ' Further transfers for this request are blocked.'}
         if row['status'] != 'in_effect':
             ledger.overrule(store, row['id'], now=now)
             return {'ok': True, 'outcome': 'overruled', 'undone': False,
@@ -182,23 +193,29 @@ class DecisionsService:
         """The game was undone: record his overrule, putting back the rule it replaced. The row is
         read again after the undo's await; a write that keeps failing is retried by the tick."""
         store = self.app.store
+        scheduled = None
         for attempt in range(RECORD_TRIES):
             try:
                 row = ledger.get(store.conn, ident)
+                scheduled = {'rank': 'Roster rank restoration is scheduled for synchronization.',
+                             'strategy': 'Strategy restoration waits for safe training cleanup.'}.get(row['kind'])
                 if row['status'] != 'in_effect':
                     self._unrecorded.discard(ident)
-                    return {'ok': True, 'outcome': 'undone', 'undone': True,
-                            'message': f"Undone in game; the ledger had already ended it ({row['status']})."}
-                back = ledger.overrule(store, ident, now=self.app.clock.now(), restore_previous=True)
+                    return {'ok': True, 'outcome': 'scheduled' if scheduled else 'undone', 'undone': not scheduled,
+                            'message': scheduled or f"Undone in game; the ledger had already ended it ({row['status']})."}
+                back = ledger.overrule(store, ident, now=self.app.clock.now(), restore_previous=getattr(self.rules_for(row['kind']), 'restore_previous', True))
                 self._unrecorded.discard(ident)
-                return {'ok': True, 'outcome': 'undone', 'undone': True,
-                        'message': 'Undone in game and overruled.'
+                return {'ok': True, 'outcome': 'scheduled' if scheduled else 'undone', 'undone': not scheduled,
+                        'message': ('Overruled. ' + scheduled if scheduled else 'Undone in game and overruled.')
                                    + (' The rule it replaced is back in effect.' if back else '')}
             except (DecisionError, sqlite3.Error) as error:
                 failure = error
                 await asyncio.sleep(0.05 * (attempt + 1))
         self._unrecorded.add(ident)
         log.warning('decision_overrule_unrecorded id=%d error=%s', ident, type(failure).__name__)
+        if scheduled:
+            return {'ok': False, 'outcome': 'scheduled_unrecorded', 'undone': False,
+                    'error': scheduled + ' Recording the overrule is pending.'}
         return {'ok': False, 'outcome': 'undone_unrecorded', 'undone': True,
                 'error': 'Undone in game, but the ledger could not record the overrule yet; '
                          'the mind keeps trying.'}

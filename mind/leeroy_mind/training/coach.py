@@ -25,6 +25,7 @@ from leeroy_mind.personas.screens import has_word, names_real_name
 from leeroy_mind.storage.store import clean
 from leeroy_mind.wow import boss_name, is_raid_fight
 
+from .score import strategy_id
 from . import store
 from .cards import (Card, Directive, LEVERS, Targets, describe, nearest, stock_card,
                     validate_card, validate_directive)
@@ -216,7 +217,7 @@ def validate_output(out, vocab, *, names, human, facts) -> CoachOutput:
 
 
 def _eligible(row):
-    return (row["complete"] == 1 and row["scoreable"] == 1
+    return (strategy_id(row) == 0 and row["complete"] == 1 and row["scoreable"] == 1
             and row["outcome"] in {"killed", "wiped"}
             and row["end_ms"] > row["start_ms"] >= 0
             and row["score"] is not None and row["score_basis"] in SCORE_BASES

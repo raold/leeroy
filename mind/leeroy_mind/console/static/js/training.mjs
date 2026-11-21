@@ -34,7 +34,8 @@ function renderTraining(v) {
   week.appendChild(el("p", "note", str(v.week) + " · pulls this week: " + kinds(obj(pulls).week_by_kind)));
   arr(v.contexts).forEach(function (c) {
     var r = row();
-    r.appendChild(el("strong", "", str(c.boss) + (c.size ? " " + num(c.size) : "")));
+    r.appendChild(el("strong", "", str(c.boss) + (c.size ? " " + num(c.size) : "") +
+      (c.guild_strategy ? " · guild strategy #" + num(c.guild_strategy) : "")));
     r.appendChild(el("span", "", plural(num(c.pulls), "pull") + " · " + plural(num(c.kills), "kill") + " · " + plural(num(c.wipes), "wipe")));
     r.appendChild(el("span", "", deathsText(c) + " deaths a pull"));
     r.appendChild(el("span", "chip", changeText(c)));

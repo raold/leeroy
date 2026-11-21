@@ -99,6 +99,8 @@ std::string Eligible(std::uint32_t guid, std::string_view operation, bool office
 }
 std::string Admit(Queued const& entry, std::uint32_t guid)
 {
+    if (entry.kind == "bank_stock" && !BankStockAllowed(entry.payload.value("maker", 0u), Config().bankRestockEnable))
+        return "restock_off";
     auto const holder = RealmModule::Instance().Holder(guid);
     return Eligible(guid, BankAdmissionOperation(holder, entry.id), entry.kind == "bank_stock");
 }
@@ -313,6 +315,20 @@ RealmStep MoveItems(Queued& entry, std::uint32_t guid)
     auto expected = LoadSource(sources.at(index));
     auto const* source = BankSlot(before.items, expected.position);
     auto const remaining = sources.at(index).at(9).get<std::uint32_t>();
+    if (auto requester = entry.payload.value("requester", 0u))
+    {
+        if (!Config().bankMailEnable || requester == HumanGuid() || requester == guid || !IsCast(requester)
+            || !guild->GetMember(PlayerGuid(requester)) || !Eligible(guid, entry.id, true).empty())
+            return Failure(entry, "not_member");
+        // Native walks the sources in slot order. Leave at least one untouched item stack.
+        bool spare = std::any_of(before.items.slots.begin(), before.items.slots.end(), [&](auto const& slot)
+        {
+            return slot.position.bank && slot.position.container == tab && slot.item.entry == itemId
+                && std::none_of(sources.begin(), sources.end(), [&](auto const& saved)
+                    { return LoadSource(saved).position == slot.position; });
+        });
+        if (!spare) return Failure(entry, "last_stack");
+    }
     if (!source || source->item != expected.item || !remaining || remaining > source->item.count)
         return Failure(entry, "bank_source_changed");
     if (source->item.property && remaining < source->item.count)
@@ -350,6 +366,13 @@ RealmStep Stock(Queued& entry, std::uint32_t guid)
     if (tab >= baseline.items.tabs) return Failure(entry, "no_tab");
     auto const moved = entry.payload.value("moved", 0u);
     if (moved >= requested) return {StepState::Unknown, "bank_progress_unproved"};
+    if (auto maker = entry.payload.value("maker", 0u))
+    {
+        if (!BankStockAllowed(maker, Config().bankRestockEnable)) return Failure(entry, "restock_off");
+        if (maker == HumanGuid() || !IsCast(maker) || !guild->GetMember(PlayerGuid(maker))) return Failure(entry, "not_member");
+        if (!TargetedBankStockFits(baseline.items, tab, itemId, requested-moved, entry.payload.at("target").get<std::uint32_t>()))
+            return Failure(entry, "stock_target");
+    }
     auto count = std::min(requested - moved, proto->GetMaxStackSize());
     // One created stack may be smaller than the template maximum to fill a
     // fragmented tab one exact destination at a time. No created stack is
@@ -592,9 +615,11 @@ void RegisterRealmBankHandlers()
     QueueHandler("bank_deposit", ParseBankDeposit, [](BankDepositCmd const& command, Queued& entry)
     { entry.guids = {command.guid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}}; }, MoveItems);
     QueueHandler("bank_withdraw", ParseBankWithdraw, [](BankWithdrawCmd const& command, Queued& entry)
-    { entry.guids = {command.guid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}}; }, MoveItems);
+    { entry.guids = {command.guid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}};
+      if (command.requester) entry.payload["requester"] = command.requester; }, MoveItems);
     QueueHandler("bank_stock", ParseBankStock, [](BankStockCmd const& command, Queued& entry)
-    { entry.guids = {command.officerGuid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}}; }, Stock);
+    { entry.guids = {command.officerGuid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}};
+      if (command.maker) { entry.payload["maker"] = command.maker; entry.payload["target"] = command.target; } }, Stock);
 }
 void AddRealmBankScripts() { new BankPlayerScripts(); new BankGuildScripts(); }
 }
