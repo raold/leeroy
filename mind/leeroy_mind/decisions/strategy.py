@@ -3,7 +3,7 @@ from dataclasses import replace
 import json
 
 from leeroy_mind.discord import store as discord
-from leeroy_mind.talk.budget import _HOLD
+from .apply import held
 from leeroy_mind.training.cards import Directive, stock_card
 from . import ledger
 from .bank import members
@@ -42,12 +42,6 @@ def propose_strategy(conn, context: str, *, now) -> dict | None:
             "wipes": [r["id"] for r in rows], "since_ms": since}
 
 
-def held(app):
-    engine = getattr(app, "engine", None)
-    raid = getattr(engine, "raid", None)
-    return bool(raid and (raid.phase(app.clock.now()) in _HOLD or engine._in_boss_fight(app.clock.now())))
-
-
 def layer_for(app, context):
     if held(app):
         return None
@@ -60,7 +54,7 @@ def layer_for(app, context):
     if v.get("levers") != LEVERS.get(v.get("change")) or not v.get("levers"):
         return None
     directives = tuple(Directive(k, n) for k, n in v["levers"].items())
-    return row["id"], replace(stock_card(context), id=row["id"], directives=directives)
+    return row["id"], replace(stock_card(context), directives=directives)
 
 
 def played(app, ident):

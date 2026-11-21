@@ -85,15 +85,15 @@ def decision_seeds(conn, *, now, personas, officers) -> list[Seed]:
         about = tuple(sorted(p['guid'] for p in positions if p['guid'] in personas))
         out.append(Seed(f"decision:p{poll['id']}:poll", 'decision', (poll['channel'],), fact, about,
                         channel.officers_only))
-    from .restock import deliveries, history
+    from .restock import announcement, history
     for state in history(conn):
         if (state.get("officer") not in officers or state.get("message")
                 or len(state["results"]) != len(state["stacks"])):
             continue
-        rows = deliveries(state, names)
-        if rows:
+        block = announcement(state, names)
+        if block:
             out.append(Seed("restock:" + state["week"], "restock", ("bank-requests",),
-                            "\n".join(rows), (state["officer"],), True))
+                            block, (state["officer"],), True))
     return out
 
 

@@ -110,6 +110,9 @@ class LazyArmory:
     def items(self, ids):
         return self._call("items", ids)
 
+    def bank_items(self, ids):
+        return self._call("bank_items", ids)
+
     def equipped(self, guids):
         return self._call("equipped", guids)
 

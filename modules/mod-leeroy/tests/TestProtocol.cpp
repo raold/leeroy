@@ -15,7 +15,15 @@ LEEROY_TEST(Protocol_HelloShape)
     CHECK_EQ(j["guild_id"], 21); CHECK_EQ(j["human_guid"], 0);
     CHECK(j["features"].is_array());
     CHECK(j["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
-        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "bank_stock_target"}));
+        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest"}));
+    auto stockOnly = json::parse(EncodeHello(1,21,0,0,false,false,true))["features"];
+    auto expected = j["features"];
+    expected.push_back("bank_stock_target");
+    CHECK(stockOnly == expected);
+    auto mailOnly = json::parse(EncodeHello(1,21,0,0,true,false,false))["features"];
+    expected = j["features"];
+    expected.push_back("member_bank_mail");
+    CHECK(mailOnly == expected);
     CHECK(!j.contains("started_ms"));
     CHECK_EQ(json::parse(EncodeHello(1700000000000, 21, 0, 1699999990000))["started_ms"], 1699999990000LL);
 }

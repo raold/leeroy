@@ -166,7 +166,8 @@ async def run(app, *, start=False):
             return
         if status == "send":
             def valid():
-                return (app.clock.local().strftime("%G-W%V") == week and rules.valid(app, bank)
+                return ("bank_stock_target" in (rules.features or ()) and app.clock.local().strftime("%G-W%V") == week
+                        and rules.valid(app, bank)
                         and requests.officer(app) == by and maker in requests.members(app)
                         and makers.get(maker, {}).get(MAKER[item], 0) >= MIN_SKILL and allowance(bank, row, limits))
             if valid() and index < cap:
@@ -195,3 +196,18 @@ def deliveries(state, names):
     counts = Counter((row["item"], row["maker"]) for i, row in enumerate(state["stacks"])
                      if state["results"].get(str(i)) == "credited")
     return [f"{names.get(g, f'#{g}')} · item {item} · {n} stack(s)" for (item, g), n in sorted(counts.items())]
+
+
+def announcement(state, names):
+    """At 60 stacks even 60 different 12-character makers fit in a single Discord post."""
+    pairs = Counter((row["maker"], row["item"]) for i, row in enumerate(state["stacks"])
+                    if state["results"].get(str(i)) == "credited")
+    grouped = {}
+    for (guid, item), count in sorted(pairs.items()):
+        grouped.setdefault(guid, []).append(f"{item}×{count}")
+    lines = []
+    for guid, items in grouped.items():
+        name = names.get(guid, "")
+        name = name if 0 < len(name) <= 12 else f"#{guid}"
+        lines.append(f"{name}: {', '.join(items)}")
+    return "\n".join(lines)

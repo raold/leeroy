@@ -362,8 +362,8 @@ class Experimenter:
                 continue
             arms = self._arms(trial["id"])
             # Raw observed wipes bench even when scoring has not run yet.
-            arms = [a for a in arms if not self.conn.execute(
-                "SELECT 1 FROM tg_pull WHERE raid_id=? AND arm_id=? AND outcome='wiped'", (raid_id, a["id"])).fetchone()]
+            arms = [a for a in arms if not any(strategy_id(row) == 0 for row in self.conn.execute(
+                "SELECT covariates FROM tg_pull WHERE raid_id=? AND arm_id=? AND outcome='wiped'", (raid_id, a["id"])))]
             if not arms:
                 continue
             candidates.append((trial, arms))

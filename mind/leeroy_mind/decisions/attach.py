@@ -20,6 +20,7 @@ def attach_decisions(app):
             selected = training.listener.guild_layer(context)
             return selected is not None and selected[0] == ident
         training.applier.guild_allowed = guild_allowed
+        training.applier.guild_hold = training.listener.guild_hold
     app.register_event_handler('hello', service.on_hello)
     from .ranks import observe_cast
     async def on_cast(ev):

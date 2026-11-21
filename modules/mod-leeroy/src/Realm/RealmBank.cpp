@@ -99,6 +99,8 @@ std::string Eligible(std::uint32_t guid, std::string_view operation, bool office
 }
 std::string Admit(Queued const& entry, std::uint32_t guid)
 {
+    if (entry.kind == "bank_stock" && !BankStockAllowed(entry.payload.value("maker", 0u), Config().bankRestockEnable))
+        return "restock_off";
     auto const holder = RealmModule::Instance().Holder(guid);
     return Eligible(guid, BankAdmissionOperation(holder, entry.id), entry.kind == "bank_stock");
 }
@@ -366,16 +368,10 @@ RealmStep Stock(Queued& entry, std::uint32_t guid)
     if (moved >= requested) return {StepState::Unknown, "bank_progress_unproved"};
     if (auto maker = entry.payload.value("maker", 0u))
     {
+        if (!BankStockAllowed(maker, Config().bankRestockEnable)) return Failure(entry, "restock_off");
         if (maker == HumanGuid() || !IsCast(maker) || !guild->GetMember(PlayerGuid(maker))) return Failure(entry, "not_member");
-        std::uint64_t total = requested - moved;
-        bool freeSlot = false;
-        for (auto const& slot : baseline.items.slots)
-            if (slot.position.bank && slot.position.container == tab)
-            {
-                freeSlot |= !slot.item.guid;
-                if (slot.item.entry == itemId) total += slot.item.count;
-            }
-        if (!freeSlot || total > entry.payload.at("target").get<std::uint32_t>()) return Failure(entry, "stock_target");
+        if (!TargetedBankStockFits(baseline.items, tab, itemId, requested-moved, entry.payload.at("target").get<std::uint32_t>()))
+            return Failure(entry, "stock_target");
     }
     auto count = std::min(requested - moved, proto->GetMaxStackSize());
     // One created stack may be smaller than the template maximum to fill a

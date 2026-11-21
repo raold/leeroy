@@ -51,7 +51,7 @@ def test_guild_layer_rechecks_decision_identity_at_transport(store, clock):
 
     async def go():
         ports = Fake(store, clock)
-        strategy = card(Directive("PullPlayerReleaseDelay", 125), id=17)
+        strategy = card(Directive("PullPlayerReleaseDelay", 125))
         current = 17
         ports.applier.guild_allowed = lambda context, ident: ident == current
         perform = ports.applier._perform
@@ -60,6 +60,125 @@ def test_guild_layer_rechecks_decision_identity_at_transport(store, clock):
             current = 18
             await perform(receipt, command)
         ports.applier._perform = replaced_before_dispatch
-        assert not await ports.apply(strategy, layer="guild")
+        from .test_tg_applier import RUN, CTX, MEMBERS
+        assert not await ports.applier.apply(RUN,"guild",CTX,strategy,MEMBERS,tank_guid=101,lead_is_human=False,
+                                             guild_strategy=17)
         assert current == 18 and not ports.sent
     asyncio.run(go())
+
+
+def test_decision_refusal_leaves_colliding_champion_intact(store, clock):
+    import asyncio
+    from leeroy_mind.training import store as tg
+    from .test_tg_applier import Fake, card
+    from leeroy_mind.training.cards import Directive
+    ports = Fake(store, clock)
+    champion = tg.put_card(store.conn, card(Directive("lust_at", 85)).to_row())
+    ports.applier.guild_allowed = lambda context, ident: ident == champion
+    ports.fail_ack[""] = "bad_value"
+    async def apply():
+        from .test_tg_applier import RUN, CTX, MEMBERS
+        return await ports.applier.apply(RUN, "guild", CTX, card(Directive("PullPlayerReleaseDelay",125)),
+                                         MEMBERS, tank_guid=101, lead_is_human=False, guild_strategy=champion)
+    assert not asyncio.run(apply())
+    assert ports.sent and tg.champion(store.conn, "631:0:0")["id"] == champion
+
+
+def test_guild_dc_requires_online_tank(store, clock):
+    import asyncio
+    from dataclasses import replace
+    from .test_tg_applier import Fake, card, RUN, CTX, MEMBERS
+    from leeroy_mind.training.cards import Directive
+    ports = Fake(store, clock)
+    ports.state = replace(ports.state, online=ports.state.online-{101})
+    ports.applier.guild_allowed = lambda context, ident: True
+    assert not asyncio.run(ports.applier.apply(RUN,"guild",CTX,card(Directive("PullPlayerReleaseDelay",125)),
+                                               MEMBERS,tank_guid=101,lead_is_human=False,guild_strategy=19))
+    assert not ports.sent
+
+
+@pytest.mark.parametrize("cause", ["hold", "refused"])
+def test_guild_inverse_retains_modified_history_until_proven(fake, cause):
+    import asyncio
+    from unittest.mock import Mock
+    from leeroy_mind.training.cards import Directive
+    from .test_tg_applier import card
+    from .test_tg_listener import real_listener, status
+
+    async def play():
+        listener, run, ports = real_listener(fake)
+        proposed = card(Directive("PullPlayerReleaseDelay",125), context="631:4:0")
+        selected = (19, proposed)
+        listener.guild_layer = lambda context: selected
+        listener.guild_played = Mock()
+        ports.applier.guild_allowed = lambda context, ident: bool(selected and ident == selected[0])
+        holding = False
+        listener.guild_hold = ports.applier.guild_hold = lambda: holding
+        await listener.on_start(run)
+        await listener.on_dc_status(status(fake))
+        listener.guild_played.assert_called_once_with(19)
+        assert any(getattr(c,"op","") == "scale" for c in ports.sent)
+        selected = None
+        listener._muster = None
+        perform = ports.applier._perform
+        async def enter_hold(receipt, command):
+            nonlocal holding
+            if cause == "hold" and receipt.envelope.get("guild_inverse"):
+                holding = True
+            await perform(receipt, command)
+        ports.applier._perform = enter_hold
+        if cause == "refused":
+            ports.fail_ack[""] = "bad_value"
+        before = len(ports.sent)
+        await listener.on_dc_status(status(fake))
+        if cause == "hold":
+            assert len(ports.sent) == before
+        assert ports.applier.guild_pending(listener.run_key(run))
+        assert listener.ledger.set_in_play.call_args.kwargs["guild_strategy"] == 19
+        listener.ledger.mark_unscoreable.assert_called_with("631:4:0")
+        holding = False
+        ports.applier._perform = perform
+        await listener.on_dc_status(status(fake))
+        assert not ports.applier.guild_pending(listener.run_key(run))
+        assert "guild_strategy" not in listener.ledger.set_in_play.call_args.kwargs
+        assert any(getattr(c,"op","") == "reset" for c in ports.sent[before:])
+        await listener.close()
+    asyncio.run(play())
+
+
+@pytest.mark.parametrize("condition,cohort", [("human_lead",0), ("shadowed",0), ("offline_tank",0), ("played",23)])
+def test_muster_selects_the_farm_cohort_it_can_play(fake, condition, cohort):
+    import asyncio
+    from dataclasses import replace
+    from unittest.mock import Mock
+    from leeroy_mind.training.cards import Directive
+    from .test_tg_applier import card
+    from .test_tg_listener import real_listener, plan_card, status
+
+    async def play():
+        listener, run, ports = real_listener(fake)
+        if condition == "human_lead":
+            run = replace(run, human_in_raid=True, lead_is_human=True)
+            ports.state = replace(ports.state, lead_is_human=True)
+        if condition == "shadowed":
+            plan_card(fake,Directive("PullPlayerReleaseDelay",75))
+        proposed = card(Directive("PullPlayerReleaseDelay",125), context="631:4:0")
+        listener.guild_layer = lambda context: (23, proposed)
+        listener.guild_played = Mock()
+        ports.applier.guild_allowed = lambda context, ident: ident == 23
+        # Three real kills make the unmodified boss farm. There are no strategy-23 receipts.
+        from .test_tg_experiments import pull
+        for n in range(3):
+            pull(fake, "farm"+str(n), boss=4, when=fake.clock.now()-100*(n+1))
+        await listener.on_start(run)
+        if condition == "offline_tank":
+            ports.state = replace(ports.state, online=ports.state.online-{101})
+        await listener.on_dc_status(status(fake))
+        cache = listener._farm_at_entry
+        assert cache[(listener.run_key(run),"631:4:0",cohort)] is (cohort == 0)
+        if cohort:
+            listener.guild_played.assert_called_once_with(cohort)
+        else:
+            listener.guild_played.assert_not_called()
+        await listener.close()
+    asyncio.run(play())

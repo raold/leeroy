@@ -175,8 +175,10 @@ The posted lineup for tomorrow creates flask requests. A member can also request
 the BoE tab or enchanting supplies if the armory records her enchanting profession. The bank
 officer, or the DKP officer in her absence, posts each request in the officers' #bank-requests.
 Her post includes the requester, item, quantity, reason and count against today's cap.
-The checks use a bank read at most 60 seconds old and protect the last stack of each item in its
-tab. A missing bank read defers the handoff. The recipient receives the item in game.
+Each handoff rechecks the member's entitlement and the raid hold. A flask still requires the
+posted lineup for the same upcoming night. A BoE requires a fresh bind-on-equip template and
+an equippable upgrade for that member. Bank reads expire after 60 seconds. The final transfer
+protects the last stack of each item in its tab. A missing bank read defers the handoff. The recipient receives the item in game.
 
 Requests use two durable Realm direct-ledger references, `decision:<id>:withdraw` and
 `decision:<id>:mail`. The first moves stock to the officer's bags. The second sends bag items
@@ -187,7 +189,8 @@ its daily allowance. Overruling after delivery preserves the receipt and the rec
 The night stage after the snapshot plans the ISO week's top-ups in `decisions:restock:<week>`.
 It fills the largest proportional deficits against the original per-tab stock, using only bank
 whitelist entries, free slots and members with the corresponding profession at 375 or higher.
-It distributes planned stacks among eligible makers. A native job completion credits the maker
+It distributes planned stacks among eligible makers. Each ISO week's announcement groups item IDs
+and stack counts by maker so the entire receipt fits one Discord post. A native job completion credits the maker
 with a craft receipt, or a gathering receipt for enchanting mats. The console lists credited
 stacks by maker and items without an eligible maker. The bank officer's weekly post lists the
 makers and their deliveries. Setting `bank_restock_per_week = 0` stops new top-ups.
@@ -210,8 +213,9 @@ The training journal removes the previous layer at the next safe muster or run c
 
 The first observed guild cast establishes existing members. Later additions have a first-seen
 time. Officers review newcomers in their first seven days, trials who raided at least four
-times in 30 days, and raiders with no attendance in 30 days. A strict majority of the eligible
-officers must approve in #applications. A settled change schedules normal roster synchronization
+times in 30 days, and raiders with no attendance in 30 days. Approval in #applications requires a strict majority of current eligible officers. The owner's
+vote counts when he votes. His abstention leaves the decision with the officers. At least one
+cast officer must still hold office at settlement and application. A settled change schedules normal roster synchronization
 with the approved rank as an overlay. Removing the overlay schedules restoration of the persona's
 rank. The owner and rank zero are protected. Private votes and reasons stay with the officers.
 The member sees her new rank in the guild roster.
@@ -220,7 +224,8 @@ The member sees her new rank in the guild roster.
 
 Build and release the native modules with `ac-release.sh --native`. Set
 `Leeroy.GuildAdd.FollowRoster = 1` for the raid picker and `Leeroy.Decisions.BankMail.Enable = 1`
-for item-only member mail, then run `.reload config`. The member-mail capability is advertised
+for item-only member mail. Independently set `Leeroy.Decisions.BankRestock.Enable = 1` for targeted
+weekly stock. Its default of zero leaves the original bootstrap stock available. Then run `.reload config`. The member-mail capability is advertised
 in the bridge hello while enabled. Reconnect the mind after reloading the switches. An older
 bridge or a disabled mail key leaves an unsupported delivery as talk and consumes no bank stock.
 

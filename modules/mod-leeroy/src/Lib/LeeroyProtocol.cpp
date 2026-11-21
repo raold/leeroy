@@ -345,7 +345,7 @@ std::string DumpLine(json const& j)
     return j.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
-std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid, std::int64_t startedMs, bool memberBankMail, bool trainingOn)
+std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid, std::int64_t startedMs, bool memberBankMail, bool trainingOn, bool bankRestock)
 {
     json j = Envelope(ts, "hello");
     j["server"] = "mod-leeroy";
@@ -357,7 +357,7 @@ std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t hu
     j["features"] = json::array();
     for (std::string_view feature : kFeatures)
         j["features"].push_back(std::string(feature));
-    j["features"].push_back("bank_stock_target");
+    if (bankRestock) j["features"].push_back("bank_stock_target");
     if (memberBankMail) j["features"].push_back("member_bank_mail");
     if (trainingOn) j["features"].push_back("training_enabled");
     return DumpLine(j);

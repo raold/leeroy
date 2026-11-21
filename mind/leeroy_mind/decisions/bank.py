@@ -62,23 +62,57 @@ def approve(request, bank, *, given_today: int, cap: int) -> tuple[bool, str]:
 
 
 def given_today(conn, now):
-    day = local_at(now).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    return conn.execute("SELECT count(*) FROM realm_direct WHERE owner='decision' AND kind='bank_withdraw' "
-                        "AND state IN ('prepared','dispatched','acked','unknown') AND coalesce(dispatched_ms, "
-                        "prepared_ms)>=?", (int(day * 1000),)).fetchone()[0]
-
-
-def requests_due(conn, bank, cast, personas, *, now):
-    if not bank:
-        return []
     day = local_at(now).date()
-    tomorrow = day + timedelta(days=1)
+    # At a DST boundary the offset at now can differ from the offset at midnight.
+    # Narrow the indexed receipt window, then classify each instant using its own local date.
+    rows = conn.execute("SELECT coalesce(dispatched_ms,prepared_ms) FROM realm_direct "
+                        "WHERE owner='decision' AND kind='bank_withdraw' "
+                        "AND state IN ('prepared','dispatched','acked','unknown') "
+                        "AND coalesce(dispatched_ms,prepared_ms) BETWEEN ? AND ?",
+                        (int((now-48*3600)*1000), int(now*1000)))
+    return sum(local_at(ts/1000).date() == day for ts, in rows)
+
+
+def raid_tomorrow(conn, now):
+    tomorrow = local_at(now).date() + timedelta(days=1)
     raid_guids = set()
     for event in raid_events(conn, since=now, until=now + 49 * 3600):
         if local_at(event["at"]).date() == tomorrow:
             row = ledger.live(conn, "lineup", f"raid:{event['id']}")
             if row and row["status"] in ("settled", "in_effect") and row["message"]:
                 raid_guids.update(json.loads(row["value"])["members"])
+    return raid_guids
+
+
+def boe_gain(bank, guid, item, member, persona):
+    info = bank.get("items", {}).get(item)
+    gear = bank.get("equipped", {}).get(guid)
+    if not info or info.bonding != 2 or info.item_class not in (2, 4) or not info.inventory_type or gear is None:
+        return None
+    role = role_of(member.class_, member.spec_tab, persona.play.raid_role)
+    return upgrade_gain(info, member.class_, stat_family(member.class_, member.spec_tab, role), gear, role=role)
+
+
+def entitled(app, req, bank, proposed):
+    guid = req["guid"]
+    member = members(app).get(guid)
+    persona = app.personas.get(guid)
+    day = local_at(app.clock.now()).date()
+    request_day = local_at(proposed).date()
+    if not member or not persona or day.isocalendar()[:2] != request_day.isocalendar()[:2]:
+        return False
+    if req["kind"] == "raid_flasks":
+        return day == request_day and guid in raid_tomorrow(app.store.conn, app.clock.now())
+    if req["kind"] == "enchant_mats":
+        return 333 in bank.get("professions", {}).get(guid, {})
+    return req["kind"] == "boe_upgrade" and bool(boe_gain(bank, guid, req["item"], member, persona))
+
+
+def requests_due(conn, bank, cast, personas, *, now):
+    if not bank:
+        return []
+    day = local_at(now).date()
+    raid_guids = raid_tomorrow(conn, now)
     out = []
     for guid, m in sorted(cast.items()):
         persona = personas.get(guid)
@@ -93,14 +127,10 @@ def requests_due(conn, bank, cast, personas, *, now):
                 item, count = max(stock, key=lambda pair: amounts[pair[0]] / pair[1])
                 if amounts[item]:
                     choices.append((kind, tab, item, count, {}))
-        role = role_of(m.class_, m.spec_tab, persona.play.raid_role)
-        equipment = bank.get("equipped", {}).get(guid)
         for _, item, _ in slots(bank, 3):
-            info = bank.get("items", {}).get(item)
-            if info and equipment is not None:
-                gain = upgrade_gain(info, m.class_, stat_family(m.class_, m.spec_tab, role), equipment, role=role)
-                if gain and gain > 0:
-                    choices.append(("boe_upgrade", 3, item, 1, {"gain": gain}))
+            gain = boe_gain(bank, guid, item, m, persona)
+            if gain:
+                choices.append(("boe_upgrade", 3, item, 1, {"gain": gain}))
         for kind, tab, item, count, extra in choices:
             period = day.strftime("%G-W%V")
             subject = f"bank:{kind}:{guid}:{period}" + (f":{item}" if kind == "boe_upgrade" else "")
@@ -125,7 +155,7 @@ def next_step(row, withdraw, mail):
     return "done"
 
 
-async def read(app, *, details=False):
+async def read(app, *, details=False, extra_items=()):
     guild = getattr(app, "guild", None)
     armory = getattr(guild, "armory", None)
     guild_id = int(app.store.get_meta("guild_id") or 0)
@@ -138,9 +168,9 @@ async def read(app, *, details=False):
         if details and cast:
             if hasattr(armory, "professions"):
                 bank["professions"] = armory.professions(cast)
-            boes = {item for _, item, _ in slots(bank, 3)}
+            boes = set(extra_items) | {item for _, item, _ in slots(bank, 3)}
             if boes:
-                bank.update(items=armory.items(boes), equipped=armory.equipped(cast))
+                bank.update(items=armory.bank_items(boes), equipped=armory.equipped(cast))
         return bank
     try:
         bank = await asyncio.to_thread(fetch)
@@ -184,7 +214,7 @@ class BankRules:
         direct = realm.part("direct")
         if direct.prepare(cmd, owner="decision", ref=ref, context=realm.action_context(), expects_job=True) is None:
             return
-        self.checks[cmd.id] = check
+        self.checks[cmd.id] = lambda: ready(app) and check()
         try:
             await realm.ports.send(cmd)
         finally:
@@ -267,10 +297,16 @@ class BankRules:
             if not actors():
                 ledger.fail(store, ident, reason="member_or_officer_changed", now=now)
                 return False
+            extra = (req["item"],) if req["kind"] == "boe_upgrade" else ()
+            bank = await read(app, details=req["kind"] != "raid_flasks", extra_items=extra)
+            if not bank or not actors() or not self.valid(app, bank):
+                return False
+            if not entitled(app, req, bank, row["proposed"]):
+                ledger.fail(store, ident, reason="entitlement_changed", now=now)
+                return False
+            def admitted():
+                return actors() and self.valid(app, bank) and entitled(app, req, bank, row["proposed"])
             if step == "withdraw":
-                bank = await read(app)
-                if not bank or not actors() or not self.valid(app, bank):
-                    return False
                 cap = app.decisions.config.bank_items_per_day
                 valid, reason = approve(dict(req, human=app.human_guid, member=True), bank,
                                         given_today=given_today(store.conn, app.clock.now()), cap=cap)
@@ -278,11 +314,11 @@ class BankRules:
                     ledger.fail(store, ident, reason=reason, now=now)
                     return False
                 cmd = protocol.BankWithdraw(uuid4().hex, by, req["item"], req["count"], req["tab"], req["guid"])
-                await self.send(app, cmd, refs[0], lambda: actors() and self.valid(app, bank))
+                await self.send(app, cmd, refs[0], admitted)
             else:
                 cmd = protocol.MailSend(uuid4().hex, by, "Guild bank request",
                                         items=(protocol.MailItem(req["item"], req["count"], "bags"),), to_guid=req["guid"])
-                await self.send(app, cmd, refs[1], actors)
+                await self.send(app, cmd, refs[1], admitted)
             return True
         return False
 

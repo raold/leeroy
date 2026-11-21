@@ -69,3 +69,12 @@ def test_week_rollover_credits_late_jobs_without_starting_unissued_stacks(store,
         restock.close_previous_weeks(app, "2026-W48")
     assert json.loads(store.get_meta(key))["results"] == {"0": "credited", "1": "skipped"}
     assert store.conn.execute("SELECT count(*) FROM realm_bank WHERE reason='craft'").fetchone()[0] == 1
+
+
+def test_sixty_distinct_deliveries_fit_one_wrapped_discord_post():
+    from leeroy_mind.discord.text import MAX_TEXT
+    rows = [dict(maker=g, item=43015, count=20) for g in range(101, 161)]
+    names = {g: "Ninelette"+str(g) for g in range(101, 161)}
+    block = restock.announcement({"stacks":rows, "results":dict.fromkeys(map(str,range(60)), "credited")}, names)
+    assert len("We filled the tab.\n```\n"+block+"\n```") <= MAX_TEXT
+    assert all(name in block for name in names.values()) and block.count("43015×1") == 60

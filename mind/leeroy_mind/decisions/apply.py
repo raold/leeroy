@@ -222,3 +222,10 @@ def effects(row) -> list[str]:
             shown = _word(value)
         out.append(f'{label}: {shown}')
     return out
+
+
+def held(app):
+    from leeroy_mind.talk.budget import _HOLD
+    engine = getattr(app, "engine", None)
+    raid = getattr(engine, "raid", None)
+    return bool(raid and (raid.phase(app.clock.now()) in _HOLD or engine._in_boss_fight(app.clock.now())))

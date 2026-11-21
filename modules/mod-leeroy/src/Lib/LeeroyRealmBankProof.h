@@ -44,6 +44,25 @@ struct BankSnapshot
     std::vector<BankSlotFact> slots;
     bool operator==(BankSnapshot const&) const = default;
 };
+inline bool BankStockAllowed(std::uint32_t maker, bool targetedEnabled)
+{
+    return maker == 0 || targetedEnabled;
+}
+
+inline bool TargetedBankStockFits(BankSnapshot const& snapshot, std::uint8_t tab, std::uint32_t item,
+                                  std::uint32_t remaining, std::uint32_t ceiling)
+{
+    std::uint64_t total = remaining;
+    bool freeSlot = false;
+    for (auto const& slot : snapshot.slots)
+        if (slot.position.bank && slot.position.container == tab)
+        {
+            freeSlot |= !slot.item.guid;
+            if (slot.item.entry == item) total += slot.item.count;
+        }
+    return freeSlot && total <= ceiling;
+}
+
 inline bool ValidBankSnapshot(BankSnapshot const& snapshot)
 {
     if (snapshot.tabs > 6 || snapshot.slots.size() > kBankSnapshotSlots) return false;

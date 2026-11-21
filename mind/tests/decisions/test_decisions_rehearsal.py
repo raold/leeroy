@@ -1,6 +1,7 @@
 """D4 across a raid night, a bank handoff and the next muster on one synthetic guild database."""
 import asyncio
 from dataclasses import replace
+from datetime import datetime, time, timedelta
 import json
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock, Mock
@@ -9,11 +10,11 @@ from conftest import make_persona
 from leeroy_mind.app import MindApp
 from leeroy_mind.config import load_config
 from leeroy_mind.console.decisionsview import decisions_view
-from leeroy_mind.decisions import bank, ledger, loot_rules, polls
+from leeroy_mind.decisions import ledger, loot_rules, polls
+from leeroy_mind.decisions.positions import vote_at
 from leeroy_mind.decisions.attach import attach_decisions
 from leeroy_mind.decisions.lineup import formed, tonight
 from leeroy_mind.decisions.seeds import decision_seeds
-from leeroy_mind.discord import store as discord
 from leeroy_mind.guild.roster import Roster
 from leeroy_mind.protocol import encode_command
 from leeroy_mind.training.ledger import Ledger
@@ -28,7 +29,8 @@ from tests.guild.conftest import fake  # noqa: F401
 from tests.guild.test_raid_night import setup  # noqa: F401
 from tests.guild.test_raid_night_lineup import form10, formed_members
 from tests.training.fakes import FakeTrainingPorts
-from tests.training.test_tg_listener import setup as training_listener, status
+from tests.training.test_tg_listener import real_listener, status
+from leeroy_mind.server.engine import Conversation
 from tests.training.test_tg_store import context, record
 from tests.training.test_tg_ledger import feed, header, member, run as open_training_raid
 from .test_lineup import event
@@ -53,7 +55,8 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
         # Configure only synthetic paths. Game reads, sends and training effects all go to fakes.
         conf = tmp_path / "mind.toml"
         conf.write_text('[server]\nenabled=true\n[guild]\nworldserver_conf="missing.conf"\n', encoding="utf-8")
-        app = MindApp(load_config(conf), tmp_path, llm=FakeLLM(), clock=clock, rng_seed=59)
+        app = MindApp(load_config(conf), tmp_path, llm=FakeLLM(lambda model, turns: "I checked the bank." if "#bank-requests" in turns[-1]["content"] else "That tank coverage works for me."), clock=clock, rng_seed=59)
+        app.server.config = replace(app.server.config, quiet_window=(time(10,11), time(10,12)))
         store, conn = app.store, app.store.conn
         ports.conn.close()
         ports.conn = conn
@@ -70,7 +73,7 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
         trainer = FakeTrainingPorts(training_dir, clock)
         trainer.close()
         trainer.conn = conn
-        listener, run = training_listener(trainer)
+        listener, run, training_ports = real_listener(trainer)
         listener.ledger = Ledger(trainer)
         app.training = NS(listener=listener, applier=listener.applier, cfg=trainer.cfg)
         direct = DirectLedger(store, process_id="rehearsal", clock=clock)
@@ -86,9 +89,13 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
         bridge = FakeBridge()
         writer = NS(write=Mock(), drain=AsyncMock())
         fighting = False
+        app.engine.raid.phase = lambda now: "combat" if fighting else "none"
+        attempted_in_fight = []
         original_send = ports.send
 
         async def send(cmd):
+            if fighting:
+                attempted_in_fight.append(cmd)
             assert not fighting
             wire = json.loads(encode_command(cmd, int(clock.now()*1000)))
             await bridge._command(writer, wire)
@@ -118,17 +125,48 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
         def seeds():
             return decision_seeds(conn, now=clock.now(), personas=people, officers={101, 104})
 
-        def post_seed(seed, speaker, channel):
-            return discord.post(store, channel=channel, author=speaker, origin="mind", text=seed.fact,
-                                now=clock.now())
+        async def scheduled_votes(poll, *, owner=None):
+            voters = polls.voters_of(poll) - {app.human_guid}
+            svc._present = lambda guids, now: dict.fromkeys(guids, "online")
+            if owner:
+                reply = await svc.handle(dict(action="vote", poll=poll["id"], option=owner))
+                assert reply["ok"]
+            clock._t = max(vote_at(poll["id"], g, poll["opened"], poll["closes"]) for g in voters) + 1
+            await svc.tick()
+            assert {r[0] for r in conn.execute("SELECT member FROM guild_poll_vote WHERE poll=?", (poll["id"],))} == voters | ({app.human_guid} if owner else set())
+
+        async def post_seed(seed, speaker):
+            server = app.server.engine
+            # Pin availability and model wording; exercise the actual server opener, Discord
+            # pipeline, recorded line, code block and atomic callback for its chosen seed.
+            server._blocked = lambda now: None
+            server._valid = lambda *args: True
+            server._observe = AsyncMock(return_value=NS(personas=people, in_play=set(), away=set(),
+                ties={}, states={speaker:NS(presence=NS(state="online"))}))
+            async def compose(turn, meta):
+                answer = await app.llm.chat("fake", [{"role":"user", "content":turn.instruction}], options={})
+                reason = app.engine._deliver_discord(turn,meta,people[speaker],answer.text,[])
+                assert reason is None, reason
+            app.engine.speak_meta = compose
+            conversation = Conversation("synthetic-"+seed.key, seed.channels[0], seed, [speaker], clock.now(), 1)
+            server._live[conversation.id] = conversation
+            await server._conversation(conversation)
+            assert len(conversation.messages) == 1, conversation.reason
+            row = conn.execute("SELECT channel,text FROM discord_message WHERE id=?", (conversation.messages[0],)).fetchone()
+            assert row["channel"] == seed.channels[0]
+            assert row["text"].startswith("I checked the bank." if seed.kind == "bank_request" else "That tank coverage works for me.")
+            if seed.kind == "bank_request":
+                assert row["channel"] == "bank-requests" and seed.fact in row["text"].split("```")[1]
 
         start = clock.now()
-        at = start + 24*3600
+        at = (datetime.fromtimestamp(start).replace(hour=0, minute=1, second=0) + timedelta(days=1)).timestamp()
+        # Start at local noon the day before so proposal, posting and formation all have room.
+        clock._t = start = at-12*3600
         event(store, at)
         await tick("lineup")
         [line] = rows("lineup")
         assert line["status"] == "proposed" and json.loads(line["positions"])
-        post_seed(next(s for s in seeds() if s.key == f"decision:{line['id']}:proposed"), 101, "raid-planning")
+        await post_seed(next(s for s in seeds() if s.key == f"decision:{line['id']}:proposed"), 101)
         clock._t += 2*3600
         await tick("lineup")
         assert rows("lineup")[0]["message"]
@@ -136,10 +174,9 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
         requests = [s for s in seeds() if s.kind == "bank_request"]
         assert len(requests) >= 2
         for seed in requests[:2]:
-            with store.transaction():
-                message = post_seed(seed, 104, "officer-chat")
-                bank.record_post(app, seed, 104, message, clock.now())
-        clock._t = at
+            await post_seed(seed, 104)
+        clock._t = at - 6*3600
+        at = clock.now()
         await tick("lineup")
         assert any(c["type"] == "guild_add_roster" and c["members"] for c in bridge.commands)
         await form10(setup)
@@ -160,11 +197,9 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
         fighting = True
         await tick("loot_rule")
         [poll] = polls.open_polls(conn)
-        for voter in polls.voters_of(poll):
-            assert polls.vote(store, poll["id"], voter, "loot_council", now=at)
-        polls.close_due(store, now=at)
-        await svc.rules_for("loot_rule").closed(app, polls.get_poll(conn, poll["id"]), "loot_council")
-        await tick("loot_rule")
+        await scheduled_votes(poll, owner="loot_council")
+        await svc.tick()
+        assert polls.get_poll(conn, poll["id"])["handled"] is not None
         await tick("bank")
         assert rows("loot_rule")[-1]["status"] == "settled"
         assert not any(c["type"] == "bank_withdraw" for c in bridge.commands)
@@ -198,8 +233,17 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
         run.session.raid_id = observed.session.raid_id
         run.session.ctx.instance_id = 77
         assert loot_rules.snapshot(conn, run.session.raid_id).mode == "loot_council"
+        training_ports.state = replace(training_ports.state, run_key=listener.run_key(run), instance_id=77)
         await listener.on_start(run)
+        from leeroy_mind.talk.raid import RaidPhase
+        phase = app.engine.raid.phase
+        app.engine.raid.phase = lambda now: RaidPhase.WIPE_DEBRIEF
+        prior_commands = list(training_ports.sent)
         await listener.on_dc_status(status(trainer, name="Lord Marrowgar", entry=36612))
+        assert training_ports.sent == prior_commands and rows("strategy")[0]["status"] == "settled"
+        app.engine.raid.phase = phase
+        await listener.on_dc_status(status(trainer, name="Lord Marrowgar", entry=36612))
+        assert any(getattr(c, "key", None) == "PullPlayerReleaseDelay" for c in training_ports.sent)
         h = header(trainer)
         await feed(listener.ledger, member(h), h)
         recorded = conn.execute("SELECT covariates FROM tg_pull WHERE id=?", (h.id,)).fetchone()
@@ -212,11 +256,11 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
         await tick("rank")
         newcomer = next(r for r in rows("rank") if r["subject"] == "rank:105")
         poll = polls.get_poll(conn, newcomer["poll"])
-        for voter in polls.voters_of(poll):
-            assert polls.vote(store, poll["id"], voter, "approve", now=clock.now())
-        polls.close_due(store, now=clock.now())
-        await svc.rules_for("rank").closed(app, polls.get_poll(conn, poll["id"]), "approve")
-        await tick("rank")
+        await scheduled_votes(poll)
+        assert ledger.get(conn, newcomer["id"])["status"] == "proposed"
+        clock._t = poll["closes"]
+        await svc.tick()
+        assert polls.get_poll(conn, poll["id"])["handled"] is not None
         assert app.guild.roster._ranks_due
         await app.guild.roster.sync_ranks()
         assert any(c["type"] == "set_rank" and c["guid"] == 105 and c["rank"] == 4 for c in bridge.commands)
@@ -226,7 +270,7 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
         view = decisions_view(conn, now=clock.now(), enabled=True)["decisions"]
         assert {r["id"] for r in view} == {r["id"] for r in ledger.history(conn)}
         assert all(r["changed"] for r in view if r["status"] in ("in_effect", "failed", "overruled"))
-        assert not ports.said and not any(c["type"] == "say" for c in bridge.commands)
+        assert not attempted_in_fight and not ports.said and not any(c["type"] == "say" for c in bridge.commands)
         await listener.close()
         store.close()
 

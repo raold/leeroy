@@ -19,6 +19,8 @@ Leeroy.PlayStyle.Enable = 0
 Leeroy.GuildAdd.FollowRoster = 0
 # Permit guild bank deliveries to cast members through mail_send.
 Leeroy.Decisions.BankMail.Enable = 0
+# Allow targeted weekly top-ups by a guild maker. Bootstrap stock is independent.
+Leeroy.Decisions.BankRestock.Enable = 0
 
 # The raid lead (mind [raidlead]): his orders to his own group's bots (bot_do "order", Bloodlust included)
 # and the raid icon of the member he names to lead on his target (raid_lead). No assistant flag is set.

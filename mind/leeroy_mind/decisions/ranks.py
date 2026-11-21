@@ -84,18 +84,37 @@ class RankRules:
         if getattr(app, "guild", None):
             app.guild.roster._ranks_due = True
 
+    def due(self, app, cast, now):
+        trial = getattr(getattr(getattr(app, "realm", None), "cfg", None), "trial_rank", 4)
+        return {row["guid"]: row for row in review_due(app.store.conn, cast, app.personas, app.guild.cfg.ranks,
+                                                       trial, now=now)}
+
+    def authorized(self, app, poll, target):
+        if not self.seen or target not in members(app):
+            return False
+        voters = polls.voters_of(poll)
+        current = {g for g, m in members(app).items()
+                   if m.rank == app.guild.cfg.ranks["officer"] and app.personas.get(g)}
+        votes = dict(app.store.conn.execute("SELECT member,option FROM guild_poll_vote WHERE poll=?", (poll["id"],)))
+        if not current:
+            return False
+        if app.human_guid in votes and app.human_guid in voters:
+            current.add(app.human_guid)
+        return sum(votes.get(g) == "approve" for g in current & voters) > len(current) // 2
+
     async def tick(self, app, now):
         if not self.seen or not getattr(app, "guild", None):
             return
         store, cast = app.store, members(app)
         ranks = app.guild.cfg.ranks
-        trial = getattr(getattr(getattr(app, "realm", None), "cfg", None), "trial_rank", 4)
-        due = {r["guid"]: r for r in review_due(store.conn, cast, app.personas, ranks, trial, now=now)}
+        due = self.due(app, cast, now)
         for row in store.conn.execute("SELECT * FROM guild_decision WHERE kind='rank' AND status='settled'").fetchall():
             if held(app):
                 break
             v = json.loads(row["value"])
-            if due.get(v["guid"], {}).get("rank") != v["rank"]:
+            poll = polls.get_poll(store.conn, row["poll"])
+            if (due.get(v["guid"], {}).get("rank") != v["rank"] or not poll
+                    or not self.authorized(app, poll, v["guid"])):
                 ledger.expire(store, row["id"], now=now)
                 continue
             ledger.take_effect(store, row["id"], now=now, effect_ref={"rank": v["rank"]})
@@ -130,9 +149,10 @@ class RankRules:
         row = ledger.pending(store.conn, "rank", poll["subject"])
         with store.transaction():
             if row and row["poll"] == poll["id"] and row["status"] == "proposed":
-                votes = dict(store.conn.execute("SELECT member,option FROM guild_poll_vote WHERE poll=?", (poll["id"],)))
-                eligible = polls.voters_of(poll)
-                if winner == "approve" and sum(votes.get(g) == "approve" for g in eligible) > len(eligible) // 2:
+                value = json.loads(row["value"])
+                target = value["guid"]
+                if (winner == "approve" and self.authorized(app, poll, target)
+                        and self.due(app, members(app), now).get(target, {}).get("rank") == value["rank"]):
                     ledger.settle(store, row["id"], settled_by=0, poll=poll["id"], now=now)
                 else:
                     ledger.expire(store, row["id"], now=now)
