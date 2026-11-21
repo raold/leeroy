@@ -105,6 +105,10 @@ def attach(app):
     runner = NightRunner(STAGES, make_ctx)
     from leeroy_mind.bond.night import attach as attach_bond
     attach_bond(runner,settings)
+    from leeroy_mind.godmode.dayplan import attach as attach_day_plans
+    from leeroy_mind.realm.places import Places, places_path
+    attach_day_plans(runner, settings, lambda: Places.load(places_path(
+        getattr(getattr(getattr(app, "guild", None), "cfg", None), "worldserver_conf", None))))
     from leeroy_mind.memory.scopes import attach as attach_scopes
     attach_scopes(runner)  # always on, model-free: no scope wider than its evidence
     app.night_runner = runner

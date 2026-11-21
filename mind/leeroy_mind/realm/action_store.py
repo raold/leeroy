@@ -120,6 +120,10 @@ def leave_released_guids(r):
     return released_members(r.role, r.policy, r.kind, r.state, r.evidence, r.reserved_manifest)
 
 
+def _day_fishing(r):
+    return r.kind == "bot_do" and r.policy == "ordinary" and bool(json.loads(r.payload).get("day_permit"))
+
+
 def held_manifest(r):
     return tuple(g for g in r.reserved_manifest if g not in leave_released_guids(r))
 
@@ -462,7 +466,7 @@ class ActionStore:
         if r.policy == "wg" and "status" in ev:
             status_binding = {k: ev["status"][k] for k in ("origin_id", "pvp_owner", "kind", "guild", "human", "origin_epoch", "members")}
             if ev.get("binding") != status_binding: raise ValueError("invalid status binding")
-        if "bot" in ev and r.policy != "defaults": raise ValueError("wrong defaults policy")
+        if "bot" in ev and r.policy != "defaults" and not _day_fishing(r): raise ValueError("wrong bot policy")
         if any(k in ev for k in ("enrollment_job", "origin_failure", "binding")) and r.policy != "wg":
             raise ValueError("wrong continuation policy")
         if "status" in ev and r.policy not in {"wg", "query"}: raise ValueError("wrong status policy")
@@ -726,6 +730,8 @@ class ActionStore:
             if positive: return self._conflict(r, ev, now)
             error = ack["error"]
             refused = (r.policy in {"ordinary", "wg"} and error in REFUSALS
+                       or json.loads(r.payload).get("day_permit") and error in {
+                           "day_off", "day_revoked", "day_scope", "day_duplicate"}
                        or r.policy == "ordinary" and r.kind == "leave_pvp" and leave_refusal_guids(error, r.reserved_manifest)
                        or r.kind == "guild_grow" and _grow_refusal(error, r.reserved_manifest)
                        or r.policy == "wg" and error in {"no_wintergrasp", "no_online_members"}
@@ -737,6 +743,16 @@ class ActionStore:
                 return result(False, error, "completed")  # the named members, for the recall to leave out
             return result(False, "refused" if refused else "unknown", "completed" if refused else "unknown")
         if r.policy == "ack" and ack: return result(True)
+        if _day_fishing(r) and "bot" in ev:
+            bot = ev["bot"]
+            succeeded = tuple(bot["guids"])
+            skipped = tuple(s["guid"] for s in bot["skipped"])
+            if (bot["state"] != "done" or bot["reason"] or set(succeeded) & set(skipped)
+                    or set(succeeded + skipped) != set(r.reserved_manifest)):
+                return result(False, "fishing_unproved", "unknown")
+            if ack or r.transport_state == "settled":
+                return result(bool(succeeded), "" if succeeded else "fishing_skipped")
+            return r
         if r.policy == "wg":
             if "origin_failure" in ev: return result(False, "origin_failed", "unknown")
             return r
@@ -809,7 +825,7 @@ class ActionStore:
         now = _now(now); incoming = json.loads(document(_evidence(ev), limit=32768)); _realm_job(incoming, ev.id)
         with self.conn:
             old = self.get(ev.id)
-            if old is None or old.transport_state == "not_entered" or old.kind != ev.kind or old.policy in {"ack", "query", "defaults"}: return Transition(False)
+            if old is None or old.transport_state == "not_entered" or old.kind != ev.kind or old.policy in {"ack", "query", "defaults"} or _day_fishing(old): return Transition(False)
             # Only an ordinary leave or a rearm skips members, and only members of its own manifest.
             if ev.skipped and (old.policy != "ordinary" or old.kind not in SKIPPING_KINDS
                                or not set(ev.skipped) <= set(old.reserved_manifest)): return Transition(False)
@@ -845,7 +861,7 @@ class ActionStore:
         if type(ev.id) is not str: return Transition(False)
         with self.conn:
             old = self.get(ev.id)
-            if (old is None or old.role != "root" or old.policy != "defaults"
+            if (old is None or old.role != "root" or (old.policy != "defaults" and not _day_fishing(old))
                     or old.transport_state == "not_entered" or ev.kind != old.kind
                     or ev.training_run != json.loads(old.payload)["training_run"]):
                 return Transition(False)

@@ -45,6 +45,7 @@ invites = true                 # his invitations in game ("come to the inn", "le
 lead = true                    # his "you lead" in game ("take the lead", "take us questing", "lead us to the inn"): a member of his group leads it and he follows (lead/README.md)
 
 [life]
+day_plans = false             # coordinated in-game activities between raids
 availability = 0              # 0-10: how often members are away, busy or slow to answer by their day (0: always there)
 state = false                 # her feeling through the day
 dm_wait_cap_s = 75            # the longest his DM waits for her answer, whatever her day (0: no cap; asleep: twice this)
@@ -163,6 +164,7 @@ class LifeCfg:
     # the longest his DM (and a group DM line that names her) waits for her answer, in
     # seconds, whatever her day; asleep twice this; 0: no cap (discord/owntime.py)
     dm_wait_cap_s: int = 75
+    day_plans: bool = False
     wow_vs_life: int = 5
 
 
@@ -289,6 +291,7 @@ _RULES = {
         "openers_to_him": (lambda v: _num_in(v, 0, 1), "a number 0-1"),
     },
     "life": {
+        "day_plans": (lambda v: type(v) is bool, "a boolean"),
         "availability": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
         "state": (lambda v: type(v) is bool, "a boolean"),
         "dm_wait_cap_s": (lambda v: _int_in(v, 0, DM_WAIT_CAP_MAX),

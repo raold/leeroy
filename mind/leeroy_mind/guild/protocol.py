@@ -134,6 +134,7 @@ class BotDo:
     param: str
     target_guid: int = 0
     training_run: str = ""
+    day_permit: str = field(default="", metadata={"omit_default": True})
 
 
 @dataclass(frozen=True, slots=True)
