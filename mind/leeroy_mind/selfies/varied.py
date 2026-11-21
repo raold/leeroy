@@ -88,7 +88,9 @@ class Look:
 
     def codes(self) -> dict:
         """The look as codes and list indices: what output and the gallery may show."""
+        from .outfit_reveal import CATEGORY
         outfits, settings = kind.VARIED_LOOKS[self.category]
+        outfits += tuple(o for o, c in CATEGORY.items() if c == self.category)
         return {"category": self.category, "view": self.view, "framing": self.framing,
                 "outfit": outfits.index(self.outfit), "setting": settings.index(self.setting),
                 "colour": kind.LUST_COLOURS.index(self.colour),
@@ -98,7 +100,8 @@ class Look:
 def screen(p: Persona, look: Look) -> list[str]:
     """kind.screen_lust's problems with `look` for `p`, its category's lists checked too."""
     outfits, settings = kind.VARIED_LOOKS.get(look.category, ((), ()))
-    if look.outfit not in outfits or look.setting not in settings:
+    from .outfit_reveal import CATEGORY
+    if (look.outfit not in outfits and CATEGORY.get(look.outfit) != look.category) or look.setting not in settings:
         return ["photo.category: not on its list"]
     return kind.screen_lust(p, look.data(), varied=True)
 
@@ -250,10 +253,11 @@ def recompose_slot(p: Persona, looks, idx: int, seed: str,
 
 
 def _valid(x) -> bool:
+    from .outfit_reveal import CATEGORY
     return (x.category in kind.VARIED_LOOKS and x.view in kind.VARIED_VIEWS
             and x.framing in kind.VARIED_FRAMINGS and x.colour in kind.LUST_COLOURS
             and x.expression in kind.LUST_EXPRESSIONS
-            and x.outfit in kind.VARIED_LOOKS[x.category][0]
+            and (x.outfit in kind.VARIED_LOOKS[x.category][0] or CATEGORY.get(x.outfit) == x.category)
             and x.setting in kind.VARIED_LOOKS[x.category][1])
 
 

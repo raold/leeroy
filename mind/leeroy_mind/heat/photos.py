@@ -73,7 +73,12 @@ def clamp(tier) -> int:
 
 
 def outfit_ok(choice: str, tier: int) -> bool:
-    return OUTFIT_TIER.get(choice, P4) <= clamp(tier)
+    return outfit_tier(choice) <= clamp(tier)
+
+
+def outfit_tier(choice: str) -> int:
+    from leeroy_mind.selfies.outfit_reveal import CATEGORY, HEAT_TIER
+    return OUTFIT_TIER.get(choice, HEAT_TIER.get(CATEGORY.get(choice), P4))
 
 
 def setting_ok(setting: str, tier: int) -> bool:
@@ -142,7 +147,8 @@ def _phrases() -> dict[str, str]:
     words they compose now, and those a photo composed before the audit's outfit words
     (kind.OLD_TEMPLATES, safe.OUTFIT_WORDS) was rendered and stored with."""
     out = {}
-    for templates in (kind.OLD_TEMPLATES, kind.LUST_OUTFITS, kind.VARIED_OUTFITS):
+    from leeroy_mind.selfies.outfit_reveal import CATALOG
+    for templates in (kind.OLD_TEMPLATES, kind.LUST_OUTFITS, kind.VARIED_OUTFITS, CATALOG):
         out.update({t.format(colour=c): choice for choice, t in templates.items()
                     for c in kind.LUST_COLOURS})
     return out
@@ -185,10 +191,10 @@ def scene_tier(scene) -> int:
         if isinstance(words, dict):
             if choice is None:
                 return P0 if words.get("wearing") in ("work_uniform", "as_now") else P4
-            return OUTFIT_TIER[choice]
+            return outfit_tier(choice)
         if choice is None:
             return P4
-        return max(OUTFIT_TIER[choice], SETTING_TIER.get(scene.get("setting", ""), P4))
+        return max(outfit_tier(choice), SETTING_TIER.get(scene.get("setting", ""), P4))
     except (AttributeError, TypeError, KeyError):
         return P4
 
@@ -205,7 +211,7 @@ def prompt_tier(prompt) -> int:
     if not isinstance(prompt, str) or not prompt:
         return P4
     text = " ".join(prompt.lower().split())
-    wear = [OUTFIT_TIER[choice] for phrase, choice in _phrases().items() if phrase in text]
+    wear = [outfit_tier(choice) for phrase, choice in _phrases().items() if phrase in text]
     places = [tier for place, tier in _places().items() if place in text]
     if not wear or not places:
         return P4
@@ -216,7 +222,7 @@ def prompt_tier(prompt) -> int:
 def look_tier(look) -> int:
     """The lowest tier a varied look (selfies.varied.Look) fits."""
     try:
-        return max(OUTFIT_TIER[look.outfit], SETTING_TIER[look.setting], VIEW_TIER[look.view])
+        return max(outfit_tier(look.outfit), SETTING_TIER[look.setting], VIEW_TIER[look.view])
     except (AttributeError, KeyError):
         return P4
 

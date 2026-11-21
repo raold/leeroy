@@ -33,6 +33,7 @@ class SelfieCfg:
     varied_sets: bool = False  # varied.py: four looks and poses in one set for the lust style
     identity_sets: bool = False  # profile sets carry her chosen photo's face (the identity worker)
     romance_styling: bool = False  # clothed wardrobe and expressions in private situational photos
+    outfit_reveal: int | None = None  # optional beach/gym coverage, 1 (covered) to 5 (revealing)
     # The photo critic (critic.py): detectors and a vision judge measure every rendered
     # situational, request and profile-set photo; a defective situational or request photo is
     # never sent. best_of renders that many seeds of a situational or request photo and sends
@@ -97,6 +98,7 @@ _RULES = {
     "varied_sets": (_bool, "true or false"),
     "identity_sets": (_bool, "true or false"),
     "romance_styling": (_bool, "true or false"),
+    "outfit_reveal": (_int(1, 5), "an integer 1-5"),
     "body_shot_share": (_num(0, 1), "a number 0-1"),
     "snap_body_share": (_num(0, 1), "a number 0-1"),
     "critic": (_bool, "true or false"),
@@ -151,6 +153,7 @@ def load_selfie_config(path: Path) -> SelfieCfg:
         values["variety"] = False  # an invalid/unknown table never opts into new behaviour
         values["varied_sets"] = False
         values["romance_styling"] = False
+        values["outfit_reveal"] = None
         values["critic"] = False
         values["best_of"] = 1
         values["param_bandit"] = False

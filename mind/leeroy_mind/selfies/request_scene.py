@@ -71,14 +71,20 @@ def _subject(app, guid: int, audience: str):
 
 def _style(app, guid: int, scene: Scene, *, category, seed, ident, names,
            framing=None, lighting=None) -> Scene:
-    if not app.selfies.cfg.romance_styling or scene.audience != 'him':
+    reveal = getattr(app.selfies.cfg, 'outfit_reveal', None)
+    if scene.audience != 'him' or (not app.selfies.cfg.romance_styling and reveal is None):
         return scene
-    history = styling_history.read(app.store, guid, ident.guid, now=app.clock.now(),
-                                    learn=getattr(app.engine, 'learn_settings', None))
-    return restyle(app.personas.get(guid), scene, enabled=True, category=category,
-                   relationship=app.store.get_relationship(guid, ident.guid, lens=True),
-                   dial=app.cfg.romance.dial, seed=seed, ident=ident, names=names,
-                   history=history, framing=framing, lighting=lighting)
+    p = app.personas.get(guid)
+    if app.selfies.cfg.romance_styling:
+        history = styling_history.read(app.store, guid, ident.guid, now=app.clock.now(),
+                                        learn=getattr(app.engine, 'learn_settings', None))
+        scene = restyle(p, scene, enabled=True, category=category,
+                        relationship=app.store.get_relationship(guid, ident.guid, lens=True),
+                        dial=app.cfg.romance.dial, seed=seed, ident=ident, names=names,
+                        history=history, framing=framing, lighting=lighting)
+    from .outfit_reveal import restyle_scene
+    return restyle_scene(p, scene, level=reveal, category=category, seed=seed,
+                        names=(*names, ident.real_name))
 
 
 async def choose_scene(app, guid: int, words: str, audience: str, *, model: bool = True) -> Scene:

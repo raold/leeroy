@@ -379,10 +379,18 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
                     folder.mkdir(parents=True, exist_ok=True)
                     try:
                         p = ctx.base(guid)
+                        kind_style = chosen_style(store, p)
+                        light = photo_extra.light_for(store, p)
+                        from .outfit_reveal import profile, restyle_look
+                        if args.varied:
+                            plans[guid] = tuple(restyle_look(p, x, scfg.outfit_reveal, f'{guid}:{i}')
+                                                for i, x in enumerate(plans[guid]))
+                        else:
+                            p = profile(p, scfg.outfit_reveal, guid, kind_style=kind_style)
                         spec = (tuple(build_varied_prompt(p, x) for x in plans[guid])
                                 if args.varied else build_prompt(
-                                    p, kind_style=chosen_style(store, p),
-                                    light=photo_extra.light_for(store, p)))
+                                    p, kind_style=kind_style,
+                                    light=light))
                         rear = None
                         if args.varied:
                             from .kind import BACK_VIEWS
@@ -482,7 +490,8 @@ async def _try_snaps(root, store, cfg, scfg, clock, args, make_llm) -> int:
             await ctx.arbiter.ensure_model(ctx.settings.reflection_model)
         for guid in guids:
             scene, codes = await ask_scene(ctx, guid, about=ABOUT["everyday"],
-                                           romance_styling=scfg.romance_styling)
+                                           romance_styling=scfg.romance_styling,
+                                           outfit_reveal=scfg.outfit_reveal)
             if scene is None:
                 _snap_result(results, guid, "declined" if codes == ["declined"] else "refused",
                              codes=codes)

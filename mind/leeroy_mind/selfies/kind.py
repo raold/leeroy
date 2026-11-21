@@ -944,7 +944,9 @@ CLOTHED_OUTFITS = {
 
 def outfit_phrase(choice: str, colour: str, outfits: dict[str, str] = LUST_OUTFITS) -> str:
     """The outfit `choice` with its colour put in and an article in front."""
-    return _article(outfits[choice].format(colour=colour))
+    from .outfit_reveal import CATALOG
+    template = outfits[choice] if choice in outfits else CATALOG[choice]
+    return _article(template.format(colour=colour))
 
 
 def compose_lust(data: dict) -> ProfilePhoto:
@@ -969,7 +971,9 @@ def screen_lust(p: Persona, data: dict, *, varied: bool = False) -> list[str]:
     the water, gym wear at the gym, the hot tub swimwear only, and a pose (`view`) anywhere
     else is refused (VIEW_OUTSIDE). The age guard and the name screens also read the pose and
     framing phrases the prompt adds."""
-    lists = (("setting", LUST_SETTINGS), ("outfit", VARIED_OUTFITS if varied else LUST_OUTFITS),
+    from .outfit_reveal import CATALOG, CATEGORY
+    outfits = {**(VARIED_OUTFITS if varied else LUST_OUTFITS), **CATALOG}
+    lists = (("setting", LUST_SETTINGS), ("outfit", outfits),
              ("colour", LUST_COLOURS), ("expression", LUST_EXPRESSIONS))
     if varied:
         lists += (("framing", VARIED_FRAMINGS), ("view", VARIED_VIEWS))
@@ -981,10 +985,11 @@ def screen_lust(p: Persona, data: dict, *, varied: bool = False) -> list[str]:
         problems.append(VIEW_OUTSIDE)
     if problems:
         return problems
-    swim = data["outfit"] in SWIM_OUTFITS
+    swim = data["outfit"] in SWIM_OUTFITS or CATEGORY.get(data["outfit"]) == "swim"
     if swim and data["setting"] not in WATER_SETTINGS:
         problems.append(PAIRINGS[0])
-    if (data["outfit"] in (VARIED_GYM_OUTFITS if varied else GYM_OUTFITS)
+    if ((data["outfit"] in (VARIED_GYM_OUTFITS if varied else GYM_OUTFITS)
+         or CATEGORY.get(data["outfit"]) == "gym")
             and data["setting"] not in GYM_SETTINGS):
         problems.append(PAIRINGS[1])
     if data["setting"] in SWIM_ONLY_SETTINGS and not swim:
