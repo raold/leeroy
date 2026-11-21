@@ -19,6 +19,7 @@ SWITCHES = (
     ('talk','coherence','Conversations hold together (read at start and at his login)',''),
     ('talk','coherence_length','Long game answers kept whole (read at start and at his login)',''),
     ('talk','wow_grounding','Raid and guild facts and her own lines in WoW talk','',True),
+    ('talk','wow_topic','WoW talk stays on the game: chat register, short game lines, DKP bids','',True),
     ('talk','intent','Her want for each turn',''),
     ('talk','situation','Situation prompts',''),
     ('talk','shape','Reply shapes',''),

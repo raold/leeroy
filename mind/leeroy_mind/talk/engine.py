@@ -41,7 +41,6 @@ import math
 import random
 import sqlite3
 from collections import Counter
-from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
@@ -67,7 +66,7 @@ from leeroy_mind.talk.budget import (GAP_REFERENCE_CHATTINESS, PHASE_MODS, Burst
 from leeroy_mind.talk.channels import choose_channel
 from leeroy_mind.talk.emotes import EmoteReactions
 from leeroy_mind.talk.facts import LibraryFacts
-from leeroy_mind.talk import guild_topics, pastes
+from leeroy_mind.talk import guild_topics, pastes, wowtopic
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.items import ItemLinker
 from leeroy_mind.talk.pastes import PASTE_BURST_S, PASTE_SETTLE_S, PasteBurst, is_addon_row
@@ -1079,8 +1078,8 @@ class TalkEngine(EmoteReactions):
 
     def _guild_event(self, now: float) -> str:
         """The guild's next calendar event within GUILD_EVENT_AHEAD_S, as its title and when
-        ("Raid night tonight at 20:00"), read from what the calendar desk posted; "" when
-        there is none or the calendar cannot be read."""
+        ("Raid night tonight at 8pm server time": realm.calendar_time.when_words), read from what
+        the calendar desk posted; "" when there is none or the calendar cannot be read."""
         try:
             found = self.store.next_calendar_event(now, now + GUILD_EVENT_AHEAD_S,
                                                    GUILD_EVENT_KINDS)
@@ -1089,11 +1088,8 @@ class TalkEngine(EmoteReactions):
         if found is None:
             return ""
         title, at = found
-        local = self.clock.local()
-        when = datetime.fromtimestamp(at, tz=local.tzinfo)
-        day = (("tonight" if when.hour >= 17 else "today") if when.date() == local.date()
-               else "tomorrow")
-        return f"{' '.join(title.split())} {day} at {when:%H:%M}"
+        from leeroy_mind.realm.calendar_time import when_words
+        return f"{' '.join(title.split())} {when_words(at, self.clock.local())}"
 
     async def _burst(self, plan: BurstPlan,
                      first: tuple[int, str, str] | None = None) -> None:
@@ -1186,10 +1182,29 @@ class TalkEngine(EmoteReactions):
                 now, HUMAN_ACTIVE_S) and self.rng.random() < chance:
             return Turn(kind=TurnKind.FLIRT, speaker=speaker, channel=channel, addressee=hg,
                         max_lines=min(2, room), delay=delay), meta
-        if kind is TurnKind.OPEN:
+        if kind is TurnKind.OPEN and self._game_opener(channel):
+            # [talk] wow_topic: on the raid's or party's channel while he raids, an opener brings
+            # up the game (what she wants in it), never her life; the topic hold holds it
+            meta.topic, meta.game_topic = self._game_topic(p), True
+        elif kind is TurnKind.OPEN:
             meta.topic = self._open_topic(p, now)
         return Turn(kind=kind, speaker=speaker, channel=channel, addressee=addressee,
                     trigger_line=trigger, max_lines=min(2, room), delay=delay), meta
+
+    def _game_opener(self, channel: str) -> bool:
+        """[talk] wow_topic on, and an opener on the raid's or party's channel while he is in his
+        raid (talk/wowtopic.py game_topics)."""
+        return (getattr(self.cfg.talk, "wow_topic", False) is True
+                and channel in wowtopic.RAID_CHANNELS and self._in_his_raid())
+
+    def _game_topic(self, p: Persona) -> str:
+        """Her next game topic tonight (wowtopic.game_topics), rotating as _open_topic does."""
+        night = night_of(self.clock.local())
+        n = self._opens.get((p.guid, night), 0)
+        self._opens[(p.guid, night)] = n + 1
+        options = wowtopic.game_topics(p.game.wants)
+        random.Random(f"{p.guid}:{night}:open").shuffle(options)
+        return options[n % len(options)]
 
     def _birthday_tonight(self, speaker: int) -> tuple[str, int] | None:
         """Whose birthday tonight is by the cast's cards, as birthday_line says it (one or two

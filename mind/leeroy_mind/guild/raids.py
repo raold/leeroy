@@ -40,6 +40,18 @@ CATALOG: dict[str, Raid] = {
 }
 
 
+def shown_kills(raid_key: str, kills) -> int:
+    """A raid's stored kill count as it is shown: never more than its map's fights
+    (wow.raid_fights). Rows from before the session left non-fight steps out, and an offline
+    raid's native count, held Ruby Sanctum's three Halion intro steps as kills ("7 kills")."""
+    from leeroy_mind.wow import raid_fights
+    if type(kills) is not int or kills < 0:
+        return 0
+    raid = CATALOG.get(raid_key) if isinstance(raid_key, str) else None
+    most = raid_fights(raid.map_id) if raid is not None else 0
+    return min(kills, most) if most else kills
+
+
 def validate(raid: Raid, size: int, heroic: bool, human_tier: int) -> str | None:
     """Check structural options before progression; booleans are not sizes."""
     if type(size) is not int or size not in raid.sizes:

@@ -14,11 +14,12 @@ from leeroy_mind.personas.screens import has_word
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.text import strip_wow_markup
+from leeroy_mind.wow import is_raid_fight
 
 from .dkp import apply_due_decay, attendance_entries, kill_entries
 from .lines import instruction, member_name, outcome_words, public_text, template
 from .loot import LootMaster, _digest, _get, _once, _put
-from .raids import CATALOG, validate
+from .raids import CATALOG, shown_kills, validate
 from .store import _insert_ledger, balances, bench_streaks
 
 
@@ -210,6 +211,8 @@ class RaidSession:
                 return
             if ev.state == "engaged":
                 return
+            if not is_raid_fight(ev.map, ev.boss_id):
+                return  # an instance script's step (Halion's intro, a gauntlet): no kill, no wipe
             kill_key = self._prefix + f"kill:{ev.instance_id}:{ev.boss_id}"
             key = kill_key if ev.state == "killed" else self._prefix + f"wipe:{ev.instance_id}:{ev.boss_id}:{ev.ts}"
             with self.ports.conn:
@@ -268,7 +271,7 @@ class RaidSession:
                     await self.ports.say(self.plan.loot_guid, "guild", template("dkp_standings", top=top))
                 if _once(self.ports.conn, self._prefix + "wrapup"):
                     self.ports.propose(self._speaker, "guild", instruction("raid_wrapup", raid=CATALOG[self.plan.raid_key].name,
-                                       kills=self.kills, wipes=self.wipes, outcome=outcome_words(outcome)), kind=TurnKind.ASIDE)
+                                       kills=shown_kills(self.plan.raid_key, self.kills), wipes=self.wipes, outcome=outcome_words(outcome)), kind=TurnKind.ASIDE)
                 if self.kills:
                     self._vote = MvpVote(self.ports, random.Random(self.raid_id), lead=self._speaker,
                                          members=self.plan.members,

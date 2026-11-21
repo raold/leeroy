@@ -852,3 +852,18 @@ async def test_offline_raid_whose_gpu_hold_meets_a_pause_waits_without_blocking_
     assert not any("could not complete" in r.message for r in caplog.records)
     del ports.acquire_gpu
     await start(setup)
+
+
+@_run_async
+async def test_native_kills_never_count_more_than_the_maps_fights(setup):
+    """Native's count holds the instance script's steps (Ruby Sanctum's Halion intro steps made
+    "7 kills", 2026-11-20): the stored count is never more than the map's fights."""
+    from leeroy_mind.guild.raids import CATALOG
+    from leeroy_mind.wow import raid_fights
+    ports, _, controller = setup
+    await running(setup)
+    raid_id, key = controller.session.raid_id, controller.session.plan.raid_key
+    await controller.on_job(event(controller, state="done", stage="", reason="cleared", kills=20))
+    await controller.tick()
+    stored = ports.conn.execute("SELECT kills FROM guild_raid WHERE raid_id=?", (raid_id,)).fetchone()[0]
+    assert stored == raid_fights(CATALOG[key].map_id) < 20

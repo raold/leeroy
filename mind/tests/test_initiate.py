@@ -684,10 +684,10 @@ def test_the_guild_calendar_is_an_opener_topic_within_a_day(store, clock, tmp_pa
             "VALUES ('meeting', 102, ?, 'Officer meeting', 'meeting:test', ?, 8, 'posted')",
             (now + 3 * 86400, now))
         store.conn.commit()
-        assert r.engine._guild_event(now) == "Raid night tonight at 23:00"
+        assert r.engine._guild_event(now) == "Raid night tonight at 11pm server time"
         p = r.engine.personas.get(103)
         topics = {r.engine._to_him_topic(p, now) for _ in range(8)}
-        assert "bring up what's on the guild calendar: Raid night tonight at 23:00" in topics
+        assert "bring up what's on the guild calendar: Raid night tonight at 11pm server time" in topics
         assert not any("Officer meeting" in t for t in topics)  # three days off
         assert r.engine._guild_event(now + 4 * 3600) == ""
     run(main())

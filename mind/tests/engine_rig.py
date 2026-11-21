@@ -275,7 +275,8 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
              availability: int = 0, life_state: bool = False, intent: bool = False,
              situation: bool = False, romance_realism: bool = False, shape: bool = False,
              dm_mirror: int = 5, coherence: bool = False,
-             coherence_length: bool = False, wow_grounding: bool = False) -> Rig:
+             coherence_length: bool = False, wow_grounding: bool = False,
+             wow_topic: bool = False) -> Rig:
     """A fresh engine over `store` (the test cast is seeded if the store has no personas).
     The FakeLLM answers `reply` unless a `script` is given; `send` replaces the recording
     send; `library` (a FakeLibrary) gives the engine the library's facts; `dial` is the
@@ -298,7 +299,9 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
     tests/test_coherence_split.py). `wow_grounding`: [talk] wow_grounding (talk/grounding.py), on
     by default in mind.toml but off here unless a test asks, so every other test's prompts are
     the ones it was written for (tests/test_wow_grounding_pipeline.py and the WoW golden,
-    golden_wow.json, cover it)."""
+    golden_wow.json, cover it). `wow_topic`: [talk] wow_topic (talk/wowtopic.py), on by default
+    in mind.toml but off here unless a test asks, likewise (tests/test_wow_topic_pipeline.py and
+    the WoW golden cover it)."""
     if not store.persona_versions():
         seed_test_cast(store)
     store.upsert_cast([Member(guid=HUMAN, name=HUMAN_NAME, race=1, class_=8, gender=0, level=80,
@@ -311,7 +314,7 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
                                        intent=intent, situation=situation, shape=shape,
                                        dm_mirror=dm_mirror, coherence=coherence,
                                        coherence_length=coherence_length,
-                                       wow_grounding=wow_grounding),
+                                       wow_grounding=wow_grounding, wow_topic=wow_topic),
                   romance=RomanceCfg(dial, jealousy, realism=romance_realism),
                   human=HumanCfg(NICK, real_name, "he"),
                   life=replace(base.life, availability=availability, state=life_state))

@@ -32,6 +32,9 @@ lines (talk/prompt.py PromptParts.voice; personas/card.py leaves those out for h
   code for all five samples, shown or not.
 - word_range: the line length her sentence shape names ("clipped, three to seven words"), for
   talk/shape.py's word draw.
+- unused: her own words none of her latest lines holds; a WoW turn's block shows only those
+  ([talk] wow_topic), and its held turns show no topics she brings up unasked (the pipeline
+  passes the sheet with those left out; the block reads "Never: ..." alone when no word is left).
 
 Pure: no clock, no I/O, no logging. The seeded draw is the caller's own stream."""
 import re
@@ -86,10 +89,11 @@ def _body(speech: Speech, human: str, to_him: bool, private: bool,
           keep: tuple[int, int, int]) -> str:
     says, never, topics = keep
     lines = [_sentence(f"{VOICE_HEAD} {_one(speech.register)}; {_one(speech.shape)}")]
-    words = f"You say, only now and then: {_listed(speech.says[:says])}."
-    if speech.never[:never]:
-        words += f" Never: {_listed(speech.never[:never])}."
-    lines.append(words)
+    said = _listed(speech.says[:says])
+    words = [f"You say, only now and then: {said}." if said else "",
+             f"Never: {_listed(speech.never[:never])}." if speech.never[:never] else ""]
+    if any(words):
+        lines.append(" ".join(x for x in words if x))
     brought = [x for x in (_one(b).rstrip(".") for b in speech.brings_up[:topics]) if x]
     if brought:
         lines.append("Unasked, you bring up: " + "; ".join(brought) + ".")
@@ -121,6 +125,15 @@ def voice_block(speech: Speech, human: str, *, to_him: bool = False, private: bo
     body = truncate_words(_body(speech, human, to_him, private, keep), BLOCK_TOKENS * 4)
     shown = [x for x in (_one(s) for s in samples) if x]
     return "\n".join([body, *([SAMPLES_HEAD] + ["- " + s for s in shown] if shown else [])])
+
+
+def unused(says, said) -> tuple[str, ...]:
+    """Her own words (`says`) none of `said` (her latest lines) holds as a run of whole words:
+    a WoW turn's block offers only those ([talk] wow_topic; talk/wowtopic.py), so a word she
+    just used is not handed back to her on the next line."""
+    lines = [normalize_words(x).split() for x in said if x]
+    return tuple(w for w in says
+                 if not any(_has_run(words, normalize_words(w).split()) for words in lines))
 
 
 def stance_current(p: Persona) -> bool:
@@ -321,5 +334,5 @@ def screen(p: Persona, *, characters=()) -> list[str]:
 
 __all__ = ["BLOCK_TOKENS", "MAX_SAMPLES", "RECIPE_TAG", "SAMPLES_HEAD", "SAMPLE_TOKENS", "TRIMS",
            "VOICE_HEAD", "WANT_SAMPLE", "block_tokens", "fitted", "pick_samples", "public_block", "screen",
-           "stance_current", "typed_by_her", "typing_makes",
+           "stance_current", "typed_by_her", "typing_makes", "unused",
            "speech_errors", "strings", "voice_block", "word_range"]

@@ -92,7 +92,10 @@ def test_upgrade_gain_plan_examples():
                         1, "str", {}) is None
     assert upgrade_gain(ItemInfo(3, "Testring", 4, 264, 11, 4, 0, -1, frozenset({7})),
                         8, "int", {10: 251, 11: 258}) == 13
+    # a trinket that shows no stat of hers is nobody's: its worth is its proc (2026-11-20)
     assert upgrade_gain(ItemInfo(4, "Testtrinket", 4, 264, 12, 4, 0, -1, frozenset()),
+                        8, "int", {}) is None
+    assert upgrade_gain(ItemInfo(4, "Testtrinket", 4, 264, 12, 4, 0, -1, frozenset({45})),
                         8, "int", {}) == 64
     assert upgrade_gain(ItemInfo(5, "Testaxe", 4, 264, 17, 2, 1, -1, frozenset({4})),
                         7, "int", {15: 200}) is None
@@ -148,3 +151,47 @@ def test_token_mean_and_empty_baseline():
     assert upgrade_gain(token, 8, "int", {0: 251, 4: 258}) == 10
     assert upgrade_gain(token, 8, "int", {}) == 64
     assert upgrade_gain(token, 8, "int", {0: 277}) is None
+
+
+# A physical damage trinket of crit rating alone (its attack power a proc), as the culture loot
+# wishes gave to healers and casters (2026-11-20); invented stats, item_template's stat types
+SCALE = ItemInfo(13, "Invented Honed Scale", 4, 264, 12, 4, 0, -1, frozenset({32}))
+AP_TRINKET = ItemInfo(14, "Invented Fang", 4, 264, 12, 4, 0, -1, frozenset({38, 32}))
+SP_TRINKET = ItemInfo(15, "Invented Phylactery", 4, 264, 12, 4, 0, -1, frozenset({45, 36}))
+TANK_TRINKET = ItemInfo(16, "Invented Bulwark", 4, 264, 12, 4, 0, -1, frozenset({7, 13}))
+AP_RING = ItemInfo(17, "Invented Band", 4, 264, 11, 4, 0, -1, frozenset({7, 38, 31}))
+HIT_CLOAK = ItemInfo(18, "Invented Shroud", 4, 264, 16, 4, 1, -1, frozenset({5, 7, 31, 45}))
+DODGE_CLOAK = ItemInfo(19, "Invented Mantle", 4, 264, 16, 4, 1, -1, frozenset({7, 12, 13}))
+
+
+@pytest.mark.parametrize(("cls", "tab", "role", "family"), [
+    (5, 1, "healer", "int"), (8, 2, "damage", "int"), (1, 1, "damage", "str"),
+    (4, 0, "damage", "agi"), (1, 2, "tank", "str")])
+def test_a_trinket_of_shared_stats_alone_is_nobodys_wish(cls, tab, role, family):
+    assert upgrade_gain(SCALE, cls, family, {12: 200, 13: 200}, role=role) is None
+
+
+def test_trinkets_by_what_their_stats_say():
+    worn = {12: 200, 13: 200}
+    assert upgrade_gain(AP_TRINKET, 4, "agi", worn, role="damage") == 64
+    assert upgrade_gain(AP_TRINKET, 1, "str", worn, role="damage") == 64
+    assert upgrade_gain(AP_TRINKET, 5, "int", worn, role="healer") is None
+    assert upgrade_gain(AP_TRINKET, 8, "int", worn, role="damage") is None
+    assert upgrade_gain(SP_TRINKET, 5, "int", worn, role="healer") == 64
+    assert upgrade_gain(SP_TRINKET, 4, "agi", worn, role="damage") is None
+    assert upgrade_gain(TANK_TRINKET, 1, "str", worn, role="tank") == 64
+    assert upgrade_gain(TANK_TRINKET, 1, "str", worn, role="damage") is None
+    assert upgrade_gain(TANK_TRINKET, 5, "int", worn, role="healer") is None
+
+
+def test_physical_and_tank_stats_keep_to_their_wearers():
+    assert upgrade_gain(AP_RING, 3, "agi", {10: 200}, role="damage") == 64
+    assert upgrade_gain(AP_RING, 8, "int", {10: 200}, role="damage") is None
+    # a caster cloak with hit is a damage caster's, never a healer's
+    assert upgrade_gain(HIT_CLOAK, 8, "int", {14: 200}, role="damage") == 64
+    assert upgrade_gain(HIT_CLOAK, 5, "int", {14: 200}, role="healer") is None
+    assert upgrade_gain(DODGE_CLOAK, 1, "str", {14: 200}, role="tank") == 64
+    assert upgrade_gain(DODGE_CLOAK, 1, "str", {14: 200}, role="damage") is None
+    # no role given (an older caller): only the stat families decide
+    assert upgrade_gain(DODGE_CLOAK, 1, "str", {14: 200}) == 64
+    assert upgrade_gain(AP_RING, 8, "int", {10: 200}) is None

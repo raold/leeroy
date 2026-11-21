@@ -71,7 +71,9 @@ on: each guild prompt gains the raid and guild card, her example lines and the g
 the awareness slot; every whisper prompt, the lines sent and everything else are as
 golden_prompts.json recorded them (tests/tuning/test_wow_golden.py proves both). Re-recorded with
 geography (2026-11-20): its six whisper prompts gain the place line as golden_prompts.json's do;
-the guild prompts, which carry the grounding, get no place line (a game channel)."""
+the guild prompts, which carry the grounding, get no place line (a game channel). Re-recorded for
+[talk] wow_topic (talk/wowtopic.py, on with the grounding there): each held guild answer gains
+the topic hold line at its instruction's end and nothing else (the greetings are not held)."""
 import asyncio
 import json
 import random
@@ -117,7 +119,7 @@ async def _run(store, clock, data_dir, core: bool = False, *, realism: bool = Fa
                heat=None, wow: bool = False) -> dict:
     r = make_rig(store, clock, data_dir, script=numbered("ok so line {n} then"), seed=7,
                  availability=6 if core else 0, life_state=core, intent=core, situation=core,
-                 shape=core, romance_realism=realism, wow_grounding=wow)
+                 shape=core, romance_realism=realism, wow_grounding=wow, wow_topic=wow)
     if heat is not None:  # [heat] on (tests/heat): a function that attaches it to the rig
         heat(r)
     # the initiation clocks came later and have their own tests (test_initiate.py): off here,

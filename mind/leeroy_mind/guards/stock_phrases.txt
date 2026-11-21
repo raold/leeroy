@@ -84,6 +84,24 @@ there he is | there she is
 how was your day
 what are you up to
 
+# Generic talk in WoW chat and persona tics said verbatim (the live model's blind A/B,
+# 2026-11-20). "rng gods" and "fingers crossed" are things people type, so common; theatre
+# metaphors in raid chat and the scripted openers ("okay so, listen", "second thing first") are
+# never anyone's own words. A voice sheet's word that holds one of these is still rationed by
+# it (slop is nobody's own word: guards/voice.py).
+rng gods | rng god | the rng gods | rngesus
+fingers crossed
+!curtain call | curtain calls
+!take a bow | takes a bow | took a bow
+!front row seat | front row seats | front-row seat
+!standing ovation
+!steal the show | stole the show | steals the show | stealing the show
+!the show must go on
+!the stage is set | set the stage | sets the stage
+!encore performance
+!^okay so listen | ^ok so listen | ^okay listen | ^ok listen | ^okay so hear me out | ^ok so hear me out
+!second thing first | second things first
+
 # Known roleplay-model slop (not yet seen here, cheap to keep out).
 !shivers down | shiver down | sends shivers | send shivers
 !barely above a whisper

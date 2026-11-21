@@ -119,14 +119,15 @@ def compute_wishes(conn, library, armory, *, now: float, raid_roles: dict[int, s
         if not worn:
             continue  # no equipment read: every slot would look like an upgrade
         cls, spec = cast[guid]
-        family = stat_family(cls, spec, role_of(cls, spec, raid_roles[guid]))
+        role = role_of(cls, spec, raid_roles[guid])
+        family = stat_family(cls, spec, role)
         best = None
         for boss, ids in drops.items():
             for item_id in ids:
                 item = items.get(item_id)
                 if item is None or item.quality < MIN_QUALITY:
                     continue
-                gain = upgrade_gain(item, cls, family, worn)
+                gain = upgrade_gain(item, cls, family, worn, role=role)  # hers by its stats
                 if gain is not None and gain > 0 and (best is None or (-gain, item_id) < (-best[2], best[0])):
                     best = (item_id, boss, gain)
         if best is not None:

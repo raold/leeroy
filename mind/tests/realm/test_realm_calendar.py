@@ -268,6 +268,20 @@ def test_raid_nights_from_his_logins(rig):
     assert len(rig.posts("raid")) == 3  # Each night once.
 
 
+def test_raid_nights_start_in_the_evening_never_at_a_relog_after_midnight(rig):
+    """His sessions run past midnight and a relog then (or a restart) starts a session at 03:00
+    of the next day; a morning check-in starts one too. Neither is a raid night's start
+    (2026-11-20: such relogs had posted raid nights at 03:00): the evening's first login is."""
+    rig.lead()
+    for day in (date(2026, 10, 20), date(2026, 10, 21), date(2026, 10, 27), date(2026, 10, 28)):
+        rig.login(_local(day, 3, 10))  # the tail of the evening before
+        rig.login(_local(day, 9, 0))  # a morning check
+        rig.login(_local(day, 21, 5))  # the raid night
+    rig.tick()
+    assert [datetime.fromtimestamp(p.at, NY) for p in rig.posts("raid")] == [
+        _local(date(2026, 11, 3), 21), _local(date(2026, 11, 4), 21)]
+
+
 def test_raid_nights_default_without_history(rig):
     rig.lead()
     rig.tick()

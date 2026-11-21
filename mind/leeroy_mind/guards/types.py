@@ -29,6 +29,9 @@ class Draft:
     # Her own earlier lines the prompt showed as examples (talk/grounding.py): a draft that
     # copies one is `phrase_exemplar` (guards/phrases.py)
     exemplars: tuple[str, ...] = field(default=(), repr=False)
+    # A WoW turn with [talk] wow_topic on (talk/wowtopic.py): the chat register is checked
+    # (guards/register.py) and her own words are rationed tighter (guards/voice.py)
+    wow_topic: bool = False
 
 
 @dataclass(frozen=True)

@@ -102,6 +102,8 @@ HISTORY_S = 28 * 86400
 NIGHTS_MAX = 4
 DEFAULT_NIGHTS = (1, 2, 3)  # Tuesday, Wednesday, Thursday (Monday is 0).
 NIGHT_HOUR = 20
+NIGHT_SPLIT = 6  # a login before this hour belongs to the evening before (clock.night_of's reading)
+EVENING_FROM = 17  # a day's evening start: its first login from this hour on
 MEETING_DAY, MEETING_HOUR = 3, 21  # Thursday 21:00.
 MEETING_LAST_POST_DAY = 2  # Posted on Monday, caught up until Wednesday; never on its own day.
 WEEK_BEFORE_DAYS = 7
@@ -438,15 +440,24 @@ class CalendarDesk:
         return int(datetime.combine(day, time(hour), tzinfo=tz).timestamp())
 
     def raid_nights(self, now) -> list[datetime]:
-        """The raid nights of the product period holding `now`, from his logins before it."""
+        """The raid nights of the product period holding `now`, from his logins before it: each
+        day's evening start, its first login from EVENING_FROM on, else its first from
+        NIGHT_SPLIT on. A login after midnight is the tail of the evening before (a relog, a
+        restart), never a raid night's start (2026-11-20: such relogs had posted "Raid night at
+        03:00", which the members read as 3am)."""
         tz = self._clock.local().tzinfo
         period = product_period(now)
         start_day = date.fromisoformat(period.key)  # The reset's Tuesday.
-        days = {}
+        starts: dict[date, list[datetime]] = {}
         for ts in self._ports.his_logins(period.starts_at - HISTORY_S):
             if ts < period.starts_at:
                 local = datetime.fromtimestamp(ts, tz)
-                days.setdefault(local.weekday(), {}).setdefault(local.date(), local.hour)
+                if local.hour >= NIGHT_SPLIT:
+                    starts.setdefault(local.date(), []).append(local)
+        days = {}
+        for day, logins in sorted(starts.items()):
+            first = min((x for x in logins if x.hour >= EVENING_FROM), default=min(logins))
+            days.setdefault(day.weekday(), {})[day] = first.hour
         chosen = [day for day, dates in days.items() if len(dates) >= 2]
         if chosen:
             chosen = sorted(chosen, key=lambda day: (-len(days[day]), (day - 1) % 7))[:NIGHTS_MAX]

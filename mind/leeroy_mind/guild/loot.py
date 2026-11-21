@@ -146,7 +146,7 @@ class LootMaster:
                             continue
                         role = role_of(member.class_, member.spec_tab, persona.play.raid_role)
                         gain = upgrade_gain(item, member.class_, stat_family(member.class_, member.spec_tab, role),
-                                            equipment.get(guid, {}))
+                                            equipment.get(guid, {}), role=role)
                         bids.append({"guid": guid, "gain": gain,
                                      "wanted": wants_item(persona.game.wants, item.name)})
                         if rule is not None:
