@@ -10,6 +10,11 @@ and mind changes together and reconnect after enabling so the mind sees the new
 hello capability. Both settings default off. When the mind setting is on but the
 native capability is missing, new hand-outs wait rather than silently losing proof.
 
+The native build requires core commit `c8bd1f28c20c72560fa5014eda3b0aa7c3d63dec`
+(`fix(Core/Database): Restart lost transactions`, upstream #28020). The core owns
+COMMIT and does not replay a transaction whose commit acknowledgement was lost;
+exact persisted readback still decides whether the award completed.
+
 The native Characters table `leeroy_loot_give_receipt` reserves the original
 `give_loot` command ID, scoped by realm, guild and owner, before touching loot.
 The award receipt and recipient inventory are committed in one transaction.
