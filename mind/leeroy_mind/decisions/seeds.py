@@ -38,13 +38,18 @@ def _fact(head: str, tail: str) -> str:
     return text if len(text) <= MAX_FACT else text[:MAX_FACT - 1].rstrip() + '…'
 
 
-def decision_seeds(conn, *, now, personas, officers) -> list[Seed]:
+def decision_seeds(conn, *, now, personas, officers, kinds=None) -> list[Seed]:
+    """kinds: the decision kinds switched on (DecisionsService.kinds_on); None is every kind. An off
+    kind's rows and polls seed nothing."""
+    on = (lambda kind: True) if kinds is None else (lambda kind: kind in kinds)
     names = {g: p.character_name for g, p in personas.items()}
     names.update({g: n for g, n in conn.execute('SELECT guid,name FROM cast_member') if g in personas})
     name = lambda g: names.get(g, f'#{g}')  # noqa: E731
     out = []
     for row in conn.execute("SELECT * FROM guild_decision WHERE status IN ('proposed','settled','in_effect') "
                             'AND proposed<=? ORDER BY id', (now,)).fetchall():
+        if not on(row['kind']):
+            continue
         message_channel, poll_channel = channels_of(conn, row)
         proposed = row['status'] == 'proposed'
         if not proposed and (row['settled'] is None or now - row['settled'] > FRESH_DEFAULT_S):
@@ -83,7 +88,7 @@ def decision_seeds(conn, *, now, personas, officers) -> list[Seed]:
     for poll in conn.execute("SELECT * FROM guild_poll WHERE status='open' AND opened<=? AND closes>? ORDER BY id",
                              (now, now)).fetchall():
         channel = layout.channel(poll['channel'])
-        if channel is None:
+        if channel is None or poll['kind'] is not None and not on(poll['kind']):
             continue
         positions = positions_of(poll)
         fact = _fact(f"Poll in #{poll['channel']}: {poll['question']} (options: "

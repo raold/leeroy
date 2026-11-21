@@ -54,6 +54,7 @@ async def snapshot(app, now, *, include_seeds=False):
     photo_dial = app.cfg.talk.selfies if photos_on else 0
     groups_config = getattr(getattr(app,'groups',None),'config',None)
     decisions_on = getattr(app, 'decisions', None) is not None
+    decisions_kinds = getattr(app.decisions, 'kinds_on', None) if decisions_on else None
     day_plans = getattr(getattr(getattr(app, 'cfg', None), 'life', None), 'day_plans', False)
     dungeons = getattr(getattr(getattr(app, 'cfg', None), 'life', None), 'dungeons', False)
     intents_on = getattr(app, 'godmode', None) is not None
@@ -110,6 +111,7 @@ async def snapshot(app, now, *, include_seeds=False):
                                 culture_enabled=culture_on, culture_store=worker_store, ident=identity,
                                 culture_calendar=calendar_on, culture_loot=loot_on,
                                 decisions_enabled=decisions_on, intents_enabled=intents_on,
+                                **({'decisions_kinds': decisions_kinds} if decisions_kinds is not None else {}),
                                 culture_memes=memes_on, **({'day_plans': True} if day_plans else {}),
                                 **({'dungeons': True} if dungeons else {}))
                 seeds = fresh(conn, source, now=now)

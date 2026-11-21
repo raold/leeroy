@@ -22,6 +22,9 @@ from .loot_rules import raid_holds
 log = logging.getLogger(__name__)
 REQUEST_KINDS = ("raid_flasks", "boe_upgrade", "enchant_mats")
 FRESH_S = 60
+# Looking for new requests reads the whole bank, professions, item templates and the cast's gear
+# (several mysql.exe runs under the armory lock): at most this often. A handoff reads afresh.
+DISCOVER_EVERY_S = 900
 
 
 def members(app):
@@ -271,6 +274,7 @@ class BankRules:
     def __init__(self):
         self.features = None
         self.checks = {}
+        self.discovered_at = None  # the last full read that looked for new requests
 
     def on_hello(self, ev):
         self.features = frozenset(ev.features)
@@ -359,6 +363,9 @@ class BankRules:
                 return  # one new wire admission per tick; unresolved refs cannot starve discovery
         if server_quiet(app) or raid_holds(app, now):
             return
+        if self.discovered_at is not None and 0 <= now - self.discovered_at < DISCOVER_EVERY_S:
+            return
+        self.discovered_at = now
         bank = await read(app, details=True)
         by = officer(app)
         if not bank or not by:

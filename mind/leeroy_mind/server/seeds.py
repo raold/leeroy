@@ -416,7 +416,8 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
            culture_enabled: bool = False, culture_store=None, ident=None,
            culture_calendar: bool = False, culture_loot: bool = False,
            intents_enabled: bool = False, decisions_enabled: bool = False,
-           culture_memes: bool = False, day_plans: bool = False, dungeons: bool = False) -> list[Seed]:
+           culture_memes: bool = False, day_plans: bool = False, dungeons: bool = False,
+           decisions_kinds: frozenset[str] | None = None) -> list[Seed]:
     # human_name is deliberately not a fallback: the persisted character row is the
     # authority; an operator's real name must not become a seed.
     names = _names(conn, cast, human)
@@ -455,7 +456,8 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
         result += _read('intent', lambda: _intent(conn, c))
     if decisions_enabled:
         from leeroy_mind.decisions.seeds import decision_seeds, his_loot_seeds
-        result += _read('decision', lambda: decision_seeds(conn, now=now, personas=cast, officers=officers))
+        result += _read('decision', lambda: decision_seeds(conn, now=now, personas=cast, officers=officers,
+                                                           kinds=decisions_kinds))
         his = _read('his_loot', lambda: his_loot_seeds(conn, now=now, names=names, human=human, cast=cast))
         # His claim is that drop's subject; it is never raised twice as plain loot too.
         raised = {'loot:' + seed.key.split(':', 1)[1] for seed in his}

@@ -137,7 +137,8 @@ def test_scheduled_rank_result_uses_current_electorate_after_reconnect(store, gu
     cast = {g: replace(m, rank=1 if g in (102, 103, 104) else 3) for g, m in store.cast().items()}
     app = NS(store=store, human_guid=1, clock=clock, personas=guild, world=NS(members=cast),
              guild=NS(cfg=NS(ranks=RANKS), roster=NS(_ranks_due=False)))
-    service = DecisionsService(app, NS())
+    from leeroy_mind.decisions.config import DecisionsConfig
+    service = DecisionsService(app, DecisionsConfig(enabled=True, rank_reviews=True))
     rules = service.rules_for("rank")
     ranks.observe_cast(store, {g: m for g, m in cast.items() if g != 105}, now=clock.now()-1)
     ranks.observe_cast(store, cast, now=clock.now())

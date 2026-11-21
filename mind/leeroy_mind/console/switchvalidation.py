@@ -104,9 +104,9 @@ def valid_table(name, table, raw):
         except (ValueError,TypeError):
             return False
     if name == 'decisions':
-        from leeroy_mind.decisions.config import RANGES, DecisionsConfig
+        from leeroy_mind.decisions.config import BOOLS, RANGES, DecisionsConfig
         return (not set(table)-{f.name for f in fields(DecisionsConfig)} and all(
-            type(v) is bool if k == 'enabled' else type(v) is int and RANGES[k][0] <= v <= RANGES[k][1]
+            type(v) is bool if k in BOOLS else type(v) is int and RANGES[k][0] <= v <= RANGES[k][1]
             for k,v in table.items()))
     if name == 'culture':
         from leeroy_mind.culture.config import CultureConfig

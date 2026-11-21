@@ -146,6 +146,21 @@ async def test_sync_ranks_sends_set_rank(roster_data):
     assert [(c.guid, c.rank) for c in fake.sent if isinstance(c, SetRank)] == [(101, 2), (103, 2)]
 
 
+@pytest.mark.parametrize("on", [False, True])
+@_run_async
+async def test_rank_decisions_hold_the_roster_only_with_rank_reviews_on(roster_data, on):
+    from types import SimpleNamespace as NS
+    fake, armory = roster_data
+    fake.members[102] = replace(fake.members[102], rank=0)
+    fake.app = NS(decisions=NS(kind_on=lambda kind: on, rules_for=lambda kind: NS(seen=False)),
+                  world=NS(members=fake.members), engine=NS(raid=None))
+    roster = Roster(fake, GuildConfig(), armory, premade=PREMADE)
+    await roster.sync_ranks()
+    sent = [(c.guid, c.rank) for c in fake.sent if isinstance(c, SetRank)]
+    # On, the rank rules have not seen a cast yet, so the roster waits; off, ranks are as before them
+    assert sent == ([] if on else [(101, 2), (103, 2)])
+
+
 @_run_async
 async def test_unknown_rank_waits_for_observation_before_new_desired_rank(roster_data):
     fake, armory = roster_data

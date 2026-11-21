@@ -80,7 +80,8 @@ def test_decisions_rehearsal(setup, tmp_path, clock, monkeypatch):
         ctx = ActionContext(enabled=True, connected=True, presence_known=True, process_id="rehearsal",
                             generation=1, connection_epoch=1, guild=8, human=1)
         app.realm = NS(part=lambda _: direct, action_context=lambda: ctx, enabled=True, ports=NS())
-        conf.write_text(conf.read_text() + '[decisions]\nenabled=true\nbank_restock_per_week=0\n', encoding="utf-8")
+        conf.write_text(conf.read_text() + '[decisions]\nenabled=true\nbank_restock_per_week=0\nrank_reviews=true\n'
+                         'boss_strategy=true\nbank_requests=true\n', encoding="utf-8")
         svc = app.decisions = attach_decisions(app)
         await svc.on_hello(NS(features=("member_bank_mail", "training_enabled")))
         observe = app._handlers["cast"][-1]
@@ -248,6 +249,9 @@ def test_decisions_rehearsal(setup, tmp_path, clock, monkeypatch):
         # Once the actionable requests finish, an unresolved one must still permit fresh discovery.
         from leeroy_mind.decisions import bank
         with patch.object(bank,"read",wraps=bank.read) as read_again:
+            await tick("bank")
+            read_again.assert_not_awaited()  # discovery reads the bank at most every DISCOVER_EVERY_S
+            svc.rules_for("bank").discovered_at = None  # as if that interval had passed
             await tick("bank")
             read_again.assert_awaited()
         assert [c["type"] for c in bridge.commands if c["type"] in ("bank_withdraw","mail_send")] == ["bank_withdraw","mail_send"]

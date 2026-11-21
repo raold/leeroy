@@ -1,4 +1,5 @@
-"""Startup-only attachment; off (or without [server]) adds no task, hook, seed or card part."""
+"""Startup-only attachment; off (or without [server]) adds no task, hook, seed or card part. A Part C
+kind switched off ([decisions] boss_strategy, rank_reviews) wires nothing into training or the cast."""
 from .config import load_decisions_config
 
 
@@ -10,7 +11,7 @@ def attach_decisions(app):
     service = DecisionsService(app, config)  # with its own instances of the shipped kinds
     app.engine.decisions_enabled = True
     training = getattr(app, "training", None)
-    if training is not None:
+    if training is not None and service.kind_on("strategy"):
         from . import strategy
         rules = service.rules_for("strategy")
         training.listener.guild_layer = lambda context: strategy.layer_for(app, context) if rules.native else None
@@ -22,12 +23,13 @@ def attach_decisions(app):
         training.applier.guild_allowed = guild_allowed
         training.applier.guild_hold = training.listener.guild_hold
     app.register_event_handler('hello', service.on_hello)
-    from .ranks import observe_cast
-    async def on_cast(ev):
-        roster = {m.guid: m for m in ev.members if m.guid != app.human_guid and m.rank and m.level >= 80}
-        observe_cast(app.store, roster, now=app.clock.now())
-        service.rules_for("rank").seen = True
-    app.register_event_handler("cast", on_cast)
+    if service.kind_on("rank"):
+        from .ranks import observe_cast
+        async def on_cast(ev):
+            roster = {m.guid: m for m in ev.members if m.guid != app.human_guid and m.rank and m.level >= 80}
+            observe_cast(app.store, roster, now=app.clock.now())
+            service.rules_for("rank").seen = True
+        app.register_event_handler("cast", on_cast)
     app.register_connection_hook(service.on_connection)
     app.register_background(service.run)
     if config.bank_restock_per_week and getattr(app, "night_runner", None) is not None:
