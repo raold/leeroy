@@ -592,18 +592,16 @@ public:
         std::uint32_t const guid = bot->GetGUID().GetCounter();
         float const reach = bot->GetCombatReach();
         HazardPoint const at = PointOf(bot);
-        std::vector<std::uint64_t> inside;
         std::vector<HazardZone> standing;
         for (HazardZone const& zone : *zones)
             if (InHazard(at, zone, reach))
-            {
-                inside.push_back(zone.id);
                 standing.push_back(zone);
-            }
-        if (inside.empty())
+        if (standing.empty())
         {
             std::lock_guard<std::mutex> lock(memoLock);
             exitMemo.erase(guid);
+            if (auto const guard = exitGuards.find(guid); guard != exitGuards.end())
+                guard->second.standing.clear(); // stood clear: whatever it steps into next is an entry
             return false;
         }
         std::uint64_t const now = NowMs();
@@ -614,10 +612,16 @@ public:
         bool yielded = false;
         {
             std::lock_guard<std::mutex> lock(memoLock);
-            HazardExitGuard& guard = exitGuards[guid];
             auto const found = exitMemo.find(guid);
-            if (HazardExitYielded(guard, inside, now))
+            // Entries count per zone, into a zone it did not stand in at its last answer and never into one that
+            // moves (it walked onto the bot); an exit planned again inside the same zones counts nothing.
+            if (HazardEntry const entry = NoteHazardZoneEntry(exitGuards[guid], standing, now);
+                entry != HazardEntry::Exit)
+            {
                 yielded = true;
+                if (entry == HazardEntry::YieldStarts)
+                    LOG_INFO("module.leeroy", "hazard_exit_yield guid={} zones={}", guid, standing.size());
+            }
             else if (found != exitMemo.end() && found->second.moved && HazardClear(found->second.answer, *zones, reach)
                 && std::hypot(found->second.answer.x - at.x, found->second.answer.y - at.y) <= kHazardMaxShiftYards)
             {
@@ -627,18 +631,6 @@ public:
             else if (found != exitMemo.end() && !found->second.moved && found->second.version == selection
                 && Close(found->second.asked, at))
                 known = true; // nothing reachable a moment ago
-            else if (found == exitMemo.end())
-            {
-                // A fresh entry (the last answer found the bot in no zone) counts toward the yield, never into a
-                // zone that moves (it walked onto the bot). Still inside, an exit that a moving hazard (or a new
-                // zone) took is planned again uncounted.
-                if (HazardEntry const entry = NoteHazardZoneEntry(guard, standing, now); entry != HazardEntry::Exit)
-                {
-                    yielded = true;
-                    if (entry == HazardEntry::YieldStarts)
-                        LOG_INFO("module.leeroy", "hazard_exit_yield guid={} zones={}", guid, inside.size());
-                }
-            }
             if (yielded)
                 exitMemo.erase(guid);
             // Out of combat: his side is the side of the follow goal the last follow tick chose.

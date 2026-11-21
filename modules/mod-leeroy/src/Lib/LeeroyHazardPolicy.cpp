@@ -406,13 +406,15 @@ bool HazardExitYielded(HazardExitGuard const& guard, std::vector<std::uint64_t> 
     return true;
 }
 
-HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now)
+namespace
 {
-    if (HazardExitYielded(guard, zones, now))
-        return HazardEntry::Yielded;
+// Counts an entry into each of `zones` not yielded now; true when one's yield starts.
+bool CountEntries(HazardExitGuard& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now)
+{
     // Forget hazards neither counting nor yielded any more.
     std::erase_if(guard.zones, [&](auto const& item)
         { return now - item.second.since > kHazardExitWindowMs && now >= item.second.yieldUntil; });
+    bool started = false;
     for (std::uint64_t zone : zones)
     {
         HazardExitCount& count = guard.zones[zone];
@@ -424,22 +426,46 @@ HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> c
             continue;
         }
         if (++count.exits >= kHazardExitsPerWindow)
+        {
             count = {0, now, now + kHazardYieldMs};
+            started = true;
+        }
     }
+    return started;
+}
+}
+
+HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now)
+{
+    if (HazardExitYielded(guard, zones, now))
+        return HazardEntry::Yielded;
+    CountEntries(guard, zones, now);
     return HazardExitYielded(guard, zones, now) ? HazardEntry::YieldStarts : HazardEntry::Exit;
 }
 
 HazardEntry NoteHazardZoneEntry(HazardExitGuard& guard, std::vector<HazardZone> const& inside, std::uint64_t now)
 {
+    std::vector<std::uint64_t> standing;
     std::vector<std::uint64_t> fixed;
+    std::vector<std::uint64_t> entered;
     bool moving = false;
     for (HazardZone const& zone : inside)
+    {
+        standing.push_back(zone.id);
         if (zone.moving)
+        {
             moving = true;
-        else
-            fixed.push_back(zone.id);
-    HazardEntry const entry = NoteHazardEntry(guard, fixed, now);
-    return moving ? HazardEntry::Exit : entry;
+            continue;
+        }
+        fixed.push_back(zone.id);
+        if (std::find(guard.standing.begin(), guard.standing.end(), zone.id) == guard.standing.end())
+            entered.push_back(zone.id);
+    }
+    guard.standing = std::move(standing);
+    bool const started = CountEntries(guard, entered, now);
+    if (moving || !HazardExitYielded(guard, fixed, now))
+        return HazardEntry::Exit;
+    return started ? HazardEntry::YieldStarts : HazardEntry::Yielded;
 }
 
 bool HazardEligible(HazardMemberFacts const& facts)

@@ -476,9 +476,10 @@ training state or pending bot command leaves the body to its owner (nothing adde
   yards, so a bot just inside the near edge steps back and goes round, and one past the middle finishes the
   crossing. In combat, ties go toward him. An exit never loops with a lower-relevance mover (follow, or
   dungeon-clear's `.dc on` route at relevance 15-57) that walks the bot back into the same hazard: entries are
-  counted per hazard, fresh ones only (still inside, an exit that a moving npc or a new zone took is planned again
-  uncounted) and never into a moving npc's zone, which walked onto the bot (`NoteHazardZoneEntry`; it is always
-  stepped out of), and a hazard's third entry within 20 seconds yields it to the bot's own movers for 20
+  counted per hazard, into a hazard the bot did not stand in at its last answer (an exit planned again inside the
+  same hazards counts nothing; a bot walked from one overlapping hazard into the other counts each) and never into
+  a moving npc's zone, which walked onto the bot (`NoteHazardZoneEntry`; it is always stepped out of), and a
+  hazard's third entry within 20 seconds yields it to the bot's own movers for 20
   seconds; a bot standing only in yielded hazards is let through, overlapping ones included
   (`hazard_exit_yield guid= zones=`).
 - Logs once a minute while it acts: `hazards_minute aware= zones= spot_members= detour_members= exit_members=`.
@@ -520,8 +521,8 @@ core's `SpellInfoCorrections` and the world database (`creature_template`, its a
 A replay of the hall from `LivingPoisonDataList` (`Hazard_AFollowerCrossesTheLivingPoisonLanesWithoutSettingOneOff`:
 a follower at run speed across all three lanes, 120 starts over every phase of the waves, the zones 500 ms old)
 reaches the far side every time and never comes within 3 yards of a slime; walking straight sets one off in 57.
-Its first run counted each re-planned exit as an entry, so a slime walking onto a bot yielded the bot to follow
-within a second; hence the entry rule above. A slime that appears on a bot standing at its pipe (a lane's start)
+Its first run counted each re-planned exit as an entry (the job counted whenever its exit memo was not reusable),
+so a slime walking onto a bot yielded the bot to follow within a second; hence the per-hazard entry rule above. A slime that appears on a bot standing at its pipe (a lane's start)
 is not foreseen. While such an npc is within the scan the zones change every pass, so follow spots and detours are
 worked out again every 500 ms (as when an area appears or ends).
 

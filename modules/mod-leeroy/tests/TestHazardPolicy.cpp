@@ -726,15 +726,46 @@ LEEROY_TEST(Hazard_AMovingHazardNeverYieldsTheExit)
     HazardZone const pool{0, 0, 0, 4, 6};
     HazardExitGuard guard;
     for (std::uint64_t now = 0; now < 10000; now += 1000)
+    {
+        guard.standing.clear(); // stood clear, then the slime walked onto it again
         CHECK(NoteHazardZoneEntry(guard, {slime}, now) == HazardEntry::Exit);
+    }
     CHECK(!guard.zones.contains(5));
-    // Standing in both, the pool's entries count as ever, but the bot still steps out of the slime.
-    CHECK(NoteHazardZoneEntry(guard, {slime, pool}, 11000) == HazardEntry::Exit);
-    CHECK(NoteHazardZoneEntry(guard, {slime, pool}, 12000) == HazardEntry::Exit);
-    CHECK(NoteHazardZoneEntry(guard, {slime, pool}, 13000) == HazardEntry::Exit);
+    // Walked back into the pool where the slime is, the pool's entries count as ever, but the bot still steps out.
+    for (std::uint64_t now : {11000u, 12000u, 13000u})
+    {
+        guard.standing.clear();
+        CHECK(NoteHazardZoneEntry(guard, {slime, pool}, now) == HazardEntry::Exit);
+    }
     CHECK(HazardExitYielded(guard, {6}, 13000));
     CHECK(!HazardExitYielded(guard, {5, 6}, 13000));
     CHECK(NoteHazardZoneEntry(guard, {pool}, 14000) == HazardEntry::Yielded); // the pool alone is let through
+}
+
+// An exit planned again and again inside the same zones is one entry; a bot another mover walks from one
+// overlapping zone into the other and back, never out of both, enters each in turn (review of #424).
+LEEROY_TEST(Hazard_OnlyAZoneNewlyEnteredCountsTowardTheYield)
+{
+    HazardZone const a{0, 0, 0, 4, 1};
+    HazardZone const b{6, 0, 0, 4, 2};
+    HazardExitGuard guard;
+    std::uint64_t now = 1000;
+    for (int replan = 0; replan < 10; ++replan)
+        CHECK(NoteHazardZoneEntry(guard, {a}, now += 100) == HazardEntry::Exit);
+    CHECK_EQ(guard.zones.at(1).exits, 1u);
+    std::vector<std::vector<HazardZone>> const turns{{a, b}, {b}, {b, a}, {a}, {a, b}, {b}, {b, a}, {a}, {a, b}};
+    std::vector<HazardEntry> seen;
+    for (auto const& inside : turns)
+        seen.push_back(NoteHazardZoneEntry(guard, inside, now += 1000));
+    for (std::size_t i = 0; i < 6; ++i)
+        CHECK(seen[i] == HazardEntry::Exit);
+    CHECK(seen[6] == HazardEntry::Exit);         // a's third entry yields a, but b is not yielded
+    CHECK(seen[7] == HazardEntry::Yielded);      // standing in a alone, a lets it through
+    CHECK(seen[8] == HazardEntry::YieldStarts);  // b's third entry
+    CHECK(HazardExitYielded(guard, {1, 2}, now));
+    // Stood clear, and back in the same zone after the window: a fresh count.
+    guard.standing.clear();
+    CHECK(NoteHazardZoneEntry(guard, {a}, now + kHazardYieldMs + kHazardExitWindowMs + 1) == HazardEntry::Exit);
 }
 
 namespace
@@ -807,7 +838,6 @@ Crossing CrossHall(HazardPoint bot, HazardPoint goal, float start, bool aware)
     Crossing out;
     std::vector<HazardZone> zones;
     std::optional<HazardPoint> kept, leave;
-    bool planned = false; // an exit was planned since the bot last stood clear (the job's exit memo)
     HazardDetourTrack track;
     HazardExitGuard guard;
     for (int tick = 0; tick < 600; ++tick)
@@ -834,18 +864,17 @@ Crossing CrossHall(HazardPoint bot, HazardPoint goal, float start, bool aware)
         if (inside.empty())
         {
             leave.reset();
-            planned = false;
+            guard.standing.clear();
         }
+        else if (NoteHazardZoneEntry(guard, inside, now) != HazardEntry::Exit)
+            ++out.yields; // left to follow
         else if (leave && HazardClear(*leave, zones, reach))
             target = leave;
-        else if (!planned && NoteHazardZoneEntry(guard, inside, now) != HazardEntry::Exit)
-            ++out.yields; // left to follow
         else
         {
-            // a fresh entry, or still inside with the exit taken by a slime: planned again
+            // in a zone with no exit yet, or the one chosen was taken by a slime: planned again
             auto const spots = HazardExitSpots(bot, goal, goal, zones, reach, 1);
             leave = spots.empty() ? std::nullopt : std::optional<HazardPoint>(spots.front());
-            planned = true;
             target = leave;
         }
         if (!target)

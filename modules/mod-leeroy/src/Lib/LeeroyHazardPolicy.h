@@ -177,6 +177,7 @@ struct HazardExitCount
 struct HazardExitGuard
 {
     std::map<std::uint64_t, HazardExitCount> zones;
+    std::vector<std::uint64_t> standing; // the zones the bot stood in at its last answer (none once it stood clear)
 };
 // Every zone the bot stands in is yielded: its own movers take it through.
 bool HazardExitYielded(HazardExitGuard const& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now);
@@ -189,8 +190,11 @@ enum class HazardEntry : std::uint8_t
 // Notes a fresh entry into the zones the bot stands in, each counted on its own; a zone's
 // kHazardExitsPerWindow-th entry in the window yields it for kHazardYieldMs.
 HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now);
-// As NoteHazardEntry for the zones themselves: one that moves walks onto the bot, no mover walks the bot back
-// into it, so it is never counted and never yielded (Exit whenever the bot stands in one).
+// The exit's answer for a bot standing in `inside` now (the caller clears guard.standing once it stands in none):
+// an entry counts for each zone it did not stand in at its last answer, so an exit planned again inside the same
+// zones counts nothing, and a bot walked from one overlapping zone into the other counts each. A zone that moves
+// walked onto the bot (no mover walked the bot back into it): never counted, never yielded, and Exit whenever the
+// bot stands in one. Otherwise Yielded / YieldStarts once every zone it stands in is yielded, as NoteHazardEntry.
 HazardEntry NoteHazardZoneEntry(HazardExitGuard& guard, std::vector<HazardZone> const& inside, std::uint64_t now);
 
 // A body the tick looks at: one of the owner's group, or one whose non-combat avoid aoe it added.
