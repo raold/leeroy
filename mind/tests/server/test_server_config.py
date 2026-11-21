@@ -51,3 +51,13 @@ def test_bad_table_and_unreadable_file_are_off(tmp_path, text, caplog):
     path.write_text(text)
     assert load_server_config(path) == ServerConfig()
     assert caplog.text.count('server_config_invalid') == 1
+
+
+def test_channel_topics_defaults_on_and_takes_a_boolean(tmp_path):
+    path = tmp_path / 'mind.toml'
+    path.write_text('[server]\nenabled=true\n')
+    assert load_server_config(path).channel_topics is True
+    path.write_text('[server]\nenabled=true\nchannel_topics=false\n')
+    assert load_server_config(path).channel_topics is False
+    path.write_text('[server]\nenabled=true\nchannel_topics=0\n')
+    assert load_server_config(path) == ServerConfig()  # a bad value turns the table off

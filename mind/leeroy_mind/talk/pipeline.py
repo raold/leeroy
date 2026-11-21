@@ -113,6 +113,7 @@ from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk import grounding
 from leeroy_mind.talk.grounding import wow_turn
 from leeroy_mind.talk import wowtopic
+from leeroy_mind.discord import topics as channel_topics
 from leeroy_mind.talk.gearfit import for_speaker as facts_for_speaker
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
 from leeroy_mind.talk.items import defuse, fold
@@ -192,6 +193,8 @@ QUIET_S = 120.0
 # medium (her DMs in a whisper, their whispers in a DM), at most PAIR_LINES from PAIR_WINDOW_S
 PAIR_LINES = 6
 PAIR_WINDOW_S = 86400.0
+# [server] channel_topics (Pipeline._channel_topic): the kinds of a server conversation's own turns
+CHANNEL_HELD_KINDS = frozenset({TurnKind.OPEN, TurnKind.CONTINUE, TurnKind.ASIDE})
 # [talk] wow_topic: her own words used in this many of her last lines stay out of her voice block
 SAYS_RECENT = 8
 # [talk] wow_grounding: her example pool is read again after this long (the night's rewards move
@@ -3029,7 +3032,13 @@ class Pipeline:
         # business is held to it (no unasked topics of hers, no Discord "where you live", the
         # hold line), and her own words she said lately are left out of her voice block
         topic_on = self._wow_topic_on(turn)
-        hold = topic_on and wowtopic.held(turn.kind, trigger or his, game_topic=meta.game_topic)
+        wow_hold = topic_on and wowtopic.held(turn.kind, trigger or his,
+                                              game_topic=meta.game_topic)
+        # [server] channel_topics (discord/topics.py): any other channel turn of the server's own
+        # is held to its channel's purpose by its hold line, and, but in #irl, leaves her life
+        # out as a WoW hold does
+        held_to = "" if topic_on else self._channel_topic(turn, meta)
+        hold = wow_hold or bool(held_to and held_to not in channel_topics.HER_LIFE)
         # a member with a voice sheet shows it by the instruction, with its own samples, in
         # place of the generator's sample lines (and of the card's trait sentences: _card)
         samples, voice = (self._voice(turn, meta, p, live=live, hooks=not hold,
@@ -3095,8 +3104,10 @@ class Pipeline:
         # every situation template's length from here (situation_length); [talk] shape (core
         # plan Task 9): the drawn shape's length line in the place of every other length
         # (render_instruction's length_text wins over the Discord one and `long`)
-        if hold:
+        if wow_hold:
             ends.append(wowtopic.hold_text(turn.channel))
+        elif held_to:
+            ends.append(channel_topics.hold_text(held_to))
         if topic_on and wowtopic.loot_turn(turn.channel, (trigger, his, meta.topic,
                                                           turn.instruction)):
             ends.append(wowtopic.DKP_RULE)  # bids are DKP, never gold
@@ -3277,6 +3288,27 @@ class Pipeline:
         rule: a cut never takes his answer)."""
         return (game and wowtopic.game_channel(turn.channel) and self._wow_topic_on(turn)
                 and not self._length_rule() and not length_asks(self._asked_line(turn, meta, c)))
+
+    def _channel_topic(self, turn: Turn, meta: TurnMeta) -> str:
+        """[server] channel_topics (read at each use; discord/topics.py): the layout channel whose
+        purpose this turn is held to and its drafts checked against, '' for none. A turn of the
+        server's own on a guild Discord channel with a purpose (an opener, a reply, an aside),
+        never a template's; never #general's (anything goes), a DM's or a group DM's, and never
+        an answer to him: his posts in a channel are answered there whatever their subject."""
+        if (turn.template is not None or turn.kind not in CHANNEL_HELD_KINDS
+                or not isinstance(turn.channel, str) or not turn.channel.startswith("discord:")):
+            return ""
+        server = getattr(getattr(self, "server_app", None), "server", None)
+        if getattr(getattr(server, "config", None), "channel_topics", False) is not True:
+            return ""
+        cid = channel_id(turn.channel)
+        if channel_topics.hold_text(cid) is None:
+            return ""
+        hg = self.human.guid
+        if (getattr(meta, "answers_human", False) or (hg and hg in (turn.addressee, turn.to_guid))
+                or self.live_review.owed(turn, meta)):
+            return ""
+        return cid
 
     def _wow_topic_on(self, turn: Turn) -> bool:
         """[talk] wow_topic (read at each compose) on a WoW turn (wowtopic.wow_topic_channel:

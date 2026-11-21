@@ -15,12 +15,12 @@ from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.storage.db import TRANSIENT_CODES, error_code
 from leeroy_mind.talk.budget import _HOLD
-from leeroy_mind.talk.discord_length import burst_draw, opener_draw
+from leeroy_mind.talk.discord_length import CHANNEL_BANDS, burst_draw, opener_draw
 from leeroy_mind.talk.guards import Guards
 from leeroy_mind.talk.pipeline import TurnMeta, TurnWithdrawn
 from leeroy_mind.talk.turns import Turn, TurnKind
 from .clock import in_window
-from . import records, rhythm, runtime, seeds
+from . import records, rhythm, runtime, seeds, topics
 from .state import pulled_into_play
 
 log = logging.getLogger(__name__)
@@ -40,6 +40,14 @@ DRY_TURNS = 2
 TIES = {'friend':2., 'crush':2., 'fond':1.5, 'neutral':1., 'rival':.6, 'feud':0.}
 BURST_SHARE = .12  # replies drawn to go out as a quick burst of 2-3 messages
 ABOUT_YOU = 'This is about you: say it in the first person, never by your own name.'
+REPLY = 'Reply to the chosen message and keep this conversation going naturally.'
+# [server] channel_topics (server/topics.py): #memes holds a meme post and a few quick reactions
+TEXT_MEME = ('Post one short original text meme about this, in a meme format ("POV: ...", '
+             '"nobody: ... me: ...", "me when ...", "... be like"), never a plain account of what '
+             'happened: ')
+MEME_REPLY = ('React to the meme posted here in a few words: laugh, add a quip or a one-line twist '
+              'on it; never plain chat.')
+QUICK_DRAW = CHANNEL_BANDS[1][0]  # a draw under this is a quick message (discord_length.band)
 
 
 class ConversationGuards(Guards):
@@ -167,7 +175,11 @@ class ServerEngine:
             active_seeds = {c.seed.key for c in self._live.values()}
             free = {g for g,s in observed.states.items() if s.presence.state in ('online','idle')
                     and g not in observed.in_play and g not in observed.away and g not in speaking}
-            available = [seed for seed in observed.seeds if seed.key not in active_seeds
+            pool = observed.seeds
+            posted = getattr(observed, 'posted', None) or {}
+            if self._topical():  # each seed only where its subject fits and the channel has room
+                pool = topics.routed(pool, posted)
+            available = [seed for seed in pool if seed.key not in active_seeds
                          and (seed.openers is None or free.intersection(seed.openers))
                          and any(c not in busy and
                          now >= self._human_until.get(c, 0) for c in seed.channels)]
@@ -212,6 +224,11 @@ class ServerEngine:
                     if not open_chat(self.app.store.conn,seed.key.removeprefix("lfg:"),conversation.id,now):
                         return
                 conversation.maximum = 12
+            if self._topical():
+                if channel == topics.MEMES:  # a meme post and a few reactions to it
+                    conversation.maximum = 1 + self.rng.randint(*topics.MEME_REPLIES)
+                if topics.capped(seed):
+                    conversation.maximum = min(conversation.maximum, topics.room(channel, posted))
             if not self._valid(conversation, cast[0]):
                 if seed.kind=="lfg":
                     heroic.finish_chat(conversation)
@@ -225,6 +242,14 @@ class ServerEngine:
             conversation.task.add_done_callback(lambda task,c=conversation:self._finished(c))
             log.info('server_conversation_started id=%s channel=%s seed_kind=%s cast=%s',
                      conversation.id, channel, seed.kind, ','.join(map(str,cast)))
+
+    def _topical(self) -> bool:
+        """[server] channel_topics (server/topics.py), read at each use."""
+        return getattr(self.config, 'channel_topics', False) is True
+
+    def _memes(self, conversation) -> bool:
+        """A conversation in #memes under [server] channel_topics: a meme post and reactions."""
+        return self._topical() and conversation.channel == topics.MEMES
 
     def _diverse(self) -> bool:
         """[talk] recall_diversity, read at each use (seeds.varied, seeds.note_subject)."""
@@ -440,6 +465,10 @@ class ServerEngine:
                 observed = await self._observe(conversation)
                 if observed is None:
                     break
+                if (self._topical() and topics.capped(conversation.seed)
+                        and topics.room(conversation.channel, getattr(observed, 'posted', None)) <= 0):
+                    conversation.reason = 'channel_full'  # its day's posts are in
+                    break
                 eligible = [g for g in conversation.cast if g != last and g in observed.personas
                     and g not in observed.in_play and g not in observed.away
                     and observed.states[g].presence.state in ('online','idle')
@@ -449,8 +478,11 @@ class ServerEngine:
                     conversation.reason = 'no_cast'
                     break
                 parent, parent_author, addressed = None, None, set()
+                memes = self._memes(conversation)
                 if conversation.messages:
-                    parent = (conversation.messages[-1] if self.rng.random() < .7 else
+                    # in #memes every reaction answers the meme post itself
+                    parent = (conversation.messages[0] if memes else
+                              conversation.messages[-1] if self.rng.random() < .7 else
                               self.rng.choice(conversation.messages))
                     row = self._message(conversation, parent)
                     if row is not None and set(eligible) <= {row[0]}:
@@ -508,7 +540,8 @@ class ServerEngine:
                 elif conversation.seed.kind == 'purpose':
                     opener = 'Talk about this topic in your own way: '
                 elif conversation.seed.kind == 'meme':
-                    opener = 'Post a short original text meme or a two-line copypasta about this, in your own way: '
+                    opener = (TEXT_MEME if self._topical() else
+                              'Post a short original text meme or a two-line copypasta about this, in your own way: ')
                 elif conversation.seed.kind == 'meme_image':
                     opener = 'You made a meme picture about this running joke and are posting it now: '
                 elif conversation.seed.kind in {'raid_before','raid_after','loot','life','calendar','birthday','his_day',
@@ -517,8 +550,7 @@ class ServerEngine:
                 else:
                     opener = 'Start a conversation using only what is known: '
                 instruction = (f"You're in #{definition.id}: {purpose}. " +
-                    (opener+conversation.seed.fact
-                     if parent is None else 'Reply to the chosen message and keep this conversation going naturally.'))
+                    (opener+conversation.seed.fact if parent is None else MEME_REPLY if memes else REPLY))
                 if (conversation.seed.kind in ('joke', 'meme', 'meme_image') and conversation.seed.about
                         and conversation.seed.about[0] and speaker != conversation.seed.about[0]):
                     target = conversation.seed.about[0]
@@ -537,12 +569,15 @@ class ServerEngine:
                 # Now and then a reply goes out as a quick burst of 2-3 messages a few seconds
                 # apart (realism.plan splits it at its sentence breaks; only with [talk] realism).
                 # An opener carries its subject: never only a few words.
-                burst = (parent is not None and getattr(app.engine.cfg.talk, 'realism', False) is True
+                burst = (parent is not None and not memes
+                         and getattr(app.engine.cfg.talk, 'realism', False) is True
                          and self.shape_rng.random() < BURST_SHARE)
                 if burst:
                     turn.discord_draw = burst_draw(self.shape_rng)
                 elif parent is None:
                     turn.discord_draw = opener_draw(self.shape_rng)
+                elif memes:  # a reaction to the meme: a quick message
+                    turn.discord_draw = QUICK_DRAW * self.shape_rng.random()
                 topic = conversation.seed.fact if parent is None else ''
                 meta = TurnMeta('', why='server:'+conversation.seed.kind, topic=topic,
                     photo_seed=(int(conversation.seed.key.removeprefix('photo:'))

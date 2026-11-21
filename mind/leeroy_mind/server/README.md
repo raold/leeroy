@@ -12,8 +12,9 @@ It never sends game chat, game emotes or unattended voice audio.
 The default quiet window remains 03:00–08:00 local. Conversation starts average
 2.5/hour before time-of-day and chattiness weights; while he is in game the rate
 is multiplied by `in_game_share` (default 0.5). `conversations_per_hour` accepts
-0–12, `in_game_share` 0–1, and `dms_per_day` 0–12 (default 3). `reactions` defaults
-true inside the otherwise disabled server feature. Changes require a mind restart.
+0–12, `in_game_share` 0–1, and `dms_per_day` 0–12 (default 3). `reactions` and
+`channel_topics` (below) default true inside the otherwise disabled server feature. Changes
+require a mind restart.
 
 At most two conversations run, with one per channel and 5–20 messages each.
 Subjects come from observed raids, loot, life beats, public plans, calendar dates,
@@ -168,6 +169,76 @@ Deploy after review with the normal mind-only
 the replay is accepted and the owner is ready to enable the switch. Nothing in the
 implementation or tests changes live configuration.
 
+## Channel topics
+
+`[server] channel_topics` (default true; read at mind start with the rest of the table) keeps
+each channel to what it is for (owner, 2026-11-21: "the discord channels like #memes are not
+topical at all its just random prattling").
+
+Where the posts came from: read-only on the live `discord_message` rows and the `say_sent` log
+events (ids and counts only), the 882 member posts outside DMs of the three days before were all
+server conversations but two D1 answers and three unattributed. #irl's 177 were life beats (151
+replies, 26 openers); #general's 236 plans (100), life beats (58), jokes (29), birthdays (17)
+and his day (14); #loot-and-dkp's 211 loot wishes (207) and raid recaps (4), and the class
+channels' 92 loot wishes; #food's 48 life beats (46) and two D1 answers; #professions-and-gold's
+42 plans (27) and fishing events (15). Over nine days #food's 206 posts were 186 life beats and
+only 93 of the 206 named any food; #memes' 32 were text memes and their replies (18), the
+channel's own purpose seed (9: "talk about this topic" with nothing posted) and a meme picture's
+replies (5). Three causes: each seed kind named fixed fallback channels whatever its words (a
+life beat went to #food, a plan to #professions-and-gold or #lfg-and-alts, a joke to #memes);
+every channel's purpose seeded a conversation of its own, also where talk needs something posted
+(#memes, #pics, #logs); and replies ran 5-20 messages on "keep this conversation going
+naturally" with nothing holding them to the channel, so a meme's thread drifted into coffee,
+work and the calendar. Volume made it worse: #general 82 and #irl 78 member posts a day.
+
+With it on:
+- Every layout channel has a purpose (`discord/layout.py` `about` and `not_here`; #general
+  takes anything). A conversation's seed keeps only the channels it fits (`server/topics.py`
+  `route`): a life beat, a weekend or a plan goes where its words take it (#food, #pets, and
+  for a plan the WoW content channels, by words no one uses outside them:
+  `discord/topics.py` `subjects`), else #irl when it is her real life, and #general; a joke
+  opens only in #general; a channel's purpose seeds nothing where talk rests on something
+  posted (`event_only`: #pics, #memes, #logs, #applications, #bank-requests); a public seed
+  with nowhere left falls back to #general. His godmode intents, decisions, bank requests,
+  heroics and a group's introduction keep the channels their modules chose.
+- #memes holds only meme posts: a text meme (asked for in a meme format, "POV: ...",
+  "nobody: ... me: ...", "me when ...", "... be like") or the night's meme picture, and one to
+  three reactions, each answering the meme post itself (its poster may answer a reaction), a
+  quick message told to react in a few words.
+- No channel floods: a channel takes `topics.DAILY` member posts a local day (#general 60,
+  #irl and #loot-and-dkp 30, #officer-chat 25, #raid-planning 20, #food and #strategy 15,
+  #pets and #pics 12, #memes 8, a class channel 10, any other 15), counted from the store
+  (`posted_today`, in the snapshot's read). A conversation opens only where `MIN_ROOM` (3)
+  more fit, runs no longer than the room left, and ends `channel_full` when the channel is
+  full. The guild's own business above is never held back; answers to him are counted but
+  never refused.
+- Every server turn on a channel with a purpose (an opener, a reply, an aside; never #general,
+  a DM, a group DM or a template) gets the channel's hold line, "Stay on what this channel is
+  about (<about>): <not_here>." (`discord/topics.py` `hold_text`), as #394's `[talk]
+  wow_topic` holds a WoW turn; outside #irl her unasked topics, life thread, "lately" and
+  where she lives are left out, as a WoW hold leaves them. A WoW channel's turn under `[talk]
+  wow_topic` keeps that switch's own hold and prompt exactly; with `wow_topic` off the
+  channel's purpose holds it instead.
+- The guards check the same turns (`Draft.channel_topic`, `discord/topics.py` `off_topic`):
+  a draft clearly off its channel's purpose is the soft `channel_topic` (`channel_meme` in
+  #memes), one rewrite with its hint in words, and dropped if the rewrite still strays. It is
+  lexical and narrow: any word of the channel's own subject keeps a draft on it; off takes
+  two distinct words of another subject the message answered did not bring, or one in a
+  message of 12 words or more (a word the game shares with everyday English, "fire", "kill",
+  "party", never counts against a draft); in #memes an opener without a picture must be a
+  text meme, and a reaction runs at most 20 words and brings in no real-life, food or
+  calendar talk of its own. Replayed read-only on the nine days above it flags 88 of 3,001:
+  18 of 32 in #memes, 21 of 206 in #food, 22 of 699 in #irl, 5 of 297 in #officer-chat, 3 of
+  334 in #loot-and-dkp and none in #general. An answer owed to him is never checked or held:
+  his posts in a channel are answered there whatever their subject. A turn that strays is
+  dropped rather than moved to #general: its parent and thread are in its own channel.
+
+Off: the seeds, lengths, prompts and guard verdicts are as before. Rollback without code:
+`channel_topics = false` under `[server]`, restart the mind (older code refuses the key and
+turns the whole table off: remove it before rolling back). No migration, no native rebuild.
+`tests/server/test_channel_topics_rehearsal.py` runs six fake hours through the real engine,
+rhythm, routing, pipeline and guards with a fake model that drifts on purpose in #memes.
+
 ## Settings and the quiet-window budget
 
 ```toml
@@ -178,6 +249,7 @@ conversations_per_hour = 2.5
 in_game_share = 0.5
 dms_per_day = 3
 reactions = true
+channel_topics = true
 ```
 
 Times require two distinct zero-padded `HH:MM` values; a window may cross midnight.

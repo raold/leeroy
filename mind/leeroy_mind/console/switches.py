@@ -41,6 +41,7 @@ SWITCHES = (
     ('banter','enabled','Banter',''),
     ('server','enabled','24/7 server','nights only inside its quiet window'),
     ('server','reactions','Server reactions','server.enabled',True),
+    ('server','channel_topics','Discord channels keep to their topics','server.enabled',True),
     ('groups','enabled','Group DMs','restart the console too'),
     ('culture','enabled','Culture: running jokes','server.enabled'),
     ('culture','calendar','Culture: real game events','culture.enabled; Leeroy.Realm.Enable = 1'),
