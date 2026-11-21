@@ -176,7 +176,10 @@ public:
         _commands.clear();
         bridge.PopCommands(_commands, kMaxCommandsPerUpdate);
         for (Leeroy::Command const& cmd : _commands)
-            bridge.Reply(LeeroyExecuteCommand(cmd));
+        {
+            auto reply = LeeroyExecuteCommand(cmd);
+            if (!reply.empty()) bridge.Reply(std::move(reply));
+        }
         _commands.clear();
 
         Leeroy::Realm::RealmModule::Instance().Tick(diff);

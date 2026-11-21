@@ -188,6 +188,8 @@ struct Job
     bool failedReported = false, heldNoted = false;
     uint32 failedAt = 0;
     DungeonReceipt receipt;
+    uint64 admissionSerial = 0;
+    bool admissionPending = false;
     bool groupCheckpointed = false;
     std::size_t nextGroupMember = 1;
     std::optional<JobEvent> pendingTerminal;
@@ -440,6 +442,33 @@ void Stop(Job& job, std::string reason, bool failed = false)
     job.trainingSealed = true;
     CleanupProofs().Seal(job.event.trainingRun);
     Enter(job, Stage::TearingDown);
+}
+
+bool AwaitDungeonPersistence(Job& job)
+{
+    auto const persistence = PollDungeonReceipt(job.receipt);
+    if (persistence == DungeonPersistence::Pending) return false;
+    if (persistence == DungeonPersistence::Failed)
+    {
+        if (!job.receipt.revision)
+        {
+            // No body operation was admitted before the first persisted row.
+            LeeroyModule::Instance().Bridge().Reply(job.admissionSerial,
+                EncodeAck(NowUnixMs(),job.event.id,false,"dungeon_receipt_unavailable"));
+            active.reset();
+            return false;
+        }
+        Stop(job,"receipt_unavailable",true);
+        return false;
+    }
+    if (job.admissionPending)
+    {
+        job.admissionPending = false;
+        if (!LeeroyModule::Instance().Bridge().Reply(job.admissionSerial,
+            EncodeAck(NowUnixMs(),job.event.id,true,{})))
+            Stop(job,"link_changed",true); // Durable receipt, untouched bodies; reconcile by exact ID.
+    }
+    return true;
 }
 
 bool Checkpoint(Job& job, std::string const& effect, uint32 actor = 0)
@@ -1911,6 +1940,23 @@ LeeroyCommandResult HandleStopOfflineRaid(nlohmann::json const& message)
 #endif
 }
 
+std::optional<LeeroyCommandResult> MemberDungeonStartReplay([[maybe_unused]] std::string const& id,
+    [[maybe_unused]] OfflineRaidCmd const& command)
+{
+#if LEEROY_HAS_DUNGEON_CLEAR
+    if (active && Dungeon(*active) && active->event.id == id)
+    {
+        if (active->guild != LeeroyModule::Instance().GuildId() || active->human != HumanGuid() ||
+            active->command.mapId != command.mapId || active->command.leaderGuid != command.leaderGuid ||
+            active->command.members != command.members) return Fail("dungeon_start_conflict");
+        // Do not consume the prepared owner token again or send a contradictory
+        // refusal for the same original while its durable acknowledgement waits.
+        return LeeroyCommandResult{true,{},active->admissionPending};
+    }
+#endif
+    return std::nullopt;
+}
+
 LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     [[maybe_unused]] OfflineRaidCmd const& command, [[maybe_unused]] RaidJobMode mode,
     [[maybe_unused]] std::vector<uint32> const& bosses, [[maybe_unused]] Realm::DayOwnerCheck const* check)
@@ -2034,9 +2080,11 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     if (dungeon) job->event.guids = Requested(*cmd);
     if (dungeon && !BeginDungeonReceipt(job->receipt, id, job->guild, job->human, cmd->leaderGuid, Requested(*cmd)))
         return Fail("dungeon_receipt_unavailable");
+    job->admissionPending = dungeon;
+    job->admissionSerial = dungeon ? LeeroyCommandSerial() : 0;
     active = std::move(job);
     // No stage side effect or progress event precedes this ack. Driver-pending retries remain caller-owned.
-    return {true, {}};
+    return {true, {}, dungeon}; // The heroic ack follows its initial durable readback.
 #endif
 }
 
@@ -2056,26 +2104,7 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
     job.elapsed = AdvanceElapsed(job.elapsed, diffMs);
     job.stageElapsed = AdvanceElapsed(job.stageElapsed, diffMs);
     job.progressElapsed = AdvanceElapsed(job.progressElapsed, diffMs);
-    if (Dungeon(job))
-    {
-        auto const persistence = PollDungeonReceipt(job.receipt);
-        if (persistence == DungeonPersistence::Pending) return;
-        if (persistence == DungeonPersistence::Failed)
-        {
-            if (!job.receipt.revision)
-            {
-                // No body operation was admitted before the first persisted row.
-                auto event = job.event;
-                event.state = "failed";
-                event.reason = "dungeon_receipt_unavailable";
-                active.reset();
-                if (!PublishDungeonReceipt(event.id).ok) PublishJob(event);
-                return;
-            }
-            Stop(job,"receipt_unavailable",true);
-            return;
-        }
-    }
+    if (Dungeon(job) && !AwaitDungeonPersistence(job)) return;
     ReassertMasters(job); // Before any stage reads ownership, teardown included.
     if (job.stage != Stage::TearingDown)
     {

@@ -459,6 +459,7 @@ LeeroyCommandResult PublishDungeonReceipt(std::string const& id)
 {
     if (!loaded) return {false,"dungeon_store_unavailable"};
     if (unreadable.contains(id)) return {false,"dungeon_receipt_unproven"};
+    if (unverified.contains(id)) return {false,"dungeon_receipt_unproven"};
     auto row = Lookup(id);
     if (!row)
     {

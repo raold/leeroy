@@ -2,6 +2,7 @@
 #include "LeeroyMemberDungeon.h"
 #include "LeeroyGuildCommands.h"
 #include "LeeroyOfflineRaidPolicy.h"
+#include "LeeroyProtocol.h"
 #include "TestHarness.h"
 #include <algorithm>
 #include <cmath>
@@ -11,13 +12,18 @@
 #include <memory>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
 
 using uint8 = std::uint8_t;
 using uint32 = std::uint32_t;
 using uint64 = std::uint64_t;
 using int64 = std::int64_t;
 using Json = nlohmann::json;
-#define LOG_ERROR(...) ((void)0)
+#define NowUnixMs ReceiptTestNowUnixMs
+template<class... Args> void ReceiptLog(Args const&...) {}
+#define LOG_ERROR(...) ReceiptLog(__VA_ARGS__)
+#define LOG_INFO(...) ReceiptLog(__VA_ARGS__)
 namespace Acore
 {
 template<class T> std::string SqlValue(T const& value)
@@ -111,7 +117,7 @@ struct ReceiptDatabase
 int64 receiptClock=1000000;
 int64 NowUnixMs() { return receiptClock; }
 struct { struct { uint32 Realm=1; } Id; } realm;
-struct LeeroyCommandResult { bool ok; std::string error; };
+struct LeeroyCommandResult { bool ok=false; std::string error; bool deferred=false; };
 enum class HighGuid { Player };
 struct ObjectGuid
 {
@@ -140,6 +146,8 @@ struct ReceiptSession {bool IsLoggingOut(){return false;}};
 class Player
 {
 public:
+    struct Instance { uint32 GetEncounterCount(){return 4;} uint8 GetBossState(uint32){return 0;} } script;
+    auto* GetInstanceScript(){return &script;}
     uint32 guid=101,map=1,instance=0,flags=0,teleports=0,saves=0;
     float x=101,y=8,z=9; bool duel=false;
     Group* group=nullptr; PlayerbotAI ai; ReceiptSession session;
@@ -182,7 +190,17 @@ struct ReceiptLfg {auto GetState(ObjectGuid){return lfg::LFG_STATE_NONE;}} recei
 auto sLFGMgr=&receiptLfg;
 struct LeeroyModule
 {
+    struct Replies
+    {
+        uint64 serial=7;bool connected=true;std::vector<std::string> lines;
+        bool Reply(uint64 source,std::string line)
+        {
+            if(!connected || source!=serial)return false;
+            lines.push_back(std::move(line));return true;
+        }
+    } replies;
     static auto& Instance(){static LeeroyModule value;return value;}
+    auto& Bridge(){return replies;}
     uint32 GuildId(){return 21;} void Publish(Json const&,bool){}
 };
 Json EncodeEvent(int64,Json const& event){return event;}
@@ -224,6 +242,7 @@ void Fresh(bool ready=true)
     loaded=exists=ready;retry=0;receiptClock=1000000;
     CharacterDatabase.queries.clear();CharacterDatabase.transactions.clear();
     receiptConnected.clear();receiptGroups.active=nullptr;receiptLive.clear();receiptEnabled=true;
+    LeeroyModule::Instance().replies={};
 }
 void Answer(QueryResult result)
 {
@@ -286,9 +305,8 @@ LEEROY_TEST(MemberDungeonIoInsertWaitsForCommitAndFreshIndependentReadback)
     CHECK(!DungeonRecoveryConflicts({999},false));
     for(int i=0;i<1000;++i)CHECK(PollDungeonReceipt(receipt)==DungeonPersistence::Pending);
     CHECK(CharacterDatabase.queries.empty());
-    // An independent status request saw no row before the transaction committed.
-    CHECK(!PublishDungeonReceipt(receipt.id).ok);Answer(Result({"0"}));
-    CHECK(!PublishDungeonReceipt(receipt.id).ok);
+    // An older independent read must not become evidence for a later write.
+    CHECK(!Lookup(receipt.id));Answer(Result({"0"}));CHECK(!Lookup(receipt.id));
     Commit();CHECK(PollDungeonReceipt(receipt)==DungeonPersistence::Pending);
     CHECK_EQ(CharacterDatabase.queries.size(),2u);
     Row(receipt,receipt.data,1);CHECK(PollDungeonReceipt(receipt)==DungeonPersistence::Ready);
@@ -461,6 +479,8 @@ LEEROY_TEST(MemberDungeonIoRestartDoesNotBorrowAPartialReusedGroupIdentity)
 namespace ReceiptRunnerTest
 {
 using namespace Leeroy::Guild;
+enum class Stage { Grouping, Teleporting, Starting, Running, Restarting, TearingDown };
+enum class RaidJobMode { Offline, Benchmark, MemberDungeon };
 struct Origin
 {
     uint32 GetMapId()const{return 1;}
@@ -472,16 +492,68 @@ struct Member
     uint32 guid;Origin origin;
     uint32 originalDifficulty=0,originalDungeonDifficulty=0;
     bool originalLeaderFlag=false,changed=false,moved=false,handbackProved=false,abandoned=false;
+    bool heroicEntryPending=false;
 };
 struct Job
 {
-    DungeonReceipt receipt;int stage=0;ObjectGuid group,driver;JobEvent event;
+    DungeonReceipt receipt;Stage stage=Stage::Grouping;ObjectGuid group,driver;JobEvent event;
     std::vector<Member> members;unsigned stops=0;
+    uint64 admissionSerial=7;bool admissionPending=false;
+    uint32 guild=21,human=1;OfflineRaidCmd command;
+    uint32 elapsed=0,stageElapsed=0,progressElapsed=0,mutations=0,teardownVisits=0;
+    uint64 rewardToken=0,trainingToken=0;
+    bool trainingSealed=false,announced=false,pinsInstalled=false;
+    std::string terminalReason,terminalState;
+    std::vector<uint32> bosses;
+    struct {uint32 timeoutMs=1800000;} limits;
+    RaidJobMode mode=RaidJobMode::MemberDungeon;
 };
+std::unique_ptr<Job> active;
 bool Dungeon(Job const&){return true;}
-char const* Name(int){return "grouping";}
-void Stop(Job& job,std::string const&,bool){++job.stops;}
+bool Benchmark(Job const&){return false;}
+char const* Name(Stage){return "grouping";}
+namespace Training
+{
+struct Rewards {void Returning(uint64){} bool Contaminated(uint64){return false;}} rewards;
+auto& BenchmarkRewards(){return rewards;}
+bool TrainingAllowed(){return true;} bool FrontierReached(std::vector<uint8>const&,std::vector<uint32>const&){return false;}
+bool ClearTrainingRun(uint32,uint64){return true;}
+}
+struct Proofs {void Seal(std::string const&) {}} proofs;
+auto& CleanupProofs(){return proofs;}
+void Enter(Job& job,Stage stage){job.stage=stage;job.stageElapsed=0;job.announced=false;++job.stops;}
+LeeroyCommandResult Fail(std::string const& error){return {false,error};}
+using Leeroy::EncodeAck;
+#include "MemberDungeonStop.inc"
+#include "MemberDungeonAdmission.inc"
+#define LEEROY_HAS_DUNGEON_CLEAR 1
+#include "MemberDungeonReplay.inc"
 #include "MemberDungeonCheckpoint.inc"
+uint32 AdvanceElapsed(uint32 elapsed,uint32 diff){return elapsed+diff;}
+ObjectGuid Guid(uint32 guid){return {guid};}
+void ReassertMasters(Job&){}
+bool HumanConnected(uint32){return false;}bool GuildEnabled(){return true;}bool KeepCast(){return true;}
+Player* Driver(Job&){static Player player;return &player;}
+bool Present(Job const&,Player*){return false;}
+std::vector<uint32> Requested(OfflineRaidCmd const& command)
+{
+    auto members=command.members;members.insert(members.begin(),command.leaderGuid);return members;
+}
+constexpr auto kPinOwnerBenchmark="benchmark";
+struct PinSet {std::unordered_set<uint32> Owned(char const*){return {};}} pinSet;
+auto& Pins(){return pinSet;}
+struct RandomBots {bool IsPinned(uint32){return true;}} sRandomPlayerbotMgr;
+void Progress(Job& job){job.announced=true;}
+void Grouping(Job& job){++job.mutations;}void Teleporting(Job& job){++job.mutations;}
+void Starting(Job& job){++job.mutations;}void Running(Job& job,uint32){++job.mutations;}
+void Restarting(Job& job){++job.mutations;}
+bool RunTeardown(Job& job){++job.teardownVisits;return false;}
+bool ReleaseStuckSlot(Job const&){return false;}
+std::string lastFinishedOffline;
+#define DC_PB_CONFIG(...) true
+#include "MemberDungeonTick.inc"
+#undef DC_PB_CONFIG
+#undef LEEROY_HAS_DUNGEON_CLEAR
 }
 
 LEEROY_TEST(MemberDungeonIoRunnerCheckpointWaitsWithoutAbortingOrAdvancing)
@@ -499,4 +571,132 @@ LEEROY_TEST(MemberDungeonIoRunnerCheckpointWaitsWithoutAbortingOrAdvancing)
     job.members[0].changed=true;job.group={90};
     CHECK(!ReceiptRunnerTest::Checkpoint(job,"group_created"));
     CHECK_EQ(job.stops,0u);CHECK_EQ(CharacterDatabase.transactions.size(),3u);
+}
+
+namespace ReceiptDispatchTest
+{
+uint64 commandSerial=0;
+auto& Handlers()
+{
+    static std::unordered_map<std::string,std::function<LeeroyCommandResult(Json const&)>> handlers;
+    return handlers;
+}
+#include "MemberDungeonDispatch.inc"
+
+Leeroy::Command StartCommand()
+{
+    Fresh();ReceiptRunnerTest::active.reset();
+    Handlers()["start_member_dungeon"]=[](Json const& message)->LeeroyCommandResult
+    {
+        using namespace ReceiptRunnerTest;
+        std::string error;
+        auto command=ParseMemberDungeon(message,error);
+        if(!command)throw std::runtime_error(error);
+        auto id=message.at("id").get<std::string>();
+        if(auto replay=MemberDungeonStartReplay(id,*command))return *replay;
+        active=std::make_unique<Job>();active->command=*command;active->event.id=id;
+        active->admissionPending=true;active->admissionSerial=commandSerial;
+        if(!BeginDungeonReceipt(active->receipt,id,21,1,101,{101,102,103,104,105}))
+            throw std::runtime_error("failed to stage initial receipt");
+        return {true,{},true};
+    };
+    Leeroy::Command command;
+    command.id="test-start";command.extType="start_member_dungeon";command.connectionSerial=7;
+    command.raw={{"id",command.id},{"type",command.extType},{"map_id",602},{"leader_guid",101},
+        {"members",{102,103,104,105}}};
+    command.raw=Json::parse(command.raw.dump()); // Match unsigned fields decoded from the bridge wire.
+    return command;
+}
+}
+
+LEEROY_TEST(MemberDungeonIoDeferredAdmissionWaitsForDurableProofAndDeduplicatesRetries)
+{
+    using namespace ReceiptDispatchTest;
+    auto command=StartCommand();
+    auto const firstReply=ExecuteExtension(command,receiptClock);
+    if(!firstReply.empty())throw std::runtime_error(firstReply);
+    CHECK(ExecuteExtension(command,receiptClock).empty());
+    CHECK_EQ(CharacterDatabase.transactions.size(),1u);
+    auto& job=*ReceiptRunnerTest::active;
+    CHECK(!ReceiptRunnerTest::AwaitDungeonPersistence(job));
+    CHECK(LeeroyModule::Instance().replies.lines.empty());
+    auto status=PublishDungeonReceipt(command.id);
+    CHECK(!status.ok);CHECK_EQ(status.error,"dungeon_receipt_unproven");
+    CHECK(CharacterDatabase.queries.empty()); // No premature absent-row status probe.
+    Commit();CHECK(!ReceiptRunnerTest::AwaitDungeonPersistence(job));
+    CHECK(ExecuteExtension(command,receiptClock).empty());
+    Row(job.receipt,job.receipt.data,1);
+    CHECK(ReceiptRunnerTest::AwaitDungeonPersistence(job));
+    CHECK_EQ(job.receipt.revision,1u);CHECK_EQ(job.stops,0u);
+    auto& lines=LeeroyModule::Instance().replies.lines;CHECK_EQ(lines.size(),1u);
+    CHECK(Json::parse(lines.front()).at("ok")==true);
+    auto replay=Json::parse(ExecuteExtension(command,receiptClock));
+    CHECK(replay.at("ok")==true);CHECK_EQ(CharacterDatabase.transactions.size(),1u);
+    CHECK_EQ(commandSerial,0u);
+    ReceiptRunnerTest::active.reset();
+}
+
+LEEROY_TEST(MemberDungeonIoFailedInitialInsertAnswersNegativeWithoutAnUnversionedTerminal)
+{
+    using namespace ReceiptDispatchTest;
+    auto command=StartCommand();CHECK(ExecuteExtension(command,receiptClock).empty());
+    Commit(false);CHECK(!ReceiptRunnerTest::AwaitDungeonPersistence(*ReceiptRunnerTest::active));
+    Answer({});CHECK(!ReceiptRunnerTest::AwaitDungeonPersistence(*ReceiptRunnerTest::active));
+    CHECK(LeeroyModule::Instance().replies.lines.empty());
+    CHECK_EQ(PublishDungeonReceipt(command.id).error,"dungeon_receipt_unproven");
+    receiptClock+=1001;CHECK(!ReceiptRunnerTest::AwaitDungeonPersistence(*ReceiptRunnerTest::active));
+    Answer(Result({"0"}));CHECK(!ReceiptRunnerTest::AwaitDungeonPersistence(*ReceiptRunnerTest::active));
+    CHECK(!ReceiptRunnerTest::active);
+    auto const& lines=LeeroyModule::Instance().replies.lines;CHECK_EQ(lines.size(),1u);
+    auto ack=Json::parse(lines.front());CHECK(ack.at("ok")==false);CHECK_EQ(ack.at("type"),"ack");
+    CHECK_EQ(ack.at("error"),"dungeon_receipt_unavailable");
+    CHECK_EQ(PublishDungeonReceipt(command.id).error,"unknown_dungeon");
+    CHECK(!DungeonRecoveryConflicts({101},false));
+}
+
+LEEROY_TEST(MemberDungeonIoDisconnectedAdmissionRetainsDurableReceiptWithoutStarting)
+{
+    using namespace ReceiptDispatchTest;
+    auto command=StartCommand();CHECK(ExecuteExtension(command,receiptClock).empty());
+    auto& replies=LeeroyModule::Instance().replies;replies.serial=8; // A replacement connection.
+    auto replayed=command;replayed.connectionSerial=8;
+    CHECK(ExecuteExtension(replayed,receiptClock).empty());
+    Commit();auto& job=*ReceiptRunnerTest::active;
+    CHECK(!ReceiptRunnerTest::AwaitDungeonPersistence(job));Row(job.receipt,job.receipt.data,1);
+    CHECK(ReceiptRunnerTest::AwaitDungeonPersistence(job));
+    CHECK_EQ(job.stops,1u);CHECK(job.stage==ReceiptRunnerTest::Stage::TearingDown);CHECK(replies.lines.empty());
+    CHECK_EQ(job.receipt.revision,1u);CHECK(DungeonBeforeMutation(job.receipt.data));
+    CHECK(DungeonRecoveryConflicts({101},false)); // Normal teardown publishes the persisted terminal later.
+    ReceiptRunnerTest::active.reset();
+}
+
+LEEROY_TEST(MemberDungeonIoCancellationBeforeReadbackNeverReentersGrouping)
+{
+    using namespace ReceiptDispatchTest;
+    auto command=StartCommand();CHECK(ExecuteExtension(command,receiptClock).empty());
+    auto& job=*ReceiptRunnerTest::active;
+    ReceiptRunnerTest::Stop(job,"stopped");
+    ReceiptRunnerTest::TickOfflineRaid(50000);
+    CHECK_EQ(job.mutations,0u);CHECK_EQ(job.teardownVisits,0u);
+    CHECK(LeeroyModule::Instance().replies.lines.empty());
+    Commit();ReceiptRunnerTest::TickOfflineRaid(1);Row(job.receipt,job.receipt.data,1);
+    ReceiptRunnerTest::TickOfflineRaid(1);
+    CHECK_EQ(job.mutations,0u);CHECK_EQ(job.teardownVisits,1u);
+    CHECK(job.stage==ReceiptRunnerTest::Stage::TearingDown);CHECK_EQ(job.terminalReason,"stopped");
+    CHECK_EQ(job.receipt.revision,1u);
+    ReceiptRunnerTest::active.reset();
+}
+
+LEEROY_TEST(MemberDungeonIoTimeoutBeforeReadbackNeverStartsWorldMutation)
+{
+    using namespace ReceiptDispatchTest;
+    auto command=StartCommand();CHECK(ExecuteExtension(command,receiptClock).empty());
+    auto& job=*ReceiptRunnerTest::active;job.limits.timeoutMs=1000;
+    ReceiptRunnerTest::TickOfflineRaid(50000);
+    CHECK_EQ(job.mutations,0u);CHECK_EQ(job.teardownVisits,0u);
+    Commit();ReceiptRunnerTest::TickOfflineRaid(1);Row(job.receipt,job.receipt.data,1);
+    ReceiptRunnerTest::TickOfflineRaid(1);
+    CHECK_EQ(job.mutations,0u);CHECK_EQ(job.teardownVisits,1u);
+    CHECK(job.stage==ReceiptRunnerTest::Stage::TearingDown);CHECK_EQ(job.terminalReason,"timeout");
+    ReceiptRunnerTest::active.reset();
 }

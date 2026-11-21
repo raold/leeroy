@@ -353,11 +353,17 @@ Logs carry ids, guids and codes only. **Native rebuild required** (`ac-release.s
 `Leeroy.MemberDungeon.Enable = 1` enables the guild party runner after `.reload config`. It defaults to 0. The separate `Leeroy.Strings.Enable` key controls the owner's in-game strings. The mind's `[life] dungeons` switch admits a party after members agree on Discord. Halls of Lightning heroic uses normal entry and a dedicated DungeonClear test driver. The party tank leads. The native receipt records the original start, party, copy and return evidence in the characters database. Deploy the native module and mind together with `ac-release.sh --native`.
 
 Receipt reads, schema creation and checkpoint transactions run through the asynchronous Characters
-database pool. An accepted start waits for its first durable receipt before changing any member;
+database pool. A start's positive acknowledgement waits for its first durable receipt before changing any member;
 each later checkpoint waits for an independent exact-ID/revision/payload readback. A slow or failed
 read keeps that transition pending while the world thread continues. Partial party construction
 resumes at its saved member index. Recovery polls at most four receipts per pass, retaining every
 unresolved receipt and each member's verified handback; it never rewrites the first terminal event.
+An initial failed insert receives a negative acknowledgement only after its absence is verified.
+Pending status queries remain unproven, never `unknown_dungeon`. Repeated original starts do not
+consume the prepared owner token twice. Deferred replies keep their originating bridge connection
+serial; a disconnect before admission leaves untouched bodies for normal exact-ID reconciliation.
+Database waits still count toward job/setup deadlines: a late verified start may immediately enter
+teardown rather than begin grouping after its deadline.
 
 An unavailable initial store read refuses new heroic admission and retries. It does not claim the
 entire cast: known outstanding, unreadable or unverified receipts still fence their own rosters

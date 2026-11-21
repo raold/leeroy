@@ -617,6 +617,15 @@ void Bridge::Reply(std::string line)
     d.PushControlLocked(std::move(line));
 }
 
+bool Bridge::Reply(std::uint64_t serial, std::string line)
+{
+    Impl& d = *_impl;
+    std::lock_guard<std::mutex> lock(d._stateMutex);
+    if (!d._connected.load() || !d._greeted || serial != d._serial.load()) return false;
+    d.PushControlLocked(std::move(line));
+    return true;
+}
+
 std::size_t Bridge::PopCommands(std::vector<Command>& out, std::size_t max)
 {
     Impl& d = *_impl;
