@@ -155,13 +155,92 @@ def test_varied_worker_prompt_and_persisted_plan_agree_and_only_swim_gym_change(
     after = varied.plan_of(h.store.conn, 101, 1)
     prompts = _prompts(h, 101, 1)
     assert len(prompts) == 4
+    traded = {x.category for x, y in zip(before, after) if x.view != y.view}
+    assert traded in (set(), {"swim", "casual"}, {"swim", "going_out"})  # the top swim level faces us
+    assert sorted(x.view for x in after) == sorted(x.view for x in before)
     for old, new, prompt in zip(before, after, prompts):
         if old.category in R.POOLS:
             assert new.outfit in R.choices(old.category, 5)
         else:
-            assert old == new
+            assert (old.outfit, old.colour, old.setting) == (new.outfit, new.colour, new.setting)
         assert new.phrase in prompt
-        assert (old.view, old.framing, old.setting) == (new.view, new.framing, new.setting)
+        assert new.setting == old.setting
+        if old.category not in traded:
+            assert (old.view, old.framing) == (new.view, new.framing)
+        if new.category == "swim":
+            assert new.view not in kind.BACK_VIEWS
+
+
+# -- the most revealing swimwear never faces away (2026-11-21: from behind it scored 1.0 on every
+#    seed, and one slot refused three times refuses its whole set) ---------------------------------
+
+def _arranged(p, **views):
+    """A composed set with each category moved to the view named for it, framed as the composer
+    frames that view (swimwear from behind full-length, front and side three-quarter)."""
+    out = []
+    for x in varied.compose(p, "coverage"):
+        view = views[x.category]
+        framing = "full_body" if view in kind.BACK_VIEWS else "three_quarter"
+        out.append(replace(x, view=view, framing=framing))
+    assert all(varied.screen(p, x) == [] for x in out)
+    return tuple(out)
+
+
+SWIM_BEHIND = dict(swim="behind", casual="front", going_out="side", gym="rear_three_quarter")
+
+
+@pytest.mark.parametrize("swim_view", kind.BACK_VIEWS)
+def test_the_top_level_swimwear_trades_its_back_view_with_a_casual_or_going_out_look(swim_view):
+    p = woman(age=30, stance="lust")
+    arranged = {**SWIM_BEHIND, "swim": swim_view, "gym": next(
+        v for v in kind.BACK_VIEWS if v != swim_view)}
+    looks = _arranged(p, **arranged)
+    out = R.restyle_looks(p, looks, 5, "101:1")
+    swim = next(x for x in out if x.category == "swim")
+    assert swim.outfit in R.choices("swim", 5) and swim.view not in kind.BACK_VIEWS
+    took = [x for x in out if x.category in ("casual", "going_out") and x.view == swim_view]
+    assert len(took) == 1
+    assert sorted(x.view for x in out) == sorted(x.view for x in looks)  # still one of each
+    assert all(varied.screen(p, x) == [] for x in out)
+    assert R.restyle_looks(p, out, 5, "101:1") == out  # a stored plan renders as it was written
+
+
+@pytest.mark.parametrize("level", range(1, R.BACK_SAFE_MAX + 1))
+def test_lower_levels_keep_every_view_and_pick_as_one_look_does(level):
+    p = woman(age=30, stance="lust")
+    looks = _arranged(p, **SWIM_BEHIND)
+    out = R.restyle_looks(p, looks, level, "101:1")
+    assert [x.view for x in out] == [x.view for x in looks]
+    assert out == tuple(R.restyle_look(p, x, level, f"101:1:{i}") for i, x in enumerate(looks))
+
+
+def test_with_no_front_or_side_look_to_trade_it_stays_behind_one_level_lower():
+    p = woman(age=30, stance="lust")
+    looks = tuple(None if x.category in ("casual", "going_out") else x
+                  for x in _arranged(p, **SWIM_BEHIND))  # her ordinary photo in those slots
+    out = R.restyle_looks(p, looks, 5, "101:1")
+    swim = next(x for x in out if x is not None and x.category == "swim")
+    assert swim.view == "behind" and swim.outfit in R.choices("swim", R.BACK_SAFE_MAX)
+    assert [x is None for x in out] == [x is None for x in looks]
+
+
+def test_a_rendered_set_never_shows_the_top_level_swimwear_from_behind(h, tmp_path):
+    p = lust(h)
+    varied.queue(h.store, human=1, now=h.T, day=DAY, go=True)
+    looks = varied.plan_of(h.store.conn, 101, 1)
+    with h.store.transaction():
+        varied.write_plan(h.store, 101, 1, tuple(replace(
+            x, view=SWIM_BEHIND[x.category],
+            framing="full_body" if SWIM_BEHIND[x.category] in kind.BACK_VIEWS else "three_quarter")
+            for x in looks), DAY)
+    assert next(x for x in varied.plan_of(h.store.conn, 101, 1) if x.category == "swim").view == "behind"
+    assert all(varied.screen(p, x) == [] for x in varied.plan_of(h.store.conn, 101, 1))
+    _render(h, tmp_path, replace(ON, outfit_reveal=5))
+    after = varied.plan_of(h.store.conn, 101, 1)
+    swim = next(x for x in after if x.category == "swim")
+    assert swim.outfit in R.choices("swim", 5) and swim.view not in kind.BACK_VIEWS
+    prompts = _prompts(h, 101, 1)
+    assert len(prompts) == 4 and all(x.phrase in prompt for x, prompt in zip(after, prompts))
 
 
 def test_profile_transform_preserves_kind_and_stored_persona():
