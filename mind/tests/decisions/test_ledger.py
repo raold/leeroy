@@ -19,6 +19,26 @@ def in_force(store, kind, subject):
     return row['id'] if row is not None else None
 
 
+def test_reconciled_effect_remains_bindable_at_status_transition(store, clock):
+    ident = propose(store, clock.now())
+    ledger.settle(store, ident, settled_by=101, now=clock.now())
+    # SQLite accepts escaped UTF-16 code units in historical JSON, including an unpaired one.
+    effect = {"retained": chr(0xD800), "text": "é" * 900, "realm_bank": 7}
+    ledger.reconcile_effect_ref(store, ident, effect)
+    saved = json.loads(ledger.get(store.conn, ident)["effect_ref"])
+    assert saved == effect
+    ledger.take_effect(store, ident, effect_ref=saved, now=clock.now())
+    assert json.loads(ledger.get(store.conn, ident)["effect_ref"]) == effect
+
+
+def test_optional_effect_does_not_hide_database_errors(store, clock):
+    ident = propose(store, clock.now())
+    store.conn.execute("CREATE TRIGGER refuse_fixture_effect BEFORE UPDATE OF effect_ref ON guild_decision "
+                       "BEGIN SELECT RAISE(ABORT, 'fixture fault'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="fixture fault"):
+        ledger.reconcile_effect_ref(store, ident, {"realm_bank": 7})
+
+
 def test_one_live_decision_per_kind_and_subject(store, clock):
     now = clock.now()
     first = propose(store, now)

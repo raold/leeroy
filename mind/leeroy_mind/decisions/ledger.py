@@ -30,11 +30,15 @@ class DecisionError(ValueError):
     """A write the ledger refuses: its words are a fixed code, never data."""
 
 
-def _json(value) -> str:
+def _json(value, *, escape_surrogates=False) -> str:
     try:
         text = json.dumps(value, separators=(',', ':'), sort_keys=True, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError):
         raise DecisionError('decision_value_invalid') from None
+    if escape_surrogates:
+        # A historical JSON escape can decode to a lone surrogate, which SQLite cannot
+        # bind as UTF-8. Keep that code unit as a JSON escape and other Unicode literal.
+        text = text.encode('utf-8', errors='backslashreplace').decode('utf-8')
     if len(text) > MAX_JSON:
         raise DecisionError('decision_value_too_long')
     return text
@@ -158,7 +162,7 @@ def settle(store, id, *, settled_by: int, poll: int | None = None, message: int 
 def reconcile_effect_ref(store, id, effect_ref):
     """Attach display metadata only if it still fits. The owning receipt records the actual transfer."""
     try:
-        text = _json(effect_ref)
+        text = _json(effect_ref, escape_surrogates=True)
     except DecisionError:
         return
     store.conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (text, id))
@@ -170,7 +174,7 @@ def take_effect(store, id, *, effect_ref: dict, now) -> None:
     same transaction and named in `supersedes`, so an undo can restore it."""
     if not isinstance(effect_ref, dict):
         raise DecisionError('decision_effect_invalid')
-    ts, ref = _time(now), _json(effect_ref)
+    ts, ref = _time(now), _json(effect_ref, escape_surrogates=True)
     with store.transaction():
         row = get(store.conn, id)
         if row is None:

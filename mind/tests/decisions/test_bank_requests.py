@@ -371,7 +371,8 @@ def test_late_withdrawal_records_debit_with_opaque_effect_metadata(store, clock)
     app = SimpleNamespace(store=store, clock=clock)
     rules = bank.bank_rules()
     cases = [{"refs": "unknown"}, {"refs": None}, {"refs": [{"old": 1}]},
-             ["legacy"], {"old": "x" * 3980}, {"refs": ["receipt-from-earlier"]}]
+             ["legacy"], {"old": "x" * 3980}, {"refs": "unknown", "legacy": chr(0xD800)},
+             {"refs": ["receipt-from-earlier"]}]
     for number, historical in enumerate(cases, 1):
         # A different recipient, item and subject follow the opaque historical requests.
         recipient, item = (103, 34753) if number == len(cases) else (102, 46377)
@@ -393,13 +394,15 @@ def test_late_withdrawal_records_debit_with_opaque_effect_metadata(store, clock)
         assert conn.execute("SELECT count(*) FROM realm_bank WHERE reason='request'").fetchone()[0] == number
         assert conn.execute("SELECT count(*) FROM realm_direct").fetchone()[0] == number
         debit = int(store.get_meta(f"decisions:bank:out:{ident}"))
+        movement = conn.execute("SELECT dir,reason,guid,item_id,count FROM realm_bank WHERE id=?", (debit,)).fetchone()
+        assert tuple(movement) == ("out", "request", recipient, item, 20)
         updated = ledger.get(conn, ident)
         assert updated["status"] == "overruled"
         effect = json.loads(updated["effect_ref"])
         if number == len(cases):
             assert effect == {"refs": [ref, "receipt-from-earlier"], "realm_bank": debit}
         elif isinstance(historical, dict) and "refs" in historical:
-            assert effect["refs"] == historical["refs"] and effect["realm_bank"] == debit
+            assert effect == dict(historical, realm_bank=debit)
         else:
             assert effect == historical
 
