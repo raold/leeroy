@@ -28,12 +28,28 @@ bash scripts/ac-release.sh --native --dry-run c6c6bb81 a6b326be 32b2d009 "${GUID
 
 ## 3. Check the scheduled tasks and phone
 
-In PowerShell substitute the actual MagicDNS hostname privately. Preserve any existing custom root, data directory, stable key file, backup configuration and schedule.
+In PowerShell, inspect the installed console task before reinstalling it. Read the executable and arguments on its `runs` line.
 
 ```powershell
-$consoleHostName = '<pc>.<tailnet>.ts.net'
-.\scripts\ac-console-schedule.ps1 -Show -AllowHost $consoleHostName
-.\scripts\ac-console-schedule.ps1 -Install -AllowHost $consoleHostName
+.\scripts\ac-console-schedule.ps1 -Status
+```
+
+Copy the installed action's `--root`, `--data-dir` and `--key-file` paths into the placeholders below. Use the key file's path only. Verify its `--allow-host` against the approved MagicDNS hostname. If the task is absent, obtain the approved installation paths and host before continuing. Preview the replacement in the same PowerShell session.
+
+```powershell
+$consoleTask = @{
+    Root      = '<installed root>'
+    DataDir   = '<installed data directory>'
+    KeyFile   = '<installed stable key file path>'
+    AllowHost = '<approved MagicDNS hostname>'
+}
+.\scripts\ac-console-schedule.ps1 -Show @consoleTask
+```
+
+Compare the preview's executable, working directory and arguments with the approved installation. After they match, replace the task using the same values. Check the resulting `runs` line against the preview. Preserve the existing health and backup schedules and backup configuration.
+
+```powershell
+.\scripts\ac-console-schedule.ps1 -Install @consoleTask
 .\scripts\ac-console-schedule.ps1 -Status
 .\scripts\ac-health-schedule.ps1 -Status
 .\scripts\ac-guild-backup-schedule.ps1 -Status

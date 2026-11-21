@@ -1,3 +1,5 @@
+import pytest
+
 from leeroy_mind.decisions import bank, ledger
 from leeroy_mind.realm import protocol
 
@@ -405,6 +407,90 @@ def test_late_withdrawal_records_debit_with_opaque_effect_metadata(store, clock)
             assert effect == dict(historical, realm_bank=debit)
         else:
             assert effect == historical
+
+
+@pytest.mark.parametrize("historical", [
+    '["legacy"]', '{"prior":1e400}', '{"prior":0.123456789012345678901}',
+    '{"prior":{"note":1,"note":2}}', '{"prior":"' + "x" * 3988 + '"}',
+    '{"prior":' + '[' * 980 + '1e400' + ']' * 980 + '}',
+], ids=["array", "overflow", "precision", "duplicate", "size", "nesting"])
+def test_confirmed_bank_tick_preserves_opaque_history_and_serves_next_request(store, guild, clock, historical):
+    import asyncio
+    import json
+    from dataclasses import replace
+    from types import SimpleNamespace as NS
+    from uuid import uuid4
+    from leeroy_mind.console.decisionsview import decisions_view
+    from leeroy_mind.decisions.config import DecisionsConfig
+    from leeroy_mind.realm.actions import ActionContext
+    from leeroy_mind.realm.direct import DirectLedger
+
+    conn = store.conn
+    now = clock.now()
+    prior = settled(store, clock)["id"]
+    ledger.take_effect(store, prior, effect_ref={"earlier": True}, now=now)
+    ident = settled(store, clock)["id"]
+    conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (historical, ident))
+    store.set_meta("guild_id", "8")
+    ctx = ActionContext(True, True, True, 1, "bank", 1, 8, 1)
+    direct = DirectLedger(store, process_id="bank", clock=clock)
+    rules = bank.bank_rules()
+    rules.features = {"member_bank_mail"}
+    cast = store.cast()
+    cast[101] = replace(cast[101], rank=1)
+    guild[101] = replace(guild[101], play=replace(guild[101].play, officer_title="Bank"))
+    armory = NS(bank=lambda _: {"tabs": [{"tab": 2, "slots": [(0, 34054, 20), (1, 34054, 20)]}]},
+                professions=lambda _: {103: {333: 450}})
+
+    def finish(cmd):
+        direct.before_send(cmd, context=ctx)
+        kind, value = ("bank_withdraw", 20) if isinstance(cmd, protocol.BankWithdraw) else ("mail_send", 77)
+        job = protocol.RealmJob(0, cmd.id, kind, "done", "", 101, value)
+        assert direct.on_job(job)
+        assert not direct.on_job(job)
+
+    async def send(cmd):
+        assert rules.checks[cmd.id]()
+        finish(cmd)
+
+    app = NS(store=store, clock=clock, human_guid=1, world=NS(members=cast), personas=guild,
+             realm=NS(part=lambda _: direct, action_context=lambda: ctx, ports=NS(send=send)),
+             guild=NS(armory=armory, raid_night=NS(active=False), offline=NS(active=False)),
+             decisions=NS(config=DecisionsConfig()))
+    for step, cmd in [
+        ("withdraw", protocol.BankWithdraw(uuid4().hex, 101, 46377, 20, 0, 102)),
+        ("mail", protocol.MailSend(uuid4().hex, 101, "Guild bank request",
+                                   items=(protocol.MailItem(46377, 20, "bags"),), to_guid=102)),
+    ]:
+        assert direct.prepare(cmd, owner="decision", ref=f"decision:{ident}:{step}", context=ctx, expects_job=True)
+        finish(cmd)
+
+    clock._t += 60
+    completed = clock.now()
+    asyncio.run(rules.tick(app, completed))
+    row = ledger.get(conn, ident)
+    assert (row["status"], row["effect"], row["supersedes"]) == ("in_effect", completed, prior)
+    assert row["effect_ref"] == historical
+    old = ledger.get(conn, prior)
+    assert (old["status"], old["ended"]) == ("superseded", completed)
+    card = next(c for c in decisions_view(conn, now=completed)["decisions"] if c["id"] == ident)
+    assert any(line.startswith("Delivery confirmed") for line in card["changed"])
+
+    # The first completion left discovery free to propose a different member's enchanting request.
+    later, = conn.execute("SELECT * FROM guild_decision WHERE kind='bank' AND status='proposed'")
+    assert json.loads(later["value"])["guid"] == 103
+    ledger.settle(store, later["id"], settled_by=101, now=completed)
+    for _ in range(4):  # Withdraw, mail, complete, then retry with no further work.
+        clock._t += 60
+        asyncio.run(rules.tick(app, clock.now()))
+    assert ledger.get(conn, later["id"])["status"] == "in_effect"
+    assert json.loads(ledger.get(conn, later["id"])["effect_ref"])["first_attachment_guid"] == 77
+    assert tuple(ledger.get(conn, ident)) == tuple(row)
+    debits = [tuple(r) for r in conn.execute("SELECT id,guid,item_id,count FROM realm_bank "
+                                            "WHERE dir='out' AND reason='request' ORDER BY id")]
+    assert debits == [(int(store.get_meta(f"decisions:bank:out:{ident}")), 102, 46377, 20),
+                      (int(store.get_meta(f"decisions:bank:out:{later['id']}")), 103, 34054, 20)]
+    assert conn.execute("SELECT count(*) FROM realm_direct").fetchone()[0] == 4
 
 
 def test_unposted_bank_requests_expire_without_another_candidate(store, clock, guild):

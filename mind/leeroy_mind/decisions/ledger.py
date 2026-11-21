@@ -24,6 +24,7 @@ SUBJECTS = {'lineup': re.compile(r'raid:[1-9][0-9]{0,18}\Z'),
             'rank': re.compile(r'rank:[1-9][0-9]{0,9}\Z')}
 CODE = re.compile(r'[a-z0-9_]{1,40}\Z')
 MAX_JSON = 4000
+_STORED_EFFECT_REF = object()
 
 
 class DecisionError(ValueError):
@@ -163,18 +164,21 @@ def reconcile_effect_ref(store, id, effect_ref):
     """Attach display metadata only if it still fits. The owning receipt records the actual transfer."""
     try:
         text = _json(effect_ref, escape_surrogates=True)
-    except DecisionError:
+    except (DecisionError, RecursionError):
         return
     store.conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (text, id))
 
 
-def take_effect(store, id, *, effect_ref: dict, now) -> None:
-    """settled -> in_effect, with what changed in game (direct-ledger refs, ledger ids, receipt
-    keys). The decision it replaces (in effect on the same kind and subject) is superseded in the
-    same transaction and named in `supersedes`, so an undo can restore it."""
-    if not isinstance(effect_ref, dict):
-        raise DecisionError('decision_effect_invalid')
-    ts, ref = _time(now), _json(effect_ref, escape_surrogates=True)
+def take_effect(store, id, *, now, effect_ref=_STORED_EFFECT_REF) -> None:
+    """settled -> in_effect. Supply the new effect refs or omit them to retain the reconciled
+    evidence in storage. Supersede the prior decision on the same kind and subject in the same
+    transaction and name it in `supersedes`, so an undo can restore it."""
+    ts = _time(now)
+    ref = None
+    if effect_ref is not _STORED_EFFECT_REF:
+        if not isinstance(effect_ref, dict):
+            raise DecisionError('decision_effect_invalid')
+        ref = _json(effect_ref, escape_surrogates=True)
     with store.transaction():
         row = get(store.conn, id)
         if row is None:
@@ -184,8 +188,9 @@ def take_effect(store, id, *, effect_ref: dict, now) -> None:
         old = current(store.conn, row['kind'], row['subject'])
         if old is not None:
             store.conn.execute("UPDATE guild_decision SET status='superseded', ended=? WHERE id=?", (ts, old['id']))
-        store.conn.execute("UPDATE guild_decision SET status='in_effect', effect=?, effect_ref=?, supersedes=? "
-                           'WHERE id=?', (ts, ref, old['id'] if old is not None else None, id))
+        store.conn.execute("UPDATE guild_decision SET status='in_effect', effect=?, "
+                           "effect_ref=coalesce(?,effect_ref), supersedes=? WHERE id=?",
+                           (ts, ref, old['id'] if old is not None else None, id))
     log.info('decision_in_effect id=%d kind=%s supersedes=%d', id, row['kind'], old['id'] if old is not None else 0)
 
 

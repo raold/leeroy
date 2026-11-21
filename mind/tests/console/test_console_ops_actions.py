@@ -39,7 +39,10 @@ def cli_process(monkeypatch):
         if code:
             raise ValueError(output.getvalue().splitlines()[-1])
         return SimpleNamespace(returncode=code)
-    monkeypatch.setattr(opsactions.subprocess,"run",execute)
+    # Keep the real subprocess module available to the console's local Git probe.
+    monkeypatch.setattr(opsactions, "subprocess", SimpleNamespace(
+        run=execute, DEVNULL=opsactions.subprocess.DEVNULL,
+        CREATE_NO_WINDOW=getattr(opsactions.subprocess, "CREATE_NO_WINDOW", 0)))
 
 
 @asynccontextmanager
