@@ -17,6 +17,8 @@ LeeroyCommandResult Start(nlohmann::json const& message)
     std::string error;
     auto command = ParseMemberDungeon(message, error);
     if (!command) return {false, error};
+    if (message.value("type",std::string{}) == "start_member_dungeon")
+        if (auto replay = MemberDungeonStartReplay(message.at("id").get<std::string>(),*command)) return *replay;
     auto roster = command->members;
     roster.push_back(command->leaderGuid);
     Realm::DayOwnerCheck check(message, std::move(roster), "heroic");

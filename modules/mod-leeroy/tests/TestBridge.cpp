@@ -156,6 +156,10 @@ LEEROY_TEST(Bridge_ReconnectNeedsFreshGreeting)
     CHECK(WaitFor([&] { return b.PopCommands(commands, 1) == 1; }, 1s));
     CHECK_EQ(commands[0].connectionSerial, 1u);
     CHECK_EQ(commands[1].connectionSerial, 2u);
+    CHECK(!b.Reply(commands[0].connectionSerial,"LATE_OLD_ACK"));
+    CHECK(!c2.ReadLine(100ms));
+    CHECK(b.Reply(commands[1].connectionSerial,"CURRENT_ACK"));
+    CHECK_EQ(NextLine(c2),"CURRENT_ACK");
 }
 
 LEEROY_TEST(Bridge_StopWithMindConnected)

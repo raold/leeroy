@@ -65,6 +65,7 @@ std::string ExecuteExtension(Leeroy::Command const& cmd, std::int64_t now)
         } scope;
         commandSerial = cmd.connectionSerial;
         LeeroyCommandResult const result = it->second(cmd.raw);
+        if (result.deferred) return {};
         return Leeroy::EncodeAck(now, cmd.id, result.ok, result.error);
     }
     catch (std::exception const& e)

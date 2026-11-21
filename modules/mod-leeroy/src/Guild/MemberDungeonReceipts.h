@@ -18,6 +18,9 @@ bool DungeonReceiptIdValid(std::string const& id);
 bool BeginDungeonReceipt(DungeonReceipt&, std::string const& id, std::uint32_t guild, std::uint32_t human,
     std::uint32_t leader, std::vector<std::uint32_t> const& roster);
 bool SaveDungeonReceipt(DungeonReceipt&, nlohmann::json const& next, std::int64_t now = NowUnixMs());
+enum class DungeonPersistence { Ready, Pending, Failed };
+DungeonPersistence PollDungeonReceipt(DungeonReceipt&);
+bool DungeonReceiptPending(std::string const& id);
 bool DungeonRecoveryConflicts(std::vector<std::uint32_t> const& guids, bool requiresSlot);
 bool DungeonReturned(std::string const& id, std::vector<std::uint32_t> const& guids);
 bool ObserveDungeonHandback(DungeonReceipt& receipt, Player& player);

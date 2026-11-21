@@ -188,6 +188,10 @@ struct Job
     bool failedReported = false, heldNoted = false;
     uint32 failedAt = 0;
     DungeonReceipt receipt;
+    uint64 admissionSerial = 0;
+    bool admissionPending = false;
+    bool groupCheckpointed = false;
+    std::size_t nextGroupMember = 1;
     std::optional<JobEvent> pendingTerminal;
     DungeonReturnProof dungeonReturn;
     bool waitOverrideInstalled = false, previousWaitOverride = false, previousWaitValue = false;
@@ -460,6 +464,33 @@ void Stop(Job& job, std::string reason, bool failed = false)
     Enter(job, Stage::TearingDown);
 }
 
+bool AwaitDungeonPersistence(Job& job)
+{
+    auto const persistence = PollDungeonReceipt(job.receipt);
+    if (persistence == DungeonPersistence::Pending) return false;
+    if (persistence == DungeonPersistence::Failed)
+    {
+        if (!job.receipt.revision)
+        {
+            // No body operation was admitted before the first persisted row.
+            LeeroyModule::Instance().Bridge().Reply(job.admissionSerial,
+                EncodeAck(NowUnixMs(),job.event.id,false,"dungeon_receipt_unavailable"));
+            active.reset();
+            return false;
+        }
+        Stop(job,"receipt_unavailable",true);
+        return false;
+    }
+    if (job.admissionPending)
+    {
+        job.admissionPending = false;
+        if (!LeeroyModule::Instance().Bridge().Reply(job.admissionSerial,
+            EncodeAck(NowUnixMs(),job.event.id,true,{})))
+            Stop(job,"link_changed",true); // Durable receipt, untouched bodies; reconcile by exact ID.
+    }
+    return true;
+}
+
 bool Checkpoint(Job& job, std::string const& effect, uint32 actor = 0)
 {
     if (!Dungeon(job)) return true;
@@ -482,7 +513,7 @@ bool Checkpoint(Job& job, std::string const& effect, uint32 actor = 0)
             {"changed",m.changed},{"moved",m.moved},{"returned",m.handbackProved},{"abandoned",m.abandoned}});
     if (effect == "disband") AuthorizeDungeonReturn(data);
     if (SaveDungeonReceipt(job.receipt, data)) return true;
-    Stop(job, "receipt_unavailable", true);
+    if (!DungeonReceiptPending(job.receipt.id)) Stop(job, "receipt_unavailable", true);
     return false;
 }
 
@@ -621,7 +652,7 @@ void Grouping(Job& job)
         return;
     }
 
-    if (Dungeon(job))
+    if (Dungeon(job) && !job.group)
         if (auto why = CheckDungeonParty(job.command, job.team, nullptr); !why.empty())
         {
             SetupFailure(job, why);
@@ -660,31 +691,34 @@ void Grouping(Job& job)
     }
 
     // Complete the usable-roster preflight before removing anyone from an existing group.
-    for (uint32 low : Requested(job.command))
+    if (!Dungeon(job) || job.members.empty())
     {
-        Player* player = FindOnline(low);
-        if (Training::DummyTrialOwns(low) || (Benchmark(job)
-            && (!Controlled(job, player) || !Training::RivalAvailable(player, 80, true)
-                || !Training::RivalBindingsSafe(player, job.command.mapId)
-                || player->GetTeamId() != job.team)))
+        for (uint32 low : Requested(job.command))
         {
-            SetupFailure(job, "not_available:" + std::to_string(low));
-            return;
+            Player* player = FindOnline(low);
+            if (Training::DummyTrialOwns(low) || (Benchmark(job)
+                && (!Controlled(job, player) || !Training::RivalAvailable(player, 80, true)
+                    || !Training::RivalBindingsSafe(player, job.command.mapId)
+                    || player->GetTeamId() != job.team)))
+            {
+                SetupFailure(job, "not_available:" + std::to_string(low));
+                return;
+            }
+            if (auto const reason = Benchmark(job) ? std::string{} : Unusable(player); !reason.empty())
+            {
+                job.event.skipped.emplace_back(low, reason);
+                continue;
+            }
+            if (!Controlled(job, player))
+            {
+                job.event.skipped.emplace_back(low, "session_changed");
+                continue;
+            }
+            job.members.push_back({low, WorldLocation(player->GetMapId(), player->GetPosition()),
+                                   player->GetRaidDifficulty()});
+            job.members.back().originalLeaderFlag = player->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
+            job.members.back().originalDungeonDifficulty = player->GetDungeonDifficulty();
         }
-        if (auto const reason = Benchmark(job) ? std::string{} : Unusable(player); !reason.empty())
-        {
-            job.event.skipped.emplace_back(low, reason);
-            continue;
-        }
-        if (!Controlled(job, player))
-        {
-            job.event.skipped.emplace_back(low, "session_changed");
-            continue;
-        }
-        job.members.push_back({low, WorldLocation(player->GetMapId(), player->GetPosition()),
-                               player->GetRaidDifficulty()});
-        job.members.back().originalLeaderFlag = player->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
-        job.members.back().originalDungeonDifficulty = player->GetDungeonDifficulty();
     }
     if (job.mode == RaidJobMode::Offline)
     {
@@ -724,23 +758,39 @@ void Grouping(Job& job)
         SetupFailure(job, "busy:realm_owner");
         return;
     }
-    if (!Checkpoint(job, "create_group", job.command.leaderGuid)) return;
-    job.members.front().changed = true;
-    if (leader->GetGroup())
-        leader->RemoveFromGroup();
-    auto created = std::make_unique<Group>();
-    if (!created->Create(leader))
+    Group* group = FindGroup(job);
+    if (!job.group)
     {
-        SetupFailure(job, "create_failed");
+        if (!Checkpoint(job, "create_group", job.command.leaderGuid)) return;
+        job.members.front().changed = true;
+        if (leader->GetGroup())
+            leader->RemoveFromGroup();
+        auto created = std::make_unique<Group>();
+        if (!created->Create(leader))
+        {
+            SetupFailure(job, "create_failed");
+            return;
+        }
+        group = created.release();
+        sGroupMgr->AddGroup(group);
+        job.group = group->GetGUID();
+    }
+    else if (!OwnsGroup(job,group,false) || group->GetLeaderGUID()!=Guid(job.command.leaderGuid) ||
+        group->GetMembersCount()!=job.nextGroupMember ||
+        std::any_of(job.members.begin(),job.members.end(),[&](Member const& member)
+            { return member.changed && !CanProjectDungeonBody(job.event.id,member.guid); }))
+    {
+        SetupFailure(job,"group_changed");
         return;
     }
-    Group* group = created.release();
-    sGroupMgr->AddGroup(group);
-    job.group = group->GetGUID();
-    if (!Checkpoint(job, "group_created")) return;
+    if (!job.groupCheckpointed)
+    {
+        if (!Checkpoint(job, "group_created")) return;
+        job.groupCheckpointed = true;
+    }
     if (Dungeon(job)) group->SetDungeonDifficulty(job.difficulty);
     else group->ConvertToRaid();
-    for (std::size_t index = 1; index < job.members.size(); ++index)
+    for (std::size_t index = job.nextGroupMember; index < job.members.size(); ++index)
     {
         Member& member = job.members[index];
         Player* player = FindOnline(member.guid);
@@ -763,6 +813,7 @@ void Grouping(Job& job)
             SetupFailure(job, "add_failed:" + std::to_string(member.guid));
             return;
         }
+        job.nextGroupMember = index + 1;
     }
     if (!Checkpoint(job, "group_formed")) return;
     if (!Dungeon(job))
@@ -1932,6 +1983,23 @@ LeeroyCommandResult HandleStopOfflineRaid(nlohmann::json const& message)
 #endif
 }
 
+std::optional<LeeroyCommandResult> MemberDungeonStartReplay([[maybe_unused]] std::string const& id,
+    [[maybe_unused]] OfflineRaidCmd const& command)
+{
+#if LEEROY_HAS_DUNGEON_CLEAR
+    if (active && Dungeon(*active) && active->event.id == id)
+    {
+        if (active->guild != LeeroyModule::Instance().GuildId() || active->human != HumanGuid() ||
+            active->command.mapId != command.mapId || active->command.leaderGuid != command.leaderGuid ||
+            active->command.members != command.members) return Fail("dungeon_start_conflict");
+        // Do not consume the prepared owner token again or send a contradictory
+        // refusal for the same original while its durable acknowledgement waits.
+        return LeeroyCommandResult{true,{},active->admissionPending};
+    }
+#endif
+    return std::nullopt;
+}
+
 LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     [[maybe_unused]] OfflineRaidCmd const& command, [[maybe_unused]] RaidJobMode mode,
     [[maybe_unused]] std::vector<uint32> const& bosses, [[maybe_unused]] Realm::DayOwnerCheck const* check)
@@ -2059,9 +2127,11 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     if (dungeon) job->event.guids = Requested(*cmd);
     if (dungeon && !BeginDungeonReceipt(job->receipt, id, job->guild, job->human, cmd->leaderGuid, Requested(*cmd)))
         return Fail("dungeon_receipt_unavailable");
+    job->admissionPending = dungeon;
+    job->admissionSerial = dungeon ? LeeroyCommandSerial() : 0;
     active = std::move(job);
     // No stage side effect or progress event precedes this ack. Driver-pending retries remain caller-owned.
-    return {true, {}};
+    return {true, {}, dungeon}; // The heroic ack follows its initial durable readback.
 #endif
 }
 
@@ -2081,7 +2151,7 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
     job.elapsed = AdvanceElapsed(job.elapsed, diffMs);
     job.stageElapsed = AdvanceElapsed(job.stageElapsed, diffMs);
     job.progressElapsed = AdvanceElapsed(job.progressElapsed, diffMs);
-    ReassertMasters(job); // Before any stage reads ownership, teardown included.
+    if (!Dungeon(job)) ReassertMasters(job);
     if (job.stage != Stage::TearingDown)
     {
         auto reason = OfflineRaidStopReason(!Dungeon(job) && (HumanConnected(job.human) || HumanConnected(HumanGuid())),
@@ -2114,6 +2184,16 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
                 }
         if (!reason.empty())
             Stop(job, reason, reason == "instance_strategies_off" || reason == "reward_scope_unproven");
+    }
+    if (Dungeon(job))
+    {
+        auto const ready = AwaitDungeonPersistence(job);
+        if (!active) return; // Failed initial admission destroyed job; no body operation was admitted.
+        // Stopping an independently owned DC run is a safety action, not a new
+        // group/return mutation. Database availability must never keep it fighting.
+        if (job.stage == Stage::TearingDown) DisableOwnedRun(job);
+        if (!ready) return;
+        ReassertMasters(job); // Group changes and handbacks still require persisted proof.
     }
     if (!job.announced) Progress(job);
     bool const alreadyTearingDown = job.stage == Stage::TearingDown;
