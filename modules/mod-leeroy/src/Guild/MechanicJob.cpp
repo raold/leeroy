@@ -6,7 +6,9 @@
 #include "OfflineRaidJob.h"
 #include "Realm/RealmPorts.h"
 #include "Config.h"
+#include "CellImpl.h"
 #include "Creature.h"
+#include "GridNotifiers.h"
 #include "Group.h"
 #include "Log.h"
 #include "Map.h"
@@ -53,6 +55,7 @@ constexpr std::uint32_t kPassesPerSummary = 240; // a minute
 constexpr std::size_t kMaxEvents = 64;           // in force at once, every instance together
 constexpr std::uint64_t kRepeatMs = 2000;        // a run out started again this soon is the same one
 constexpr float kAnchorYards = 15.0f;            // a responder this far from every hazard scan centre gets its own
+constexpr float kAnchorScanYards = kMechanicNearestYards + kAnchorYards; // a `nearest` anchor any responder reaches
 constexpr std::uint64_t kOrderYieldMs = 10000;   // the raid lead's spread, run out or back off owns the bot this long
 
 std::atomic<bool> enabled{false};
@@ -89,6 +92,7 @@ struct Instance
     std::shared_ptr<MechanicTable const> table;
     std::vector<std::uint32_t> party; // every player of the group or raid there: whom spacing counts
     std::vector<HazardZone> hazards;  // the known ground hazards, while a mechanic is in force there
+    std::vector<MechanicAnchor> anchors; // live creatures a `nearest` area in force names (every phase)
 };
 struct Snapshot
 {
@@ -463,16 +467,23 @@ bool Resolve(Player* bot, bool full, Plan& plan)
         Creature* caster = !event.caster.IsEmpty() ? ObjectAccessor::GetCreature(*bot, event.caster) : nullptr;
         if (caster && (!caster->IsInWorld() || !caster->IsAlive()))
             caster = nullptr;
-        if (caster && !caster->InSamePhase(bot))
-            continue; // the other realm's mechanic (Halion): it never reaches this bot
         MechanicRule const& rule = event.table->rules[event.rule];
+        if (caster && !caster->InSamePhase(bot) && !MechanicBindsAcrossPhases(rule))
+            continue; // the other realm's mechanic (Halion): it never reaches this bot
+        MechanicCast cast = event.cast;
+        if (rule.area == MechanicArea::Nearest)
+        {
+            cast.nearest = MechanicNearestAnchor(instance->second.anchors, rule.entries, PointOf(bot));
+            if (!cast.nearest)
+                continue; // no refuge within reach: nothing to do
+        }
         if (rule.area == MechanicArea::Caster && !caster)
             continue; // a whirl or a hellfire ends with its caster
         Unit* target = !event.target.IsEmpty() ? ObjectAccessor::GetUnit(*bot, event.target) : nullptr;
         std::optional<HazardPoint> targetNow;
         if (target && target->IsInWorld() && target->IsAlive())
             targetNow = PointOf(target);
-        auto duty = MechanicDutyFor(rule, event.cast, caster ? PointOf(caster) : event.cast.caster, targetNow);
+        auto duty = MechanicDutyFor(rule, cast, caster ? PointOf(caster) : event.cast.caster, targetNow);
         if (!duty || !MechanicDutyReaches(*duty, PointOf(bot)))
             continue; // nothing to do, or a stack whose point lies where another fight is
         if (duty->hide && caster)
@@ -708,6 +719,49 @@ void Collect(Snapshot& next, Collected& out)
             instance.party.assign(found->second.begin(), found->second.end());
 }
 
+// The live creatures of the wanted entries round each scan centre, in every phase (a bot hidden in a black hole's
+// phase still needs the hole it stands in). World thread.
+struct AnchorScanner
+{
+    float x;
+    float y;
+    std::set<std::uint32_t> const& wanted;
+    std::set<ObjectGuid>& seen;
+    std::vector<MechanicAnchor>& out;
+
+    void Visit(CreatureMapType& m)
+    {
+        for (auto itr = m.begin(); itr != m.end(); ++itr)
+        {
+            Creature* unit = itr->GetSource();
+            if (!unit || !unit->IsInWorld() || !unit->IsAlive() || !wanted.contains(unit->GetEntry())
+                || unit->GetExactDist2d(x, y) > kAnchorScanYards || !seen.insert(unit->GetGUID()).second)
+                continue;
+            out.push_back({unit->GetEntry(), PointOf(unit)});
+        }
+    }
+
+    template <class NotInterested>
+    void Visit(GridRefMgr<NotInterested>&)
+    {
+    }
+};
+
+std::vector<MechanicAnchor> ScanAnchors(Map* map, std::vector<HazardPoint> const& centres,
+    std::set<std::uint32_t> const& wanted)
+{
+    std::vector<MechanicAnchor> out;
+    if (!map)
+        return out;
+    std::set<ObjectGuid> seen;
+    for (HazardPoint const& centre : centres)
+    {
+        AnchorScanner scanner{centre.x, centre.y, wanted, seen, out};
+        Cell::VisitObjects(centre.x, centre.y, map, scanner, kAnchorScanYards);
+    }
+    return out;
+}
+
 void Summarise(std::size_t members, std::size_t instances, Collected const& last)
 {
     std::uint32_t dropped = 0;
@@ -780,6 +834,7 @@ void TickMechanics(std::uint32_t diffMs)
     };
     std::vector<Ended> ended;
     std::set<MapKey> inForce;
+    std::map<MapKey, std::set<std::uint32_t>> anchorEntries; // the creatures `nearest` areas in force name
     {
         std::lock_guard<std::mutex> lock(eventLock);
         std::uint64_t const now = NowMs();
@@ -789,6 +844,8 @@ void TickMechanics(std::uint32_t diffMs)
             if (now < event.end && next->instances.contains(event.key))
             {
                 inForce.insert(event.key);
+                if (MechanicRule const& rule = event.table->rules[event.rule]; rule.area == MechanicArea::Nearest)
+                    anchorEntries[event.key].insert(rule.entries.begin(), rule.entries.end());
                 return false;
             }
             MechanicRule const& rule = event.table->rules[event.rule];
@@ -826,6 +883,8 @@ void TickMechanics(std::uint32_t diffMs)
                 anchors.push_back(at);
         }
         next->instances[key].hazards = ScanHazardZones(bodies->second.front(), anchors);
+        if (auto const wanted = anchorEntries.find(key); wanted != anchorEntries.end())
+            next->instances[key].anchors = ScanAnchors(bodies->second.front()->GetMap(), anchors, wanted->second);
     }
 
     std::size_t const members = next->members.size();

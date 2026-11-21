@@ -45,6 +45,10 @@ inline constexpr int kMechanicRingDirections = 16;
 inline constexpr float kMechanicSelfYards = 0.5f;
 // A stack binds only a member this near its point: one farther off fights elsewhere (a horseman's own tank).
 inline constexpr float kMechanicGatherReachYards = 20.0f;
+// A `nearest` area's anchor: the nearest live creature of the rule's entries within this of the bot (Algalon's
+// black holes); a stack on it binds the bot anywhere within it. As far as a spot may lie from the bot.
+inline constexpr float kMechanicNearestYards = kMechanicMaxShiftYards;
+inline constexpr std::size_t kMechanicMaxEntries = 8;
 
 enum class MechanicKind : std::uint8_t
 {
@@ -65,6 +69,10 @@ enum class MechanicArea : std::uint8_t
     Group,  // spread: the other members
     Target, // run_out_debuff: the member the cast or its aura lands on
     Ring,   // a ring `range` from the cast's destination (else its target), `radius` either side: Infernal Eruption
+    // a circle `radius` round the creature of the rule's `entries` nearest the bot: stack gathers in it (Algalon's
+    // black hole at Big Bang), avoid_ground leaves it. It binds the bot whatever the caster's phase: the refuge's
+    // own phase hides the bot from the caster.
+    Nearest,
 };
 
 inline constexpr std::uint8_t kMechanicTank = 1;
@@ -82,6 +90,7 @@ struct MechanicRule
     std::vector<std::uint32_t> spells;
     float radius = 0, range = 0, angle = 0, duration = 0; // yards, degrees (whole cone), seconds
     bool landing = false; // the place is known only when the cast completes (a random offset): nothing binds before
+    std::vector<std::uint32_t> entries; // a `nearest` area's creature entries (1 to kMechanicMaxEntries)
 };
 
 // raid_mechanics {map, difficulty, mechanics: [...]}: the instance's whole table, replacing the last one.
@@ -146,6 +155,7 @@ struct MechanicCast
     std::optional<HazardPoint> dest;   // its destination
     std::uint32_t castMs = 0;
     std::uint32_t spellDurationMs = 0;
+    std::optional<HazardPoint> nearest; // for one bot: its `nearest` area's anchor, when one is within reach
 };
 
 std::uint32_t MechanicLifetimeMs(MechanicRule const& rule, std::uint32_t castMs, std::uint32_t spellDurationMs);
@@ -186,14 +196,30 @@ struct MechanicDuty
     float spacing = 0;      // keep this far from every other member, plus
     std::uint8_t bodies = 0; // this many bodies' reach: a chain jumps between both (2), a burst reaches one (1)
     bool hide = false;      // out of the caster's sight
+    float reachYards = kMechanicGatherReachYards; // a gather binds a member this near its point
 };
+
+// Whether a rule binds a bot in another phase than its caster: only a `nearest` area does, since the refuge it
+// names (a black hole) is what moves the bot out of the caster's phase.
+bool MechanicBindsAcrossPhases(MechanicRule const& rule);
+
+// A live creature a `nearest` area may name, as the world tick saw it (every phase).
+struct MechanicAnchor
+{
+    std::uint32_t entry = 0;
+    HazardPoint at;
+};
+// The anchor of one of `entries` nearest `at` on its floor within kMechanicNearestYards; nullopt when none is.
+std::optional<HazardPoint> MechanicNearestAnchor(std::vector<MechanicAnchor> const& anchors,
+    std::vector<std::uint32_t> const& entries, HazardPoint at);
 
 // The duty a bound rule gives; nullopt when it gives none (no place known, nothing to gather on).
 // targetNow: where the cast's target is now (stack follows it).
 std::optional<MechanicDuty> MechanicDutyFor(MechanicRule const& rule, MechanicCast const& cast, HazardPoint casterNow,
     std::optional<HazardPoint> targetNow);
 
-// A duty binds a member where it stands: a stack only within kMechanicGatherReachYards of its point.
+// A duty binds a member where it stands: a stack only within its reachYards of its point (kMechanicGatherReachYards,
+// kMechanicNearestYards for a `nearest` area).
 bool MechanicDutyReaches(MechanicDuty const& duty, HazardPoint at);
 
 // True when the point is hidden from the caster (los duties); a refusal never asks it.
