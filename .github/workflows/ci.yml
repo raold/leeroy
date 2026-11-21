@@ -36,6 +36,8 @@ jobs:
         run: bash scripts/tests/ac-prune-native-logs.sh
       - name: zip module to git self-test (temporary repositories only)
         run: bash scripts/tests/ac-module-to-git.sh
+      - name: subtree module update self-test (temporary repositories only)
+        run: bash scripts/tests/ac-update-subtree.sh
 
   secrets:
     runs-on: ubuntu-latest

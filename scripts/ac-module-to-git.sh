@@ -8,8 +8,8 @@
 #   COMMIT   the upstream commit whose tree matches the folder (the dry run shows the match)
 #   --subdir PATH  the module lives in PATH inside the upstream repository (the core reads a
 #            module's conf/ and data/sql/ from the folder itself, so the clone cannot hold it
-#            nested): the branch is `git subtree split` of PATH and has no upstream, so
-#            ac-update.sh skips it; the recipe printed at the end updates it
+#            nested): the branch is `git subtree split` of PATH. Local metadata lets
+#            ac-update.sh update the split without importing the rest of upstream
 #   --go     act; without it the upstream is cloned into a temporary directory and compared
 #
 # Afterwards the folder holds exactly what the zip folder held, line endings aside: what the
@@ -101,6 +101,9 @@ if [ -n "$SUBDIR" ]; then
     tip="$(cd "$STAGE" && git subtree split -q --prefix="$SUBDIR" "$sha")" || die "subtree split failed"
     GIT_LFS_SKIP_SMUDGE=1 git -C "$STAGE" checkout --quiet -B "$branch" "$tip"
     git -C "$STAGE" branch --quiet --unset-upstream "$branch" 2>/dev/null || true
+    git -C "$STAGE" config --local leeroy.subtreePrefix "$SUBDIR"
+    git -C "$STAGE" config --local leeroy.subtreeUpstream "$remote_head"
+    git -C "$STAGE" config --local leeroy.subtreeRevision "$sha $tip"
 else
     tip="$sha"
     GIT_LFS_SKIP_SMUDGE=1 git -C "$STAGE" checkout --quiet -B "$branch" "$sha"
@@ -190,13 +193,8 @@ fi
 swapped=1
 log "$MODULE is now a git checkout: $branch at $(git -C "$DIR" rev-parse --short HEAD)"
 if [ -n "$SUBDIR" ]; then
-    # The split is deterministic, so a later split of upstream extends this one and the
-    # rebase only replays the local edits, if any. It splits in a temporary worktree of
-    # upstream, where the prefix is on disk as older Git's subtree split wants.
-    printf '    %s, no upstream (ac-update.sh skips it). Update with:\n' "split of $SUBDIR from ${sha:0:12}"
-    # shellcheck disable=SC2016  # the $w, $s and $(...) are for the operator's shell, printed as is
-    printf '      cd %q && git fetch origin && w=$(mktemp -d) && GIT_LFS_SKIP_SMUDGE=1 git worktree add --quiet --detach "$w" origin/%s && s=$(cd "$w" && git subtree split -q --prefix=%q HEAD) && git worktree remove --force "$w" && git rebase "$s"\n' \
-        "$DIR" "$branch" "$SUBDIR"
+    printf '    %s; ac-update.sh follows %s with this prefix only.\n' "split of $SUBDIR from ${sha:0:12}" "$remote_head"
+    printf '    update: bash %q\n' "$AC_ROOT/scripts/ac-update.sh"
 else
     printf '    tracking %s; ac-update.sh fast-forwards it\n' "$remote_head"
 fi

@@ -85,4 +85,5 @@
 
 # ac-update.sh rollback state, local to this machine.
 /scripts/.last-update
+/scripts/.last-update.subtrees
 __pycache__/

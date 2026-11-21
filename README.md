@@ -449,6 +449,26 @@ Apply them to a checkout of each module with
 ./ac-module-to-git.sh [--go] [--subdir P] <module> <url> <commit>  # swap a zip-extracted module for its git clone
 ```
 
+Modules converted with `--subdir` now record their prefix, upstream branch and
+source/split revisions in local Git configuration (`leeroy.subtreePrefix`,
+`leeroy.subtreeUpstream`, `leeroy.subtreeRevision`). `ac-update.sh` fetches the
+upstream, splits that folder in a temporary checkout and rebases only the local
+module edits, preserving local merge commits. The upstream's client files never
+enter the module directory.
+`--dry-run` fetches and computes the split without changing the module HEAD or
+revision metadata. Conflicting local edits abort back to the original HEAD;
+rewritten upstream history, a removed source folder and incomplete metadata
+require manual review. Rollback needs both the HEADs in `scripts/.last-update`
+and the matching metadata commands in `scripts/.last-update.subtrees`; restore
+the HEADs, then run the latter with Bash before updating again. Both files are
+local, overwritten by the next real update, and absent from a dry run.
+
+The Slavery Valley conversion still belongs in a quiet native release: stop both
+servers, run the converter with `--subdir server-side/mod-bg-slaveryvalley` at the
+verified zip source commit, then run `ac-build.sh`. This change performs no live
+swap or release. An older conversion without metadata remains skipped; do not
+guess its split base or set its Git upstream to the unsplit repository.
+
 On server startup, native `*.log.YYYY-MM-DD HH-MM-SS` rotations older than
 14 days are pruned by their local rotation timestamp. Every rotation within
 that window survives, even after frequent restarts. Active logs, invalid or
