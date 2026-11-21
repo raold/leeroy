@@ -77,6 +77,24 @@ LEEROY_TEST(Guild_Review_OfflineUsesDeclaredOrderRatherThanJsonKeyOrder)
     Reject(ParseOfflineRaid, input, "assistants");
 }
 
+LEEROY_TEST(Guild_Review_OfflineReservesAreOptionalBoundedAndDisjoint)
+{
+    auto input = json::parse(R"({"map_id":631,"size":10,"leader_guid":101,"members":[102,103],"loot_master_guid":101})");
+    std::string error;
+    CHECK(ParseOfflineRaid(input, error)->reserves.empty());
+    input["reserves"] = json::parse("[104,105]");
+    auto command = ParseOfflineRaid(input, error);
+    CHECK(command.has_value());
+    CHECK(command->reserves == (std::vector<std::uint32_t>{104, 105}));
+    CHECK_EQ(command->minMembers, 3u); // the optional list never lowers or raises this contract
+    for (auto text : {"null", "true", "1", "[104,104]", "[101]", "[102]", "[104,105,106]",
+                      "[0]", "[-1]", "[1.0]", "[true]", "[4294967296]"})
+    {
+        input["reserves"] = json::parse(text);
+        Reject(ParseOfflineRaid, input, "reserves");
+    }
+}
+
 LEEROY_TEST(Guild_Review_EnvelopePreservesUnsignedOverflowForFieldRejection)
 {
     RegisterGuildCommandTypes();

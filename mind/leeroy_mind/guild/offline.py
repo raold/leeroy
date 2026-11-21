@@ -142,7 +142,7 @@ def setup_skips(skipped, plan: RaidPlan) -> dict:
 MEMBER_REFUSALS = ("in_instance:", "busy:realm_owner:", "busy:realm_group:", "not_cast:")
 
 
-def refused_member(error: str, plan: RaidPlan) -> int | None:
+def refused_member(error: str, plan: RaidPlan, reserves=()) -> int | None:
     """The member of the sent roster a refusal names, or None when it names nobody in it.
 
     `leader_unavailable:<why>` names the leader, the plan's tank. `busy:<guid>` is a body a
@@ -160,7 +160,7 @@ def refused_member(error: str, plan: RaidPlan) -> int | None:
     if not (tail.isascii() and tail.isdigit() and len(tail) <= 10):
         return None
     guid = int(tail)
-    return guid if guid in plan.members else None
+    return guid if guid in plan.members or guid in reserves else None
 
 
 def runnable(raid_key: str, features=frozenset()) -> bool:
@@ -463,8 +463,9 @@ class OfflineRaids:
         plan = RaidPlan(**self._owned["plan"])
         raid, _, _ = split_key(f"{plan.raid_key}{plan.size}{'h' if plan.heroic else ''}")
         members, skipped = set(ev.guids), [s.guid for s in ev.skipped if not s.reason.startswith("cleanup:")]
+        manifest = set(plan.members) | set(self._owned.get("reserves", ()))
         if (any(type(g) is not int for g in (*ev.guids, *skipped)) or len(members) != len(ev.guids)
-                or not members <= set(plan.members) or not set(skipped) <= set(plan.members)
+                or len(members) > plan.size or not members <= manifest or not set(skipped) <= manifest
                 or members & set(skipped) or len(set(skipped)) != len(skipped)
                 or type(ev.instance_id) is not int or not 0 <= ev.instance_id <= 0xFFFFFFFF
                 # Encounter-state slots include minibosses (ICC has 13 slots,
@@ -482,7 +483,7 @@ class OfflineRaids:
         if ev.stage in {"starting", "running", "restarting"} and not ev.instance_id:
             return False
         usable = ({plan.tank_guid, plan.loot_guid} <= members and len(members) >= plan.size * 4 // 5
-                  and members | set(skipped) == set(plan.members))
+                  and members | set(skipped) == manifest)
         if (ev.stage in {"teleporting", "starting", "running", "restarting"} or ev.kills) and not usable:
             return False
         return True
@@ -762,6 +763,8 @@ class OfflineRaids:
             return
         if busy:
             log.info("offline_raid_planned excluded=%d in_dungeon=%d", len(busy & excluded), len(busy - excluded))
+        reserves = (plan.bench[:self.cfg.offline_reserves]
+                    if "offline_raid_reserves" in self._features else [])
         now = self.ports.clock.now()
         self._progress = None
         self._owned = dict(id=uuid4().hex, day=self._day(), phase="acquiring", plan=asdict(plan),
@@ -769,6 +772,8 @@ class OfflineRaids:
                            cancelled=False, cancel_at=None, accepted=None, instance=None,
                            raid_id=None, started=False, running_seen=False, attended=False,
                            terminal=None, end_notified=False)
+        if reserves:
+            self._owned["reserves"] = reserves
         self._save()
         try:
             self._lease = True
@@ -806,7 +811,8 @@ class OfflineRaids:
                                        heroic=plan.heroic, assistants=assistants,
                                        max_wipes=self.cfg.offline_max_wipes,
                                        max_wipes_per_boss=self.cfg.offline_max_wipes_per_boss,
-                                       timeout_min=self.cfg.offline_timeout_min, min_members=plan.size * 4 // 5)
+                                       timeout_min=self.cfg.offline_timeout_min, min_members=plan.size * 4 // 5,
+                                       reserves=tuple(reserves))
             runner = getattr(getattr(getattr(self.ports, "app", None), "realm", None), "parts", {}).get("day")
             async def send_original(original, **guard):
                 self._owned["phase"] = "awaiting_ack"
@@ -842,7 +848,7 @@ class OfflineRaids:
             elif admission_refusal or ack.ok is not True:
                 self._owned["phase"] = "rejected"
                 refused = (admission_refusal or str(ack.error or ""))[:REASON_LIMIT]
-                member = None if self._owned["cancelled"] else refused_member(refused, plan)
+                member = None if self._owned["cancelled"] else refused_member(refused, plan, reserves)
                 delay = None if self._owned["cancelled"] else retry_after(refused)
                 if not self._owned["cancelled"] and admission_refusal in {"day_check_unknown", "no_link"}:
                     delay = RETRY_S  # Only the control was uncertain; the next scheduled request gets a fresh ID.
@@ -908,11 +914,13 @@ class OfflineRaids:
             return
         plan = RaidPlan(**self._owned["plan"])
         accepted = set(ev.guids)
+        manifest = [*plan.members, *self._owned.get("reserves", ())]
         if (not {plan.tank_guid, plan.loot_guid} <= accepted
-                or len(accepted) < plan.size * 4 // 5
-                or accepted | {s.guid for s in ev.skipped if not s.reason.startswith("cleanup:")} != set(plan.members)):
+                or not plan.size * 4 // 5 <= len(accepted) <= plan.size
+                or accepted | {s.guid for s in ev.skipped if not s.reason.startswith("cleanup:")} != set(manifest)):
             return
-        actual = replace(plan, members=[g for g in plan.members if g in accepted])
+        actual = replace(plan, members=[g for g in manifest if g in accepted],
+                         bench=[g for g in plan.bench if g not in accepted])
         self._owned["accepted"] = list(actual.members)
         self._owned["actual_plan"] = asdict(actual)
         self._save()
@@ -1095,7 +1103,8 @@ class OfflineRaids:
             self._void_run(raid_id, RETRY_S, skip_raid=True)
         elif busy is not None:
             self._void_run(raid_id, busy)
-            member = refused_member(str(terminal.get("reason") or ""), RaidPlan(**self._owned["plan"]))
+            member = refused_member(str(terminal.get("reason") or ""), RaidPlan(**self._owned["plan"]),
+                                    self._owned.get("reserves", ()))
             if member is not None:
                 log.info("offline_raid_setup_excluded guid=%d", member)
                 self._exclude(member)

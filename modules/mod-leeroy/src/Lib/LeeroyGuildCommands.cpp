@@ -245,6 +245,9 @@ std::optional<OfflineRaidCmd> ParseOfflineRaid(json const& j, std::string& error
     auto count = static_cast<std::uint32_t>(out.members.size()) + 1;
     out.minMembers = std::min(out.size * 4 / 5, count);
     f.Number("min_members", out.minMembers, 1, count, true);
+    f.List("reserves", out.reserves, 0, 2, 1, kU32Max, true);
+    f.Require(std::none_of(out.reserves.begin(), out.reserves.end(), [&](auto guid)
+        { return guid == out.leaderGuid || Contains(out.members, guid); }), "reserves");
     return f.Result(std::move(out));
 }
 

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Leeroy::Guild
@@ -35,6 +36,34 @@ struct OfflineRaidLimits
 {
     std::uint32_t maxWipes, maxWipesPerBoss, timeoutMs, minMembers, maxRestarts;
 };
+
+// A reserve replaces a setup loss only until the raid has its requested headroom.
+// The running minimum stays unchanged; the raid never exceeds its real capacity.
+inline std::size_t OfflineReserveTarget(std::size_t capacity, std::size_t minimum, std::size_t reserves)
+{
+    return std::min(capacity, std::min(capacity, minimum) + std::min<std::size_t>(reserves, 2));
+}
+
+struct OfflineReserveAdmission
+{
+    std::vector<std::uint32_t> accepted;
+    std::vector<std::pair<std::uint32_t, std::string>> skipped;
+};
+
+template <class Refusal>
+OfflineReserveAdmission AdmitOfflineReserves(std::size_t capacity, std::size_t minimum,
+    std::size_t present, std::vector<std::uint32_t> const& reserves, Refusal refusal)
+{
+    OfflineReserveAdmission out;
+    auto target = OfflineReserveTarget(capacity, minimum, reserves.size());
+    for (auto guid : reserves)
+    {
+        auto reason = present + out.accepted.size() < target ? refusal(guid) : std::string{"reserve_unused"};
+        if (reason.empty()) out.accepted.push_back(guid);
+        else out.skipped.emplace_back(guid, std::move(reason));
+    }
+    return out;
+}
 
 struct OfflineRaidState
 {

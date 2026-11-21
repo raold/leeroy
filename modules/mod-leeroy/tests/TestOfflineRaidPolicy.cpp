@@ -8,6 +8,51 @@
 
 using namespace Leeroy::Guild;
 
+LEEROY_TEST(OfflineRaid_ReservesAddHeadroomWithoutIncreasingRaidCapacity)
+{
+    auto ready = [](auto) { return std::string{}; };
+    CHECK_EQ(AdmitOfflineReserves(10, 8, 8, {101, 102}, ready).accepted.size(), 2u);
+    CHECK_EQ(AdmitOfflineReserves(25, 20, 20, {101, 102}, ready).accepted.size(), 2u);
+    auto one = AdmitOfflineReserves(10, 8, 9, {101, 102}, ready);
+    CHECK(one.accepted == std::vector<std::uint32_t>{101});
+    CHECK_EQ(one.skipped.size(), 1u);
+    CHECK_EQ(one.skipped.front().first, 102u);
+    CHECK_EQ(one.skipped.front().second, "reserve_unused");
+    CHECK_EQ(AdmitOfflineReserves(10, 8, 8, {101}, ready).accepted.size(), 1u);
+    CHECK_EQ(AdmitOfflineReserves(10, 10, 9, {101, 102}, ready).accepted.size(), 1u);
+    CHECK(AdmitOfflineReserves(10, 8, 8, {}, ready).accepted.empty());
+}
+
+LEEROY_TEST(OfflineRaid_ReserveRefusalUsesTheNextCandidateAndPreservesEvidence)
+{
+    auto admitted = AdmitOfflineReserves(10, 8, 8, {101, 102}, [](auto guid)
+        { return guid == 101 ? std::string{"busy:realm_owner"} : std::string{}; });
+    CHECK(admitted.accepted == std::vector<std::uint32_t>{102});
+    CHECK_EQ(admitted.skipped.front().first, 101u);
+    CHECK_EQ(admitted.skipped.front().second, "busy:realm_owner");
+    auto full = AdmitOfflineReserves(10, 8, 10, {101, 102}, [](auto)
+        { CHECK(false); return std::string{}; });
+    CHECK(full.accepted.empty());
+    CHECK_EQ(full.skipped.size(), 2u);
+    CHECK_EQ(full.skipped.back().second, "reserve_unused");
+}
+
+LEEROY_TEST(OfflineRaid_HeadroomDoesNotLowerTheRunningMinimum)
+{
+    OfflineRaidLimits limits{6, 3, 180 * 60000, 8, 8};
+    OfflineRaidState state{0, false, true, 10, 0, 0, 0, 12, true, 0, 0, 0};
+    state.membersPresent = 9; // one member lost after starting with two reserves
+    state.shortMs = OfflineShortRosterStopMs;
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    state.membersPresent = 8;
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    state.membersPresent = 7;
+    CHECK_EQ(Decide(state, limits).reason, "too_few");
+    state.membersPresent = 10;
+    state.leaderPresent = false;
+    CHECK_EQ(Decide(state, limits).reason, "leader_lost");
+}
+
 LEEROY_TEST(OfflineRaid_StopRequiresConnectedMindAndOwnedLiveJob)
 {
     CHECK(OfflineStopError(true, true, false, false, false, false).empty());

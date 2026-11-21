@@ -39,6 +39,31 @@ After mind restart no saved heartbeat authorizes a stop; fresh native evidence i
 required. Lost-terminal handling (deadline plus 15 minutes) is unchanged. No schema
 migration. **Deploying this feature requires a native rebuild and updated mind.**
 
+# Offline raid admission reserves
+
+The planner already fills all 10 or 25 raid seats. Members can become unavailable
+before native grouping, which used to start at the 80% minimum without drawing
+from the bench. `[guild] offline_reserves = 2` allows up to two eligible bench
+members to fill those setup losses; `1` allows one, and the default `0` preserves
+the current behavior. This requires an updated mind and a **native rebuild**
+advertising `offline_raid_reserves`; the mind omits reserves on older servers.
+No migration is needed.
+
+Native tries the pre-approved reserves only while forming an offline raid, until
+it has the minimum plus the requested reserve count (capped at the raid's normal
+capacity). It never removes a usable planned member, lowers the running minimum,
+replaces the required tank or loot lead, or brings in replacements during a run.
+Owner lockouts, absence and the planner's exclusions apply to the bench too.
+Native rechecks the exact bot session, Realm/day ownership, training/heroic
+recovery, queued commands, existing groups, PvP, instances, combat and travel before admitting a
+reserve. It does not preempt a reserve's day plan. Member heroics and benchmarks
+do not use this feature.
+
+The job's manifest accounts for each reserve: admitted members join ordinary
+ownership, cleanup and attendance; unused members report `reserve_unused` and
+remain on the bench. The log reports admitted counts as
+`leeroy: raid <id> reserves=<n> members=<n> minimum=<n>`.
+
 # Trial of the Crusader and Ulduar offline raids (patches/mod-dungeon-clear)
 
 The local mod-dungeon-clear commits (`patches/mod-dungeon-clear`, exported by `scripts/ac-snapshot.sh` and applied
