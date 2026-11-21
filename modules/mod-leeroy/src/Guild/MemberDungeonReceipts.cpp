@@ -63,7 +63,7 @@ bool Load()
         std::map<std::string,DungeonReceipt> restored;
         if (expected)
         {
-            auto rows = CharacterDatabase.Query("SELECT start_id,revision,payload,COALESCE(active_slot,0) FROM leeroy_member_dungeon_receipt "
+            auto rows = CharacterDatabase.Query("SELECT start_id,revision,payload,CAST(COALESCE(active_slot,0) AS UNSIGNED) FROM leeroy_member_dungeon_receipt "
                 "WHERE realm={} AND settled=0 LIMIT 129", ::realm.Id.Realm);
             if (!rows) return false;
             do
@@ -72,12 +72,10 @@ bool Load()
                 auto id = fields[0].Get<std::string>();
                 auto raw = fields[2].Get<std::string>();
                 auto data = raw.size()<=32768 ? Json::parse(raw,nullptr,false) : Json{};
-                bool const slot = fields[3].Get<uint64>()!=0;
-                if (!DungeonReceiptIdValid(id) || !fields[1].Get<uint64>() || !ValidDungeonReceipt(data) ||
-                    data.at("settled")==true || data.at("slot")!=slot ||
-                    (data.at("terminal").is_object() && data.at("terminal").at("id")!=id))
+                auto const slot = fields[3].Get<uint64>();
+                if (!DungeonReceiptIdValid(id) || !DungeonStoredEvidence(id,fields[1].Get<uint64>(),slot,0,data))
                 {
-                    if (unreadable.emplace(id,Unreadable{slot,DungeonKnownRoster(data)}).second)
+                    if (unreadable.emplace(id,Unreadable{slot!=0,DungeonKnownRoster(data)}).second)
                         LOG_ERROR("module.leeroy","leeroy: member_dungeon recovery unreadable receipt; ownership retained");
                     continue;
                 }
@@ -92,15 +90,22 @@ bool Load()
 
 std::optional<DungeonReceipt> Lookup(std::string const& id)
 {
-    if (!exists || !DungeonReceiptIdValid(id)) return std::nullopt;
-    auto row = CharacterDatabase.Query("SELECT revision,payload FROM leeroy_member_dungeon_receipt WHERE realm={} AND start_id=UNHEX('{}')",
+    if (!exists || !DungeonReceiptIdValid(id) || unreadable.contains(id)) return std::nullopt;
+    auto row = CharacterDatabase.Query("SELECT revision,payload,CAST(COALESCE(active_slot,0) AS UNSIGNED),settled "
+        "FROM leeroy_member_dungeon_receipt WHERE realm={} AND start_id=UNHEX('{}')",
         ::realm.Id.Realm, Hex(id));
     if (!row) return std::nullopt;
     auto raw = row->Fetch()[1].Get<std::string>();
-    if (raw.size()>32768 || !row->Fetch()[0].Get<uint64>()) return std::nullopt;
-    auto data = Json::parse(raw,nullptr,false);
-    if (!ValidDungeonReceipt(data) || (data.at("terminal").is_object() && data.at("terminal").at("id")!=id)) return std::nullopt;
-    return DungeonReceipt{id, row->Fetch()[0].Get<uint64>(), std::move(data)};
+    auto data = raw.size()<=32768 ? Json::parse(raw,nullptr,false) : Json{};
+    auto revision = row->Fetch()[0].Get<uint64>();
+    auto slot = row->Fetch()[2].Get<uint64>();
+    if (!DungeonStoredEvidence(id,revision,slot,row->Fetch()[3].Get<uint8>(),data))
+    {
+        if (unreadable.emplace(id,Unreadable{slot!=0,DungeonKnownRoster(data)}).second)
+            LOG_ERROR("module.leeroy","leeroy: member_dungeon lookup contradictory receipt; ownership retained");
+        return std::nullopt;
+    }
+    return DungeonReceipt{id,revision,std::move(data)};
 }
 }
 
@@ -145,7 +150,7 @@ bool BeginDungeonReceipt(DungeonReceipt& receipt, std::string const& id, uint32 
     Json data = {{"version",1},{"guild",guild},{"human",human},{"leader",leader},{"roster",roster},
         {"map",602},{"difficulty",1},{"stage","accepted"},{"slot",true},{"settled",false},{"bodies",Json::array()},
         {"terminal",nullptr},{"instance",0},{"group",0},{"issued_ms",NowUnixMs()}};
-    if (Lookup(id) || unverified.contains(id)) return false;
+    if (Lookup(id) || unreadable.contains(id) || unverified.contains(id)) return false;
     receipt.id = id;
     unverified.emplace(id,DungeonWriteProof{0,Json{},data});
     CharacterDatabase.DirectExecute("INSERT INTO leeroy_member_dungeon_receipt(realm,start_id,revision,active_slot,settled,payload) "
@@ -231,9 +236,11 @@ bool DungeonReturned(std::string const& id, std::vector<uint32> const& guids)
 LeeroyCommandResult PublishDungeonReceipt(std::string const& id)
 {
     if (!loaded) return {false,"dungeon_store_unavailable"};
+    if (unreadable.contains(id)) return {false,"dungeon_receipt_unproven"};
     auto row = Lookup(id);
     if (!row)
     {
+        if (unreadable.contains(id)) return {false,"dungeon_receipt_unproven"};
         if (!exists) return {false,"unknown_dungeon"};
         auto count = CharacterDatabase.Query("SELECT COUNT(*) FROM leeroy_member_dungeon_receipt WHERE realm={} AND start_id=UNHEX('{}')",
             ::realm.Id.Realm, Hex(id));
@@ -304,10 +311,11 @@ bool RecoverBodies(DungeonReceipt& receipt)
         auto* fields = snapshot->Fetch();
         auto durableGroup = fields[7].Get<uint32>();
         if (durableGroup && (durableGroup != groupId || (group && !members.contains(guid)))) return false;
-        bool const inCopy = instance && fields[0].Get<uint32>() == 602 && fields[1].Get<uint32>() == instance;
-        bool const atOrigin = fields[0].Get<uint32>() == map && !fields[1].Get<uint32>() &&
-            std::hypot(fields[2].Get<float>()-x, fields[3].Get<float>()-y) <= 5 && std::abs(fields[4].Get<float>()-z) <= 5;
-        if (!inCopy && !atOrigin) return false;
+        auto const storedPlace = DungeonLocationOf(body,instance,fields[0].Get<uint32>(),fields[1].Get<uint32>(),
+            fields[2].Get<float>(),fields[3].Get<float>(),fields[4].Get<float>());
+        if (storedPlace==DungeonLocation::Foreign) return false;
+        bool const atOrigin = storedPlace==DungeonLocation::Origin;
+        bool const inCopy = storedPlace==DungeonLocation::Copy;
         if (inCopy && group && durableGroup == groupId) groupProof = true;
         uint32 mask = body.at("dungeon").get<uint32>() | (body.at("raid").get<uint32>() << 4);
         bool const leaderFlag = body.at("leader").get<bool>();
@@ -325,10 +333,11 @@ bool RecoverBodies(DungeonReceipt& receipt)
                 !player->GetSession() || player->GetSession()->IsLoggingOut() || player->IsInCombat() ||
                 player->GetGroupInvite() || player->GetOriginalGroup() || player->GetTradeData() ||
                 (player->GetGroup() && player->GetGroup() != group)) return false;
-            bool origin = !player->GetInstanceId() && player->GetMapId() == map &&
-                player->GetDistance2d(x,y) <= 5 && std::abs(player->GetPositionZ()-z) <= 5;
-            bool copy = instance && player->GetMapId() == 602 && player->GetInstanceId() == instance;
-            if (!origin && !copy) return false;
+            auto const place = DungeonLocationOf(body,instance,player->GetMapId(),player->GetInstanceId(),
+                player->GetPositionX(),player->GetPositionY(),player->GetPositionZ());
+            if (place==DungeonLocation::Foreign) return false;
+            bool const origin = place==DungeonLocation::Origin;
+            bool const copy = place==DungeonLocation::Copy;
             if (!group && DungeonReturnAuthorized(data))
             {
                 if (copy)
@@ -385,14 +394,19 @@ bool HeldAfterRestart(Json const& data)
 {
     auto* group = sGroupMgr->GetGroupByGUID(data.at("group").get<uint32>());
     if (!MatchesParty(data,group)) return false;
-    auto roster = DungeonKnownRoster(data);
+    auto const instance = data.at("instance").get<uint32>();
     auto* driver = FindOnline(data.value("driver",0u));
     if (!driver || driver->GetGUID().GetCounter()==HumanGuid() || IsCast(driver->GetGUID().GetCounter())) return false;
-    for (auto guid : roster)
+    for (auto const& body : data.at("bodies"))
     {
+        auto guid = body.at("guid").get<uint32>();
         auto* p = FindOnline(guid);
-        if (p && IsCast(guid) && Realm::IsOnRandomBotAccount(guid) && p->GetGroup()==group &&
-            !IsSelfBot(p) && GET_PLAYERBOT_AI(p) && GET_PLAYERBOT_AI(p)->GetMaster()==driver) return true;
+        if (body.at("changed")!=true || body.at("returned")==true || body.at("abandoned")==true ||
+            !p || p->IsBeingTeleported() || !IsCast(guid) || !Realm::IsOnRandomBotAccount(guid) ||
+            p->GetGuildId()!=data.at("guild") || p->GetGroup()!=group || IsSelfBot(p) ||
+            !GET_PLAYERBOT_AI(p) || GET_PLAYERBOT_AI(p)->GetMaster()!=driver) continue;
+        if (DungeonLocationOf(body,instance,p->GetMapId(),p->GetInstanceId(),p->GetPositionX(),
+                p->GetPositionY(),p->GetPositionZ())!=DungeonLocation::Foreign) return true;
     }
     return false;
 }

@@ -133,6 +133,53 @@ LEEROY_TEST(MemberDungeonDisbandProofSurvivesReconstructionAndSlotRequiresAPosit
     CHECK(DungeonCanReleaseSlot(true,600000,false));
 }
 
+LEEROY_TEST(MemberDungeonRestartHolderMustBeInItsCopyOrAtItsSavedOutdoorOrigin)
+{
+    nlohmann::json row={{"group",90},{"leader",101},{"roster",{101,102,103,104,105}}};
+    nlohmann::json body={{"map",1},{"x",4.0},{"y",5.0},{"z",6.0}};
+    CHECK(DungeonMatchesGroup(row,90,101,{101,104})); // Same leader and subset, same driver, reused group ID.
+    CHECK(DungeonLocationOf(body,47,602,99,0,0,0)==DungeonLocation::Foreign);
+    CHECK(DungeonCanReleaseSlot(true,600000,DungeonLocationOf(body,47,602,99,0,0,0)!=DungeonLocation::Foreign));
+    CHECK(DungeonLocationOf(body,47,602,47,0,0,0)==DungeonLocation::Copy);
+    CHECK(DungeonLocationOf(body,47,1,0,4,5,6)==DungeonLocation::Origin);
+    CHECK(DungeonLocationOf(body,47,1,8,4,5,6)==DungeonLocation::Foreign);
+    CHECK(DungeonLocationOf(body,47,1,0,60,70,80)==DungeonLocation::Foreign);
+}
+
+LEEROY_TEST(MemberDungeonStatusRequiresIndependentColumnsForTheExactReceipt)
+{
+    nlohmann::json row={{"version",1},{"map",602},{"difficulty",1},{"stage","tearing_down"},{"slot",false},
+        {"settled",true},{"guild",21},{"human",1},{"leader",101},{"roster",{101,102,103,104,105}},
+        {"bodies",nlohmann::json::array()},{"group",0},{"instance",0},{"issued_ms",1}};
+    row["terminal"]={{"type","job"},{"id","lost"},{"kind","member_dungeon"},{"state","failed"},
+        {"reason","world_restart"},{"guids",row["roster"]},{"instance_id",0},{"kills",0},{"wipes",0}};
+    CHECK(ValidDungeonReceipt(row));
+    CHECK(!DungeonStoredEvidence("lost",8,1,0,row));
+    CHECK(!DungeonStoredEvidence("lost",8,0,0,row));
+    CHECK(!DungeonStoredEvidence("lost",8,1,1,row));
+    CHECK(!DungeonStoredEvidence("neighbor",8,0,1,row));
+    row["terminal"]["id"]="neighbor";
+    CHECK(DungeonStoredEvidence("neighbor",9,0,1,row));
+}
+
+LEEROY_TEST(MemberDungeonDelayedCharacterSaveDoesNotRewriteTheReturnTransition)
+{
+    DungeonReturnProof proof;
+    using namespace std::chrono;
+    std::vector<std::string> writes;
+    unsigned worldChecks=0, storeChecks=0;
+    auto save=[&](auto effect) { writes.push_back(effect); return true; };
+    for (unsigned ms=0; ms<65000; ms+=10)
+    {
+        bool ready = proof.Observe(steady_clock::time_point{}+milliseconds(ms),save,
+            [&]{ ++worldChecks; return ms>=100; },[&]{ ++storeChecks; return ms>=62000; });
+        CHECK(ready==(ms>=62100));
+    }
+    CHECK((writes==std::vector<std::string>{"return_roster","returned"}));
+    CHECK_EQ(worldChecks,11u);
+    CHECK_EQ(storeChecks,63u);
+}
+
 LEEROY_TEST(MemberDungeonOnlyMatchesItsExactLostWriteBeforeAdvancing)
 {
     nlohmann::json initial={{"effect","accepted"}}, entered={{"effect","enter_leader"}}, cleanup={{"effect","return_roster"}};

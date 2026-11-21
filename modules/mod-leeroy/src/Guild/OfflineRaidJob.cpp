@@ -187,7 +187,7 @@ struct Job
     uint32 failedAt = 0;
     DungeonReceipt receipt;
     std::optional<JobEvent> pendingTerminal;
-    uint32 nextStoreCheck = 0;
+    DungeonReturnProof dungeonReturn;
     bool waitOverrideInstalled = false, previousWaitOverride = false, previousWaitValue = false;
     bool trainingSealed = false, trainingRestored = false, trainingTouched = false, proofPublished = false;
     std::string terminalReason, terminalState = "done";
@@ -1684,25 +1684,29 @@ bool RunTeardown(Job& job)
         job.terminalState = "failed";
         job.terminalReason = "reward_scope_unproven";
     }
-    if (Dungeon(job) && !Checkpoint(job, "return_roster")) return false;
     bool complete = false;
-    try { complete = (Dungeon(job) && DungeonBeforeMutation(job.receipt.data)) || Teardown(job); }
+    try
+    {
+        if (Dungeon(job))
+            complete = job.dungeonReturn.Observe(std::chrono::steady_clock::now(),
+                [&](char const* effect) { return Checkpoint(job,effect); },
+                [&] {
+                    if (DungeonBeforeMutation(job.receipt.data)) return true;
+                    if (Teardown(job) && std::all_of(job.members.begin(),job.members.end(),[](auto const& m) {
+                        return DungeonHandback(m.changed,m.handbackProved,m.abandoned);
+                    })) return true;
+                    // Capture newly returned or abandoned individuals without toggling the persisted effect.
+                    auto const effect = job.receipt.data.value("effect",std::string{"return_roster"});
+                    Checkpoint(job,effect,job.receipt.data.value("actor",0u));
+                    return false;
+                },
+                [&] { return DungeonReturnsPersisted(job.receipt); });
+        else complete = Teardown(job);
+    }
     catch (...)
     {
         job.cleanupFailed = true; // Keep every incomplete receipt and the original cleanup deadline.
         LOG_ERROR("module.leeroy", "leeroy: raid {} cleanup exception; recovery retained", job.event.id);
-    }
-    if (complete && Dungeon(job))
-    {
-        complete = std::all_of(job.members.begin(),job.members.end(),[](auto const& m) {
-            return DungeonHandback(m.changed,m.handbackProved,m.abandoned);
-        });
-        if (!complete || !Checkpoint(job,"returned") || job.stageElapsed < job.nextStoreCheck) complete = false;
-        else if (!DungeonReturnsPersisted(job.receipt))
-        {
-            complete = false;
-            job.nextStoreCheck = AdvanceElapsed(job.stageElapsed,1000);
-        }
     }
     if (complete && !job.event.trainingRun.empty() && !job.proofPublished)
     {

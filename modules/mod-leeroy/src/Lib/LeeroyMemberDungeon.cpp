@@ -97,6 +97,25 @@ bool ValidDungeonReceipt(nlohmann::json const& data)
     catch (nlohmann::json::exception const&) { return false; }
 }
 
+bool DungeonStoredEvidence(std::string const& id, std::uint64_t revision, std::uint64_t slot,
+    std::uint64_t settled, Json const& data)
+{
+    if (!revision || slot>1 || settled>1 || !ValidDungeonReceipt(data) ||
+        data.at("slot")!=(slot==1) || data.at("settled")!=(settled==1)) return false;
+    auto const& terminal = data.at("terminal");
+    if (terminal.is_null()) return slot && !settled;
+    return terminal.at("id")==id && !(slot && settled);
+}
+
+DungeonLocation DungeonLocationOf(Json const& body, std::uint32_t savedInstance, std::uint32_t map,
+    std::uint32_t instance, float x, float y, float z)
+{
+    if (savedInstance && instance==savedInstance && map==MemberDungeonMap) return DungeonLocation::Copy;
+    if (!instance && map==body.at("map") && std::hypot(x-body.at("x").get<float>(),y-body.at("y").get<float>())<=5 &&
+        std::abs(z-body.at("z").get<float>())<=5) return DungeonLocation::Origin;
+    return DungeonLocation::Foreign;
+}
+
 DungeonWriteRead DungeonWriteProof::Observe(std::uint64_t seenRevision, Json const* seen) const
 {
     if (!seen) return DungeonWriteRead::Unavailable;

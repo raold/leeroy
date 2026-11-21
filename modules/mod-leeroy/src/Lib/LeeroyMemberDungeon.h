@@ -2,6 +2,7 @@
 #pragma once
 
 #include "LeeroyGuildAddPolicy.h"
+#include <chrono>
 
 namespace Leeroy::Guild
 {
@@ -15,6 +16,34 @@ struct DungeonCandidate
 std::string MemberDungeonAdmission(std::uint32_t map, std::uint32_t leader,
     std::vector<DungeonCandidate> const& candidates, bool ownerOnline, bool slotBusy);
 bool ValidDungeonReceipt(nlohmann::json const& data);
+bool DungeonStoredEvidence(std::string const& id, std::uint64_t revision, std::uint64_t slot,
+    std::uint64_t settled, nlohmann::json const& data);
+enum class DungeonLocation { Foreign, Origin, Copy };
+DungeonLocation DungeonLocationOf(nlohmann::json const& body, std::uint32_t savedInstance,
+    std::uint32_t map, std::uint32_t instance, float x, float y, float z);
+
+// The world undo and its durable receipt happen once. Character saves may become visible later.
+class DungeonReturnProof
+{
+public:
+    template<class Checkpoint, class WorldReturned, class StoreReturned>
+    bool Observe(std::chrono::steady_clock::time_point now, Checkpoint save, WorldReturned world, StoreReturned store)
+    {
+        if (!_started) _started = save("return_roster");
+        if (!_started) return false;
+        if (!_recorded && world()) _recorded = save("returned");
+        if (!_recorded) return false;
+        if (!_proved && now >= _nextCheck)
+        {
+            _nextCheck = now + std::chrono::seconds(1);
+            _proved = store();
+        }
+        return _proved;
+    }
+private:
+    bool _started = false, _recorded = false, _proved = false;
+    std::chrono::steady_clock::time_point _nextCheck = std::chrono::steady_clock::time_point::min();
+};
 enum class DungeonWriteRead { Unavailable, Previous, Committed, Conflict };
 struct DungeonWriteProof
 {
