@@ -483,7 +483,11 @@ training state or pending bot command leaves the body to its owner (nothing adde
   A fourth kind stock never sees: an add (a selectable, attackable unit) whose own periodic aura triggers an
   allow-listed damage spell (`HeldAuraHazard`; today the Living Inferno's Blazing Aura, 75886/75887, heroic 25-man
   Halion), that spell's radius plus the add's reach, up to 35 yards. A tank holds such an add in its fire, so its
-  zone concerns everyone but bots playerbots reads as tanks (`held`). Each zone keeps its object's phase mask and
+  zone concerns everyone but bots playerbots reads as tanks (`held`). A fifth: an allow-listed npc that goes off
+  when a player comes near (`ProximityHazardFor`, by creature entry, below), its trigger distance or its blast's
+  radius (this difficulty's version of the spell) when larger; nobody holds one, so tanks keep out too. Such npcs
+  walk, so each pass places the zone where the npc is and, while its spline runs, stretches it a second ahead
+  toward its next path point (`HazardLeadZone`: the circle round both). Each zone keeps its object's phase mask and
   a body meets only the zones of its own phases (Halion's two realms share the room; `HazardApplies`), where the
   scan used to keep only what the owner's phase saw. Map threads read that snapshot; its version changes only
   when the zones do, so answers are reused between passes.
@@ -503,7 +507,10 @@ training state or pending bot command leaves the body to its owner (nothing adde
   yards, so a bot just inside the near edge steps back and goes round, and one past the middle finishes the
   crossing. In combat, ties go toward him. An exit never loops with a lower-relevance mover (follow, or
   dungeon-clear's `.dc on` route at relevance 15-57) that walks the bot back into the same hazard: entries are
-  counted per hazard, and a hazard's third entry within 20 seconds yields it to the bot's own movers for 20
+  counted per hazard, into a hazard the bot did not stand in at its last answer (an exit planned again inside the
+  same hazards counts nothing; a bot walked from one overlapping hazard into the other counts each) and never into
+  a moving npc's zone, which walked onto the bot (`NoteHazardZoneEntry`; it is always stepped out of), and a
+  hazard's third entry within 20 seconds yields it to the bot's own movers for 20
   seconds; a bot standing only in yielded hazards is let through, overlapping ones included
   (`hazard_exit_yield guid= zones=`).
 - Logs once a minute while it acts: `hazards_minute aware= zones= spot_members= detour_members= exit_members=`.
@@ -530,6 +537,37 @@ tank. Halion's meteor crater (40029, 74713 -> 74712) and the flames its script s
 74718 -> 74717), Combustion (40001) and Consumption (40135) are unselectable trigger npcs within 15 yards and
 were measured already.
 
+**Npcs that go off when a player comes near (2026-11-21).** In Naxxramas the owner's bots walked straight into
+the Living Poison of the Construct Quarter's hall (`hazards_minute ... zones=0`): an unselectable npc with no
+aura, so none of the four kinds saw it. From the core's scripts, the live `Spell.dbc`/`SpellRadius.dbc` with the
+core's `SpellInfoCorrections` and the world database (`creature_template`, its addon auras and SmartAI rows):
+
+| Npc | Where | Script: what sets it off | Then | Zone |
+|---|---|---|---|---|
+| 16027 Living Poison | Naxx, Construct Quarter hall | `npc_living_poison`: `SelectNearestTarget(1.5)`, a player's centre within 1.5 yards; it walks one of three lanes (`LivingPoisonDataList`, one every 5 s each, 2.5 yards a second, gone after ~15 s) | Explode 28433, 5 yards (radius index 8), ~30k nature, and it dies | **1.5**: the trigger, not the blast: 5 yards round slimes 12.5 yards apart would shut every lane, and a bot that sets none off is caught in none of its own |
+| 34362 Proximity Mine | Ulduar, Mimiron phase 1 (ten from the Leviathan Mk II at a time) | `npc_ulduar_proximity_mine`: a player within 1.9 yards (`SelectTargetFromPlayerList`), checked every 500 ms; else it goes off after 35 s | Mine Explosion 66351 (63009 on 25-man), 3 yards (index 15) | **3**, the blast |
+| 33292 Ominous Cloud | Ulduar, Yogg-Saron phase 1 | `boss_yoggsaron_cloud`: drifts in circles round the room (`MoveCirclePath`); every 500 ms a player within 6 yards of its edge (`SelectNearbyTarget(6)`) | Summon Guardian of Yogg-Saron 63031 | **6 + its reach** |
+| 39137 Shadow Trap | ICC, the Lich King phase 1 | its periodic aura 73525 casts the searcher 74282 every 500 ms, 3 yards by the core's correction | 73529, 10 yards of damage (index 13) and a knockback (10 yards by correction) | **10**, the blast; playerbots' own Lich King strategy also keeps 12 yards |
+
+A replay of the hall from `LivingPoisonDataList` (`Hazard_AFollowerCrossesTheLivingPoisonLanesWithoutSettingOneOff`:
+a follower at run speed across all three lanes, 120 starts over every phase of the waves, the zones 500 ms old)
+reaches the far side every time and never comes within 3 yards of a slime; walking straight sets one off in 57.
+Its first run counted each re-planned exit as an entry (the job counted whenever its exit memo was not reusable),
+so a slime walking onto a bot yielded the bot to follow within a second; hence the per-hazard entry rule above. A slime that appears on a bot standing at its pipe (a lane's start)
+is not foreseen. While such an npc is within the scan the zones change every pass, so follow spots and detours are
+worked out again every 500 ms (as when an area appears or ends).
+
+Looked at and left out: Fallout Slime (16290, Grobbulus) and Sewage Slime (16375, Construct Quarter trash) carry
+Disease Cloud (28156 -> 28153, 15 yards) and Embalming Slime (16024) casts Embalming Cloud in combat, but each is
+an attackable add the raid kills inside its cloud; Mimiron's Bomb Bot (33836, SmartAI: explodes within 3 yards of
+its victim), Lady Deathwhisper's Vengeful Shade (38222: Vengeful Blast procs on its one fixated target),
+Putricide's Volatile Ooze and Gas Cloud and the Blood Princes' Kinetic Bomb chase or are struck by chosen players
+(playerbots' ICC strategies); the Twin Val'kyr's orbs (34628/34630: `SelectNearestPlayer(2.75)`) are collected by
+colour; Valithria's Dream Clouds (`SelectNearestPlayer(5)`) are flown through on purpose; Sapphiron's Blizzard
+(16474, `trigger_periodic`) drops 3-yard Chill areas the dynamic object kind already sees; Algalon's black holes
+are the mechanic responder's (`nearest` areas). The same search of the Northrend 5-man scripts and SmartAI rows
+found none (Xevozz's Ethereal Spheres empower him, not a player).
+
 Rotface's own playerbots strategy (`IccRotfaceMultiplier`) zeroes every `avoid aoe` action, this exit included,
 for a bot with Rotface on its threat list, so in that fight Ooze Flood mainly moves the follow spots of members
 not yet engaged. No dynamic object in those raids exceeds 15 yards in the DBC (the largest are 13: Rune of Death,
@@ -543,7 +581,9 @@ navmesh check refuses a waypoint it cannot reach straight, and then follow walks
 again at the exit until the yield lets it through); a navmesh path between two clear points can still bend into
 a hazard. `melee` and `queue` formations follow a unit, not a spot, so only the exit applies. Encounter
 multipliers that silence `avoid aoe` during a mechanic silence the exit too, and in combat a melee bot whose
-target stands in a hazard can step back in to reach it (after two exits the yield lets it stay). Logs carry
+target stands in a hazard can step back in to reach it (after two exits the yield lets it stay). A Living Poison
+the owner himself sets off still catches the bots within 5 yards of it, and a moving npc's zone is up to a pass
+(500 ms) old plus its one-second lead. Logs carry
 guids, counts and reason codes only. **Native rebuild required, with the playerbots patch applied first.**
 
 # Boss mechanics at cast start (the mechanic responder)

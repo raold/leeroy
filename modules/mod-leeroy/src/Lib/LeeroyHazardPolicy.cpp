@@ -34,6 +34,24 @@ constexpr std::array<LargeHazard, 6> kLargeHazards{{
 // on 25-man, 15 yards round the inferno.
 constexpr std::array<std::uint32_t, 2> kHeldAuraHazards{{75886, 75887}};
 
+// Measured from the core's scripts, Spell.dbc/SpellRadius.dbc with the core's spell corrections and the world
+// database (2026-11-21): npcs that go off when a player comes near (see the README).
+constexpr std::array<ProximityHazardRule, 4> kProximityHazards{{
+    // Naxxramas, Living Poison: walks across the Construct Quarter's hall in three lanes, one every 5 s in each,
+    // and casts Explode on itself (28433: 5 yards) at a player within 1.5 yards (SelectNearestTarget, centre to
+    // centre). Its blast does not count: 5 yards round slimes 12.5 yards apart would shut each lane, and a bot
+    // that never sets one off is never caught in its own.
+    {16027, 1.5f, false, 0},
+    // Ulduar, Mimiron's Proximity Mine: explodes (66351, 63009 on 25-man: 3 yards) at a player within 1.9 yards.
+    {34362, 1.9f, false, 66351},
+    // Ulduar, Yogg-Saron's Ominous Cloud: drifts round the room and wakes a Guardian of Yogg-Saron (63031) for a
+    // player within 6 yards of its edge (SelectNearbyTarget).
+    {33292, 6.0f, true, 0},
+    // Icecrown Citadel, the Lich King's Shadow Trap: its search (74282, 3 yards by the core's correction) sets off
+    // 73529, 10 yards of damage and a knockback.
+    {39137, 3.0f, false, 73529},
+}};
+
 float constexpr kPi = 3.14159265358979f;
 
 float Distance2d(HazardPoint a, float x, float y)
@@ -167,6 +185,39 @@ float HazardHeldAuraRadius(HazardSpellIds const& ids, float spellRadius, float u
     if (whitelisted || !HeldAuraHazard(ids) || spellRadius <= 0.0f || spellRadius > kHazardLargeCapYards)
         return 0.0f;
     return spellRadius + std::max(0.0f, unitReach);
+}
+
+std::optional<ProximityHazardRule> ProximityHazardFor(std::uint32_t entry)
+{
+    for (auto const& rule : kProximityHazards)
+        if (entry && rule.entry == entry)
+            return rule;
+    return std::nullopt;
+}
+
+float HazardProximityRadius(ProximityHazardRule const& rule, float blastRadius, float unitReach)
+{
+    float const trigger = rule.trigger + (rule.edges ? std::max(0.0f, unitReach) : 0.0f);
+    float const blast = rule.blast && blastRadius <= kHazardLargeCapYards ? blastRadius : 0.0f;
+    float const radius = std::max(trigger, blast);
+    return radius > 0.0f && radius <= kHazardLargeCapYards ? radius : 0.0f;
+}
+
+HazardZone HazardLeadZone(HazardZone zone, std::optional<HazardPoint> next, float speed)
+{
+    if (!next || !(speed > 0.0f))
+        return zone;
+    float const dx = next->x - zone.x;
+    float const dy = next->y - zone.y;
+    float const left = std::hypot(dx, dy);
+    float const travel = std::min(left, speed * kHazardLeadSeconds);
+    if (!(travel > 0.01f))
+        return zone;
+    zone.x += dx / left * travel / 2.0f;
+    zone.y += dy / left * travel / 2.0f;
+    zone.radius += travel / 2.0f;
+    zone.moving = true;
+    return zone;
 }
 
 bool HazardApplies(HazardZone const& zone, std::uint32_t phaseMask, bool tank)
@@ -355,13 +406,15 @@ bool HazardExitYielded(HazardExitGuard const& guard, std::vector<std::uint64_t> 
     return true;
 }
 
-HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now)
+namespace
 {
-    if (HazardExitYielded(guard, zones, now))
-        return HazardEntry::Yielded;
+// Counts an entry into each of `zones` not yielded now; true when one's yield starts.
+bool CountEntries(HazardExitGuard& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now)
+{
     // Forget hazards neither counting nor yielded any more.
     std::erase_if(guard.zones, [&](auto const& item)
         { return now - item.second.since > kHazardExitWindowMs && now >= item.second.yieldUntil; });
+    bool started = false;
     for (std::uint64_t zone : zones)
     {
         HazardExitCount& count = guard.zones[zone];
@@ -373,9 +426,46 @@ HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> c
             continue;
         }
         if (++count.exits >= kHazardExitsPerWindow)
+        {
             count = {0, now, now + kHazardYieldMs};
+            started = true;
+        }
     }
+    return started;
+}
+}
+
+HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now)
+{
+    if (HazardExitYielded(guard, zones, now))
+        return HazardEntry::Yielded;
+    CountEntries(guard, zones, now);
     return HazardExitYielded(guard, zones, now) ? HazardEntry::YieldStarts : HazardEntry::Exit;
+}
+
+HazardEntry NoteHazardZoneEntry(HazardExitGuard& guard, std::vector<HazardZone> const& inside, std::uint64_t now)
+{
+    std::vector<std::uint64_t> standing;
+    std::vector<std::uint64_t> fixed;
+    std::vector<std::uint64_t> entered;
+    bool moving = false;
+    for (HazardZone const& zone : inside)
+    {
+        standing.push_back(zone.id);
+        if (zone.moving)
+        {
+            moving = true;
+            continue;
+        }
+        fixed.push_back(zone.id);
+        if (std::find(guard.standing.begin(), guard.standing.end(), zone.id) == guard.standing.end())
+            entered.push_back(zone.id);
+    }
+    guard.standing = std::move(standing);
+    bool const started = CountEntries(guard, entered, now);
+    if (moving || !HazardExitYielded(guard, fixed, now))
+        return HazardEntry::Exit;
+    return started ? HazardEntry::YieldStarts : HazardEntry::Yielded;
 }
 
 bool HazardEligible(HazardMemberFacts const& facts)
