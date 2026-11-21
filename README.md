@@ -131,6 +131,11 @@ audience, and a group DM is shared only with those who were in it.
   own words and actually come, go there, sit, join him or fish, by their day
   and how they feel about him; her answer waits for the game and never says
   she is on her way unless she is.
+- **She leads**: when he says "you lead", "take us questing", "go grind" or
+  "lead us to the inn", a member of his group takes the lead and he follows:
+  in the open world she picks the quests and mobs (playerbots' own) and the
+  others follow her, waiting whenever he falls behind; in a dungeon or raid
+  dungeon-clear's tank takes the group boss to boss while she calls it.
 - **Guild life**: raid nights from call to loot (a fair composition, a rotating
   raid lead, summons, the dungeon-clear run, DKP and an MVP vote), offline
   raids the guild runs on its own while he is away, a group he fills with

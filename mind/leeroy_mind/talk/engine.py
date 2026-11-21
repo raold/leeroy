@@ -197,6 +197,8 @@ class TalkEngine(EmoteReactions):
                                 engine=self)
         # his invitations in game (invites/service.py, attached by the app); None: not attached
         self.invites = None
+        # his "you lead" (lead/service.py, attached by the app); None: not attached
+        self.leading = None
         # [talk] think_private and think_budget (the beat, talk/beat.py): read at mind start,
         # never at a login's reload
         self.think_private = getattr(cfg.talk, "think_private", False) is True
@@ -410,10 +412,14 @@ class TalkEngine(EmoteReactions):
                 and classify_human_line(row.text) == "greeting"):
             # the login's 2-3 hellos in all, and one answer to his own hello whatever they were
             planned = self._cap_hellos(planned, held) or planned[:1]
-        # his invitation (invites/): the members it asked answer it, each saying what her body
-        # did; nobody else says yes for them
-        invited = (self.invites.reply_turns(row, reply_to)
-                   if getattr(self, "invites", None) is not None else None)
+        # his "you lead" (lead/) or his invitation (invites/): the members it asked answer it, each
+        # saying what really happened; nobody else says yes for them
+        claimer, invited = None, None
+        for source in (getattr(self, "leading", None), getattr(self, "invites", None)):
+            invited = source.reply_turns(row, reply_to) if source is not None else None
+            if invited:
+                claimer = source
+                break
         if invited:
             planned, question, push = invited, None, None
             called = [*called, *(rt.speaker for rt in invited if rt.speaker not in called)]
@@ -448,7 +454,8 @@ class TalkEngine(EmoteReactions):
                 delay = d if before is None else max(self.rng.uniform(*REPLY_NEXT_S), d - before)
                 before = d
             pushed = push is not None and rt.speaker == push.target
-            how = ("invite" if invited else "whisper" if whisper else "named" if rt.speaker in called
+            how = (("lead" if claimer is getattr(self, "leading", None) else "invite") if invited
+                   else "whisper" if whisper else "named" if rt.speaker in called
                    else "pushback" if pushed
                    else "topic_fit" if rt.turn_id == fitted
                    else "memory" if rt.turn_id == kept
@@ -474,7 +481,7 @@ class TalkEngine(EmoteReactions):
                 meta.wake, meta.heard_at = asyncio.Event(), row.ts
                 meta.life_presence = drawn[rt.turn_id][1]
             if invited:  # her answer waits for what her body did (TurnMeta.ready)
-                meta.ready = self.invites.ready(row.id, rt.speaker)
+                meta.ready = claimer.ready(row.id, rt.speaker)
             if pushed:  # one line, told he is pushing back, by how agreeable they are
                 ease = self.personas.get(rt.speaker).big_five.agreeableness.score
                 turn.instruction = " ".join(

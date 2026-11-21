@@ -532,6 +532,59 @@ single proved cast (`bot_do` "go fishing") is not used for invitations: it refus
 group or with a master, and the stay a come_to_me or go_to leaves her fences her from its Realm
 queue. **Native rebuild required.**
 
+## His "you lead" (`Leeroy.Lead.Enable`)
+
+His "you lead", "take the lead", "take us questing", "go grind", "lead us to the inn" in party,
+raid or a whisper (the mind's `[talk] lead`, `mind/leeroy_mind/lead/README.md`) is `lead_do`
+(`Guild/Lead.cpp`, pure policy `Lib/LeeroyLead.h`), answering to `Leeroy.Lead.Enable` (default 0,
+`.reload config`; `off` while 0, and 0 ends the lead in force). Hello's `features` lists `lead`.
+One lead at a time (a newer start ends the one in force, `replaced`).
+
+- `{"action": "start", "guid", "activity": "quest"|"grind"|"travel", "spot"}` (`spot`: travel
+  only, one of the meeting spots of `Lib/LeeroyInviteSpots.h`). Refused with one code
+  (`LeadRefusal`): `off`, `human_offline`, `not_cast`, `not_online`, the first ownership fence of
+  a member of his group (every one but `busy:raid_owner`, as his strings), `dead`, `combat` (hers
+  or his group's fight), `in_instance` (either of them: dungeon-clear leads there), `in_bg`,
+  `queued`, `travelling`, `human_dead`, `not_in_group`, `lfg_group`, `not_leader`, `too_far`
+  (farther than 100 yards, or another map), `unsupported` (playerbots lacks the strategy); travel
+  adds `bad_spot`, `other_map`, `here`. Carried out: she masters herself (a self-mastered bot, as
+  an offline raid's driver: playerbots then keeps her as the others' master, and an arena captain's
+  gather leaves them alone), playerbots' `follow` (and an older `stay`) come off her, and the
+  activity's strategies go on: `new rpg` + `grind` (quest; new rpg starts idle and picks its own
+  statuses), `grind` + `new rpg` (grind; wandering), `new rpg` alone (travel; `go camp` to the
+  spot). The cast members of his group on her map whose playerbots master is him, free of fences,
+  get her as their master, so their own follow and formation follow her. Done job `lead_do`,
+  reason `leading`, `guids` the followers.
+- `{"action": "end", "guid"}` (0 or absent: whoever leads): his end, whatever the switch says
+  (`no_lead` when none is in force, or another member leads).
+
+The world tick, once a second (`DecideLead`): **the wait-for-him rule**: once he is farther than 40
+yards from her (or on another map, or being teleported) her activity's strategies come off and she
+stops where she is; they go on again once he is within 20 yards (never in a fight: hers or his
+group's). new rpg is kept to the activity (`LeadSteer`: a flight or outdoor PvP while questing is
+turned into wandering, grinding keeps to idle, going to grind, wandering and resting, travel always
+goes to the camp), and playerbots' stuck teleport is held off (its stuck clock is refreshed) so she
+never teleports away from him; a travel that gets no 5 yards closer in 2 minutes of her own walking
+ends instead. It ends (`lead_ended guid= why=`, published as the job `lead`, state `ended`, the
+start's id, `guids` the followers given back), the first that holds: `gone` (another life, her
+logout), `off`, `logout` (his), `dead`, `instance` (she or he on an instance map), `pvp`, `group`
+(she left his group, he no longer leads it, a finder group), `taken` (her master is no longer
+herself: someone else took her), `reset` (playerbots reset her strategies), `fenced`, `teleported`
+(being teleported, a new map, or 250 yards in a tick: a self-mastered bot's teleport is
+acknowledged by playerbots only once she is ours no more, so it ends at once), `timeout` (60
+minutes), `arrived` (travel, within 15 yards), `no_path`, `left` (he stayed behind 10 minutes).
+Restored from its journal, same body, AI and session only: the followers whose master is still her
+follow him again (nobody if he left their group), then she loses the strategies the lead added
+(and gets back her own that a wait took off), new rpg goes idle, her master is him again and her
+`follow` comes back if the lead took it. A
+follower whose body, group or master changed is let go untouched (`lead_follower_released`); one
+that logs out is forgotten. A removed `stay` is not given back (leading means moving).
+
+Not covered: members who join his group during the lead keep following him; addclass bots and
+members of other guilds are never touched. **Native rebuild required.** Unverified in game at
+release: new rpg's choices while self-mastered in his group, the followers' formation around her,
+the wait and resume, and travel's walk through a city.
+
 # Realm job receipts
 
 The bridge's existing `realm_job` event may include `"changed": false` on a

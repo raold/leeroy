@@ -94,6 +94,16 @@ Leeroy.Strings.Enable = 0
 # they added.
 Leeroy.Invites.Enable = 0
 
+# The owner's "you lead" in the open world ("take the lead", "take us questing", "go grind", "lead us to the inn"),
+# read by the mind ([talk] lead) and sent as lead_do: one cast member of his group takes its lead and runs
+# playerbots' own strategies for it (new rpg's questing, grind, or new rpg's walk to one of the meeting spots), the
+# others of his group follow her instead of him, and he follows her himself. She waits whenever he is more than 40
+# yards behind, never takes a flight or goes to outdoor PvP, and the lead ends after 60 minutes, when he takes it back,
+# his group breaks, she dies or is teleported, either of them enters an instance (where dungeon-clear leads) or a
+# battleground, he logs out or stays behind 10 minutes. Everything it changed is given back. Reloadable with
+# .reload config; 0 refuses new leads and ends the one in force.
+Leeroy.Lead.Enable = 0
+
 # Pin every cast member as an online random bot.
 Leeroy.BringCastOnline = 1
 
