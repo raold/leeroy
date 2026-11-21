@@ -24,6 +24,8 @@ export class FaceCache {
     this.drop = o.drop || function () {};
     this.replaced = o.replaced || function () {};
     this.inUse = o.inUse || function () { return false; };
+    this.inUseSnapshot = o.inUseSnapshot;
+    this.retryWanted = o.retryWanted || function () { return true; };
     this.entries = new Map();
     this.waiting = [];
     this.active = 0;
@@ -40,9 +42,10 @@ export class FaceCache {
     if (!e) {
       // A queued, active or retrying load still has consumers waiting for its URL, and a photo
       // still on screen is still used. Only the others can be evicted.
+      var inUse = this.entries.size >= this.maxEntries && this.inUseSnapshot ? this.inUseSnapshot() : this.inUse;
       for (const [key, entry] of this.entries) {
         if (this.entries.size < this.maxEntries) { break; }
-        if (!entry.pending && !(entry.value && this.inUse(key, entry.value))) { this.forgetKey(key); }
+        if (!entry.pending && !(entry.value && inUse(key, entry.value))) { this.forgetKey(key); }
       }
       e = { pending: false, settled: false, at: 0, value: null, promise: null, tries: 0, timer: null };
       this.entries.set(key, e);
@@ -96,6 +99,7 @@ export class FaceCache {
       this.active--;
       e.timer = setTimeout(() => {
         e.timer = null;
+        if (this.entries.get(job.key) === e && !this.retryWanted(job.key)) { this.forgetKey(job.key); return; }
         if (this.entries.get(job.key) === e && e.pending) { this.waiting.push(job); this._pump(); }
       }, delay);
       this._pump();
