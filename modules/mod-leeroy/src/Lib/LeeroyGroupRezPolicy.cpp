@@ -43,6 +43,13 @@ void NoteGroupRezDrinkAsked(GroupRezCasters& casters, std::uint32_t caster, std:
     casters[caster].drinkAskedAt = now;
 }
 
+void NoteGroupRezUnreachable(GroupRezMemory& memory, std::uint32_t caster, std::uint64_t now)
+{
+    memory.unreachableAt[caster] = now;
+    if (memory.approachCaster == caster)
+        memory.approachCaster.reset();
+}
+
 void PruneGroupRezCasters(GroupRezCasters& casters, std::uint64_t now)
 {
     std::erase_if(casters, [now](auto const& item) {

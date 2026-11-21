@@ -208,10 +208,12 @@ free rezzers with that mana, the one already walking in to the body keeps it, un
 already within its spell's range and in sight: that one, the nearest, is put down from its mount
 or Flight Form (only within 3 yards of the ground), out of Shadowform, Ghost Wolf or a druid form,
 stopped and made to cast its highest-rank rez (`group_rez_cast`). With none in range and sight
-the nearest walks to the body (`group_rez_approach guid= body= yards=`, once per pair): a point
-move, with playerbots' AI held 1.5 s on each pass so its follow does not take it back, until it
-is in range and sight; a walk-in that has not got there within 25 s gives that rezzer up for the
-body for a minute. With no free rezzer that has the mana, the nearest short of it is asked to
+the nearest walks to the body (`group_rez_approach guid= body= yards= path=`, once per pair): a
+point move to the end of its navmesh path, with playerbots' AI held 1.5 s on each pass so its
+follow does not take it back, until it is in range and sight. No path, or one that ends out of
+the spell's range of the body (`path=0`; a plain point move would cut straight through walls or
+off a ledge), or a walk-in that has not got there within 25 s, gives that rezzer up for the body
+for a minute. With no free rezzer that has the mana, the nearest short of it is asked to
 drink through playerbots' own `drink` action (its food cheat sits it down to regain mana; a
 mount or form is dropped first; `group_rez_drink guid= body= mana= cost= ok=`, once per pair),
 again after 25 s while still short, and is used once it has the mana. A refused cast passes that

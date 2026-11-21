@@ -11,6 +11,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "PathGenerator.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
@@ -210,24 +211,34 @@ SpellCastResult StartRez(Player* caster, Player* body, std::uint32_t spell)
     return caster->CastSpell(body, spell, false);
 }
 
-// Walks the rezzer to the body; the policy casts once it is within range and in sight. Its AI is
-// held a little past the next pass so playerbots' follow does not take it back first.
-void Approach(Player* caster, Player* body)
+// Walks the rezzer to the body along the navmesh; the policy casts once it is within range and in
+// sight. Its AI is held a little past the next pass so playerbots' follow does not take it back
+// first. False when there is no path, or the path ends out of the spell's range of the body: a
+// point move would then go in a straight line through walls or off a ledge.
+bool Approach(Player* caster, Player* body, float castRange)
 {
     std::uint32_t const id = caster->GetGUID().GetCounter();
     std::uint32_t const target = body->GetGUID().GetCounter();
-    if (!caster->IsStandState())
-        caster->SetStandState(UNIT_STAND_STATE_STAND);
     MotionMaster* motion = caster->GetMotionMaster();
     auto const sent = walkingTo.find(id);
     if (sent == walkingTo.end() || sent->second != target || !caster->isMoving()
         || motion->GetCurrentMovementGeneratorType() != POINT_MOTION_TYPE)
     {
-        motion->MovePoint(kApproachPointId, body->GetPositionX(), body->GetPositionY(), body->GetPositionZ());
+        PathGenerator path(caster);
+        path.CalculatePath(body->GetPositionX(), body->GetPositionY(), body->GetPositionZ(), false);
+        if (path.GetPathType() & (PATHFIND_NOPATH | PATHFIND_SHORTCUT))
+            return false;
+        G3D::Vector3 const& end = path.GetActualEndPosition();
+        if (body->GetExactDist(end.x, end.y, end.z) > castRange)
+            return false;
+        if (!caster->IsStandState())
+            caster->SetStandState(UNIT_STAND_STATE_STAND);
+        motion->MovePoint(kApproachPointId, end.x, end.y, end.z, FORCED_MOVEMENT_NONE, 0.0f, 0.0f, true, false);
         walkingTo[id] = target;
     }
     if (PlayerbotAI* ai = GET_PLAYERBOT_AI(caster))
         ai->SetNextCheckDelay(kApproachHoldMs);
+    return true;
 }
 
 // Playerbots' own drink action (its food cheat sits the bot down to regain mana); a mount or form
@@ -399,13 +410,16 @@ void TickGroupRez(std::uint32_t diffMs)
                 break;
             case GroupRezStep::Approach:
             {
-                Player* caster = byGuid.at(decision.caster)->player;
-                Approach(caster, body);
+                Rezzer const& rezzer = *byGuid.at(decision.caster);
+                bool const path = Approach(rezzer.player, body, rezzer.info->GetMaxRange(true));
                 used.insert(decision.caster);
-                claimed[decision.caster] = guid;
+                if (path)
+                    claimed[decision.caster] = guid;
+                else
+                    NoteGroupRezUnreachable(memories[guid], decision.caster, now);
                 if (approachesLogged.emplace(guid, decision.caster).second)
-                    LOG_INFO("module.leeroy", "group_rez_approach guid={} body={} yards={}", decision.caster, guid,
-                        static_cast<int>(caster->GetDistance(body)));
+                    LOG_INFO("module.leeroy", "group_rez_approach guid={} body={} yards={} path={}", decision.caster,
+                        guid, static_cast<int>(rezzer.player->GetDistance(body)), path ? 1 : 0);
                 break;
             }
             case GroupRezStep::Drink:

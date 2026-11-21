@@ -87,6 +87,8 @@ struct GroupRezMemory
 // transient: a global cooldown or a cast already in progress, retried after kGroupRezRetryMs.
 void NoteGroupRezRefused(GroupRezCasters& casters, std::uint32_t caster, std::uint64_t now, bool transient);
 void NoteGroupRezDrinkAsked(GroupRezCasters& casters, std::uint32_t caster, std::uint64_t now);
+// The rezzer has no navmesh path to within its spell's range of the body: given up for it.
+void NoteGroupRezUnreachable(GroupRezMemory& memory, std::uint32_t caster, std::uint64_t now);
 // Drops caster entries with nothing left to remember.
 void PruneGroupRezCasters(GroupRezCasters& casters, std::uint64_t now);
 

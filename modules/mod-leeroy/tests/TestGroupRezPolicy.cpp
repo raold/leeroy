@@ -117,6 +117,19 @@ LEEROY_TEST(GroupRez_AWalkInThatNeverArrivesGivesThatRezzerUpForTheBody)
     CHECK_EQ(d.caster, 8u);
 }
 
+LEEROY_TEST(GroupRez_ARezzerWithNoPathIsGivenUpAtOnce)
+{
+    GroupRezMemory m;
+    CHECK_EQ(Decide(Bot(), false, {Rezzer(8, 60.0f), Rezzer(9, 70.0f)}, m, 0).caster, 8u);
+    NoteGroupRezUnreachable(m, 8, 0);
+    CHECK(!m.approachCaster.has_value());
+    auto d = Decide(Bot(), false, {Rezzer(8, 60.0f), Rezzer(9, 70.0f)}, m, 1000);
+    CHECK(d.step == GroupRezStep::Approach);
+    CHECK_EQ(d.caster, 9u);
+    NoteGroupRezUnreachable(m, 9, 1000);
+    CHECK_EQ(Code(Decide(Bot(), false, {Rezzer(8, 60.0f), Rezzer(9, 70.0f)}, m, 2000)), std::string("unreachable"));
+}
+
 LEEROY_TEST(GroupRez_NeverUsesAnAirborneMountedRezzerOrOneOutOfReach)
 {
     GroupRezMemory m;
