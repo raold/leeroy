@@ -483,9 +483,20 @@ void TickGroupRez(std::uint32_t diffMs)
     std::erase_if(memories, [&](auto const& item) { return !lying.contains(item.first); });
     std::erase_if(approachesLogged, [&](auto const& item) { return !lying.contains(item.first); });
     std::erase_if(drinksLogged, [&](auto const& item) { return !lying.contains(item.first); });
+    // A walk-in given up (a fight near the body, another rezzer's cast, the body up) stops where it
+    // is, out of combat, so the walker does not go on to a body it will not rez.
     std::erase_if(walkingTo, [&](auto const& item) {
         auto const memory = memories.find(item.second);
-        return memory == memories.end() || memory->second.approachCaster != item.first;
+        if (memory != memories.end() && memory->second.approachCaster == item.first)
+            return false;
+        if (auto const walker = rezzers.find(item.first); walker != rezzers.end())
+            if (Player* bot = walker->second.player; !bot->IsInCombat()
+                && bot->GetMotionMaster()->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE)
+            {
+                bot->GetMotionMaster()->Clear();
+                bot->StopMoving();
+            }
+        return true;
     });
     std::erase_if(refusalsLogged, [&](auto const& item) { return now - item.second >= kGroupRezBlockLogMs; });
     std::erase_if(combatClearsLogged, [&](auto const& item) { return now - item.second >= kGroupRezBlockLogMs; });

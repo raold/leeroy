@@ -213,7 +213,8 @@ point move to the end of its navmesh path, with playerbots' AI held 1.5 s on eac
 follow does not take it back, until it is in range and sight. No path, or one that ends out of
 the spell's range of the body (`path=0`; a plain point move would cut straight through walls or
 off a ledge), or a walk-in that has not got there within 25 s, gives that rezzer up for the body
-for a minute. With no free rezzer that has the mana, the nearest short of it is asked to
+for a minute. A walk-in given up for any reason (a fight near the body, another rezzer's cast, the
+body up) stops where it is when the walker is out of combat. With no free rezzer that has the mana, the nearest short of it is asked to
 drink through playerbots' own `drink` action (its food cheat sits it down to regain mana; a
 mount or form is dropped first; `group_rez_drink guid= body= mana= cost= ok=`, once per pair),
 again after 25 s while still short, and is used once it has the mana. A refused cast passes that
