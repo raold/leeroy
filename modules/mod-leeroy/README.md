@@ -306,13 +306,16 @@ bags are full or nothing capped fits the slot. Incremental mode replaces an item
 scoring 1.2 times as much.
 
 **Ordinary gear-up** (role change, under level, below average, theorycrafter; native whose hello
-lists `regear`, `GearUpToCap`) never uses `autogear bis` and never destroys a bag item. It runs
-one capped incremental `AutoGear`, which fills empty slots and upgrades slots under the cap.
-- An item the bot had at or above the cap that the pass replaced (DKP loot) goes back into its
-  slot from the bags, enchants and gems intact. The capped item the pass made for that slot is
-  destroyed.
+lists `regear`, `GearUpToCap`) never uses `autogear bis`. Its capped incremental `AutoGear`
+fills empty slots and upgrades slots under the cap without destroying bag items. The separate
+under-level step still calls `Randomize(true)` first, whose inventory reset can clear bag items;
+that older behavior is outside the capped gear pass.
+- Items already at or above the cap are protected before selection, including their enchants
+  and gems. A two-handed main-hand candidate is refused while the offhand is protected, so the
+  offhand stays equipped even with full bags. Compatible one-handers and unrelated slots can
+  still upgrade. This needs playerbots patch `0015` and a native rebuild.
 - Anything this gear-up put on above the cap is stripped, and the slot is refilled from the capped
-  search (pure policy `GearUpSlotStep`).
+  search with the same original protections (pure policies `GearUpSlotStep`, `GearUpProtectedSlots`).
 - Nothing it equips is above its cap, and nothing the bot already holds at or above it is removed.
 - Log `gear_up_member guid= ilvl= avg= stripped= returned= empty= kept=`.
 
@@ -351,6 +354,8 @@ offline raid).
 - **Receipts.** Ordinary gear-ups take a floor of ilvl - 20 and no ceiling, since kept loot can lift
   the average. An older native keeps the old floors.
 - **Restarts.** A hello from a restarted worldserver releases any gear-up batch the old process held.
+- **Deadline.** A member still unavailable at the three-day deadline keeps its previous gear.
+  Ordinary gear-up will not lower it later; a new `regear_to` value is needed to retry the regear.
 - **Health.** The `regear` line shows members done of the total (a note), and FAILs a regear
   running over two days.
 - **Logs.** `regear_started`, `regear_batch`, `regear_member`, `regear_out_of_bounds`,

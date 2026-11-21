@@ -127,6 +127,18 @@ inline bool RegearDestroysBagItem(bool weaponOrArmor, std::uint32_t ilvl, std::u
 // off; anything else stays as the pass left it.
 enum class GearUpStep : std::uint8_t { Leave, Return, Strip };
 
+// Pass this snapshot to every capped factory pass. Protect before selection rather than
+// recovering from the bags: a two-hander can send an old offhand to mail when the bags are full.
+template <typename Slots>
+std::uint32_t GearUpProtectedSlots(Slots const& slots, std::uint32_t cap)
+{
+    std::uint32_t protectedSlots = 0;
+    for (std::size_t slot = 0; slot < kRegearSlots && slot < slots.size(); ++slot)
+        if (slot != kRegearSlotBody && slot != kRegearSlotTabard && slots[slot].entry && slots[slot].ilvl >= cap)
+            protectedSlots |= std::uint32_t(1) << slot;
+    return protectedSlots;
+}
+
 inline GearUpStep GearUpSlotStep(std::uint8_t slot, RegearSlotItem before, RegearSlotItem now, std::uint32_t cap)
 {
     if (slot >= kRegearSlots || slot == kRegearSlotBody || slot == kRegearSlotTabard) return GearUpStep::Leave;

@@ -214,3 +214,20 @@ LEEROY_TEST(ordinary_gear_up_returns_loot_at_or_above_its_cap_and_never_strips_w
     for (std::uint8_t slot : {kRegearSlotBody, kRegearSlotTabard, kRegearSlots})
         CHECK(GearUpSlotStep(slot, At(1, 264), At(2, 300), cap) == GearUpStep::Leave);
 }
+
+LEEROY_TEST(ordinary_gear_up_protects_equipped_loot_before_either_factory_pass)
+{
+    std::array<RegearSlotItem, kRegearSlots> slots{};
+    slots[0] = At(1, 244);
+    slots[4] = At(2, 245); // Exactly the cap remains protected, by the owner's ruling.
+    slots[15] = At(3, 232);
+    slots[16] = At(4, 264); // The offhand must never enter inventory/mail in the first place.
+    slots[kRegearSlotBody] = At(5, 300);
+    slots[kRegearSlotTabard] = At(6, 300);
+    CHECK_EQ(GearUpProtectedSlots(slots, 245), (1u << 4) | (1u << 16));
+    slots[16] = {};
+    CHECK_EQ(GearUpProtectedSlots(slots, 245), 1u << 4);
+    CHECK_EQ(GearUpProtectedSlots(slots, 246), 0u);
+    std::array<RegearSlotItem, 0> none{};
+    CHECK_EQ(GearUpProtectedSlots(none, 245), 0u);
+}
