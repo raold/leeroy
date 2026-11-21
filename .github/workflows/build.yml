@@ -151,7 +151,7 @@ jobs:
           cmake -S core -B build -DBUILD_TESTING=ON > configure-tests.log
           cmake --build build --target dungeon_clear_tests -j "$(nproc)"
           ./build/dungeon_clear_tests \
-            --gtest_filter='TrialOfTheCrusader*:Ulduar*:DungeonEventIntegrityTest*:BossRoster*:DcEncounterChests*:TrialOfTheChampion*'
+            --gtest_filter='TrialOfTheCrusader*:Ulduar*:Icecrown*:DungeonEventIntegrityTest*:BossRoster*:DcEncounterChests*:TrialOfTheChampion*'
 
       - name: ccache stats
         if: always()

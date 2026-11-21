@@ -166,3 +166,12 @@ LEEROY_TEST(Decode_ExtensionCommand)   // registry is process-wide: use a name n
     CHECK_EQ(r.command->id, "x"); CHECK_EQ(r.command->raw["size"], 10);
     CHECK_EQ(DecodeCommand(R"({"v":1,"type":"test_ext","size":10})").error, "missing id");
 }
+
+LEEROY_TEST(Protocol_IccGunshipPassNeverAnnouncesAKill)
+{
+    CHECK(!ClassifyBossTransition(3, 0, 631, 2));
+    CHECK(!ClassifyBossTransition(3, 2, 631, 2));
+    CHECK(ClassifyBossTransition(3, 1, 631, 2) == BossState::Killed);
+    CHECK(ClassifyBossTransition(3, 0, 631, 3) == BossState::Killed);
+    CHECK(ClassifyBossTransition(3, 0, 603, 2) == BossState::Killed);
+}

@@ -328,8 +328,13 @@ DecodeResult DecodeCommand(std::string_view line)
     return result;
 }
 
-std::optional<BossState> ClassifyBossTransition(std::uint8_t newState, std::uint8_t oldState)
+std::optional<BossState> ClassifyBossTransition(std::uint8_t newState, std::uint8_t oldState,
+    std::uint32_t map, std::uint32_t boss)
 {
+    // DC can pass ICC's vehicle encounter without fighting it. Its required
+    // progression slot is DONE, but this must not become a kill or a lesson.
+    if (map == 631 && boss == 2 && newState == 3 && oldState != 1)
+        return std::nullopt;
     if (oldState == 5 || newState == oldState)
         return std::nullopt;
     if (newState == 1)

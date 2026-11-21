@@ -687,3 +687,31 @@ LEEROY_TEST(OfflineDriverChecksAnExistingConfiguredBodyBeforeLogin)
     CHECK_EQ(OfflineDriverConflict(4, 1, false, {3,4}), "driver_unavailable:driver_is_member");
     CHECK(OfflineDriverConflict(5, 1, false, {3,4}).empty());
 }
+
+LEEROY_TEST(OfflineRaid_GunshipProgressionPassNeedsSeparateEarnedCredit)
+{
+    CHECK(!EarnedRaidKill(631, 2, 3, 0));
+    CHECK(!EarnedRaidKill(631, 2, 3, 1u << 3));
+    CHECK(EarnedRaidKill(631, 2, 3, 1u << 2));
+    CHECK(!EarnedRaidKill(631, 2, 1, 1u << 2));
+    CHECK(EarnedRaidKill(631, 3, 3, 0));
+    CHECK(EarnedRaidKill(603, 2, 3, 0));
+}
+
+LEEROY_TEST(OfflineRaid_IccCompletesAfterElevenKillsAndOneGunshipPass)
+{
+    auto state = Base();
+    std::vector<std::uint8_t> slots(12, 3);
+    slots.back() = 1; // Final boss still engaged; the gunship pass is already DONE.
+    state.bossesDone = CompletedRaidSlots(slots);
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    slots.back() = 3;
+    state.bossesDone = CompletedRaidSlots(slots);
+    CHECK_EQ(Decide(state, limits).reason, "cleared");
+    std::uint32_t earned = 0;
+    std::uint32_t const mask = ((1u << 12) - 1) & ~(1u << 2);
+    for (std::uint32_t boss = 0; boss < slots.size(); ++boss)
+        earned += EarnedRaidKill(631, boss, slots[boss], mask) ? 1 : 0;
+    CHECK_EQ(earned, 11u);
+    CHECK_EQ(state.bossesDone, 12u);
+}

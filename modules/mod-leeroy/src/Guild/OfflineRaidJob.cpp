@@ -991,7 +991,7 @@ bool ReadBosses(Job& job, Player* leader, bool baseline)
             ++job.event.wipes;
         }
         job.previousBossStates[index] = current;
-        if (current == DONE)
+        if (EarnedRaidKill(leader->GetMapId(), index, current, instance->GetCompletedEncounterMask()))
             ++job.event.kills;
     }
     return true;
@@ -1229,7 +1229,7 @@ void Running(Job& job, uint32 diff)
     job.shortMs = shortNow ? std::max<uint32>(AdvanceElapsed(job.shortMs, diff), 1) : 0;
     uint32 const mostWipes = job.bossWipes.empty() ? 0 : *std::max_element(job.bossWipes.begin(), job.bossWipes.end());
     OfflineRaidState const state{job.elapsed, !Dungeon(job) && HumanConnected(job.human), leaderPresent, present, job.event.wipes,
-        mostWipes, job.event.kills, static_cast<uint32>(job.previousBossStates.size()),
+        mostWipes, CompletedRaidSlots(job.previousBossStates), static_cast<uint32>(job.previousBossStates.size()),
         enabled, job.dcOff, job.restarts, job.shortMs};
     Decision const decision = Decide(state, limits);
     if (waitingForReturn && (decision.verdict == Verdict::Restart || decision.reason == "cleared"))
