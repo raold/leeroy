@@ -180,6 +180,55 @@ LEEROY_TEST(MemberDungeonDelayedCharacterSaveDoesNotRewriteTheReturnTransition)
     CHECK_EQ(storeChecks,63u);
 }
 
+LEEROY_TEST(MemberDungeonFailedTerminalMustBeVerifiedBeforeItsSlotClockStarts)
+{
+    using Json=nlohmann::json;
+    Json base={{"version",1},{"map",602},{"difficulty",1},{"stage","tearing_down"},{"slot",true},
+        {"settled",false},{"guild",21},{"human",1},{"leader",101},{"roster",{101,102,103,104,105}},
+        {"bodies",Json::array()},{"group",0},{"instance",0},{"issued_ms",1},{"terminal",nullptr}};
+    Json failure={{"type","job"},{"id","lost"},{"kind","member_dungeon"},{"state","failed"},
+        {"reason","cleanup_failed:preempted"},{"guids",base["roster"]},{"instance_id",0},{"kills",0},{"wipes",0}};
+    auto invalid=base; invalid["slot"]=false;
+    CHECK(!DungeonWriteAllowed("lost",1,base,invalid,700000));
+    Json verified=base, stored=base;
+    for (int ms=60000; ms<=700000; ms+=1000)
+    {
+        auto next=DungeonTerminalUpdate(verified,failure,false,ms);
+        CHECK(DungeonWriteAllowed("lost",1,verified,next,ms));
+        CHECK(!next.contains("failure_verified_ms"));
+        CHECK(!DungeonFailureAge(verified,ms)); // Write fails throughout the original ten-minute deadline.
+    }
+    stored=DungeonTerminalUpdate(verified,failure,false,710000);
+    DungeonWriteProof write{1,verified,stored};
+    CHECK(write.Observe(0,nullptr)==DungeonWriteRead::Unavailable); // Committed; first verification lost.
+    CHECK(!DungeonFailureAge(verified,1400000));
+    CHECK(write.Observe(2,&stored)==DungeonWriteRead::Committed);
+    verified=stored;
+    verified["failed_ms"]=60000; // A legacy timestamp from an unverified write cannot authorize release.
+    CHECK(!DungeonFailureAge(verified,1400000));
+    auto confirmed=DungeonTerminalUpdate(verified,nullptr,false,1400000);
+    CHECK(confirmed["failure_verified_ms"]==1400000);
+    CHECK(DungeonWriteAllowed("lost",2,verified,confirmed,1400000));
+    auto backdated=confirmed; backdated["failure_verified_ms"]=710000;
+    CHECK(!DungeonWriteAllowed("lost",2,verified,backdated,1400000));
+    verified=confirmed;
+    auto release=verified; release["slot"]=false;
+    CHECK(!DungeonWriteAllowed("lost",3,verified,release,1999999));
+    CHECK(DungeonWriteAllowed("lost",3,verified,release,2000000));
+    CHECK(!DungeonCanReleaseSlot(true,*DungeonFailureAge(verified,2000000),true));
+    CHECK(DungeonCanReleaseSlot(true,*DungeonFailureAge(verified,2000000),false));
+    auto returned=DungeonTerminalUpdate(verified,nullptr,true,1400010);
+    CHECK(returned["terminal"]==failure && DungeonWriteAllowed("lost",3,verified,returned,1400010));
+    auto premature=stored; premature["failure_verified_ms"]=710000;
+    CHECK(!DungeonWriteAllowed("lost",1,base,premature,710000));
+    auto replaced=release; replaced["terminal"]["reason"]="stopped";
+    CHECK(!DungeonWriteAllowed("lost",3,verified,replaced,2000000));
+    auto changedClock=verified; changedClock["failure_verified_ms"]=1;
+    CHECK(!DungeonWriteAllowed("lost",3,verified,changedClock,2000000));
+    CHECK(release["terminal"]==failure && release["settled"]==false);
+    CHECK(DungeonStoredEvidence("lost",4,0,0,release));
+}
+
 LEEROY_TEST(MemberDungeonOnlyMatchesItsExactLostWriteBeforeAdvancing)
 {
     nlohmann::json initial={{"effect","accepted"}}, entered={{"effect","enter_leader"}}, cleanup={{"effect","return_roster"}};

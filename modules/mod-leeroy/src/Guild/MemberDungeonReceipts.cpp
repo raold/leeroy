@@ -150,7 +150,7 @@ bool BeginDungeonReceipt(DungeonReceipt& receipt, std::string const& id, uint32 
     Json data = {{"version",1},{"guild",guild},{"human",human},{"leader",leader},{"roster",roster},
         {"map",602},{"difficulty",1},{"stage","accepted"},{"slot",true},{"settled",false},{"bodies",Json::array()},
         {"terminal",nullptr},{"instance",0},{"group",0},{"issued_ms",NowUnixMs()}};
-    if (Lookup(id) || unreadable.contains(id) || unverified.contains(id)) return false;
+    if (!DungeonStoredEvidence(id,1,1,0,data) || Lookup(id) || unreadable.contains(id) || unverified.contains(id)) return false;
     receipt.id = id;
     unverified.emplace(id,DungeonWriteProof{0,Json{},data});
     CharacterDatabase.DirectExecute("INSERT INTO leeroy_member_dungeon_receipt(realm,start_id,revision,active_slot,settled,payload) "
@@ -158,7 +158,7 @@ bool BeginDungeonReceipt(DungeonReceipt& receipt, std::string const& id, uint32 
     return Verify(receipt)==DungeonWriteRead::Committed;
 }
 
-bool SaveDungeonReceipt(DungeonReceipt& receipt, Json const& next)
+bool SaveDungeonReceipt(DungeonReceipt& receipt, Json const& next, std::int64_t now)
 {
     if (unverified.contains(receipt.id))
     {
@@ -168,7 +168,7 @@ bool SaveDungeonReceipt(DungeonReceipt& receipt, Json const& next)
     }
     if (receipt.data == next) return true;
     auto payload = next.dump();
-    if (payload.size() > 32768 || !receipt.revision || !ValidDungeonReceipt(next)) return false;
+    if (payload.size()>32768 || !DungeonWriteAllowed(receipt.id,receipt.revision,receipt.data,next,now)) return false;
     unverified.emplace(receipt.id,DungeonWriteProof{receipt.revision,receipt.data,next});
     CharacterDatabase.DirectExecute("UPDATE leeroy_member_dungeon_receipt SET revision=revision+1,active_slot={},settled={},payload=UNHEX('{}') "
         "WHERE realm={} AND start_id=UNHEX('{}') AND revision={}", next.at("slot").get<bool>() ? "1" : "NULL",
@@ -413,36 +413,32 @@ bool HeldAfterRestart(Json const& data)
 
 void RecoverDungeonReceipt(DungeonReceipt& receipt)
 {
-    auto now = NowUnixMs();
     if (!receipt.data.contains("recovery_ms"))
     {
         auto data = receipt.data;
-        data["recovery_ms"] = now;
+        data["recovery_ms"] = NowUnixMs();
         if (!SaveDungeonReceipt(receipt,data)) return;
     }
     bool const complete = RecoverBodies(receipt);
-    auto data = receipt.data;
-    if (!complete && now - data.at("recovery_ms").get<int64>() < OfflineCleanupFailMs) return;
-    if (data.at("terminal").is_null())
+    auto const& verified = receipt.data;
+    auto const now = NowUnixMs();
+    if (!complete && now - verified.at("recovery_ms").get<int64>() < OfflineCleanupFailMs) return;
+    Json terminal;
+    if (verified.at("terminal").is_null())
     {
         JobEvent event;
         event.id = receipt.id; event.kind = "member_dungeon"; event.state = "failed";
         event.reason = complete ? "world_restart" : "cleanup_failed:world_restart";
-        event.guids = data.at("roster").get<std::vector<uint32>>();
-        event.kills = data.value("kills",0u); event.wipes = data.value("wipes",0u);
-        event.instanceId = data.value("instance",0u);
-        data["terminal"] = MakeJobEvent(event);
-        data["terminal_ms"] = now;
-        if (!complete) data["failed_ms"] = now;
+        event.guids = verified.at("roster").get<std::vector<uint32>>();
+        event.kills = verified.value("kills",0u); event.wipes = verified.value("wipes",0u);
+        event.instanceId = verified.value("instance",0u);
+        terminal = MakeJobEvent(event);
     }
-    data["settled"] = complete;
-    if (complete) data["slot"] = false;
-    if (!complete && data.contains("failed_ms") && data.at("slot")==true)
-    {
-        auto since = std::max<int64>(0,now-data.at("failed_ms").get<int64>());
-        if (DungeonCanReleaseSlot(true,since,HeldAfterRestart(data))) data["slot"] = false;
-    }
-    if (data != receipt.data && SaveDungeonReceipt(receipt,data)) PublishDungeonReceipt(receipt.id);
+    auto data = DungeonTerminalUpdate(verified,terminal,complete,now);
+    if (!complete && verified.at("slot")==true)
+        if (auto age=DungeonFailureAge(verified,now); age && DungeonCanReleaseSlot(true,*age,false) && !HeldAfterRestart(verified))
+            data["slot"] = false;
+    if (data != receipt.data && SaveDungeonReceipt(receipt,data,now)) PublishDungeonReceipt(receipt.id);
 }
 }
 

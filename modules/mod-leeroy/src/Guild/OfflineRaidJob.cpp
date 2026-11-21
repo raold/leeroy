@@ -1725,10 +1725,11 @@ bool RunTeardown(Job& job)
     // bounded report as benchmarks while incomplete recovery still owns active.
     bool const reportedBefore = job.terminal.Reported();
     auto report = job.terminal.Observe(complete, job.stageElapsed);
-    if (complete && reportedBefore && job.failedReported)
+    if (complete && reportedBefore && (job.failedReported ||
+        (Dungeon(job) && DungeonFailureAge(job.receipt.data,NowUnixMs()).has_value())))
         LOG_INFO("module.leeroy", "leeroy: raid {} cleanup completed after cleanup_failed elapsed_ms={}",
             job.event.id, job.stageElapsed);
-    if (report == RaidCleanupReport::Failed)
+    if (report == RaidCleanupReport::Failed && !Dungeon(job))
     {
         job.failedReported = true;
         job.failedAt = job.stageElapsed;
@@ -1747,18 +1748,11 @@ bool RunTeardown(Job& job)
     }
     if (Dungeon(job))
     {
-        auto data = job.receipt.data;
-        if (job.pendingTerminal && data.at("terminal").is_null())
-        {
-            data["terminal"] = MakeJobEvent(*job.pendingTerminal);
-            data["terminal_ms"] = NowUnixMs();
-        }
-        if (job.failedReported && !data.contains("failed_ms")) data["failed_ms"] = NowUnixMs();
-        bool const returned = complete;
-        data["settled"] = returned;
-        if (complete) data["slot"] = false;
-        if (!SaveDungeonReceipt(job.receipt, data)) return false;
-        if (job.pendingTerminal || (reportedBefore && returned))
+        auto const now = NowUnixMs();
+        auto data = DungeonTerminalUpdate(job.receipt.data,
+            job.pendingTerminal ? MakeJobEvent(*job.pendingTerminal) : nlohmann::json{},complete,now);
+        if (!SaveDungeonReceipt(job.receipt,data,now)) return false;
+        if (job.pendingTerminal || (reportedBefore && complete))
         {
             PublishDungeonReceipt(job.event.id);
             job.pendingTerminal.reset();
@@ -1787,10 +1781,18 @@ uint32 HeldMembers(Job const& job)
 // so their own fences and get_training_cleanup still show what was not restored.
 bool ReleaseStuckSlot(Job& job)
 {
-    uint32 const since = job.failedReported ? job.stageElapsed - job.failedAt : 0;
+    bool reported = job.failedReported;
+    uint32 since = reported ? job.stageElapsed - job.failedAt : 0;
+    if (Dungeon(job))
+    {
+        auto age = DungeonFailureAge(job.receipt.data,NowUnixMs());
+        if (!age) return false;
+        reported = true;
+        since = uint32(std::min<std::uint64_t>(*age,UINT32_MAX));
+    }
     uint32 const held = HeldMembers(job);
-    auto const decision = DecideSlotRelease(Benchmark(job), job.failedReported, since, held);
-    if (decision == SlotRelease::Keep && job.failedReported && !Benchmark(job) && !job.heldNoted)
+    auto const decision = DecideSlotRelease(Benchmark(job), reported, since, held);
+    if (decision == SlotRelease::Keep && reported && !Benchmark(job) && !job.heldNoted)
     {
         job.heldNoted = true;
         LOG_WARN("module.leeroy", "leeroy: raid {} cleanup_held held={} after_ms={}; the slot stays owned",

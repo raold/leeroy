@@ -18,6 +18,11 @@ std::string MemberDungeonAdmission(std::uint32_t map, std::uint32_t leader,
 bool ValidDungeonReceipt(nlohmann::json const& data);
 bool DungeonStoredEvidence(std::string const& id, std::uint64_t revision, std::uint64_t slot,
     std::uint64_t settled, nlohmann::json const& data);
+nlohmann::json DungeonTerminalUpdate(nlohmann::json const& verified, nlohmann::json const& firstTerminal,
+    bool returned, std::int64_t now);
+std::optional<std::uint64_t> DungeonFailureAge(nlohmann::json const& verified, std::int64_t now);
+bool DungeonWriteAllowed(std::string const& id, std::uint64_t revision, nlohmann::json const& verified,
+    nlohmann::json const& next, std::int64_t now);
 enum class DungeonLocation { Foreign, Origin, Copy };
 DungeonLocation DungeonLocationOf(nlohmann::json const& body, std::uint32_t savedInstance,
     std::uint32_t map, std::uint32_t instance, float x, float y, float z);

@@ -35,6 +35,12 @@ bool UInt(Json const& value, std::uint64_t max = UINT32_MAX)
     return value.is_number_integer() && value >= 0 && value.get<std::uint64_t>() <= max;
 }
 bool GuidValue(Json const& value) { return UInt(value) && value != 0; }
+bool CleanupFailureTerminal(Json const& data)
+{
+    auto const& terminal = data.at("terminal");
+    return terminal.is_object() && terminal.at("state")=="failed" &&
+        terminal.at("reason").get_ref<std::string const&>().starts_with("cleanup_failed:");
+}
 }
 
 std::vector<std::uint32_t> DungeonKnownRoster(Json const& data)
@@ -62,7 +68,7 @@ bool ValidDungeonReceipt(nlohmann::json const& data)
             !UInt(data.at("group")) || !UInt(data.at("instance")) || !UInt(data.at("issued_ms"),INT64_MAX)) return false;
         std::set<std::string> const stages{"accepted","grouping","teleporting","starting","running","restarting","tearing_down"};
         if (!stages.contains(data.at("stage").get<std::string>())) return false;
-        for (auto key : {"recovery_ms","terminal_ms","failed_ms"})
+        for (auto key : {"recovery_ms","terminal_ms","failed_ms","failure_verified_ms"})
             if (data.contains(key) && !UInt(data.at(key),INT64_MAX)) return false;
         for (auto key : {"actor","driver","kills","wipes"})
             if (data.contains(key) && !UInt(data.at(key),key==std::string_view("kills") ? 4 : UINT32_MAX)) return false;
@@ -78,6 +84,9 @@ bool ValidDungeonReceipt(nlohmann::json const& data)
                 !UInt(terminal.at("kills"),4) || !UInt(terminal.at("wipes")) || !UInt(terminal.at("instance_id")) ||
                 (terminal.at("instance_id")!=0 && terminal.at("instance_id")!=data.at("instance"))) return false;
         }
+        if (data.contains("failure_verified_ms") &&
+            (!CleanupFailureTerminal(data) || data.at("failure_verified_ms")==0 ||
+                data.at("failure_verified_ms")<data.value("terminal_ms",std::int64_t{0}))) return false;
         auto roster = DungeonKnownRoster(data);
         std::set<std::uint32_t> ids(roster.begin(),roster.end());
         if (roster.size()!=5 || ids.contains(data.at("human").get<std::uint32_t>()) || data.at("leader")!=roster.front()) return false;
@@ -105,6 +114,51 @@ bool DungeonStoredEvidence(std::string const& id, std::uint64_t revision, std::u
     auto const& terminal = data.at("terminal");
     if (terminal.is_null()) return slot && !settled;
     return terminal.at("id")==id && !(slot && settled);
+}
+
+Json DungeonTerminalUpdate(Json const& verified, Json const& firstTerminal, bool returned, std::int64_t now)
+{
+    auto next = verified;
+    if (verified.at("terminal").is_null() && firstTerminal.is_object())
+    {
+        next["terminal"] = firstTerminal;
+        next["terminal_ms"] = now;
+    }
+    // This clock can only be installed by a second write, after the first failure passed exact-ID readback.
+    // Older receipts' failed_ms was prepared before verification and is not that proof.
+    if (!returned && !verified.contains("failure_verified_ms") && CleanupFailureTerminal(verified) &&
+        now>0 && now>=verified.value("terminal_ms",std::int64_t{0})) next["failure_verified_ms"] = now;
+    next["settled"] = returned;
+    if (returned) next["slot"] = false;
+    return next;
+}
+
+std::optional<std::uint64_t> DungeonFailureAge(Json const& verified, std::int64_t now)
+{
+    if (verified.at("settled")==true || !verified.contains("failure_verified_ms") || !CleanupFailureTerminal(verified))
+        return std::nullopt;
+    auto at = verified.at("failure_verified_ms").get<std::int64_t>();
+    return now>=at ? std::uint64_t(now-at) : 0;
+}
+
+bool DungeonWriteAllowed(std::string const& id, std::uint64_t revision, Json const& verified, Json const& next, std::int64_t now)
+{
+    if (!revision || revision==UINT64_MAX || !next.contains("slot") || !next.at("slot").is_boolean() ||
+        !next.contains("settled") || !next.at("settled").is_boolean() ||
+        !DungeonStoredEvidence(id,revision+1,next.at("slot").get<bool>(),next.at("settled").get<bool>(),next)) return false;
+    if (!verified.at("terminal").is_null() && next.at("terminal")!=verified.at("terminal")) return false;
+    for (auto stamp : {"terminal_ms","failure_verified_ms"})
+        if (verified.contains(stamp) && (!next.contains(stamp) || next.at(stamp)!=verified.at(stamp))) return false;
+    if (next.contains("failure_verified_ms") && !verified.contains("failure_verified_ms") &&
+        (!CleanupFailureTerminal(verified) || next.at("failure_verified_ms")!=now)) return false;
+    if ((verified.at("settled")==true && next.at("settled")==false) ||
+        (verified.at("slot")==false && next.at("slot")==true)) return false;
+    if (verified.at("slot")==true && next.at("slot")==false && next.at("settled")==false)
+    {
+        auto age = DungeonFailureAge(verified,now);
+        return age && DungeonCanReleaseSlot(true,*age,false);
+    }
+    return true;
 }
 
 DungeonLocation DungeonLocationOf(Json const& body, std::uint32_t savedInstance, std::uint32_t map,

@@ -15,7 +15,7 @@ struct DungeonReceipt
 bool DungeonReceiptIdValid(std::string const& id);
 bool BeginDungeonReceipt(DungeonReceipt&, std::string const& id, std::uint32_t guild, std::uint32_t human,
     std::uint32_t leader, std::vector<std::uint32_t> const& roster);
-bool SaveDungeonReceipt(DungeonReceipt&, nlohmann::json const& next);
+bool SaveDungeonReceipt(DungeonReceipt&, nlohmann::json const& next, std::int64_t now = NowUnixMs());
 bool DungeonRecoveryConflicts(std::vector<std::uint32_t> const& guids, bool requiresSlot);
 bool DungeonReturned(std::string const& id, std::vector<std::uint32_t> const& guids);
 bool DungeonReturnsPersisted(DungeonReceipt const& receipt);
