@@ -35,7 +35,7 @@ def joke(h, butt=102):
 
 
 def plan(h, reply=CAPTION, per_week=3):
-    stage = memes.make_plan_stage(app_for(per_week), SELFIES)
+    stage = memes.make_plan_stage(app_for(per_week))
     run(stage(h.ctx({"culture_meme": [reply]} if reply else {})))
     return [dict(r) for r in h.store.conn.execute("SELECT * FROM discord_meme ORDER BY id")]
 
@@ -66,7 +66,7 @@ class Worker:
             req.thumb.write_bytes(JPEG)
         return Rendered(self.flag_render, 0.95 if self.flag_render else 0.02, "p", 3, 0.1, 1.0, 1024, 1024)
 
-    async def caption(self, base, *, top, bottom, out, nsfw_max=None, rid=None):
+    async def caption(self, base, *, top, bottom, out, rid=None):
         self.captions.append((base, top, bottom, out))
         if not self.flag_caption:
             out.write_bytes(JPEG)
@@ -141,7 +141,7 @@ def test_meme_scene_prompt_has_no_names(h, tmp_path):
     assert req.phrases == memes.scene_spec("burnt_pizza")[0] and req.negative == memes.SCENE_NEGATIVE
     prompt = " ".join(t for t, _ in (*req.phrases, *req.negative)).lower()
     assert not any(n.lower() in prompt for n in names()) and "inspect" not in prompt
-    assert req.identity is None and req.nsfw_max is None  # plain worker, its startup cutoff
+    assert req.identity is None
     (row,) = h.store.conn.execute("SELECT * FROM discord_meme").fetchall()
     assert row["status"] == "ready" and row["path"] == f"discord/memes/{row['id']}.jpg"
     assert worker.captions[0][1:3] == ("when Belra inspects", "the floor again") and worker.stopped == 1
@@ -174,24 +174,6 @@ def test_flagged_or_screened_meme_is_never_ready(h, tmp_path, case):
     assert memes.offer(SimpleNamespace(store=h.store, data_dir=tmp_path, clock=h.clock), mid) is None
 
 
-def test_misreported_base_score_retries_without_captioning_or_publishing(h, tmp_path):
-    mid = planned(h, joke(h))
-
-    class LaxWorker(Worker):
-        async def render(self, req, *, rid=None):
-            got = await super().render(req, rid=rid)
-            return replace(got, nsfw=SELFIES.nsfw_max)
-
-    worker = LaxWorker()
-    render(h, worker)
-    assert len(worker.renders) == 3 and worker.captions == []
-    assert all(req.nsfw_max is None for req in worker.renders)
-    row = h.store.conn.execute("SELECT status,path FROM discord_meme WHERE id=?", (mid,)).fetchone()
-    assert tuple(row) == ("refused", None)
-    assert all(not req.out.exists() and not req.thumb.exists() for req in worker.renders)
-    assert not (tmp_path / f"discord/memes/{mid}.jpg").exists()
-    assert memes.offer(SimpleNamespace(store=h.store, data_dir=tmp_path, clock=h.clock), mid) is None
-
 
 def posted_snap(h, tmp_path, channel, *, guid=102, line=4321, sent=3.0):
     """Her situational photo as the photo paths post it: a `snap` attachment on her own message in
@@ -217,17 +199,17 @@ def personas_of(h):
 def test_her_own_posted_photo_is_captioned_without_a_render(h, tmp_path):
     ident = joke(h)
     sid, _ = posted_snap(h, tmp_path, "pics")
-    assert memes.own_snap(h.store.conn, tmp_path, 102, nsfw_max=0.2, personas=personas_of(h)) == sid
+    assert memes.own_snap(h.store.conn, tmp_path, 102, personas=personas_of(h)) == sid
     mid = planned(h, ident, base="snap", snap=sid, scene=None)
     newer, _ = posted_snap(h, tmp_path, "food", line=4322, sent=4.0)  # a newer public photo of hers
     worker = Worker()
     render(h, worker)  # still eligible: the newer one does not refuse it
     assert worker.renders == [] and len(worker.captions) == 1
     assert h.store.conn.execute("SELECT status FROM discord_meme WHERE id=?", (mid,)).fetchone()[0] == "ready"
-    assert memes.own_snap(h.store.conn, tmp_path, 102, nsfw_max=0.2, personas=personas_of(h)) == newer
+    assert memes.own_snap(h.store.conn, tmp_path, 102, personas=personas_of(h)) == newer
     # a photo sent only to him never becomes a public meme
     h.store.conn.execute("UPDATE selfie_snap SET audience='him',channel='dm' WHERE id IN (?,?)", (sid, newer))
-    assert memes.own_snap(h.store.conn, tmp_path, 102, nsfw_max=0.2, personas=personas_of(h)) is None
+    assert memes.own_snap(h.store.conn, tmp_path, 102, personas=personas_of(h)) is None
 
 
 @pytest.mark.parametrize("where", ["officer-chat", "applications", "bank-requests", "dm:102", "deleted", "unposted"])
@@ -240,8 +222,8 @@ def test_an_officers_only_or_private_photo_never_bases_a_public_meme(h, tmp_path
         h.store.conn.execute("UPDATE discord_message SET deleted=5.0 WHERE id=?", (message,))
     if where == "unposted":
         h.store.conn.execute("DELETE FROM discord_attachment WHERE message=?", (message,))
-    assert memes.own_snap(h.store.conn, tmp_path, 102, nsfw_max=0.2, personas=personas_of(h)) is None
-    assert not memes.snap_eligible(h.store.conn, tmp_path, 102, sid, nsfw_max=0.2, personas=personas_of(h))
+    assert memes.own_snap(h.store.conn, tmp_path, 102, personas=personas_of(h)) is None
+    assert not memes.snap_eligible(h.store.conn, tmp_path, 102, sid, personas=personas_of(h))
     mid = planned(h, ident, base="snap", snap=sid, scene=None)  # one planned before is refused at render
     worker = Worker()
     render(h, worker)
@@ -263,7 +245,7 @@ def test_the_caption_characters_are_the_workers(h):
 def test_the_meme_stages_are_in_the_night_budget(h):
     from leeroy_mind.nightly import budget
     ident = joke(h)
-    memes.make_plan_stage(app_for(per_week=1), SELFIES)
+    memes.make_plan_stage(app_for(per_week=1))
     memes.make_render_stage(app_for(), SELFIES, worker=lambda: Worker())
     assert {"meme_plan", "meme_render"} <= budget.EXTENSION_STAGES
     ctx = h.ctx()

@@ -22,7 +22,7 @@ def test_render_workers_get_the_selected_file_and_strength(tmp_path, strength, i
     assert cfg.lora == adapter and cfg.lora_scale == strength
     assert cmd[cmd.index("--lora") + 1] == str(adapter)
     assert cmd[cmd.index("--lora-scale") + 1] == f"{strength:g}"
-    assert "--nsfw-max" in cmd
+    assert not any(part.startswith("--nsfw") for part in cmd)
 
 
 def test_lora_defaults_off_and_strength_defaults_to_one(tmp_path):

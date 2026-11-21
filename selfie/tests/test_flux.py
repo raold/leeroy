@@ -17,8 +17,7 @@ from test_render import request
 
 def renderer(*, identity=False, score=0.05):
     old = make_renderer(make_torch(nsfw=score), identity=identity)
-    return flux.FluxRenderer(old.pipe, old.processor, old.classifier, old.nsfw_index,
-                             old.torch, old.info, identity=identity)
+    return flux.FluxRenderer(old.pipe, old.gate, old.torch, old.info, identity=identity)
 
 
 class TokenCount:
@@ -68,7 +67,7 @@ def test_sdxl_still_enforces_both_clip_encoder_windows():
         r._fit((('adult in a coat', 0),))
 
 
-@pytest.mark.parametrize('score,flagged', [(0.05, False), (0.2, True), (0.9, True)])
+@pytest.mark.parametrize('score,flagged', [(0.05, False), (0.89, False), (0.9, True)])
 def test_flux_keeps_negative_guidance_and_shared_image_gate(tmp_path, monkeypatch, score, flagged):
     stub_pil(monkeypatch)
     r = renderer(score=score)

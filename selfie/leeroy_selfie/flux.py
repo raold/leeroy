@@ -1,6 +1,6 @@
 """Opt-in FLUX.1-dev renderer. Pinned local weights, NF4 transformer/T5, CPU offload.
 
-Uses the shared scoring, JPEG writes, face crop/cache, captions, grids and detail pass.
+Uses the shared NSFW gate (nsfw.py), JPEG writes, face crop/cache, captions, grids and detail pass.
 The SDXL adapter is never used here. Model imports stay inside load().
 """
 import hashlib
@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 import time
 
-from . import models
+from . import models, nsfw
 from .fit import fit
 from .render import RETRY_WAIT_S, ReadyError, Renderer, _face_ref, _free_gib, _ms
 
@@ -106,8 +106,7 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
     try:
         import diffusers
         from diffusers import BitsAndBytesConfig, FluxPipeline, FluxTransformer2DModel
-        from transformers import (AutoImageProcessor, AutoModelForImageClassification,
-                                  BitsAndBytesConfig as TextQuant, CLIPImageProcessor,
+        from transformers import (BitsAndBytesConfig as TextQuant, CLIPImageProcessor,
                                   CLIPVisionModelWithProjection, T5EncoderModel)
         folder = models.model_dir(data, "flux1-dev")
         quant = dict(load_in_4bit=True, bnb_4bit_quant_type="nf4",
@@ -142,13 +141,7 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
         pipe.vae.enable_slicing()
         pipe.vae.enable_tiling()
         pipe.set_progress_bar_config(disable=True)
-        nsfw_dir = models.model_dir(data, "nsfw")
-        processor = AutoImageProcessor.from_pretrained(nsfw_dir, local_files_only=True)
-        classifier = AutoModelForImageClassification.from_pretrained(
-            nsfw_dir, local_files_only=True).eval()
-        labels = {str(v).lower(): int(k) for k, v in classifier.config.id2label.items()}
-        if "nsfw" not in labels:
-            raise ValueError("classifier_label")
+        gate = nsfw.load(data)
     except torch.cuda.OutOfMemoryError as exc:
         raise ReadyError("vram", fields=fields) from exc
     except Exception as exc:
@@ -158,5 +151,5 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
                          "backend": "flux1-dev", "quantization": "nf4"}}
     if lora is not None:
         info["versions"].update(lora_sha256=lora_hash, lora_scale=f"{lora_scale:g}")
-    return FluxRenderer(pipe, processor, classifier, labels["nsfw"], torch, info, identity,
+    return FluxRenderer(pipe, gate, torch, info, identity,
                         _face_ref(data) if identity else None, data)

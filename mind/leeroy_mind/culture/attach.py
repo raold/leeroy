@@ -61,7 +61,7 @@ def _attach_meme_stages(app) -> bool:
         return False
     from . import memes
     runner = app.night_runner
-    runner.add_stage(memes.PLAN_STAGE, memes.make_plan_stage(app, cfg), after="language", model="reflection")
+    runner.add_stage(memes.PLAN_STAGE, memes.make_plan_stage(app), after="language", model="reflection")
     names = [stage.name for stage in runner.stages]
     runner.add_stage(memes.RENDER_STAGE, memes.make_render_stage(app, cfg),
                      after="snaps" if "snaps" in names else "selfies", model="image",

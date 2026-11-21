@@ -41,7 +41,7 @@ def req(tmp_path, rid="r1"):
     return json.dumps({"id": rid, "op": "render", "phrases": [["a", 0]], "negative": [],
                        "seed": 1, "steps": 10, "cfg": 5, "size": 768,
                        "out": str(tmp_path / f"{rid}.jpg"), "thumb": str(tmp_path / "t.jpg"),
-                       "thumb_size": 128, "nsfw_max": 0.2}).encode() + b"\n"
+                       "thumb_size": 128}).encode() + b"\n"
 
 
 def run(load, data, eofs=None):
@@ -61,34 +61,16 @@ def test_serve_answers_ready_then_each_request(tmp_path):
     assert fake.seen == ["a", "b"]
 
 
-def test_worker_applies_its_startup_policy_to_render_and_caption_requests(tmp_path):
-    class Screened(Fake):
-        def render(self, request):
-            self.seen.append(request.nsfw_max)
-            return {'flagged': 0.15 >= request.nsfw_max, 'nsfw': 0.15}
-
-        caption = render
-
-    render = json.loads(req(tmp_path))
-    del render['nsfw_max']
-    caption = {'id': 'c', 'op': 'caption', 'base_path': str(tmp_path/'base.jpg'),
-               'out_path': str(tmp_path/'caption.jpg'), 'top': 'HELLO', 'bottom': ''}
-    fake, output = Screened(), io.BytesIO()
-    data = b'\n'.join(json.dumps(x).encode() for x in (render, caption))
-    assert serve(lambda: fake, stdin=io.BytesIO(data), out=output, on_eof=lambda: None,
-                 nsfw_max=0.1) == 0
-    answers = [json.loads(line) for line in output.getvalue().splitlines()]
-    assert fake.seen == [0.1, 0.1]
-    assert all(answer['flagged'] and answer['nsfw'] == 0.15 for answer in answers[1:])
-
-
-@pytest.mark.parametrize('bad', [None, True, 0, 1, float('nan'), float('inf')])
-def test_bad_startup_policy_refuses_before_loading_any_model(bad):
-    loaded = []
-    with pytest.raises(ValueError):
-        serve(lambda: loaded.append(1), stdin=io.BytesIO(), out=io.BytesIO(),
-              on_eof=lambda: None, nsfw_max=bad)
-    assert not loaded
+def test_a_request_carrying_a_threshold_is_a_bad_request_and_the_worker_goes_on(tmp_path):
+    """The threshold lives only in nsfw.py: a line that still names one is refused, not obeyed."""
+    fake = Fake()
+    render = json.loads(req(tmp_path, "a"))
+    render["nsfw_max"] = 0.99
+    code, lines = run(lambda: fake, json.dumps(render).encode() + b"\n" + req(tmp_path, "b"))
+    assert code == 0
+    assert [(x["id"], x["ok"], x["error"]) for x in lines[1:]] == [
+        ("a", False, "bad_request"), ("b", True, "")]
+    assert fake.seen == ["b"]
 
 
 def test_a_failed_load_answers_ready_false_with_its_reason_only():

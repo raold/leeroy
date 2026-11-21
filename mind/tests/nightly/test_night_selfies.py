@@ -290,7 +290,7 @@ def test_a_night_renders_four_checked_candidates_for_each_member_without_a_photo
     rows = h.store.conn.execute("SELECT guid, set_no, idx, seed, tries, nsfw, prompt "
                                 "FROM selfie_candidate ORDER BY guid, idx").fetchall()
     assert len(rows) == SET_SIZE * len(TEST_CAST)
-    assert all(r["tries"] == 1 and r["nsfw"] < SELFIE_CFG.nsfw_max for r in rows)
+    assert all(r["tries"] == 1 and type(r["nsfw"]) is float for r in rows)
     shown = ", ".join(t for t, _ in build_prompt(load_persona(h.store, 101)).phrases)
     assert [r["prompt"] for r in rows if r["guid"] == 101] == [shown] * SET_SIZE   # what was rendered
     assert [r["seed"] for r in rows if r["guid"] == 101] == [seed_for(ctx.night, 101, 1, i, 0)
@@ -623,20 +623,6 @@ def test_a_second_oom_of_a_slot_propagates_and_three_flags_refuse_the_set(h, tmp
         run(go(FAKE_SELFIE_FLAG_SEEDS=seeds))
     assert list(out.iterdir()) == []                       # a flagged image is never written
 
-
-def test_an_image_scored_at_the_limit_is_flagged_whatever_the_worker_says(h, tmp_path):
-    renderable_cast(h.store, 101)
-    spec = build_prompt(load_persona(h.store, 101))
-    out = tmp_path / "out"; out.mkdir()
-    class Lax:                                              # a worker that wrote it anyway
-        async def render(self, req, *, rid=None):
-            req.out.write_bytes(JPEG); req.thumb.write_bytes(JPEG)
-            return Rendered(False, SELFIE_CFG.nsfw_max, "unused", 1, 0.01, 10.5, 1024, 1024)
-    async def room(): pass
-    with pytest.raises(SetRefused):
-        run(render_candidates(Lax(), spec, out, night=h.night, guid=101, set_no=1,
-                              cfg=SELFIE_CFG, make_room=room))
-    assert list(out.iterdir()) == []
 
 
 # -- the budget and the logs ----------------------------------------------------------------------

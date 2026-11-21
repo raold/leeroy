@@ -23,7 +23,6 @@ running jokes, planned at night and posted in #memes by a member.
 Logs carry ids, counts and codes, never a caption, a scene or a name."""
 from dataclasses import dataclass
 import logging
-import math
 from pathlib import Path
 import random
 import time
@@ -138,9 +137,9 @@ def plan_due(conn, now: float, per_week: int) -> str | None:
     return None
 
 
-def snap_eligible(conn, data_dir: Path, guid: int, sid: int, *, nsfw_max: float, personas) -> bool:
+def snap_eligible(conn, data_dir: Path, guid: int, sid: int, *, personas) -> bool:
     """Whether `sid` may be the base of a public meme about `guid`: her own plain situational
-    photo, scored under the NSFW limit, its file still there, she 25 or older, and posted by her
+    photo (it passed the worker's NSFW gate to exist), its file still there, she 25 or older, and posted by her
     where the whole guild saw it. "Posted publicly" is decided by its actual posting, never by
     the photo's flags: every message carrying it is hers, not deleted, in a layout channel that
     is not officers-only (a DM or group DM is no layout channel), and there is at least one.
@@ -152,7 +151,7 @@ def snap_eligible(conn, data_dir: Path, guid: int, sid: int, *, nsfw_max: float,
     p = personas.get(guid)
     if p is None or p.identity.age < SEND_MIN_AGE:
         return False
-    row = conn.execute("SELECT scene,nsfw FROM selfie_snap WHERE id=? AND kind='situation' AND guid=? "
+    row = conn.execute("SELECT scene FROM selfie_snap WHERE id=? AND kind='situation' AND guid=? "
                        "AND audience='anyone' AND status='sent' AND channel='discord'", (sid, guid)).fetchone()
     if row is None:
         return False
@@ -160,9 +159,7 @@ def snap_eligible(conn, data_dir: Path, guid: int, sid: int, *, nsfw_max: float,
         data = json.loads(row[0])
     except (TypeError, ValueError):
         return False
-    nsfw = row[1]
     if not (isinstance(data, dict) and data.get("audience") == "anyone" and data.get("style", "plain") == "plain"
-            and type(nsfw) in (int, float) and math.isfinite(nsfw) and nsfw < nsfw_max
             and files.snap(data_dir, guid, sid).is_file()):
         return False
     postings = conn.execute("SELECT m.channel,m.author,m.origin,m.deleted FROM discord_attachment a "
@@ -174,12 +171,12 @@ def snap_eligible(conn, data_dir: Path, guid: int, sid: int, *, nsfw_max: float,
         for channel, author, origin, deleted in postings)
 
 
-def own_snap(conn, data_dir: Path, guid: int, *, nsfw_max: float, personas) -> int | None:
+def own_snap(conn, data_dir: Path, guid: int, *, personas) -> int | None:
     """The butt's own situational photo already posted publicly (snap_eligible), newest first."""
     for (sid,) in conn.execute(
             "SELECT id FROM selfie_snap WHERE kind='situation' AND guid=? AND audience='anyone' "
             "AND status='sent' AND channel='discord' ORDER BY sent DESC,id DESC LIMIT 8", (guid,)):
-        if snap_eligible(conn, data_dir, guid, sid, nsfw_max=nsfw_max, personas=personas):
+        if snap_eligible(conn, data_dir, guid, sid, personas=personas):
             return sid
     return None
 
@@ -199,7 +196,7 @@ def _jokes(ctx, library):
                       if int(s.key[5:]) not in recent]
 
 
-def make_plan_stage(app, selfies_cfg) -> Callable:
+def make_plan_stage(app) -> Callable:
     """The "meme_plan" stage: one caption a night at most, written by the reflection model."""
     from leeroy_mind.nightly.llm import ReflectionError, schema
     from leeroy_mind.personas.screens import redact_real_name
@@ -226,8 +223,8 @@ def make_plan_stage(app, selfies_cfg) -> Callable:
             return
         joke = random.Random(f"memes:{ctx.night}").choice(jokes)
         butt, originator = joke.about
-        snap = (own_snap(ctx.store.conn, ctx.settings.data_dir, butt, nsfw_max=selfies_cfg.nsfw_max,
-                         personas=personas) if butt and butt != ctx.human else None)
+        snap = (own_snap(ctx.store.conn, ctx.settings.data_dir, butt, personas=personas)
+                if butt and butt != ctx.human else None)
         choices = {**MEME_SCENES, **({OWN_PHOTO: "the photo the person this joke is about posted"} if snap else {})}
 
         async def one(_: str) -> None:
@@ -292,7 +289,7 @@ def wants_gpu(ctx) -> bool:
     return bool(_todo(ctx))
 
 
-def _recheck(ctx, row, *, library, nsfw_max) -> str | None:
+def _recheck(ctx, row, *, library) -> str | None:
     """Why a planned meme can no longer be made: its joke gone or private, its caption screened,
     its photo no longer public and safe."""
     from leeroy_mind.culture.seeds import _culture_seeds
@@ -310,7 +307,7 @@ def _recheck(ctx, row, *, library, nsfw_max) -> str | None:
     if row["base"] == "snap":
         # still eligible (a newer public photo of hers does not refuse this one)
         if row["snap"] is None or not snap_eligible(ctx.store.conn, ctx.settings.data_dir, butt, row["snap"],
-                                                    nsfw_max=nsfw_max, personas=personas):
+                                                    personas=personas):
             return "snap"
     elif row["scene"] not in MEME_SCENES:
         return "scene"
@@ -352,8 +349,7 @@ async def _render_one(ctx, cfg, worker, row) -> str:
             await ctx.arbiter.make_room()
             _unleased(lambda: ctx.arbiter.holders)
         try:
-            got, _ = await render_slot(worker, request, rid=lambda a: f"m{meme}:{a}", make_room=room,
-                                       nsfw_max=cfg.nsfw_max)
+            got, _ = await render_slot(worker, request, rid=lambda a: f"m{meme}:{a}", make_room=room)
         except SetRefused:
             _refuse(ctx, row, "flagged")
             return "refused"
@@ -363,7 +359,7 @@ async def _render_one(ctx, cfg, worker, row) -> str:
     _unleased(lambda: ctx.arbiter.holders)
     captioned = await worker.caption(base, top=row["top"], bottom=row["bottom"], out=out,
                                      rid=f"m{meme}:caption")
-    if captioned.flagged or not math.isfinite(captioned.nsfw) or captioned.nsfw >= cfg.nsfw_max:
+    if captioned.flagged:
         _refuse(ctx, row, "flagged")
         return "refused"
     if not out.is_file():
@@ -421,7 +417,7 @@ def make_render_stage(app, cfg, *, worker=None) -> Callable:
             for row in todo:
                 unit = f"meme:{row['id']}"
                 try:
-                    why = _recheck(ctx, row, library=library, nsfw_max=cfg.nsfw_max)
+                    why = _recheck(ctx, row, library=library)
                 except Exception as error:
                     ctx.fail(RENDER_STAGE, unit, error)
                     tally["failed"] += 1

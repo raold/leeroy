@@ -129,7 +129,6 @@ def test_smoke_forwards_explicit_lora_without_adding_prompt_words(tmp_path, monk
     assert loads == [{'min_free_gib': 8.0, 'identity': False, 'backend': 'flux1-dev',
                       'lora': file, 'lora_scale': 0.8}]
     assert [list(p) for p in renderer.seen[0].phrases] == SMOKE_PHRASES
-    assert renderer.seen[0].nsfw_max == 0.2
 
 
 @pytest.mark.parametrize('args', [

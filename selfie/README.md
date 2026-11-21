@@ -121,11 +121,11 @@ needed; omit the options to use the previous rendering behavior.
 
 ## Worker protocol
 
-Screening is always active. `worker --nsfw-max N` sets the default cutoff once at startup;
-omitting it uses 0.2. The mind supplies its existing `[selfies] nsfw_max` value at this boundary,
-so normal render and caption requests no longer need that field. A missing TOML entry uses
-the mind's default. Older callers may still send a validated per-request cutoff for compatibility.
-An explicitly invalid value is an error, never a request to disable screening.
+Screening is always active and has no switch. The whole NSFW gate is `leeroy_selfie/nsfw.py`:
+the pinned classifier, the one threshold (`LIMIT`, 0.9) and the decision. Every image the
+worker would write (a render, a detail pass, a caption) goes through `Gate.check` first. No
+command-line flag, request field or `mind.toml` key sets the threshold; a request that names
+`nsfw_max` is a bad request. Change `LIMIT` in that file to change it.
 
 Responses keep `flagged` and the actual `nsfw` score. A flagged image is not written, and the
 mind retains its retry, delivery and database checks. Deploy the mind and worker together:
@@ -203,9 +203,9 @@ own face is passed over no smaller face takes her reference. That face is also h
 likeness: the image encoder's cosine between the crop and her reference's face crop is read
 before and after, and when it falls by more than `detail_identity_margin` the crop stays as it
 was (`detail_reverted` counts these).
-The NSFW check reads the image before and after the pass. A render that scores `nsfw_max` or
-more gets no pass and is flagged as ever (`detail_code` `nsfw_base`); an image the pass made
-that scores `nsfw_max` or more is never written, and the render as it was is written instead
+The NSFW gate reads the image before and after the pass. A flagged render gets no pass
+(`detail_code` `nsfw_base`); an image the pass made that the gate flags is never written,
+and the render as it was is written instead
 (`nsfw_reverted`, counts 0, the render's own score): the pass never flags a clean render and
 never clears a flagged one.
 The answer then also carries `detail_faces` and `detail_hands` (how many were drawn again),
@@ -240,15 +240,14 @@ between, 2 x 2 up to 4 x 4; a tile that is missing or not a JPEG answers `missin
 writes nothing. Either worker also answers a `caption` request (the mind's culture memes):
 `base_path` (an existing JPEG), `top` and `bottom` (at most 60 printable characters each, one
 may be empty, and only characters the font draws: `protocol.CAPTION_CHARS`, printable ASCII,
-Latin-1, Latin Extended-A and common typographic marks; an emoji is a bad request), `out_path`
-and `nsfw_max`. It draws the classic outlined capitals at the top and
+Latin-1, Latin Extended-A and common typographic marks; an emoji is a bad request) and
+`out_path`. It draws the classic outlined capitals at the top and
 bottom with Pillow in the bundled Anton font (SIL Open Font License 1.1, `leeroy_selfie/fonts/`
 with its `OFL.txt`), each block sized to the width; the text is never part of a diffusion
-prompt. The captioned image goes through the NSFW classifier like every render and is written
-only when it scores under `nsfw_max` (`flagged: true` writes nothing); a base that is missing
+prompt. The captioned image goes through the NSFW gate like every render and is written
+only when it passes (`flagged: true` writes nothing); a base that is missing
 or not a JPEG answers `missing_base`. The mind's `[selfies]` table in `mind.toml` turns
-rendering on (off by default) and sets the classifier limit, steps, guidance, size and the
-VRAM floor.
+rendering on (off by default) and sets steps, guidance, size and the VRAM floor.
 
 Licences: this package is GPL-3.0-or-later (see `LICENSE`); RealVisXL is openrail++, the
 classifier Apache-2.0, diffusers Apache-2.0, IP-Adapter Apache-2.0 (its image encoder, OpenCLIP

@@ -5,7 +5,6 @@ partial copies are retained. Identity and content digests follow copies across r
 ordinary snap deliveries are checked too, so they cannot bypass the 30-day audience gap.
 """
 import hashlib
-import math
 
 from leeroy_mind.imagefiles import read_image
 from leeroy_mind.selfies import files, ration, snaps
@@ -21,9 +20,6 @@ from . import request_store as records
 MAX_GALLERY_CANDIDATES = 128
 MAX_RECENT_UNINDEXED = 128
 
-
-def _score(score, maximum):
-    return type(score) in (float, int) and math.isfinite(score) and 0 <= score < maximum
 
 
 def _member(app, request):
@@ -57,8 +53,7 @@ def _safe_snap(app, request, photo, *, now, member):
     if (photo.guid != request.guid or photo.audience != request.audience
             or photo.status != 'ready' or photo.pick != cur.pick
             or photo.looks != snaps.looks_hash(p.appearance) or now < photo.not_before
-            or (photo.source != 'request' and now >= photo.expires)
-            or not _score(photo.nsfw, app.selfies.cfg.nsfw_max)):
+            or (photo.source != 'request' and now >= photo.expires)):
         return False
     try:
         scene = scene_from(photo.scene)
@@ -191,8 +186,7 @@ def _candidates(app, request, *, now, member):
             (request.guid, request.guid, cur.set_no, MAX_GALLERY_CANDIDATES)).fetchall()
     for row in rows:
         was_lust = lust_set(app.store.conn, request.guid, row['set_no'])
-        if (not _score(row['nsfw'], app.selfies.cfg.nsfw_max)
-                or (was_lust and (style_of(p) != LUST or request.audience != 'him'))):
+        if was_lust and (style_of(p) != LUST or request.audience != 'him'):
             continue
         image = read_image(files.candidate(app.data_dir, request.guid, row['set_no'], row['idx']),
                            app.data_dir)

@@ -324,7 +324,7 @@ def test_partial_copy_failure_keeps_files_and_cannot_publish_ready(app, monkeypa
     assert request_stock.reserve_fallback(app, req) is None
 
 
-@pytest.mark.parametrize('change', ['pick', 'looks', 'age', 'nsfw', 'dial', 'missing', 'lust_set'])
+@pytest.mark.parametrize('change', ['pick', 'looks', 'age', 'dial', 'missing', 'lust_set'])
 def test_gallery_copy_rechecks_current_identity_and_content_at_send(app, change):
     req, _ = claim(app)
     photo = request_stock.reserve_fallback(app, req)
@@ -337,8 +337,6 @@ def test_gallery_copy_rechecks_current_identity_and_content_at_send(app, change)
     elif change == 'age':
         p = app.people[101]
         app.people[101] = replace(p, identity=replace(p.identity, age=24))
-    elif change == 'nsfw':
-        app.selfies.cfg = replace(app.selfies.cfg, nsfw_max=.001)
     elif change == 'dial':
         app.cfg.talk.selfies = 0
     elif change == 'missing':

@@ -89,7 +89,6 @@ class RenderRequest:
     out: Path  # absolute .jpg paths the worker writes
     thumb: Path
     thumb_size: int
-    nsfw_max: float | None = None  # legacy override; new requests use the worker's startup policy
     identity: Identity | None = None  # an identity worker needs it, a plain one refuses it
     shape: str = "square"  # or "portrait" (832 x 1216, needs size 1024)
     detail: Detail | None = None  # the detailer's pass; None sends no detail key at all
@@ -97,7 +96,7 @@ class RenderRequest:
 
 @dataclass(frozen=True)
 class Rendered:
-    flagged: bool  # scored nsfw_max or more: nothing was written
+    flagged: bool  # the worker's NSFW gate refused it: nothing was written
     nsfw: float
     prompt: str  # what was rendered, after the worker's fit; stored, never logged
     tokens: int
@@ -121,7 +120,7 @@ class Gridded:
 
 @dataclass(frozen=True)
 class Captioned:
-    flagged: bool  # the captioned image scored nsfw_max or more: nothing was written
+    flagged: bool  # the worker's NSFW gate refused the captioned image: nothing was written
     nsfw: float
     width: int
     height: int
@@ -320,8 +319,6 @@ class SelfieWorker:
             "negative": [[t, p] for t, p in req.negative], "seed": req.seed,
             "steps": req.steps, "cfg": req.cfg, "size": req.size, "out": str(req.out),
             "thumb": str(req.thumb), "thumb_size": req.thumb_size}
-        if req.nsfw_max is not None:
-            body["nsfw_max"] = req.nsfw_max
         if req.identity is not None:
             body["identity"] = {"ref": str(req.identity.ref), "crop": list(req.identity.crop),
                                 "scale": req.identity.scale}
@@ -391,10 +388,9 @@ class SelfieWorker:
         return Gridded(width, height, seconds, similarity)
 
     async def caption(self, base: Path, *, top: str, bottom: str, out: Path,
-                      nsfw_max: float | None = None,
                       rid: str | None = None) -> Captioned:
         """A meme: the worker draws `top` and `bottom` over the JPEG at `base` and writes `out`
-        unless the result scores nsfw_max or more (Captioned.flagged). An ok false answer
+        unless its NSFW gate flags the result (Captioned.flagged). An ok false answer
         (missing_base, bad_request, ...) raises WorkerError(<error>) and leaves the worker
         running. The caption is drawn, never sent as a prompt; it is never logged."""
         self._sequence += 1
@@ -403,8 +399,6 @@ class SelfieWorker:
             raise ValueError("a request id is 1-32 characters")
         body = {"id": rid, "op": "caption", "base_path": str(base), "top": top,
                 "bottom": bottom, "out_path": str(out)}
-        if nsfw_max is not None:
-            body["nsfw_max"] = nsfw_max
         line = json.dumps(body).encode("utf-8") + b"\n"
         if len(line) - 1 > MAX_LINE:
             raise WorkerError("bad_request")
