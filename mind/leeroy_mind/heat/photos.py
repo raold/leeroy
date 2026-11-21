@@ -187,7 +187,8 @@ def scene_tier(scene) -> int:
             return P0
         words = scene.get("words")
         worn = scene.get("outfit", "")
-        choice = worn if worn in OUTFIT_TIER else choice_of(worn)  # a reply's pick, or a phrase
+        from leeroy_mind.selfies.outfit_reveal import CATALOG
+        choice = worn if worn in OUTFIT_TIER or worn in CATALOG else choice_of(worn)
         if isinstance(words, dict):
             if choice is None:
                 return P0 if words.get("wearing") in ("work_uniform", "as_now") else P4

@@ -64,6 +64,8 @@ def test_each_level_has_distinct_complete_outfits_and_all_colours_pass_existing_
             assert x.phrase in " ".join(t for t, _ in spec.phrases)
             assert photos.look_tier(x) == max(R.HEAT_TIER[category], photos.VIEW_TIER[x.view])
             assert photos.choice_of(x.phrase) == choice
+            assert photos.scene_tier({"style": LUST, "outfit": choice,
+                                      "setting": x.setting}) == R.HEAT_TIER[category]
             negative = " ".join(t for t, _ in spec.negative)
             assert "underwear" in negative and "topless" in negative
     assert set(R.choices(category, level)).isdisjoint(
