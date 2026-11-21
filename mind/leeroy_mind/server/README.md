@@ -213,7 +213,8 @@ With it on:
   full. The guild's own business above is never held back; answers to him are counted but
   never refused.
 - Every server turn on a channel with a purpose (an opener, a reply, an aside; never #general,
-  a DM, a group DM or a template) gets the channel's hold line, "Stay on what this channel is
+  a DM, a group DM, a template or the post his godmode intent asked for, whose subject is his)
+  gets the channel's hold line, "Stay on what this channel is
   about (<about>): <not_here>." (`discord/topics.py` `hold_text`), as #394's `[talk]
   wow_topic` holds a WoW turn; outside #irl her unasked topics, life thread, "lately" and
   where she lives are left out, as a WoW hold leaves them. A WoW channel's turn under `[talk]
@@ -313,7 +314,8 @@ ports, FakeLLM, synthetic embeddings and a fake-admin arbiter. It advances a rea
 MindApp from 07:30 through 09:30 the next day, including his 19:00–21:00 session,
 night interruption by a 05:00 Discord post, and shutdown cleanup. Its controlled
 availability and ample synthetic topic stock isolate admission rates from roster
-coverage and source exhaustion. Interarrival draws are fixed at their exponential
+coverage and source exhaustion (with `channel_topics` off: its daily room per channel would
+end the starts it measures once the three stocked channels fill). Interarrival draws are fixed at their exponential
 mean for this wiring test; the separate rhythm tests exercise the production
 distribution. Its phase-count acceptance band is ±40% of `starts_per_hour`
 integrated over available hours. It is not a production

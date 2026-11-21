@@ -3293,8 +3293,9 @@ class Pipeline:
         """[server] channel_topics (read at each use; discord/topics.py): the layout channel whose
         purpose this turn is held to and its drafts checked against, '' for none. A turn of the
         server's own on a guild Discord channel with a purpose (an opener, a reply, an aside),
-        never a template's; never #general's (anything goes), a DM's or a group DM's, and never
-        an answer to him: his posts in a channel are answered there whatever their subject."""
+        never a template's; never #general's (anything goes), a DM's or a group DM's, never the
+        post his godmode intent asked for (its subject is his), and never an answer to him: his
+        posts in a channel are answered there whatever their subject."""
         if (turn.template is not None or turn.kind not in CHANNEL_HELD_KINDS
                 or not isinstance(turn.channel, str) or not turn.channel.startswith("discord:")):
             return ""
@@ -3306,6 +3307,7 @@ class Pipeline:
             return ""
         hg = self.human.guid
         if (getattr(meta, "answers_human", False) or (hg and hg in (turn.addressee, turn.to_guid))
+                or getattr(meta, "godmode_intent", None) is not None
                 or self.live_review.owed(turn, meta)):
             return ""
         return cid

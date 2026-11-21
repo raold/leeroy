@@ -31,8 +31,7 @@ from leeroy_mind.talk.wowtopic import _LIFE
 
 CODE = "channel_topic"
 MEME_CODE = "channel_meme"
-HINT = ("it strays from what this channel is about: keep to the channel's subject, as the "
-        "instruction's \"Stay on\" line says")
+HINT = "it strays from what this channel is about: keep to the channel's own subject"
 MEME_HINT = ("this is #memes: post a meme in a meme format (\"POV: ...\", \"nobody: ... me: ...\", "
              "\"me when ...\", \"... be like\"), or answer the meme posted in a few words, never "
              "plain chat")

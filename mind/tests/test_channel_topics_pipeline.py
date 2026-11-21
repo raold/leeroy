@@ -94,6 +94,15 @@ def test_an_answer_to_him_is_never_held(rig):
     assert rig.engine._channel_topic(addressed, meta()) == ""
 
 
+def test_the_post_his_intent_asked_for_is_never_held(rig):
+    asked = meta()
+    asked.godmode_intent = 7
+    t = turn("discord:memes", kind=TurnKind.OPEN)
+    assert rig.engine._channel_topic(t, asked) == ""
+    assert rig.engine.live_review.draft(t, asked, "x").channel_topic == ""
+    assert rig.engine._channel_topic(t, meta()) == "memes"
+
+
 def test_a_template_turn_is_never_held(rig):
     t = replace(turn("discord:food"), template="gz")
     assert rig.engine._channel_topic(t, meta()) == ""
