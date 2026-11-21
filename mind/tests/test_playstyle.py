@@ -206,6 +206,9 @@ def test_real_mind_fake_bridge_applies_and_shutdown_restores(tmp_path,clock,capl
     from leeroy_mind.testing.fake_llm import FakeLLM
     from test_app import CAST, HUMAN, hello, seed_db, toml
 
+    def passes():
+        return [r.getMessage() for r in caplog.records if r.getMessage().startswith('playstyle_pass')]
+
     async def scenario():
         tasks = set()
         applied = set()
@@ -229,8 +232,11 @@ def test_real_mind_fake_bridge_applies_and_shutdown_restores(tmp_path,clock,capl
         app = MindApp(cfg,tmp_path,llm=llm,clock=clock)
         runner = asyncio.create_task(app.run())
         try:
+            # The bridge's ack sees a command before the mind has its job, so all five acked
+            # does not mean the pass is done: wait for the mind's own summary of that pass.
             async with asyncio.timeout(5):
-                while len(applied)!=5: await asyncio.sleep(.01)
+                while not passes(): await asyncio.sleep(.01)
+            assert len(applied)==5
             assert app.playstyle.owned=={101,102,103,104,105}
             await app.stop()
             assert not applied and app.playstyle.owned==set()
@@ -243,8 +249,7 @@ def test_real_mind_fake_bridge_applies_and_shutdown_restores(tmp_path,clock,capl
             if tasks: await asyncio.gather(*tasks)
             await bridge.stop()
         assert 'playstyle_result' not in caplog.text       # a line a member is DEBUG now
-        passes = [r.getMessage() for r in caplog.records if r.getMessage().startswith('playstyle_pass')]
-        assert passes[0].startswith('playstyle_pass: commands=5 applied=5 restored=0 other=- owner=1')
+        assert passes()[0].startswith('playstyle_pass: commands=5 applied=5 restored=0 other=- owner=1')
         assert 'private' not in caplog.text
     caplog.set_level(logging.INFO,'leeroy_mind')
     run(scenario())
