@@ -29,6 +29,14 @@ LEEROY_TEST(MemberDungeonReceiptRequiresTheExactDurableRosterAndTypedState)
         {"settled",false},{"guild",21},{"human",1},{"leader",101},{"roster",{101,102,103,104,105}},
         {"bodies",nlohmann::json::array()},{"terminal",nullptr}};
     CHECK(ValidDungeonReceipt(accepted));
+    CHECK(DungeonBeforeMutation(accepted));
+    auto observing = accepted;
+    observing["stage"] = "grouping"; observing["effect"] = "observe";
+    CHECK(DungeonBeforeMutation(observing));
+    observing["effect"] = "create_group";
+    CHECK(!DungeonBeforeMutation(observing));
+    observing["effect"] = "observe"; observing["group"] = 7;
+    CHECK(!DungeonBeforeMutation(observing));
     auto invalid = accepted;
     invalid["roster"] = {101,101,103,104,105};
     CHECK(!ValidDungeonReceipt(invalid));

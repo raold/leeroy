@@ -12,7 +12,7 @@
 #include "TrainingRivals.h"
 #include "TrainingCommands.h"
 #include "MapMgr.h"
-#include "Realm/RealmModule.h"
+#include "Realm/RealmPorts.h"
 #include "LeeroyOfflineRaidPolicy.h"
 #include "LeeroyMemberDungeon.h"
 #include <cmath>
@@ -201,7 +201,7 @@ LeeroyCommandResult PublishDungeonReceipt(std::string const& id)
     event["returned"] = data.at("settled");
     event["map_id"] = data.at("map");
     event["revision"] = row->revision;
-    LeeroyModule::Instance().Publish(EncodeEvent(NowUnixMs(),event),false);
+    LeeroyModule::Instance().Publish(EncodeEvent(data.value("terminal_ms",NowUnixMs()),event),false);
     return {true,{}};
 }
 
@@ -212,7 +212,7 @@ namespace
 bool RecoverBodies(DungeonReceipt& receipt)
 {
     auto const& data = receipt.data;
-    if (data.at("stage") == "accepted" && data.at("bodies").empty()) return true;
+    if (DungeonBeforeMutation(data)) return true;
     if (data.at("guild") != LeeroyModule::Instance().GuildId() || data.at("human") != HumanGuid()) return false;
     auto const groupId = data.value("group",0u);
     auto const instance = data.value("instance",0u);
@@ -236,8 +236,10 @@ bool RecoverBodies(DungeonReceipt& receipt)
         uint32 guid = body.at("guid");
         uint32 map = body.at("map");
         float x = body.at("x"), y = body.at("y"), z = body.at("z"), orientation = body.at("o");
-        if (!IsCast(guid) || !MapMgr::IsValidMapCoord(map,x,y,z,orientation) ||
-            Realm::RealmOwns(guid) || Training::DummyTrialOwns(guid) || Training::HasTrainingJournal(guid)) return false;
+        if (!IsCast(guid) || guid == HumanGuid() || !Realm::IsOnRandomBotAccount(guid) ||
+            !Realm::IsConfiguredGuildMember(guid) || !MapMgr::IsValidMapCoord(map,x,y,z,orientation) ||
+            Realm::RealmOwns(guid) || Training::DummyTrialOwns(guid) || Training::HasTrainingJournal(guid) ||
+            Training::TrainingDcOwns(guid) || Training::TrainingCleanupPending() || HasPendingBotCommands({guid})) return false;
         auto snapshot = CharacterDatabase.Query("SELECT c.map,c.instance_id,c.position_x,c.position_y,c.position_z,"
             "c.instance_mode_mask,c.playerFlags,COALESCE(gm.guid,0),c.online FROM characters c "
             "LEFT JOIN group_member gm ON gm.memberGuid=c.guid WHERE c.guid={}", guid);
@@ -284,7 +286,9 @@ bool RecoverBodies(DungeonReceipt& receipt)
                     return false;
                 }
             }
-            if (!origin || player->GetGroup()) released = false;
+            if (!origin || player->GetGroup() || player->GetDungeonDifficulty() != Difficulty(body.at("dungeon").get<uint32>()) ||
+                player->GetRaidDifficulty() != Difficulty(body.at("raid").get<uint32>()) ||
+                (guid == leader && player->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER) != leaderFlag)) released = false;
         }
         else if (!group && !durableGroup && !fields[8].Get<uint8>() && data.value("recovery_authorized",false)
             && (!atOrigin || mask != fields[5].Get<uint8>() || !flagMatches))
@@ -334,6 +338,7 @@ void RecoverDungeonReceipt(DungeonReceipt& receipt)
         event.kills = data.value("kills",0u); event.wipes = data.value("wipes",0u);
         event.instanceId = data.value("instance",0u);
         data["terminal"] = MakeJobEvent(event);
+        data["terminal_ms"] = now;
         if (!complete) data["failed_ms"] = now;
     }
     data["settled"] = complete;

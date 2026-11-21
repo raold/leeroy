@@ -15,6 +15,7 @@ struct DungeonCandidate
 std::string MemberDungeonAdmission(std::uint32_t map, std::uint32_t leader,
     std::vector<DungeonCandidate> const& candidates, bool ownerOnline, bool slotBusy);
 bool ValidDungeonReceipt(nlohmann::json const& data);
+bool DungeonBeforeMutation(nlohmann::json const& data);
 bool MemberDungeonPreempts(bool admitted, std::vector<std::uint32_t> const& requested,
     std::vector<std::uint32_t> const& participants);
 }

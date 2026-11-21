@@ -307,8 +307,8 @@ StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot, std::s
     f.groupMembers = his ? his->GetMembersCount() : 0;
     if (!dungeon.empty() && CanProjectDungeonBody(dungeon,guid))
     {
-        f.otherGroup = f.instance = f.combat = f.dead = false;
-        f.fence.clear();
+        f.otherGroup = f.instance = f.combat = f.dead = f.travelling = false;
+        if (f.fence == "busy:training_owner") f.fence.clear();
     }
     if (cmd.kind == StringKind::JoinGroup)
         f.joinRefusal = GuildAddJoinRefusal(human, bot, dayToken, dungeon);
@@ -578,6 +578,7 @@ LeeroyCommandResult HandleStringDo(nlohmann::json const& message)
     Player* bot = cmd->guid == HumanGuid() ? nullptr : FindOnline(cmd->guid);
     if (!bot && !token.empty()) bot = ObjectAccessor::FindConnectedPlayer(Realm::PlayerGuid(cmd->guid));
     auto dungeon = MemberDungeonFor(cmd->guid);
+    if (!bot && !dungeon.empty()) bot = ObjectAccessor::FindConnectedPlayer(Realm::PlayerGuid(cmd->guid));
     if (!dungeon.empty() && (!check.ProjectsDungeon(cmd->guid) || cmd->invite ||
         (cmd->kind != StringKind::JoinGroup && cmd->kind != StringKind::ComeToMe))) return {false,"busy:member_dungeon"};
     std::string why = StringRefusal(cmd->kind, ReadFacts(*cmd, human, bot, token, dungeon));

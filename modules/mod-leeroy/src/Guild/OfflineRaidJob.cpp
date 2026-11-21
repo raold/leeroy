@@ -137,6 +137,7 @@ struct Member
     bool masterReleased = false, journalRestored = false;
     RaidFinalReset finalReset{};
     bool moved = false;
+    bool heroicEntryPending = false;
     bool restartIssued = false;
     bool restartDropped = false;
     bool returnIssued = false;
@@ -239,8 +240,10 @@ bool Controlled(Job const& job, Player* player)
     auto body = job.bodies.find(player->GetGUID().GetCounter());
     if (body == job.bodies.end() || !SameBody(body->second, player)
         || !player->GetSession() || player->GetSession()->IsLoggingOut()) return false;
+    auto guid = player->GetGUID().GetCounter();
+    if (Dungeon(job) && (!Realm::IsOnRandomBotAccount(guid) || player->GetGuildId() != job.guild)) return false;
     return Benchmark(job) ? Training::RivalIdentity(player) && player->GetLevel() >= 80
-        && player->GetTeamId() == job.team : IsCast(player->GetGUID().GetCounter());
+        && player->GetTeamId() == job.team : IsCast(guid);
 }
 
 Group* FindGroup(Job const& job)
@@ -349,7 +352,7 @@ std::string DungeonBodyRefusal(Player* bot, uint32 low, uint32 team, Realm::DayO
     if (!bot->GetSession() || bot->GetSession()->IsLoggingOut() || bot->IsGameMaster() || bot->GetLevel() != 80 ||
         bot->GetTeamId() != team || bot->GetGuildId() != LeeroyModule::Instance().GuildId() ||
         bot->GetGroup() || bot->GetOriginalGroup() || bot->GetGroupInvite() || GET_PLAYERBOT_AI(bot)->GetMaster() ||
-        bot->GetTradeData() || !sRandomPlayerbotMgr.IsPinned(low)) return "not_available";
+        bot->GetTradeData() || !sRandomPlayerbotMgr.IsPinned(low) || !Realm::IsOnRandomBotAccount(low)) return "not_available";
     auto pvp = ReadRecallPvp(bot);
     if (pvp.duel && !token.empty() && Realm::DayDueling(token, Realm::RealmModule::Instance().Holder(low), bot))
         pvp.duel = false;
@@ -414,6 +417,8 @@ void Stop(Job& job, std::string reason, bool failed = false)
 bool Checkpoint(Job& job, std::string const& effect, uint32 actor = 0)
 {
     if (!Dungeon(job)) return true;
+    // The first mutation is group creation. A rejected partial roster never writes a partial undo manifest.
+    if (effect != "create_group" && DungeonBeforeMutation(job.receipt.data)) return true;
     auto data = job.receipt.data;
     data["stage"] = Name(job.stage);
     data["effect"] = effect;
@@ -809,6 +814,7 @@ void Teleporting(Job& job)
         {
             job.leaderSent = true;
             job.members.front().moved = true;
+            job.members.front().heroicEntryPending = Dungeon(job);
         }
         return;
     }
@@ -914,6 +920,7 @@ void Teleporting(Job& job)
             if (!Checkpoint(job, "enter_follower", member.guid)) return;
             member.moved = player->TeleportTo(entrance.target_mapId, entrance.target_X, entrance.target_Y,
                 entrance.target_Z, entrance.target_Orientation);
+            member.heroicEntryPending = Dungeon(job) && member.moved;
             allSent = allSent && member.moved;
         }
         job.followersSent = allSent;
@@ -1114,6 +1121,7 @@ void RecallStrays(Job& job, Player* leader, uint32 diff)
             auto const& point = job.entrance;
             member.recall.pending = player->TeleportTo(point.target_mapId, point.target_X,
                 point.target_Y, point.target_Z, point.target_Orientation);
+            member.heroicEntryPending = Dungeon(job) && member.recall.pending;
             LOG_INFO("module.leeroy", "leeroy: raid {} stray_recall guid={} attempt={} sent={}",
                 job.event.id, member.guid, member.recall.attempts, member.recall.pending);
         }
@@ -1638,7 +1646,7 @@ bool RunTeardown(Job& job)
     }
     if (Dungeon(job) && !Checkpoint(job, "return_roster")) return false;
     bool complete = false;
-    try { complete = Teardown(job); }
+    try { complete = (Dungeon(job) && DungeonBeforeMutation(job.receipt.data)) || Teardown(job); }
     catch (...)
     {
         job.cleanupFailed = true; // Keep every incomplete receipt and the original cleanup deadline.
@@ -1694,7 +1702,10 @@ bool RunTeardown(Job& job)
     {
         auto data = job.receipt.data;
         if (job.pendingTerminal && data.at("terminal").is_null())
+        {
             data["terminal"] = MakeJobEvent(*job.pendingTerminal);
+            data["terminal_ms"] = NowUnixMs();
+        }
         if (job.failedReported && !data.contains("failed_ms")) data["failed_ms"] = NowUnixMs();
         bool const returned = complete && std::none_of(job.members.begin(), job.members.end(),
             [](auto const& m){ return m.abandoned || (m.changed && !m.finished); });
@@ -1925,6 +1936,13 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
     if (!active)
         return;
     Job& job = *active;
+    if (Dungeon(job))
+        for (auto& member : job.members)
+            if (member.heroicEntryPending)
+            {
+                auto* player = ObjectAccessor::FindConnectedPlayer(Guid(member.guid));
+                if (!player || !player->IsBeingTeleported()) member.heroicEntryPending = false;
+            }
     job.elapsed = AdvanceElapsed(job.elapsed, diffMs);
     job.stageElapsed = AdvanceElapsed(job.stageElapsed, diffMs);
     job.progressElapsed = AdvanceElapsed(job.progressElapsed, diffMs);
@@ -2016,11 +2034,14 @@ bool CanProjectDungeonBody([[maybe_unused]] std::string const& start, [[maybe_un
     if (start.empty() || MemberDungeonFor(guid) != start) return false;
     auto& job = *active;
     auto* player = ObjectAccessor::FindConnectedPlayer(Guid(guid));
-    if (!Controlled(job, player) || player->GetOriginalGroup() || player->GetGroupInvite() || player->GetTradeData() ||
-        Realm::RealmOwns(guid) || Training::DummyTrialOwns(guid) || HasPendingBotCommands({guid}) ||
-        Training::HasTrainingJournal(guid) || Training::TrainingCleanupPending() || StringStayHeld(guid) ||
+    if (!Controlled(job, player) || player->GetOriginalGroup() ||
+        player->GetGroupInvite() || player->GetTradeData() || Realm::RealmOwns(guid) ||
+        Training::DummyTrialOwns(guid) || HasPendingBotCommands({guid}) || Training::HasTrainingJournal(guid) ||
+        Training::TrainingDcOwns(guid) || Training::TrainingCleanupPending() || StringStayHeld(guid) ||
         player->HasPendingBind() || player->IsInFlight() || player->GetTransport() || player->GetVehicle() ||
         RecallPvpBusy(ReadRecallPvp(player))) return false;
+    auto queue = sLFGMgr->GetState(player->GetGUID());
+    if (queue != lfg::LFG_STATE_NONE && queue != lfg::LFG_STATE_RAIDBROWSER) return false;
     auto* master = GET_PLAYERBOT_AI(player)->GetMaster();
     if (master && (master != Driver(job) || !master->GetSession())) return false;
     auto it = std::find_if(job.members.begin(), job.members.end(), [guid](auto const& m){ return m.guid == guid; });
@@ -2028,7 +2049,14 @@ bool CanProjectDungeonBody([[maybe_unused]] std::string const& start, [[maybe_un
         return !player->GetGroup() && !master && !player->IsBeingTeleported() && player->IsInWorld() &&
             !player->GetMap()->IsDungeon() && !player->IsInCombat() && player->IsAlive();
     if (it->abandoned || !OwnsGroup(job, player->GetGroup(),false)) return false;
-    if (player->IsBeingTeleported()) return false;
+    if (player->IsBeingTeleported())
+    {
+        auto const& dest = player->GetTeleportDest();
+        auto const& entry = job.entrance;
+        return it->heroicEntryPending && dest.GetMapId() == entry.target_mapId &&
+            std::abs(dest.GetPositionX()-entry.target_X) < 0.1f && std::abs(dest.GetPositionY()-entry.target_Y) < 0.1f &&
+            std::abs(dest.GetPositionZ()-entry.target_Z) < 0.1f;
+    }
     // Only the job's own fight or wipe is projected away. An outside fight/takeover remains independent.
     return Present(job, player) || (AtOrigin(*it,player) && !player->IsInCombat() && player->IsAlive());
 #else

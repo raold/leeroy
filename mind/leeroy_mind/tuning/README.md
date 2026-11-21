@@ -81,6 +81,8 @@ its nudge. To prevent that, set `nudge_memories = false` in `[tuning]` of `mind.
 
 ## Godmode edits
 
+The console’s Tuning tools record each godmode edit in change history. Undo restores the previous effective state. The Strings controls show whether a Discord or in-game intent was taken and its outcome. [Godmode controls](../godmode/README.md)
+
 With `[godmode] enabled = true`, the same change log also holds the owner's edits of a
 member's mind (`tuning/edits.py`: traits, feelings, mood, life events, memory implants and
 erasures, feud starts and ends, hangouts, skill and day-plan activities). Their receipts live in

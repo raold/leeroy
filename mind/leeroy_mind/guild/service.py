@@ -98,9 +98,12 @@ class GuildLife:
     def configure_dungeons(self, enabled, realm=None):
         realm = realm if realm is not None else self.app.realm
         if self.heroics is None:
-            from leeroy_mind.godmode.heroics import HELD, Heroics
+            from leeroy_mind.godmode.heroics import HELD, Heroics, end_offers
             if not enabled and not self.app.store.conn.execute(
                     "SELECT 1 FROM member_heroic WHERE " + HELD + " LIMIT 1").fetchone():
+                if self.app.store.conn.execute("SELECT 1 FROM member_heroic WHERE phase IN "
+                        "('offered','chat','agreed') LIMIT 1").fetchone():
+                    end_offers(self.app.store, "disabled")
                 return
             if "day" not in realm.parts:
                 realm.configure_day_plans(False, owner_handoff=True)

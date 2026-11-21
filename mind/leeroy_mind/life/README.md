@@ -21,6 +21,8 @@ life thread, night_owl) and the date, so an edited persona gets a fresh plan. Dr
 `seeded(what, night, guid, minute, extra)` for a generator of its own), never the talk engine's
 shared rng, so a switch that is off draws nothing and moves no other draw.
 
+Guild members can plan shared in-game blocks with `[life] day_plans` and agree on five-member heroics with `[life] dungeons`. Both default off. The guild-life controller coordinates the party, GPU lease and native receipts. His validated request for a participant takes priority. [In-game activities and members’ heroics](../godmode/README.md)
+
 ## Her day plan (`life/day.py`)
 
 `day_plan(p, day, *, event=None) -> DayPlan`: every minute of her local date (0-1439) in exactly

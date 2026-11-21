@@ -3,6 +3,7 @@ are separate evidence: a proposal alone never reserves a member."""
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 import json
 from uuid import uuid4
@@ -138,6 +139,14 @@ def consent(conn, start):
     return bool(row and len(posted) >= 4 and set(json.loads(row[0])) <= posted)
 
 
+def end_offers(store, reason):
+    with store.transaction():
+        store.conn.execute(
+            "UPDATE member_heroic SET phase='talk_only',reason=? WHERE phase IN ('offered','chat','agreed')",
+            (reason,),
+        )
+
+
 def holds(conn):
     return tuple(
         BodyHold(i, OWNER, 3, frozenset(json.loads(roster)), True)
@@ -227,6 +236,7 @@ class Heroics:
         self.poll_at = self.offer_at = 0
         self.playing = self.lease = None
         self.stopping = set()
+        self.tick_lock = asyncio.Lock()
         self.attached = None
         self.write("UPDATE member_heroic SET phase='talk_only',reason='chat_ended' WHERE phase='chat'")
         realm.bodies.add_holder_source(OWNER, lambda: holds(self.conn))
@@ -243,10 +253,7 @@ class Heroics:
             self.end_offers("disabled")
 
     def end_offers(self, reason):
-        self.write(
-            "UPDATE member_heroic SET phase='talk_only',reason=? WHERE phase IN ('offered','chat','agreed')",
-            (reason,),
-        )
+        end_offers(self.store, reason)
 
     def row(self, ident):
         return self.conn.execute("SELECT * FROM member_heroic WHERE id=?", (ident,)).fetchone()
@@ -255,7 +262,7 @@ class Heroics:
         c = self.realm._forget_context()
         return (c.guild, c.human) if c.connected and c.presence_known and self.guild._ready() else (0, 0)
 
-    def states(self):
+    def states(self, members=None):
         cast = self.ports.cast()
         busy = (
             self.ports.away()
@@ -273,7 +280,9 @@ class Heroics:
             )
         }
         states = {}
-        for g in cast:
+        for g in cast if members is None else members:
+            if g not in cast:
+                continue
             p = self.ports.persona(g)
             if g == self.ports.human_guid or p is None or g in busy or g not in self.app.world.online:
                 continue
@@ -296,8 +305,8 @@ class Heroics:
             and not self.ports.gpu_paused()
         ):
             return False
-        cast, states = self.states()
         roster, roles = json.loads(r["roster"]), json.loads(r["roles"])
+        cast, states = self.states(roster)
         ties = roster_ties(self.conn, set(roster))
         return all(
             g in states
@@ -347,7 +356,7 @@ class Heroics:
             "UPDATE member_heroic SET generation=generation+1,roster=?,bench=?,replaced=? WHERE id=?",
             (json.dumps(roster), json.dumps(bench), json.dumps(sorted(required)), ident),
         )
-        c.cast[:] = roster
+        c.cast[c.cast.index(g)] = sub
         c.seed = replace(c.seed, about=tuple(roster), witnesses=tuple(roster))
         return True
 
@@ -514,6 +523,10 @@ class Heroics:
             )
 
     async def tick(self):
+        async with self.tick_lock:
+            await self._tick()
+
+    async def _tick(self):
         from leeroy_mind.guild.protocol import StopMemberDungeon
 
         now = self.app.clock.now()
@@ -566,7 +579,9 @@ class Heroics:
             return
         day = self.app.clock.local().date().isoformat()
         r = self.conn.execute(
-            "SELECT * FROM member_heroic WHERE guild=? AND human=? AND day=?", (guild, human, day)
+            "SELECT * FROM member_heroic WHERE guild=? AND human=? AND "
+            "(day=? OR phase IN ('offered','chat','agreed')) ORDER BY created DESC LIMIT 1",
+            (guild, human, day),
         ).fetchone()
         if r:
             if r["phase"] == "agreed" and now >= r["next_try"]:

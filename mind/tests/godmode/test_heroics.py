@@ -221,6 +221,26 @@ def test_final_check_and_start_once_then_positive_receipts(tmp_path, store, cloc
     asyncio.run(go())
 
 
+def test_midnight_preserves_a_still_valid_single_proposal(tmp_path, store, clock):
+    import asyncio
+    from datetime import timedelta
+
+    async def go():
+        almost_midnight = clock.local().replace(hour=23, minute=59, second=50)
+        delta = (almost_midnight - clock.local()).total_seconds()
+        await clock.advance(delta, delta)
+        rig = Rig(tmp_path, store, clock)
+        await rig.connect()
+        await rig.agree()
+        await clock.advance(20, 20)
+        assert clock.local().date() == almost_midnight.date() + timedelta(days=1)
+        await rig.h.tick()
+        assert rig.h.row(rig.ident)["phase"] == "running"
+        assert store.conn.execute("SELECT count(*) FROM member_heroic").fetchone()[0] == 1
+
+    asyncio.run(go())
+
+
 def test_driver_waits_one_minute_eight_times_without_cast_reservation(tmp_path, store, clock):
     import asyncio
 
@@ -356,12 +376,20 @@ def test_dungeons_reloads_nightly_and_session_both_directions(tmp_path):
     async def go():
         try:
             assert app.guild.heroics is None and "day" not in app.realm.parts
+            prior = heroics.offer(app.store, propose(app.store), day="prior", now=1, guild=3, human=1)
+            app.guild.configure_dungeons(False)
+            assert app.store.conn.execute(
+                "SELECT phase,reason FROM member_heroic WHERE id=?", (prior,)
+            ).fetchone()[:] == ("talk_only", "disabled")
+            assert app.guild.heroics is None and "day" not in app.realm.parts
             for reload in (app._reload_config, lambda: app.night_runner.make_ctx("2026-10-29", (1, 10))):
                 for on in (True, False):
                     toggle(on)
                     reload()
                     assert app.guild.heroics.enabled is on and app.cfg.life.dungeons is on
                     assert app.file_cfg.life.dungeons is on and app.engine.cfg.life.dungeons is on
+                    app.tuning.refresh()
+                    assert app.engine.cfg.life.dungeons is on
                     assert not app.realm.parts["day"].admission
             assert sum(part is app.realm.parts["day"] for part, _ in app.realm._parts) == 1
         finally:

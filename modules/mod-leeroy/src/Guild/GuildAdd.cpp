@@ -268,7 +268,7 @@ void PreviewDungeonBody(GuildAddBody& body, std::string const& dungeon, uint32 g
     if (body.fence == "busy:training_owner" && CanProjectDungeonBody(dungeon,guid))
     {
         body.fence.clear();
-        body.grouped = body.elsewhere = body.inCombat = body.dead = false;
+        body.grouped = body.elsewhere = body.inCombat = body.dead = body.teleporting = false;
     }
 }
 
@@ -324,7 +324,8 @@ std::vector<std::string> Fill(Player* human, uint32 size, PendingAdd const* resu
         Player* bot = FindOnline(guid);
         auto token = ownerAsk && Realm::Config().dayPlans ? Realm::DayForMember(guid) : std::string{};
         bool const owned = !token.empty() && Realm::DayOwnsMember(token, guid);
-        if (owned && !bot) bot = ObjectAccessor::FindConnectedPlayer(Realm::PlayerGuid(guid));
+        if (!bot && (owned || (ownerAsk && !MemberDungeonFor(guid).empty())))
+            bot = ObjectAccessor::FindConnectedPlayer(Realm::PlayerGuid(guid));
         auto body = BodyOf(guid, bot, human, guildId, false, &outside, size);
         if (owned && bot)
         {
@@ -413,6 +414,7 @@ std::vector<std::string> Fill(Player* human, uint32 size, PendingAdd const* resu
                 break;
             if (GroupHasRealmOwner(group))
                 break;
+            if (ownerAsk) Realm::CancelPreparedDungeon({pick.guid});
             if (!group->isRaidGroup() && group->GetMembersCount() >= MAXGROUPSIZE)
                 group->ConvertToRaid();
             if (group->IsFull() || !group->AddMember(bot))

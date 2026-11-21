@@ -53,6 +53,13 @@ bool ValidDungeonReceipt(nlohmann::json const& data)
     catch (nlohmann::json::exception const&) { return false; }
 }
 
+bool DungeonBeforeMutation(nlohmann::json const& data)
+{
+    auto stage = data.value("stage",std::string{});
+    return data.at("bodies").empty() && !data.value("group",0u) && !data.value("instance",0u) &&
+        (stage == "accepted" || (stage == "grouping" && data.value("effect",std::string{}) == "observe"));
+}
+
 bool MemberDungeonPreempts(bool admitted, std::vector<std::uint32_t> const& requested,
     std::vector<std::uint32_t> const& participants)
 {
