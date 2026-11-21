@@ -441,7 +441,9 @@ def _varied_specs(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int,
                   set_no: int) -> tuple[PromptSpec | None, ...] | None:
     """A varied set's prompts by slot (varied.py; None for a slot that renders her ordinary
     photo) while the switch is on and its plan still holds for her; None renders the set as an
-    ordinary one (logged by code when it had a plan)."""
+    ordinary one (logged by code when it had a plan). Called only for queued sets: _render_set
+    discards any uncommitted files and rebuilds all four slots before marking the set ready.
+    Updating coverage here cannot relabel candidates in an already ready set."""
     from . import varied
     if not getattr(cfg, "varied_sets", False):
         return None

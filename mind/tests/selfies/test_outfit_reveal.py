@@ -173,6 +173,40 @@ def test_profile_transform_preserves_kind_and_stored_persona():
     assert R.profile(p, 5, 1, kind_style=PLAIN) is p
 
 
+def test_crash_before_ready_rebuilds_all_slots_on_level_change_and_ready_sets_stay_frozen(
+        h, tmp_path, monkeypatch):
+    from leeroy_mind.selfies import files, render
+    from leeroy_mind.selfies.store import queued_sets
+    from selfies.fakes import tagged_jpeg
+    lust(h)
+    varied.queue(h.store, human=1, now=h.T, day=DAY, go=True)
+
+    def crash(*args, **kwargs):
+        raise RuntimeError("simulated crash after publish, before ready transaction")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(render, "_ready", crash)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            _render(h, tmp_path, replace(ON, outfit_reveal=1))
+    low = varied.plan_of(h.store.conn, 101, 1)
+    assert queued_sets(h.store) and not _prompts(h, 101, 1)
+    old = tagged_jpeg("uncommitted low coverage")
+    for i in range(4):
+        path = files.candidate(h.settings.data_dir, 101, 1, i)
+        assert path.is_file()
+        path.write_bytes(old)
+    _render(h, tmp_path, replace(ON, outfit_reveal=5))
+    high = varied.plan_of(h.store.conn, 101, 1)
+    prompts = _prompts(h, 101, 1)
+    assert high != low and len(prompts) == 4 and not queued_sets(h.store)
+    for i, (look, prompt) in enumerate(zip(high, prompts)):
+        assert look.phrase in prompt
+        assert files.candidate(h.settings.data_dir, 101, 1, i).read_bytes() != old
+    _render(h, tmp_path, replace(ON, outfit_reveal=1))
+    assert varied.plan_of(h.store.conn, 101, 1) == high
+    assert _prompts(h, 101, 1) == prompts
+
+
 @pytest.mark.parametrize("audience", ["him", "anyone"])
 def test_enum_request_reaches_reveal_and_channel_request_is_routed_privately(app, audience):
     save(app, woman(age=30, stance="lust"))
