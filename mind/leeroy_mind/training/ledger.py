@@ -85,6 +85,7 @@ class PullContext:
     arm_id: int | None
     change: str
     covariates: dict[str, int | str]
+    uncertain: bool = False
 
 
 @dataclass
@@ -332,8 +333,8 @@ class Ledger:
             self.ports.conn.execute("INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                                     (key, json.dumps(value, separators=(",", ":"), allow_nan=False)))
 
-    def set_in_play(self, context, *, card_id=None, arm_id=None, change=""):
-        if (not _CONTEXT.fullmatch(context) or any(v is not None and not _int(v, 1) for v in (card_id, arm_id))
+    def set_in_play(self, context, *, card_id=None, arm_id=None, change="", guild_strategy=None, at_ms=None, uncertain=False):
+        if (not _CONTEXT.fullmatch(context) or any(v is not None and not _int(v, 1) for v in (card_id, arm_id, guild_strategy))
                 or type(change) is not str or len(change) > 5000):
             raise ValueError("invalid in-play context")
         raid_id = self._run_id()
@@ -343,9 +344,14 @@ class Ledger:
         history = self._get(key, [])
         if not isinstance(history, list):
             raise ValueError("invalid saved in-play context")
-        now = int(self.ports.clock.now() * 1000)
+        now = int(self.ports.clock.now() * 1000) if at_ms is None else at_ms
         history = [item for item in history if item["at_ms"] != now]
-        history.append(dict(at_ms=now, card_id=card_id, arm_id=arm_id, change=change))
+        entry = dict(at_ms=now, card_id=card_id, arm_id=arm_id, change=change)
+        if guild_strategy is not None:
+            entry["guild_strategy"] = guild_strategy
+        if uncertain:
+            entry["uncertain"] = True
+        history.append(entry)
         self._put(key, sorted(history, key=lambda item: item["at_ms"])[-64:])
 
     def mark_unscoreable(self, context):
@@ -414,6 +420,8 @@ class Ledger:
         history = self._get(f"tg:in-play:{raid_id}:{context}", []) if raid_id is not None else []
         eligible = [item for item in history if item["at_ms"] <= h.start_ms]
         chosen = max(eligible, key=lambda item: item["at_ms"], default={})
+        if chosen.get("guild_strategy") is not None:
+            covariates["guild_strategy"] = chosen["guild_strategy"]
         token = None
         if raid_id is not None:
             key = f"tg:unscoreable:{raid_id}:{context}"
@@ -422,7 +430,7 @@ class Ledger:
             if row and isinstance(value, dict) and _int(value.get("from_ms")) and value["from_ms"] <= h.start_ms:
                 token = (key, row[0])
         return (PullContext(kind, lead, raid_id, chosen.get("card_id"), chosen.get("arm_id"),
-                            chosen.get("change", ""), covariates), roles, token)
+                            chosen.get("change", ""), covariates, bool(chosen.get("uncertain"))), roles, token)
 
     async def on_event(self, ev):
         if type(ev) not in (p.Pull, p.PullMember, p.PullDeath, p.PullTrack):
@@ -452,7 +460,7 @@ class Ledger:
             ctx, roles, token = self._context(rec)
             self._ready[ident] = (rec, ctx, roles, token, received)
         inserted = store.put_pull(self.ports.conn, rec, ctx, roles, received=received,
-            first_pull_ts=received, consume_unscoreable=token)
+            first_pull_ts=received, consume_unscoreable=token, scoreable=not ctx.uncertain)
         self._ready.pop(ident, None)
         if not inserted:
             return

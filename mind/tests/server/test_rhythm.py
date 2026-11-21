@@ -175,3 +175,16 @@ def test_hangouts_still_scale_a_subject():
     avoided = sum(choose_seed_and_channel(seeds, local=datetime(2026,11,12,19), officers_free=3,
                                           rng=rng, hangouts=avoid)[0].kind == 'officer' for _ in range(2000))
     assert avoided < plain / 5
+
+
+def test_bank_singleton_keeps_officer_opener_presence_and_audience():
+    personas,states = fixture()
+    for kind in ("bank_request","restock"):
+        seed = Seed(kind+":1",kind,("bank-requests",),"Stock",(102,),True)
+        opts = dict(local=datetime(2026,11,12,19),rng=random.Random(1))
+        assert choose_seed_and_channel([seed],officers_free=1,**opts) == (seed,"bank-requests")
+        assert choose_seed_and_channel([seed],officers_free=0,**opts) is None
+        assert draw(personas,states,seed=seed,channel="bank-requests",officers={102}) == [102]
+        for skip in (dict(away={102}),dict(in_play={102}),dict(officers={104})):
+            assert not draw(personas,states,seed=seed,channel="bank-requests",**skip)
+        assert not draw(personas,states,seed=seed,channel="general")

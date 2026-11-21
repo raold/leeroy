@@ -441,3 +441,15 @@ def test_pooled_promotion_retires_stale_boss_trial_preserves_evidence_and_admits
     assert exp._card(replacement_arm["card"]).lineage == fresh
     assert exp.arm_valid(CTX, replacement_arm["id"])
     assert asyncio.run(exp.open_trials()) == 0
+
+
+def test_raw_guild_strategy_wipes_do_not_bench_strategy_free_arms(fake, experiment):
+    exp, run, trial, challenger, champion = open_one(fake, experiment)
+    for arm in (challenger, champion):
+        pull(fake, "tagged"+str(arm["id"]), arm=arm["id"], card=arm["card"],
+             outcome="wiped", covariates={"guild_strategy":17}, raid=run.session.raid_id)
+    assert exp.arm_for(CTX, run) is not None
+    for arm in (challenger, champion):
+        pull(fake, "baseline"+str(arm["id"]), arm=arm["id"], card=arm["card"],
+             outcome="wiped", raid=run.session.raid_id)
+    assert exp.arm_for(CTX, run) is None

@@ -53,6 +53,20 @@ def _eligible(row):
             and is_raid_fight(row.get("map"), row.get("boss_id")))
 
 
+def strategy_id(row):
+    """Legacy receipts belong to unmodified training (zero). A malformed id cannot join it."""
+    data = row["covariates"] if "covariates" in row.keys() else {}
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except ValueError:
+            return -1
+    if not isinstance(data, dict):
+        return -1
+    ident = data.get("guild_strategy", 0)
+    return ident if type(ident) is int and ident >= 0 else -1
+
+
 def _duration(row):
     return (row["end_ms"] - row["start_ms"]) / 1000.0
 
@@ -88,7 +102,7 @@ class ContextStats:
 
 def context_stats(rows) -> ContextStats:
     rows = _scored_rows(rows)
-    if len({r["score_basis"] for r in rows}) > 1:
+    if len({(r["score_basis"], strategy_id(r)) for r in rows}) > 1:
         raise ValueError("context statistics require one score basis")
     champion = [r for r in rows if r.get("champion") == 1]
     if len(champion) >= 3:
@@ -133,7 +147,7 @@ def _solve(matrix, target):
 def adjusted(rows) -> dict[str, float]:
     rows = sorted(_scored_rows(rows), key=lambda row: row["id"])
     raw = {row["id"]: float(row["score"]) for row in rows}
-    if len(rows) < 20 or len({row["score_basis"] for row in rows}) > 1:
+    if len(rows) < 20 or len({(row["score_basis"], strategy_id(row)) for row in rows}) > 1:
         return raw
     covariates = []
     for row in rows:
@@ -214,7 +228,7 @@ async def score_pull(ports, rec, ctx, result: CheckResult) -> float | None:
     basis = "mechanics_deaths_time" if row["checks_complete"] else "deaths_time"
     history = [dict(r) for r in _context_rows(conn, row["context"])
                if r["start_ms"] < row["start_ms"] and r["received"] <= row["received"]
-               and r["score_basis"] == basis]
+               and r["score_basis"] == basis and strategy_id(r) == strategy_id(row)]
     median = context_stats(history).median_kill_s
     failed = row["failed_mechanics"] if row["checks_complete"] else 0
     score = pull_score(row["outcome"], row["deaths"], failed, _duration(row), median)

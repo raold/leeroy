@@ -214,27 +214,32 @@ def hurt_report(conn, *, context: str | None = None, last: int | None = None,
                   evidence=dict(EVIDENCE), truncated=[])
     if not kinds:
         return result
+    from .score import strategy_id
     marks = ",".join("?" * len(kinds))
     pulls = defaultdict(list)
     incomplete = Counter()
     for row in conn.execute(
             "SELECT id, context, map, boss_id, difficulty, size, outcome, start_ms, end_ms, kind, complete, "
-            "checks_complete, checks_coverage, damage_basis, spell_basis FROM tg_pull "
+            "checks_complete, checks_coverage, damage_basis, spell_basis, covariates FROM tg_pull "
             f"WHERE kind IN ({marks}) ORDER BY start_ms DESC, id DESC", kinds):
         if not _context_ok(row["context"]) or not _matches(row["context"], context):
             continue
+        key = (row["context"], strategy_id(row))
         if not row["complete"] or row["outcome"] not in ("killed", "wiped"):
-            incomplete[row["context"]] += 1
+            incomplete[key] += 1
             continue
-        if len(pulls[row["context"]]) < keep:
-            pulls[row["context"]].append(row)
+        if len(pulls[key]) < keep:
+            pulls[key].append(row)
         elif (last is None or last > keep) and "pulls" not in result["truncated"]:
             result["truncated"].append("pulls")  # the cap, not the asked-for --last, cut it
     order = sorted(pulls, key=lambda c: (-pulls[c][0]["start_ms"], c))
     if len(order) > max_contexts:
         result["truncated"].append("contexts")
     for ctx in order[:max_contexts]:
-        result["contexts"].append(_context(conn, ctx, pulls[ctx], incomplete[ctx], spells, names, owner, top))
+        group = _context(conn, ctx[0], pulls[ctx], incomplete[ctx], spells, names, owner, top)
+        if ctx[1]:
+            group["guild_strategy"] = ctx[1]
+        result["contexts"].append(group)
     return result
 
 

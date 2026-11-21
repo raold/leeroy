@@ -59,10 +59,19 @@ def poll_card(conn, row, human: int) -> dict:
             counts[r["option"]] += 1
         if r["member"] == human:
             mine = r["option"]
+    eligible = len(voters_of(row))
+    if row["kind"] == "rank" and row["status"] == "closed":
+        snapshot = views.rows(conn, "SELECT json_extract(value,'$.rank_tally.eligible'), "
+                                    "json_extract(value,'$.rank_tally.counts.approve'), "
+                                    "json_extract(value,'$.rank_tally.counts.keep') FROM guild_decision "
+                                    "WHERE kind='rank' AND poll=?", (row["id"],))
+        if snapshot and all(type(n) is int and n >= 0 for n in snapshot[0]):
+            eligible, approve, keep = snapshot[0]
+            counts = {"approve": approve, "keep": keep}
     return {"id": row["id"], "channel": row["channel"], "question": row["question"],
             "options": [{"code": o, "count": n} for o, n in counts.items()], "status": row["status"],
             "opened": row["opened"], "closes": row["closes"], "result": row["result"], "kind": row["kind"],
-            "voters": len(voters_of(row)), "votes": sum(counts.values()), "his_vote": mine,
+            "voters": eligible, "votes": sum(counts.values()), "his_vote": mine,
             "he_votes": human in voters_of(row)}
 
 
@@ -73,11 +82,27 @@ def decisions_view(conn, *, now: float, enabled: bool = False) -> dict:
     out = {"enabled": enabled, "human": human, "missing": missing, "decisions": [], "polls": []}
     if missing:
         return out
+    if enabled and "meta" in have:
+        from leeroy_mind.decisions.restock import history, deliveries
+        out["restocks"] = [dict(week=s["week"], deliveries=deliveries(s, views.names(conn)), no_maker=s["no_maker"])
+                           for s in history(conn)]
     apply.load_builtin()
     names = views.names(conn)
     name = lambda g: names.get(g, f"#{g}")  # noqa: E731
     for row in views.rows(conn, "SELECT * FROM guild_decision ORDER BY id DESC LIMIT ?", (LIMIT,)):
         message, poll = apply.channels_of(conn, row)
+        changed, action = apply.effects(row), _action(row)
+        if row["kind"] == "bank" and "realm_direct" in have:
+            from leeroy_mind.decisions.bank import delivery
+            irreversible, words = delivery(conn, row)
+            if irreversible:
+                changed.append(words)
+                if action:
+                    action.update(words=words, permanent=True, confirm=words + " Block further transfers?")
+        if action and action["kind"] == "undo" and row["kind"] in ("rank", "strategy"):
+            words = ("Schedule roster rank restoration?" if row["kind"] == "rank"
+                     else "Schedule strategy cleanup at the next safe point?")
+            action.update(words=words, confirm=words)
         out["decisions"].append({
             "id": row["id"], "kind": row["kind"], "label": apply.LABELS[row["kind"]], "subject": row["subject"],
             "summary": apply.summary(row, name), "status": row["status"], "state": apply.STATES[row["status"]],
@@ -85,10 +110,10 @@ def decisions_view(conn, *, now: float, enabled: bool = False) -> dict:
             "settler": (("a poll" if row["settled_by"] == 0 else name(row["settled_by"]))
                         if row["settled"] is not None else ""),
             "proposed": row["proposed"], "settled": row["settled"], "effect": row["effect"], "ended": row["ended"],
-            "changed": apply.effects(row), "positions": _positions(row["positions"], names),
+            "changed": changed, "positions": _positions(row["positions"], names),
             "poll": row["poll"], "supersedes": row["supersedes"], "overruled": bool(row["overruled_by_owner"]),
             "officers_only": apply.officers_only(row, message) or apply.private_channel(poll),
-            "action": _action(row)})
+            "action": action})
     for row in views.rows(conn, "SELECT * FROM guild_poll ORDER BY (status = 'open') DESC, id DESC LIMIT ?", (POLLS,)):
         card = poll_card(conn, row, human)
         card["positions"] = [{**p, "name": names.get(p["guid"], "")} for p in positions_of(row)]

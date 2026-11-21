@@ -181,7 +181,7 @@ def strategy_positions(conn, context: str, proposal: dict, cast, personas) -> li
     theorycrafters back a change, argumentative members resist it, the rest follow the wipes."""
     since = proposal.get('since_ms', 0)
     since = since if type(since) is int and since >= 0 else 0
-    wipes = (_rows(conn, "SELECT count(*) FROM tg_pull WHERE context=? AND outcome='wiped' AND start_ms>=?",
+    wipes = (_rows(conn, "SELECT count(*) FROM tg_pull p JOIN guild_raid r USING(raid_id) WHERE p.context=? AND p.outcome='wiped' AND complete=1 AND kind IN ('his','offline') AND end_ms>=?",
                    (context, since)) or [(0,)])[0][0]
     out = []
     for g in sorted(cast):

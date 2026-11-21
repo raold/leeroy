@@ -332,3 +332,15 @@ LEEROY_TEST(RealmBank_AdmissionChecksAnUnreservedBodyUnowned)
     CHECK(BankAdmissionOperation("op-2", "op-1").empty());
     CHECK(BankAdmissionOperation("", "").empty());
 }
+
+LEEROY_TEST(RealmBank_TargetedStockRequiresOptInAndRoomAtItsCeiling)
+{
+    CHECK(BankStockAllowed(0, false));
+    CHECK(!BankStockAllowed(101, false));
+    CHECK(BankStockAllowed(101, true));
+    auto bank = Deposited();
+    CHECK(TargetedBankStockFits(bank, 0, 41001, 10, 20));
+    CHECK(!TargetedBankStockFits(bank, 0, 41001, 11, 20));
+    bank.slots.back().item = {2001,0,41002,1,1,0};
+    CHECK(!TargetedBankStockFits(bank, 0, 41001, 1, 20));
+}

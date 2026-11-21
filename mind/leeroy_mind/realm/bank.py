@@ -75,7 +75,7 @@ STOCK = {
     5: ((8485, 1), (8486, 1), (8487, 1), (8488, 1), (8489, 1), (8490, 1)),  # cats
 }
 STACKS_PER_TAB = 20
-REASONS = ("stock", "gathering", "donation", "prize", "craft", "gift", "consumables")
+REASONS = ("stock", "gathering", "donation", "prize", "craft", "gift", "consumables", "request")
 JOB_KINDS = frozenset({"bank_stock", "bank_deposit", "bank_withdraw"})
 BANK_GAP_S, STOCK_GAP_S = 1.0, 0.5
 POLL_S, SETTLE_S = 0.25, 120.0
@@ -328,6 +328,8 @@ class BankLedger:
         if type(guid) is not int or not 0 <= guid <= _U32 or type(item_id) is not int or not 0 <= item_id <= _U32:
             raise ValueError("invalid bank guid or item")
         count, money = _count(count), _count(money)
+        if reason == "request" and (dir != "out" or not count or money):
+            raise ValueError("a bank request withdraws items only")
         if (count > 0) != (item_id > 0) or not (count or money):
             raise ValueError("a bank row moves an item count or money")
         return dir, reason, guid, item_id, count, money

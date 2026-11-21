@@ -373,7 +373,7 @@ def test_ledger_balance_and_low(store, clock):
     assert [tuple(r) for r in store.conn.execute(
         "SELECT ts,dir,reason,guid,item_id,count,money FROM realm_bank ORDER BY id")] == [
         (clock.now(), "in", "stock", DKP, 43015, 10, 0), (clock.now(), "out", "consumables", DKP, 43015, 7, 0)]
-    assert set(bank.REASONS) == {"stock", "gathering", "donation", "prize", "craft", "gift", "consumables"}
+    assert set(bank.REASONS) == {"stock", "gathering", "donation", "prize", "craft", "gift", "consumables", "request"}
     for bad in ({"dir": "sideways"}, {"reason": "theft"}, {"count": -1}, {"count": 0},
                 {"item_id": 0}, {"guid": True}):
         with pytest.raises(ValueError):

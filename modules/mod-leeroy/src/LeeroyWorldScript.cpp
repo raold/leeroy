@@ -6,6 +6,7 @@
 #include "LeeroyEvents.h"
 #include "LeeroyIntegrations.h"
 #include "LeeroyModule.h"
+#include "Training/TrainingTap.h"
 #include "LeeroyProtocol.h"
 #include "LeeroyQueueFence.h"
 #include "RealmModule.h"
@@ -160,7 +161,8 @@ public:
             if (module.Config().dayPlans && module.Config().realmEnable)
                 features.emplace_back("day_plan_handoff_v1");
             bridge.Greet(serial, Leeroy::EncodeHello(now, module.GuildId(), humanOnline ? human : 0, _startedMs,
-                    features),
+                    features, module.Config().bankMailEnable,
+                    Leeroy::Training::TrainingTap::Instance().TrainingOn(), module.Config().bankRestockEnable),
                 Leeroy::EncodeCast(now, cast.BuildMembers(module.GuildId())));
             _greetedSerial = serial;
             LeeroyResetAfk();   // the new mind hears about everyone already AFK on the next poll

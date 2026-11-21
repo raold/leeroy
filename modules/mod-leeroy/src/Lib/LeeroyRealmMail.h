@@ -34,6 +34,7 @@ struct MailPlan { std::vector<MailAttachment> attachments; std::vector<MailSourc
 // nonstacking new gifts become separate native attachments, up to the core cap.
 // Whitelist maxima apply to the aggregate new quantity of each entry, so
 // repeated wire rows cannot bypass them. Bag transfers need no creation rule.
+std::uint32_t MailReceiverGuid(MailSendCmd const&, std::uint32_t human, bool enabled, bool officer, bool member);
 std::optional<MailPlan> PlanMail(MailSendCmd const&, std::vector<ItemRule> const&,
     std::vector<MailTemplateFacts> const&, std::vector<MailBagFacts> const&, std::string& error);
 bool MailDebitAllowed(std::uint32_t before, std::uint32_t amount, std::uint32_t nativeCap);

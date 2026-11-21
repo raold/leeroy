@@ -13,6 +13,7 @@ import re
 from leeroy_mind.guild.boss_calls import call_for, parse_dc_status
 from leeroy_mind.wow import BOSS_NAMES
 
+from .score import strategy_id
 from . import store
 from .cards import Card, LEVERS, stock_card
 from .ledger import combat_role, context_key
@@ -42,6 +43,8 @@ class TrainingListener:
         self.lust_provider, self.members_provider = lust_provider, members_provider
         self.prepare_run = prepare_run
         self.farm_basis = farm_basis
+        self.guild_layer = self.guild_played = None
+        self.guild_hold = lambda: False
         self.run = None
         self._muster = None
         self._pull = False
@@ -68,7 +71,8 @@ class TrainingListener:
         self._start_ready = False
         self._start_waiting = self._start_attempted = False
         self._start_retry_at = 0
-        self._effective_context = None
+        self._effective_context = self._guild_applied = self._guild_card = None
+        self._fight_strategy = 0
 
     @staticmethod
     def run_key(run):
@@ -120,32 +124,32 @@ class TrainingListener:
     def set_experimenter(self, experimenter):
         self.experimenter = experimenter
 
-    def _farm(self, context, *, before_ms=None):
+    def _farm(self, context, *, before_ms=None, strategy=0):
         rows = store.pull_rows(self.ports.conn, context=context, scoreable=True)
         return is_farm([r["outcome"] for r in rows if r["complete"] and r["score"] is not None
-                        and r["score_basis"] == self.farm_basis and r["kind"] in {"his", "offline"}
+                        and strategy_id(r) == strategy and r["score_basis"] == self.farm_basis and r["kind"] in {"his", "offline"}
                         and (before_ms is None or r["start_ms"] < before_ms)])
 
-    def _run_farm(self, context, run, *, before_ms=None):
+    def _run_farm(self, context, run, *, before_ms=None, strategy=0):
         """Freeze eligibility before this context's first pull of the run.
 
         A farm wipe must not turn the next pull into an untested progression
         experiment. The callback fallback excludes its just-stored pull.
         """
-        key = (self.run_key(run), context)
+        key = (self.run_key(run), context, strategy)
         if key not in self._farm_at_entry:
             cutoff = int(self.ports.clock.now() * 1000) if before_ms is None else before_ms
-            self._farm_at_entry[key] = self._farm(context, before_ms=cutoff)
+            self._farm_at_entry[key] = self._farm(context, before_ms=cutoff, strategy=strategy)
         return self._farm_at_entry[key]
 
-    def card_for(self, context, run):
+    def card_for(self, context, run, strategy=0):
         stock = stock_card(context)
         if not self._acting():
             return stock, None
         row = store.champion(self.ports.conn, context)
         champion = Card.from_row(row) if row else stock
-        farm = self._run_farm(context, run)
-        if run.human_in_raid and (context in self._old or farm and self._wipes.get(context, 0) >= 2):
+        farm = self._run_farm(context, run, strategy=strategy)
+        if run.human_in_raid and (context in self._old or farm and self._wipes.get((context, strategy), 0) >= 2):
             previous = self.ports.conn.execute("SELECT * FROM tg_card WHERE id=? AND context=?",
                 (champion.prev_champion, context)).fetchone()
             if previous is not None and previous["status"] in {"retired", "champion"}:
@@ -154,7 +158,7 @@ class TrainingListener:
                 return replace(Card.from_row(previous), status="champion"), None
             return champion, None
         if farm:
-            if (not run.human_in_raid and self.ports.cfg.experiments and self.experimenter is not None
+            if (not strategy and not run.human_in_raid and self.ports.cfg.experiments and self.experimenter is not None
                     and context not in self._benched):
                 choice = self.experimenter.arm_for(context, run)
                 if choice is not None and self._arm_allowed(context, run, *choice):
@@ -259,9 +263,10 @@ class TrainingListener:
                 return False
         return self._valid(token)
 
-    async def _apply(self, run, layer, card):
+    async def _apply(self, run, layer, card, *, guild_strategy=None):
         return await self.applier.apply(self.run_key(run), layer, card.context, card,
-            self._members(run), tank_guid=run.plan.tank_guid, lead_is_human=run.lead_is_human)
+            self._members(run), tank_guid=run.plan.tank_guid, lead_is_human=run.lead_is_human,
+            **({"guild_strategy": guild_strategy} if guild_strategy is not None else {}))
 
     def invalidate(self, run):
         self.gate.invalidate(run)
@@ -364,6 +369,12 @@ class TrainingListener:
             self._muster = None  # Same-boss retries require a new resting boundary.
         await self._call("on_boss", ev)
 
+    def _guild_carrier(self, run, card):
+        if self.lust_provider is None and any(d.lever == "lust_at" for d in card.directives):
+            return False
+        return self.applier.guild_carrier(self.run_key(run), card, tank=run.plan.tank_guid,
+                                         human_lead=run.lead_is_human)
+
     async def _prepare(self, ev):
         if (not self._fresh(ev) or self._pull or ev.tank_guid != self.run.plan.tank_guid
                 or not ev.enabled or self._ending):
@@ -383,6 +394,8 @@ class TrainingListener:
             if not self._valid(token):
                 return
             run = token[0]
+            if self.guild_layer and self.guild_hold():
+                return
             if (boss, state.next_entry) != self._muster:
                 self._boss, self._muster = boss, (boss, state.next_entry)
                 self._prepared = self._release_ok = False
@@ -395,7 +408,19 @@ class TrainingListener:
                     self._old_next = False
                     self._queue("old_plan", boss)
                 if self._acting():
-                    card, arm = self.card_for(context, run)
+                    guild = self.guild_layer(context) if self.guild_layer else None
+                    if guild:
+                        proposed = guild[1]
+                        top = store.champion(self.ports.conn, context)
+                        champion = Card.from_row(top) if top else stock_card(context)
+                        shadowed = any(c.lever == d.lever for c in champion.directives for d in proposed.directives)
+                        if shadowed or not self._guild_carrier(run, proposed):
+                            guild = None
+                    card, arm = self.card_for(context, run, guild[0] if guild else 0)
+                    if guild and any(c.lever == d.lever for c in card.directives for d in guild[1].directives):
+                        # A progression correction or fallback champion can own this lever too.
+                        guild = None
+                        card, arm = self.card_for(context, run)
                     ok = False
                     try:
                         async with asyncio.timeout(self.APPLY_TIMEOUT):
@@ -414,7 +439,20 @@ class TrainingListener:
                             # Experimenter cards are the complete merged
                             # baseline. Reinstalling pooled beneath an omitted
                             # trial key would silently turn stock into champion.
+                            if self._guild_applied is not None:
+                                await self.applier.revert(self.run_key(run), "guild")
+                                if self.applier.guild_pending(self.run_key(run)):
+                                    self.ledger.set_in_play(context, guild_strategy=self._guild_applied)
+                                    self.ledger.mark_unscoreable(context)
+                                    self._muster = None
+                                    return
+                                self._guild_applied = None
                             baseline_ok = arm is not None or await self._pooled(token, context)
+                            if baseline_ok and guild:
+                                baseline_ok = (self._valid(token) and not self._pull and self.guild_layer(context) == guild
+                                               and await self._apply(run, "guild", guild[1], guild_strategy=guild[0]))
+                                if self.applier.guild_pending(self.run_key(run)):
+                                    self._guild_applied = guild[0]
                             if baseline_ok and self._valid(token):
                                 ok = await self._apply(run, "arm" if arm is not None else "boss", card)
                             if (ok and arm is not None and self._valid(token)
@@ -425,17 +463,43 @@ class TrainingListener:
                         pass
                     if not self._valid(token):
                         return
+                    if ok and guild and (self._pull or self.guild_layer(context) != guild
+                                         or not self._guild_carrier(run, guild[1])):
+                        # Timer ownership becomes effective here, after physical preparation.
+                        # Reprepare at the next safe muster if the selected cohort changed.
+                        self._muster = None
+                        ok = False
                     if ok:
                         self._effective_context = context
+                        receipt = {}
+                        if guild:
+                            self._guild_applied = guild[0]
+                            self._guild_card = guild[1]
+                            self.guild_played(guild[0])
+                            receipt["guild_strategy"] = guild[0]
+                            # Timer/call levers run in the listener. The champion/arm wins an overlap.
+                            keys = {d.lever for d in card.directives}
+                            card = replace(card, directives=tuple(d for d in guild[1].directives if d.lever not in keys)
+                                           + card.directives)
                         self._applied[context] = (card, arm, self.change_for(context))
                         self.ledger.set_in_play(context, card_id=card.id, arm_id=arm,
-                                                change=self.change_for(context))
+                                                change=self.change_for(context), **receipt)
                         self._release_ok = True
                     else:
                         self._effective_context = None
                         self._applied.pop(context, None)
-                        self.ledger.set_in_play(context)
+                        receipt = {}
+                        if (self._guild_applied or guild) and self.applier.guild_pending(self.run_key(run)):
+                            # A timeout can cut the await after native dispatch but before apply returns.
+                            self._guild_applied = self._guild_applied or guild[0]
+                            receipt["guild_strategy"] = self._guild_applied
+                            self._muster = None
+                        else:
+                            self._guild_applied = None
+                        self.ledger.set_in_play(context, **receipt)
                         self.ledger.mark_unscoreable(context)
+                        if self._muster is None:
+                            return
                         # Never resume an uncertain/partially mutated apply.
                         # Terminal cleanup is the controller's mandatory barrier.
                 else:
@@ -445,6 +509,34 @@ class TrainingListener:
             if held and self._prepared and self._release_ok and self._valid(token) and self._acting():
                 if await self.applier.resume_held(run.plan.tank_guid) and self._valid(token):
                     self._release_ok = False
+
+    def _engagement(self, run, context, ev):
+        """Freeze what this engagement actually inherited without changing the game."""
+        if not self.guild_layer:
+            return 0
+        physical = self.applier.guild_evidence(self.run_key(run))
+        prepared = self._effective_context == context and self._prepared
+        selected = self._guild_applied
+        card = self._guild_card if selected else None
+        timer = card and any(d.lever == "lust_at" for d in card.directives)
+        strategy = None
+        uncertain = False
+        if physical:
+            ids = {ident for _, ident, _ in physical if ident}
+            strategy = next(iter(ids)) if len(ids) == 1 else None
+            uncertain = not (prepared and strategy and strategy == selected and card and self._guild_carrier(run, card)
+                             and all(ctx == context and ident == strategy and ok for ctx, ident, ok in physical))
+        elif timer and prepared and self._lust_active and self._guild_carrier(run, card):
+            strategy = selected
+        elif selected:
+            uncertain = True
+            if timer:
+                self._lust_active = False
+        chosen = self._applied.get(context) if prepared else None
+        self.ledger.set_in_play(context, at_ms=ev.ts, guild_strategy=strategy, uncertain=uncertain,
+                                card_id=chosen[0].id if chosen else None, arm_id=chosen[1] if chosen else None,
+                                change=chosen[2] if chosen else "")
+        return None if uncertain else strategy or 0
 
     async def _boss_event(self, ev):
         token = self._token()
@@ -457,12 +549,14 @@ class TrainingListener:
             self._start_waiting = False
             if self._pull:
                 return
-            self._run_farm(context, token[0], before_ms=ev.ts)
             self._pull, self._boss = True, ev.boss_id
             self._fight = (token, ev.boss_id, ev.ts, f"{ev.ts}-{ev.instance_id}-{ev.boss_id}")
             self._lust_sent = False
             self._pulse_id = None
             self._lust_active = self.lust_held(ev.map, ev.boss_id)
+            self._fight_strategy = self._engagement(token[0], context, ev)
+            if self._fight_strategy is not None:
+                self._run_farm(context, token[0], before_ms=ev.ts, strategy=self._fight_strategy)
             self._lust_due = self.ports.clock.now() + 10 if self._lust_active else None
         else:
             if self._fight is None or self._fight[1] != ev.boss_id or ev.ts < self._fight[2]:
@@ -472,8 +566,9 @@ class TrainingListener:
             self._lust_active = False
             self._effective_context = None
             self._prepared = self._release_ok = False
-            if ev.state == "wiped":
-                self._wipes[context] = self._wipes.get(context, 0) + 1
+            if ev.state == "wiped" and self._fight_strategy is not None:
+                cohort = (context, self._fight_strategy)
+                self._wipes[cohort] = self._wipes.get(cohort, 0) + 1
                 if self._applied.get(context, (None, None))[1] is not None:
                     self._benched.add(context)
             async with self._lock:
@@ -550,7 +645,7 @@ class TrainingListener:
                 or h.end_ms > self.ports.clock.now() * 1000 or h.id in self._seen):
             return
         row = self.ports.conn.execute("SELECT * FROM tg_pull WHERE id=?", (h.id,)).fetchone()
-        if (row is None or not rec.complete or not row["complete"] or not row["scoreable"]
+        if (row is None or strategy_id(row) or not rec.complete or not row["complete"] or not row["scoreable"]
                 or row["score"] is None or row["score_basis"] not in {"deaths_time", "mechanics_deaths_time"}
                 or row["raid_id"] != ctx.raid_id or row["end_ms"] != h.end_ms
                 or row["outcome"] != h.outcome or h.outcome not in {"killed", "wiped"}):

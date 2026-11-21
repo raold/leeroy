@@ -298,7 +298,8 @@ class LineupRules:
 
     async def _roster(self, app, now):
         guild = getattr(app, 'guild', None)
-        if guild is None or not self._connected or not guild.ports.enabled:
+        from .apply import held
+        if guild is None or not self._connected or not guild.ports.enabled or held(app):
             return
         members, bench, until = self.desired(app.store.conn, now)
         want = (members, bench, until)

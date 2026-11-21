@@ -262,6 +262,16 @@ public:
     }
 };
 
+std::uint32_t Receiver(MailSendCmd const& command)
+{
+    if (!command.toGuid) return HumanGuid();
+    auto const* guild = sGuildMgr->GetGuildById(GuildId());
+    auto const* sender = guild ? guild->GetMember(PlayerGuid(command.fromGuid)) : nullptr;
+    return MailReceiverGuid(command, HumanGuid(), Config().bankMailEnable,
+        sender && sender->GetRankId() == GR_OFFICER && IsCast(command.fromGuid),
+        guild && guild->GetMember(PlayerGuid(command.toGuid)) && IsCast(command.toGuid));
+}
+
 std::string Eligibility(Queued const& entry, std::uint32_t guid)
 {
     if (!IsCast(guid)) return "not_cast";
@@ -269,6 +279,7 @@ std::string Eligibility(Queued const& entry, std::uint32_t guid)
     std::string error;
     auto command = ParseMailSend(entry.payload, error);
     if (!command || command->fromGuid != guid) return command ? "bad field: from_guid" : error;
+    if (command->toGuid && !Receiver(*command)) return "no_receiver";
     auto* sender = FindOnline(guid);
     if (!sender) return "offline";
     if (sender->IsBeingTeleported() || sender->duel || sender->GetTradeData()) return "busy:transition";
@@ -379,14 +390,22 @@ RealmStep Send(Queued& entry, std::uint32_t guid)
     auto command = ParseMailSend(entry.payload,error);
     if (!command) return {StepState::Refused,std::move(error)};
     auto const human = HumanGuid();
-    auto const* recipient = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(human));
-    if (!human || !recipient || human == guid) return {StepState::Refused,"no_receiver"};
-    if (auto why = BoundaryPolicy(*command,human); !why.empty()) return {StepState::Refused,std::move(why)};
+    auto const receiver = Receiver(*command);
+    auto const* recipient = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(receiver));
+    if (!receiver || !recipient || receiver == guid) return {StepState::Refused,"no_receiver"};
+    auto const recipientAccount = recipient->AccountId;
+    auto memberIdentityMatches = [&]()
+    {
+        if (!command->toGuid) return true;
+        auto const* current = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(receiver));
+        return current && current->AccountId == recipientAccount && Receiver(*command) == receiver;
+    };
+    if (auto why = BoundaryPolicy(*command,receiver); !why.empty()) return {StepState::Refused,std::move(why)};
     auto* sender = FindOnline(guid);
     if (!sender) return {StepState::Refused,"offline"};
     auto const before = sender->GetMoney();
     if (!MailDebitAllowed(before,command->money,MAX_MONEY_AMOUNT)) return {StepState::Refused,"money"};
-    auto const allSources = BagSources(sender,recipient->AccountId);
+    auto const allSources = BagSources(sender,recipientAccount);
     if (!allSources) return {StepState::Refused,"no_item"};
     std::vector<MailBagFacts> bags;
     for (auto const& source : *allSources) bags.push_back({source.guid,source.entry,source.count,true});
@@ -442,15 +461,15 @@ RealmStep Send(Queued& entry, std::uint32_t guid)
             item = created.get(); attempt.escrow.push_back(std::move(created));
         }
         attachments.push_back(item);
-        expected.push_back({item->GetGUID().GetCounter(),want.entry,human,want.count});
+        expected.push_back({item->GetGUID().GetCounter(),want.entry,receiver,want.count});
     }
     attempt.first = expected.empty() ? 0 : expected.front().guid;
     // All planning/allocation ends before consuming a sender asset. Recheck the
     // exact lease and every selected native object after allocation hooks.
     if (auto why = AdmissionReason(guid,Purpose::Mail,entry.id); !why.empty()) return refuse(std::move(why));
-    if (attempt.epoch != RealmModule::Instance().Epoch() || HumanGuid() != human || sender->GetMoney() != before)
+    if (attempt.epoch != RealmModule::Instance().Epoch() || HumanGuid() != human || !memberIdentityMatches() || sender->GetMoney() != before)
         return refuse("mail_operation_identity");
-    for (auto const& source : sources) if (!ExactSource(sender,source,recipient->AccountId)) return refuse("no_item");
+    for (auto const& source : sources) if (!ExactSource(sender,source,recipientAccount)) return refuse("no_item");
     auto transaction = std::make_shared<MailTransaction>();
     if (command->money)
     {
@@ -495,25 +514,25 @@ RealmStep Send(Queued& entry, std::uint32_t guid)
     {
         auto* item = attachments[i];
         item->SetCount(expected[i].count);
-        item->SetOwnerGUID(PlayerGuid(human));
+        item->SetOwnerGUID(PlayerGuid(receiver));
         item->SetGuidValue(ITEM_FIELD_CONTAINED,ObjectGuid::Empty);
         if (item->GetState() == ITEM_UNCHANGED) item->FSetState(ITEM_CHANGED);
         item->SaveToDB(transaction); draft.AddItem(item);
     }
     if (!MailDebitProved(before,sender->GetMoney(),command->money,MAX_MONEY_AMOUNT)) return refuse("money");
     if (auto why = AdmissionReason(guid,Purpose::Mail,entry.id); !why.empty()) return refuse(std::move(why));
-    if (HumanGuid() != human || attempt.epoch != RealmModule::Instance().Epoch()) return refuse("mail_operation_identity");
+    if (HumanGuid() != human || !memberIdentityMatches() || attempt.epoch != RealmModule::Instance().Epoch()) return refuse("mail_operation_identity");
     // Release object ownership immediately before the native transfer. The
     // online receiver owns them afterwards; the offline path deletes them.
     attempt.mutated = true;
     for (auto& item : attempt.escrow) attempt.uncertain.push_back(item.release());
     attempt.escrow.clear();
     draft.AddMoney(command->money).SendMailTo(transaction,
-        MailReceiver(ObjectAccessor::FindConnectedPlayer(PlayerGuid(human)),human),
+        MailReceiver(ObjectAccessor::FindConnectedPlayer(PlayerGuid(receiver)),receiver),
         MailSender(MAIL_NORMAL,guid,MAIL_STATIONERY_DEFAULT),MAIL_CHECK_MASK_HAS_BODY,command->delayS);
     if (command->money) sender->SaveGoldToDB(transaction);
     auto const stage = transaction->Inspect(sources,guid,delivery+lifetime);
-    if (!ProveMailStage(stage,*command,*plan,expected,human,before-command->money,delivery))
+    if (!ProveMailStage(stage,*command,*plan,expected,receiver,before-command->money,delivery))
         return {StepState::Unknown,"mail_stage_unproved"};
     attempt.mail = stage.headers.front().id;
     attempt.header = stage.headers.front(); attempt.expiry = delivery+lifetime; attempt.attachments = expected;

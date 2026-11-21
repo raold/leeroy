@@ -21,6 +21,7 @@ from leeroy_mind.guild.raids import CATALOG
 from leeroy_mind.guild.roles import premade_spec_no, role_of, spec_tab_for
 from leeroy_mind.wow import is_raid_fight
 
+from .score import strategy_id
 from . import store
 from .cards import CLASSES, LEVERS
 from .ledger import combat_role
@@ -114,7 +115,7 @@ def score_evidence(conn, week, *, now=None, tz=None):
         raise ValueError("invalid score observation cutoff")
     history, buckets, identities = defaultdict(list), defaultdict(list), defaultdict(set)
     for r in _guild_pulls(conn, now):
-        context = (r["context"], r["size"])
+        context = (r["context"], r["size"], strategy_id(r))
         farm = is_farm([outcome for ended, received, outcome in history[context]
                         if ended <= r["start_ms"] and received <= r["received"]])
         history[context].append((r["end_ms"], r["received"], r["outcome"]))

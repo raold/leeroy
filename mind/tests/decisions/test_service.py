@@ -103,11 +103,11 @@ def test_a_hook_that_keeps_failing_is_given_up_after_its_tries(store, clock, loo
 
 
 def test_a_poll_whose_kind_has_no_hook_waits_for_one(store, clock):
-    # Ranks have no rules until Part C (the loot rule's are shipped since Part B)
+    # A bank request has no poll-closure hook.
     now = clock.now()
     store.set_meta('human_guid', '1')
     poll = polls.open_poll(store, channel='officer-chat', question='Promote?', options=('promote', 'keep'),
-                           voters=(102, 104), closes=now + 86400, now=now, kind='rank', subject='rank:103')
+                           voters=(102, 104), closes=now + 86400, now=now, kind='bank', subject='bank:103')
     at = [now + 86400]
     asyncio.run(service(store, at).tick())
     assert [r['id'] for r in polls.unhandled(store.conn)] == [poll]
@@ -115,7 +115,7 @@ def test_a_poll_whose_kind_has_no_hook_waits_for_one(store, clock):
 
 def test_each_service_holds_its_own_kinds(store, clock):
     first, second = service(store, [clock.now()]), service(store, [clock.now()])
-    assert set(first.rules) == {'lineup', 'loot_rule'}
+    assert set(first.rules) == {'lineup', 'loot_rule', 'bank', 'strategy', 'rank'}
     assert all(first.rules[k] is not second.rules[k] for k in first.rules)
     # A stand-in registered for a test goes ahead of a service's own
     stand_in = Kind(store)
@@ -168,8 +168,8 @@ def test_an_undo_the_ledger_cannot_record_yet_is_reported_and_retried(store, clo
     svc = service(store, [now + 2])
     try:
         reply = asyncio.run(svc.handle({'action': 'overrule', 'id': promote}))
-        assert reply['ok'] is False and reply['undone'] is True and reply['outcome'] == 'undone_unrecorded'
-        assert 'Undone in game' in reply['error'] and Rank.undone == [promote]
+        assert reply['ok'] is False and reply['undone'] is False and reply['outcome'] == 'scheduled_unrecorded'
+        assert 'scheduled' in reply['error'] and Rank.undone == [promote]
         assert ledger.current(store.conn, 'rank', 'rank:105')['id'] == promote
         with store.transaction():
             store.conn.execute('DROP TRIGGER temp.busy')

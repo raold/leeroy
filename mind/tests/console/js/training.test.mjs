@@ -86,3 +86,8 @@ test("what hurt them reads as short lines of numbers and spell names", () => {
   assert.equal(deathsBy({}), "");
   assert.deepEqual(avoidText({}), []);
 });
+
+test("hurt headings identify a played guild strategy", () => {
+  assert.match(hurtHead({pulls:1,guild_strategy:19}), /guild strategy #19/);
+  assert.doesNotMatch(hurtHead({pulls:1}), /guild strategy/);
+});

@@ -16,8 +16,8 @@ stand-in ahead of both (tests).
 | Key | Default | Range | Meaning |
 |---|---|---|---|
 | `enabled` | `false` | bool | Needs `[server] enabled`; without it the table logs `decisions_need_server` and stays off. |
-| `bank_items_per_day` | 10 | 0-50 | Stacks leaving the bank a day (the bank kind, a later part). |
-| `bank_restock_per_week` | 20 | 0-60 | Stacks the crafters restock a week; 0 turns the restock off (a later part). |
+| `bank_items_per_day` | 10 | 0-50 | Stacks leaving the bank a day. |
+| `bank_restock_per_week` | 20 | 0-60 | Stacks the crafters restock a week; 0 turns the restock off. |
 | `loot_poll_days` | 14 | 3-60 | Fewest days between loot-rule polls (Part B's loot rules). |
 
 An invalid table is off (`decisions_config_invalid key=`). Off adds no task, seed or card part,
@@ -169,11 +169,78 @@ position's side with its `why`. Presence is computed from the presence inputs on
 - Receipts record `mode`, `slot` and each bidder's `role` and `share` only while decisions are on;
   off, a receipt and every award are exactly today's.
 
-## For Part C
+## Members' bank requests and weekly restocking
 
-- `strategy_positions` counts every `tg_pull` wipe on the context, benchmark and offline pulls
-  included; Part C should count the guild's own pulls only (`kind` in `his`/`offline` as it rules).
-- Officers' business never reaches the member it is about: she does not learn the outcome of her
-  own bank request or rank change from her card, though the plan lists them as touching her.
-  Decide in Part C how the outcome reaches her (an announcement in a public channel, or a
-  pair-scoped line to her).
+The posted lineup for tomorrow creates flask requests. A member can also request an upgrade from
+the BoE tab or enchanting supplies if the armory records her enchanting profession. The bank
+officer, or the DKP officer in her absence, posts each request in the officers' #bank-requests.
+Her post includes the requester, item, quantity, reason and count against today's cap.
+Each handoff rechecks the member's entitlement and the raid hold. A flask still requires the
+posted lineup for the same upcoming night. A BoE requires a fresh bind-on-equip template and
+an equippable upgrade for that member. Bank reads expire after 60 seconds. The final transfer
+protects the last stack of each item in its tab. A missing bank read defers the handoff. The recipient receives the item in game.
+
+Requests use two durable Realm direct-ledger references, `decision:<id>:withdraw` and
+`decision:<id>:mail`. The first moves stock to the officer's bags. The second sends bag items
+with zero gold to the named member. A confirmed withdrawal creates one outgoing bank receipt,
+even if the owner overrules it before delivery. An unknown result stops the request and reserves
+its daily allowance. Each unresolved request or stack keeps its own ref while independent work
+continues. A matching late native job can still confirm the original withdrawal or mail. The
+Decisions card and overrule response report which transfers entered transport and which completed.
+One available bank officer can publish an operational post in the private bank channel.
+
+The night stage after the snapshot plans the ISO week's top-ups in `decisions:restock:<week>`.
+If the first planning attempt cannot read a fresh bank snapshot, it waits for the next nightly
+stage. The minute tick resumes an existing plan. Maker skill comes from the armory read before
+dispatch. Native checks current membership, whitelist and capacity at the write; an intervening
+profession change can leave the earlier maker credit in the ledger.
+It fills the largest proportional deficits against the original per-tab stock, using only bank
+whitelist entries, free slots and members with the corresponding profession at 375 or higher.
+It distributes planned stacks among eligible makers. Each ISO week's announcement groups item IDs
+and stack counts by maker so the entire receipt fits one Discord post. A native job completion credits the maker
+with a craft receipt, or a gathering receipt for enchanting mats. The console lists credited
+stacks by maker and items without an eligible maker. The bank officer's weekly post lists the
+makers and their deliveries. Setting `bank_restock_per_week = 0` stops new top-ups.
+
+## Boss strategy
+
+Two complete guild wipes on the same context in seven days can start a #strategy discussion.
+After two hours the lead can post the chosen change to lust timing, pull delay or muster wait.
+The next eligible resting muster installs the guild layer above standing and below the boss
+champion. A fight, wipe silence or debrief holds application. A human-led run can carry lust
+timing, while a dungeon-clear setting requires a bot-led run. The native training switch and
+an enabled training service are required. The normal training observation gate still applies.
+
+The pull's in-play receipt records its guild decision ID. Normalization, farm status and reports
+use separate cohorts for each ID. Existing benchmark comparisons, trial promotions and the
+promotion-capable coach use strategy-free evidence. Overruling ends future use of the layer.
+The training journal removes the previous layer at the next safe muster or run cleanup.
+
+## Rank reviews
+
+The first observed guild cast establishes existing members. Later additions have a first-seen
+time. Officers review newcomers in their first seven days, trials who raided at least four
+times in 30 days, and raiders with no attendance in 30 days. Approval in #applications requires a strict majority of current eligible officers. The owner's
+vote counts when he votes. His abstention leaves the decision with the officers. At least one
+cast officer must still hold office at settlement and application. A settled change schedules normal roster synchronization
+with the approved rank as an overlay. Removing the overlay schedules restoration of the persona's
+rank. The owner and rank zero are protected. Private votes and reasons stay with the officers.
+The member sees her new rank in the guild roster.
+
+## Release and switches
+
+Build and release the native modules with `ac-release.sh --native`. Set
+`Leeroy.GuildAdd.FollowRoster = 1` for the raid picker and `Leeroy.Decisions.BankMail.Enable = 1`
+for item-only member mail. Independently set `Leeroy.Decisions.BankRestock.Enable = 1` for targeted
+weekly stock. Its default of zero leaves the original bootstrap stock available. Then run `.reload config`. The member-mail capability is advertised
+in the bridge hello while enabled. Reconnect the mind after reloading the switches. An older
+bridge or a disabled mail key leaves an unsupported delivery as talk and consumes no bank stock.
+
+Enable `[server]` and `[decisions]` in the mind configuration and restart the mind and console.
+Bank writes also require the normal Realm enablement, bank permissions, item whitelist and a
+guild armory connection. Boss changes require `Leeroy.Training.Enable = 1` and `[training]`
+with telemetry and action enabled. Migration `0062_decisions_bank.sql` admits decision-owned
+direct receipts, request outflows and the guild training layer, preserving existing receipts.
+Migration `0063_decision_job_proof.sql` binds expected job actors and counts to their original
+command IDs. An outstanding 0062 request or stock plan can supply that evidence after upgrade
+when its reconstructed payload matches the original stored hash.

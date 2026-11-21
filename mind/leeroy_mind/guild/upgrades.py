@@ -15,6 +15,7 @@ class ItemInfo:
     item_subclass: int
     allowable_class: int
     stats: frozenset[int]
+    bonding: int | None = None
 
 
 _ARMOUR = {1: 4, 2: 4, 3: 3, 4: 2, 5: 1, 6: 4, 7: 3, 8: 1, 9: 1, 11: 2}

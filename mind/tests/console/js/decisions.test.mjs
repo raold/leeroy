@@ -66,3 +66,10 @@ test('an overrule asks first, and one the game cannot undo also asks him to say 
   // Unknown permanence fails toward the stronger confirmation
   assert.ok(confirmStep(decisionRow({action: {kind: 'overrule'}}).action).ack);
 });
+
+test('bank confirmation retains the observed in-flight state', () => {
+  const words = "Mail already entered transport. Block further transfers?";
+  const row = decisionRow({kind:"bank", action:{kind:"overrule", permanent:true, confirm:words}});
+  assert.equal(confirmStep(row.action).prompt, words);
+  assert.ok(confirmStep(row.action).ack);
+});
