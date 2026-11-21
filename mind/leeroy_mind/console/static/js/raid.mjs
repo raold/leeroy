@@ -16,7 +16,7 @@ var RAID_STATES = { idle: ["no raid night open", ""], waiting_call: ["call pendi
                     ended: ["over for tonight", ""] };
 var LOOT_STATES = { pending: "open for claims", sending: "being given", acknowledged: "given",
                     charged: "awarded", unclaimed: "nobody needed it", failed: "could not be given",
-                    uncertain: "uncertain", cancelled: "cancelled" };
+                    uncertain: "uncertain", gone: "no longer on the corpse", cancelled: "cancelled" };
 var ROLE_ORDER = { tank: 0, healer: 1, damage: 2 };
 var RAID_LABEL = { call: "call the raid", summon: "summon", start: "start the run",
                    stop: "stop the run", end: "end", form: "form the raid", lead: "raid lead" };

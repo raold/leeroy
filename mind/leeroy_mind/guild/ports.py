@@ -21,6 +21,10 @@ from .protocol import Job, MemberDungeonStatus, StopMemberDungeon, StopOfflineRa
 log = logging.getLogger(__name__)
 
 
+class TransportUnavailable(RuntimeError):
+    """Guild life's transport is off (disconnected or stopping): the command never left the mind."""
+
+
 class JobWaiter:
     """Bounded terminal mailbox, armed before dispatch (a job can beat its ack)."""
 
@@ -217,7 +221,7 @@ class LivePorts:
 
     async def send(self, cmd, *, expected_epoch=None):
         if not self.enabled:
-            raise RuntimeError("guild transport unavailable")
+            raise TransportUnavailable("guild transport unavailable")
         if not isinstance(cmd, (StopOfflineRaid, StopMemberDungeon, MemberDungeonStatus)):
             # A stop's terminal rides the start command's id; a mailbox entry would never be drained.
             self.jobs.expect(cmd.id)
