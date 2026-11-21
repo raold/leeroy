@@ -203,6 +203,8 @@ class GuildLife:
                 self.maintenance.members = {}
                 self.roster = self._roster()
             if name == "hello":
+                self.ports.loot_receipts = "loot_receipts_v1" in ev.features
+                self.ports.loot_receipt_status = "loot_receipt_status_v1" in ev.features
                 # First: the runner's raids must be known before any offline tick can plan one.
                 self._heroic_feature = "member_dungeon_v1" in ev.features
                 if self.heroics is not None:
@@ -342,6 +344,12 @@ class GuildLife:
             return
         await self.roster.tick()
 
+    async def loot_receipts_tick(self):
+        # Settlements survive the raid, reconnects and turning new receipt awards off.
+        if self._ready() and getattr(self.ports, "loot_receipt_status", False):
+            from .loot import reconcile_receipts
+            await reconcile_receipts(self.ports)
+
     async def speech_tick(self):
         if not self._ready() or not self.source.managed and self.ports.human_online():
             return
@@ -397,6 +405,10 @@ class GuildLife:
         self.source.managed = True
         lanes = [("online", self.online_tick), ("offline", self.offline_tick),
                  ("roster", self.roster_tick), ("speech", self.speech_tick)]
+        if self.cfg.loot_receipts or self.ports.conn.execute(
+                "SELECT 1 FROM meta WHERE key LIKE 'guild:loot:%' AND json_extract(value,'$.receipt')=1 "
+                "AND json_extract(value,'$.state') IN ('sending','uncertain','acknowledged') LIMIT 1").fetchone():
+            lanes.append(("loot_receipts", self.loot_receipts_tick))
         if self.heroics is not None:
             lanes.append(("heroics", self.heroics.tick))
         lanes += [(type(listener).__name__, lambda listener=listener: self.listener_tick(listener))

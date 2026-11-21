@@ -8,20 +8,24 @@ file is deleted. The guard review is stubbed to send (the guards have their own 
 name here is invented."""
 import asyncio
 import json
+import time
 from dataclasses import replace
 from types import SimpleNamespace
+
+import pytest
 
 from conftest import TEST_CAST, run
 from nightly.conftest import FakeAdmin, generic, scripted
 from nightly.test_night_lexicon import term
 from culture.test_memes import recorded
+from photos.test_pipeline_photo import finish
 from selfies.fakes import CLOCK, fake_command, mind_app
 from leeroy_mind.culture import memes
 from leeroy_mind.culture.bots import BOTS, SINCE_KEY
 from leeroy_mind.discord.presence import Presence
 from leeroy_mind.guards.types import Verdict
 from leeroy_mind.selfies import config as selfies_config
-from leeroy_mind.server import engine as server_engine, rhythm, state
+from leeroy_mind.server import engine as server_engine, rhythm, runtime, state, topics
 from leeroy_mind.storage.rows import Relationship
 
 TOML = ("[server]\nenabled=true\n[guards]\nenabled=true\n[selfies]\nenabled=true\n"
@@ -64,7 +68,8 @@ def seed_rows(h):
     return ident
 
 
-def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch):
+@pytest.mark.parametrize("delayed_read", [False, True], ids=["normal", "delayed-runtime-read"])
+def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch, delayed_read):
     log = tmp_path / "worker.log"
     monkeypatch.setattr(selfies_config, "worker_command",
                         lambda cfg, identity=False, embedding=False: fake_command(tmp_path)[0])
@@ -123,6 +128,9 @@ def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch):
             app.engine._login_at = float("-inf")
             app.world.human_online = False
             monkeypatch.setattr(rhythm, "length", lambda rng: 1)
+            # Topical memes override rhythm.length with their reply count. This
+            # rehearsal proves the opener, not replies with random 10–40 minute gaps.
+            monkeypatch.setattr(topics, "MEME_REPLIES", (0, 0))
 
             def choose(seeds, **kw):
                 (seed,) = [s for s in seeds if s.kind == "meme_image"]
@@ -132,13 +140,34 @@ def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch):
             app.llm._script = lambda model, messages: (
                 json.dumps(generic(messages[-1]["content"])) if "matching this schema:" in messages[-1]["content"]
                 else LINE)
+            reads = []
+            if delayed_read:
+                original_to_thread = asyncio.to_thread
+
+                async def delayed_worker(fn, *args, **kwargs):
+                    if fn.__module__ != runtime.__name__:
+                        return await original_to_thread(fn, *args, **kwargs)
+
+                    def read():
+                        started = app.clock.now()
+                        time.sleep(.05)  # a scheduled real DB worker, not a fake-clock sleep
+                        value = fn(*args, **kwargs)
+                        reads.append((started, app.clock.now()))
+                        return value
+
+                    return await original_to_thread(read)
+
+                monkeypatch.setattr(asyncio, "to_thread", delayed_worker)
             await app.server.engine.tick(app.clock.now())
-            for _ in range(400):
-                if not app.server.engine.live():
-                    break
-                await asyncio.sleep(0.002)
-                await app.clock.advance(2, 2)
+            (conversation,) = app.server.engine._live.values()
+            assert conversation.maximum == 1
+            # The conversation reads real SQLite snapshots in asyncio.to_thread.
+            # Do not spend fake typing/deadline time while those workers await CPU.
+            await finish(app, conversation.task)
             assert not app.server.engine.live()
+            if delayed_read:
+                assert len(reads) >= 2  # seed selection and the conversation's own snapshot
+                assert all(started == ended for started, ended in reads), reads
             row = app.store.conn.execute(
                 "SELECT m.id,m.author,m.channel,m.text,a.kind,d.status FROM discord_message m "
                 "JOIN discord_attachment a ON a.message=m.id JOIN discord_meme d ON d.posted_message=m.id").fetchone()

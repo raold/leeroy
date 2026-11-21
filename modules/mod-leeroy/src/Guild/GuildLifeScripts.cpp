@@ -3,6 +3,7 @@
 #include "GuildAdd.h"
 #include "RaidAssembly.h"
 #include "LootMaster.h"
+#include "LootReceipts.h"
 #include "GearUpJob.h"
 #include "TopUpJob.h"
 #include "DeathLoopJob.h"
@@ -63,6 +64,7 @@ public:
 
     void OnUpdate(uint32 diff) override
     {
+        Leeroy::Guild::TickLootReceipts();
         Leeroy::Guild::TickSummons();
         Leeroy::Guild::TickGearUp();
         Leeroy::Guild::TickBotCommands();

@@ -76,6 +76,19 @@ class GiveLoot:
     index: int
     item_id: int
     to_guid: int
+    receipt: bool = field(default=False, kw_only=True, metadata={"omit_default": True})
+
+
+@dataclass(frozen=True, slots=True)
+class GetLootReceipt:
+    id: str
+    give_id: str
+    map: int
+    instance_id: int
+    source_entry: int
+    index: int
+    item_id: int
+    to_guid: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,6 +311,7 @@ COMMANDS: dict[str, type] = {
     "clear_lockout": ClearLockout,
     "set_loot_master": SetLootMaster,
     "give_loot": GiveLoot,
+    "get_loot_receipt": GetLootReceipt,
     "start_offline_raid": StartOfflineRaid,
     "start_member_dungeon": StartMemberDungeon,
     "member_dungeon_stop": StopMemberDungeon,

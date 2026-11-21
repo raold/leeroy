@@ -60,6 +60,29 @@ def ready(app):
     return service
 
 
+@pytest.mark.parametrize(("enabled", "saved", "expected"), [
+    (False, None, False), (True, None, True), (False, "uncertain", True),
+    (False, "sending", True), (False, "acknowledged", True), (False, "charged", False),
+])
+def test_receipt_recovery_lane_runs_for_debts_even_after_disabling_new_awards(app, enabled, saved, expected):
+    from leeroy_mind.guild.loot import _put
+
+    async def go():
+        service = install(app, cfg=GuildConfig(loot_receipts=enabled), armory=armory())
+        if saved:
+            with app.store.conn:
+                _put(app.store.conn, "guild:loot:1:synthetic", {"state": saved, "receipt": True})
+        task = asyncio.create_task(service.run())
+        try:
+            await asyncio.sleep(0)
+            assert ("guild-loot_receipts" in {t.get_name() for t in service._tasks}) is expected
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 1)
+    asyncio.run(go())
+
+
 def test_install_only_registers_shared_ordered_listeners(app, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("construction must not create tasks")

@@ -12,6 +12,14 @@ file(GLOB LEEROY_LIB_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../s
 
 add_executable(leeroy_tests ${LEEROY_TEST_SOURCES} ${LEEROY_LIB_SOURCES})
 
+# Exercise the production loot receipt adapter with delayed database/bridge boundaries.
+set(loot_receipt_source "${CMAKE_CURRENT_SOURCE_DIR}/../src/Guild/LootReceipts.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${loot_receipt_source}")
+file(READ "${loot_receipt_source}" loot_receipt_text)
+string(FIND "${loot_receipt_text}" "namespace Leeroy::Guild" loot_receipt_begin)
+string(SUBSTRING "${loot_receipt_text}" ${loot_receipt_begin} -1 loot_receipt_body)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/LootReceipts.inc" "${loot_receipt_body}")
+
 # Compile the real receipt adapter against delayed database/game boundary fakes.
 # Only its AzerothCore includes are replaced; changes to the implementation must
 # exercise these tests, and synchronous database calls cannot compile in the fake.

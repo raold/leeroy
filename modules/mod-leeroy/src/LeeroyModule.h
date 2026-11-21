@@ -24,6 +24,7 @@ struct LeeroyConfig
     bool bankMailEnable = false;
     bool bankRestockEnable = false;
     bool dayPlans = false;
+    bool lootReceipts = false;
     bool worldEnable = false;
     bool playStyleEnable = false;
     bool raidLeadEnable = false;
