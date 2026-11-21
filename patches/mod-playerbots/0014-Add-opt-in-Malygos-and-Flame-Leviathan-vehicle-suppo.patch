@@ -1,4 +1,4 @@
-From 5c70f0d387045845b0bf7657c68bf4c8c6c13018 Mon Sep 17 00:00:00 2001
+From 847196fe3c91531600a37d1b1c4cba764c89a319 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 21 Nov 2026 13:16:02 -0500
 Subject: [PATCH] Add opt-in Malygos and Flame Leviathan vehicle support
@@ -11,16 +11,16 @@ Subject: [PATCH] Add opt-in Malygos and Flame Leviathan vehicle support
  src/Ai/Raid/EoE/EoETriggerContext.h |   2 +
  src/Ai/Raid/EoE/EoETriggers.cpp     |   3 +
  src/Ai/Raid/EoE/EoETriggers.h       |   7 +
- src/Ai/Raid/RaidVehicleActions.cpp  | 228 ++++++++++++++++++++++++++++
+ src/Ai/Raid/RaidVehicleActions.cpp  | 229 ++++++++++++++++++++++++++++
  src/Ai/Raid/RaidVehicleActions.h    |  18 +++
- src/Ai/Raid/RaidVehiclePolicy.h     | 134 ++++++++++++++++
+ src/Ai/Raid/RaidVehiclePolicy.h     | 149 ++++++++++++++++++
  src/Ai/Raid/Uld/UldActions.cpp      | 167 +++++++++++++++-----
  src/Ai/Raid/Uld/UldTriggers.cpp     |   5 +
  src/Bot/PlayerbotAI.cpp             |   3 +-
  src/PlayerbotAIConfig.cpp           |   1 +
  src/PlayerbotAIConfig.h             |   1 +
- tests/raid_vehicles_test.cpp        | 149 ++++++++++++++++++
- 16 files changed, 695 insertions(+), 37 deletions(-)
+ tests/raid_vehicles_test.cpp        | 171 +++++++++++++++++++++
+ 16 files changed, 733 insertions(+), 37 deletions(-)
  create mode 100644 src/Ai/Raid/RaidVehicleActions.cpp
  create mode 100644 src/Ai/Raid/RaidVehicleActions.h
  create mode 100644 src/Ai/Raid/RaidVehiclePolicy.h
@@ -149,10 +149,10 @@ index 6bfec6b3..89d9bde1 100644
  #endif
 diff --git a/src/Ai/Raid/RaidVehicleActions.cpp b/src/Ai/Raid/RaidVehicleActions.cpp
 new file mode 100644
-index 00000000..ec80f453
+index 00000000..baf18dbd
 --- /dev/null
 +++ b/src/Ai/Raid/RaidVehicleActions.cpp
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,229 @@
 +/*
 + * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
 + * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
@@ -187,7 +187,8 @@ index 00000000..ec80f453
 +bool VehicleSpell(PlayerbotAI* ai, uint32 spell, Unit* target)
 +{
 +    Unit* vehicle = ai->GetBot()->GetVehicleBase();
-+    if (!vehicle || !vehicle->IsAlive() || !vehicle->HasSpell(spell) || vehicle->HasUnitState(UNIT_STATE_CASTING))
++    if (!vehicle || !vehicle->IsAlive() || !vehicle->HasSpell(spell) || vehicle->HasUnitState(UNIT_STATE_CASTING) ||
++        !target || !target->IsInWorld() || !target->IsAlive() || target->GetMap() != vehicle->GetMap())
 +        return false;
 +    if (target != vehicle)
 +        vehicle->SetFacingToObject(target);
@@ -321,7 +322,7 @@ index 00000000..ec80f453
 +    DrakeSpell const pick = NextDrakeSpell(facts);
 +    if (pick == DrakeSpell::None)
 +        return false;
-+    Unit* target = (pick == DrakeSpell::Spike || pick == DrakeSpell::Engulf) ? static_cast<Unit*>(boss) : drake;
++    Unit* target = DrakeTarget(pick, static_cast<Unit*>(boss), drake, drake->GetComboTarget());
 +    return VehicleSpell(ai, static_cast<uint32>(pick), target);
 +}
 +
@@ -407,10 +408,10 @@ index 00000000..f8371bb5
 +#endif
 diff --git a/src/Ai/Raid/RaidVehiclePolicy.h b/src/Ai/Raid/RaidVehiclePolicy.h
 new file mode 100644
-index 00000000..64139720
+index 00000000..1ce15bab
 --- /dev/null
 +++ b/src/Ai/Raid/RaidVehiclePolicy.h
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,149 @@
 +/*
 + * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
 + * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
@@ -495,6 +496,21 @@ index 00000000..64139720
 +    if (f.energy >= 10 && (f.targetPoints < 2 || (f.targetPoints < 5 && f.energy >= 85)))
 +        return DrakeSpell::Spike;
 +    return DrakeSpell::None;
++}
++
++// Flame Shield (57108) applies its shield to the implicit caster, but its
++// second effect is dummy TARGET_UNIT_TARGET_ANY. Spell::CheckCast therefore
++// requires points on the explicit target: boss for damage, self for healing.
++template <typename UnitType>
++inline UnitType* DrakeTarget(DrakeSpell spell, UnitType* boss, UnitType* self, UnitType* combo)
++{
++    if (spell == DrakeSpell::Shield)
++        return combo;
++    if (spell == DrakeSpell::Spike || spell == DrakeSpell::Engulf)
++        return boss;
++    if (spell == DrakeSpell::Revivify || spell == DrakeSpell::Burst)
++        return self;
++    return nullptr;
 +}
 +
 +// A continually moving anchor must not starve instant vehicle spells. Invoke
@@ -917,10 +933,10 @@ index 45ed9eaa..0ca1ae02 100644
      uint32 GlobalCoolDown, ReactDelay, MaxWaitForMove, DisableMoveSplinePath, MaxMovementSearchTime, ExpireActionTime,
 diff --git a/tests/raid_vehicles_test.cpp b/tests/raid_vehicles_test.cpp
 new file mode 100644
-index 00000000..9ddf3d80
+index 00000000..8f2b4829
 --- /dev/null
 +++ b/tests/raid_vehicles_test.cpp
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,171 @@
 +/*
 + * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
 + * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
@@ -1036,6 +1052,28 @@ index 00000000..9ddf3d80
 +                    CHECK(spell != DrakeSpell::Burst || (energy >= 50 && points >= 5));
 +                    CHECK((spell != DrakeSpell::Spike && spell != DrakeSpell::Revivify) || energy >= 10);
 +                }
++
++    int bossTarget = 1, selfTarget = 2;
++    for (bool healer : {false, true})
++    {
++        DrakeFacts shield;
++        shield.healer = healer;
++        shield.surgeActive = shield.shieldReady = true;
++        shield.energy = 25;
++        shield.points = 2;
++        int* combo = healer ? &selfTarget : &bossTarget;
++        DrakeSpell spell = NextDrakeSpell(shield);
++        CHECK(spell == DrakeSpell::Shield);
++        CHECK(DrakeTarget(spell, &bossTarget, &selfTarget, combo) == combo);
++        CHECK(DrakeTarget(spell, &bossTarget, &selfTarget, static_cast<int*>(nullptr)) == nullptr);
++        shield.points = 0;
++        CHECK(NextDrakeSpell(shield) == DrakeSpell::None);
++    }
++    CHECK(DrakeTarget(DrakeSpell::Spike, &bossTarget, &selfTarget, &selfTarget) == &bossTarget);
++    CHECK(DrakeTarget(DrakeSpell::Engulf, &bossTarget, &selfTarget, &selfTarget) == &bossTarget);
++    CHECK(DrakeTarget(DrakeSpell::Revivify, &bossTarget, &selfTarget, &bossTarget) == &selfTarget);
++    CHECK(DrakeTarget(DrakeSpell::Burst, &bossTarget, &selfTarget, &selfTarget) == &selfTarget);
++    CHECK(DrakeTarget(DrakeSpell::None, &bossTarget, &selfTarget, &bossTarget) == nullptr);
 +
 +    // A human orbiting every tick (or a pursued driver) cannot suppress weapon
 +    // decisions, and a successful instant cast cannot suppress movement.

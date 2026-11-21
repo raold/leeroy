@@ -21,9 +21,17 @@ Engulf in Flames; healers build Revivify on themselves and use Life Burst for
 the stack. During a Surge warning, bots build/reserve combo points and energy
 for Flame Shield. Shields wait for the actual damage aura: warning GUIDs remain set after
 the damage, and a short shield cast early can expire before any damage. Reaction
-can allow the first damage tick through; the remaining channel is shielded.
+can allow initial damage ticks through; the shield protects the remaining channel.
 Blazing Speed helps a field escape. Costs, targets, cooldowns and normal cast
 checks remain enforced. No health, phase, kill or achievement state is written.
+
+The spell-data cross-check matters here: Flame Shield 57108 has an implicit
+caster shield plus an explicit-target dummy effect. The cast therefore supplies
+the current combo target (Malygos for a damage drake, itself for a healer),
+while the protective aura still applies to the caster. Life Burst uses the
+healer's self combo points. Revivify 57090 and Engulf 56092 directly apply their
+periodic auras; those are the aura IDs checked for refresh, with no triggered
+spell substitution. The normal cast validates the selected target and cost.
 
 ## Flame Leviathan with a human raid
 
