@@ -35,8 +35,8 @@ from ..nightly.settings import NightlySettings
 from ..realm.action_store import released_members
 from . import mindlog, views
 
-PANELS = ("health", "night", "realm", "raids", "selfies", "backups", "drift", "schedules", "switches")
-BUDGETS = {"health": 6.0, "night": 1.0, "realm": 1.0, "raids": 1.0,
+PANELS = ("health", "night", "realm", "raids", "debrief", "selfies", "backups", "drift", "schedules", "switches")
+BUDGETS = {"health": 6.0, "night": 1.0, "realm": 1.0, "raids": 1.0, "debrief": 4.0,
            "selfies": 1.0, "backups": 1.0, "drift": 10.0, "schedules": 3.0, "switches": 1.0}
 ROWS = 128
 FILE_BYTES = 2 * 1024 * 1024
@@ -677,6 +677,11 @@ class OpsView:
             return self.sources[name]()
         if name == "health":
             return health_view(self.root, self.data)
+        if name == "debrief":
+            from ..training.debrief import raid_debrief
+            with database(self.data, deadline) as conn:
+                return panel(**raid_debrief(conn, data=self.data, native_dir=health.bin_dir(self.root),
+                                           now=self.clock(), deadline=deadline - .1))
         if name in {"night", "realm", "raids", "selfies"}:
             with database(self.data, deadline) as conn:
                 now = self.clock()
@@ -730,7 +735,7 @@ class OpsView:
     async def _one(self, name, runtime):
         start = self.monotonic()
         with self._lock:
-            ttl = 60 if name == "health" else 15
+            ttl = 60 if name in {"health", "debrief"} else 15
             if name in self._cache and start - self._started[name] < ttl:
                 return self._cache[name]
             if name not in self._workers:

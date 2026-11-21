@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 import json
 import re
 import sqlite3
+import time
+from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from leeroy_mind.clock import SystemClock
 from leeroy_mind.config import ConfigError
@@ -117,7 +120,7 @@ def training_main(argv=None):
     _add_data_dir(parser)
     subs = parser.add_subparsers(dest="command", required=True)
     for name in ("status", "gate", "rescore", "report", "spells", "cards", "lessons", "voicecheck",
-                 "trials", "rollback", "stock", "lab", "lab-clear", "hurt"):
+                 "trials", "rollback", "stock", "lab", "lab-clear", "hurt", "debrief"):
         sub = subs.add_parser(name)
         _add_data_dir(sub, after_action=True)
         if name == "gate":
@@ -135,6 +138,10 @@ def training_main(argv=None):
             sub.add_argument("--context")
             sub.add_argument("--last", type=_last)
             sub.add_argument("--kind", action="append", choices=("his", "offline", "benchmark"))
+        elif name == "debrief":
+            sub.add_argument("--raid", type=int, help="saved raid ID; defaults to latest completed raid")
+            sub.add_argument("--native-log-dir", type=Path, help="directory containing Server.log and its rotations")
+            sub.add_argument("--log-timezone", help="IANA zone for imported native logs; defaults to this host's local time")
     args = parser.parse_args(argv)
     root = _root(args)
     write = args.command in {"rescore", "rollback", "stock", "lab-clear"} or args.command == "gate" and args.reset
@@ -185,6 +192,14 @@ def training_main(argv=None):
                     result = {"context": context, "changed": changed,
                               "applied_commands_unchanged": True,
                               "pending_cleanup": conn.execute("SELECT count(*) FROM tg_applied WHERE undone IS NULL").fetchone()[0]}
+                elif args.command == "debrief":
+                    from .debrief import raid_debrief
+                    deadline = time.monotonic() + 8
+                    conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+                    result = raid_debrief(conn, data=root,
+                        native_dir=args.native_log_dir or root.parent / "build" / "bin" / "RelWithDebInfo",
+                        raid_id=args.raid, deadline=deadline,
+                        tz=ZoneInfo(args.log_timezone) if args.log_timezone else None)
                 elif args.command == "hurt":
                     from leeroy_mind.console.views import names
                     from .hurt import KINDS, SpellNames, hurt_report, stored_names
@@ -224,6 +239,6 @@ def training_main(argv=None):
         return 0
     except AlreadyRunning:
         print("training: mind.lock is held; stop the mind before changing training data")
-    except (OSError, sqlite3.Error, ValueError, ConfigError) as error:
+    except (OSError, sqlite3.Error, ValueError, ConfigError, ZoneInfoNotFoundError) as error:
         print(f"training: command unavailable ({type(error).__name__}); database was not migrated")
     return 1

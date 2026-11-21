@@ -721,6 +721,8 @@ td > div.who { color: var(--ink); font-weight: 600; }
 
 /* Ops: independent read-only panels, including narrow screens in either theme. */
 #tab-ops .ops-panel { min-width: 0; }
+#tab-ops .raid-debrief { grid-column: 1 / -1; }
+#tab-ops .raid-debrief summary { cursor: pointer; padding: .5rem 0; }
 #tab-ops .ops-line, #tab-ops .ops-error { margin: 8px 0; overflow-wrap: anywhere; }
 #tab-ops .ops-error { color: var(--bad); }
 #tab-ops .ops-command { display: grid; gap: 6px; margin-top: 12px; font-size: 12px; }
