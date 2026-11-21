@@ -627,6 +627,7 @@ std::size_t Bridge::PopCommands(std::vector<Command>& out, std::size_t max)
     while (popped < max && !d._inbox.empty())
     {
         out.push_back(std::move(d._inbox.front()));
+        out.back().connectionSerial = d._serial.load();
         d._inbox.pop_front();
         ++popped;
     }

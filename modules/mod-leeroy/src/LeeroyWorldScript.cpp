@@ -33,6 +33,12 @@ char const* OnOff(bool on)
 }
 }
 
+std::int64_t LeeroyWorldStartedMs()
+{
+    static std::int64_t const started = Leeroy::NowUnixMs();
+    return started;
+}
+
 // Lifecycle and the world-thread pump. Every hook here runs on the world thread.
 class LeeroyWorldScript : public WorldScript
 {
@@ -150,8 +156,11 @@ public:
             uint32 const human = module.HumanGuid();
             Player* humanPlayer = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(human));
             bool const humanOnline = humanPlayer && humanPlayer->IsInWorld();
+            auto features = LeeroyDcRaidFeatures();
+            if (module.Config().dayPlans && module.Config().realmEnable)
+                features.emplace_back("day_plan_handoff_v1");
             bridge.Greet(serial, Leeroy::EncodeHello(now, module.GuildId(), humanOnline ? human : 0, _startedMs,
-                    LeeroyDcRaidFeatures()),
+                    features),
                 Leeroy::EncodeCast(now, cast.BuildMembers(module.GuildId())));
             _greetedSerial = serial;
             LeeroyResetAfk();   // the new mind hears about everyone already AFK on the next poll
@@ -217,7 +226,7 @@ private:
     std::uint64_t _greetedSerial = 0;
     // Scripts are made once at worldserver start. Every hello names this process, so a mind can tell
     // a restarted worldserver (whose in-memory jobs and fences are gone) from a reconnect.
-    std::int64_t const _startedMs = Leeroy::NowUnixMs();
+    std::int64_t const _startedMs = LeeroyWorldStartedMs();
     std::vector<Leeroy::Command> _commands;
 };
 

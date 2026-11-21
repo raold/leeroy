@@ -24,7 +24,10 @@ LEEROY_TEST(Protocol_HelloAppendsTheBuildsOwnFeaturesOnce)
 {
     auto j = json::parse(EncodeHello(1700000000000, 21, 0, 0, {"dc_toc", "dc_ulduar", "regear", "", "dc_toc"}));
     CHECK(j["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
-        "dummy_party_on_arrival", "invites", "lead", "dc_toc", "dc_ulduar"}));
+        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "dc_toc", "dc_ulduar"}));
+    auto day = json::parse(EncodeHello(1700000000000, 21, 0, 0, {"dc_toc", "dc_ulduar", "day_plan_handoff_v1"}));
+    j["features"].push_back("day_plan_handoff_v1");
+    CHECK(day == j);
     CHECK(!j.contains("started_ms"));
 }
 

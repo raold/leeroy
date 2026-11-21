@@ -362,6 +362,9 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
         return Fail("raidlead_off"); // lifting a hold is cleanup: it runs with the switch off too
     // Formation is the tier-one alias that can replace a journaled value.
     bool const fishing = command->action == "do" && command->param == "go fishing";
+    if (message.contains("day_permit") && (!fishing || !message["day_permit"].is_string()
+        || message["day_permit"].get_ref<std::string const&>().size() != 32 || command->guids.size() != 1
+        || command->targetGuid || !command->trainingRun.empty())) return Fail("day_scope");
     if (!command->trainingRun.empty() && !Training::ScopedBotMutationAllowed(command->action))
         return Fail("training_run_ownership");
     if (!command->trainingRun.empty() || Training::IsTierTwo(command->action, command->param)
@@ -383,7 +386,7 @@ LeeroyCommandResult HandleBotDo(nlohmann::json const& message)
     if (fishing)
     {
         bool const accepted = Realm::RealmModule::Instance().AcceptGuildFishing(
-            message.at("id").get<std::string>(), command->guids, error);
+            message.at("id").get<std::string>(), command->guids, error, message.value("day_permit",std::string{}));
         return {accepted, std::move(error)};
     }
     if (pending.size() >= kMaxPending)

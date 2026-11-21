@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "RealmModule.h"
+#include "DayPlans.h"
 #include "RealmPorts.h"
 #include "RealmPvp.h"
 #include "RealmArenaObserver.h"
@@ -33,6 +34,7 @@ namespace Leeroy::Realm
 void RegisterRealmHandlers()
 {
     RegisterRealmContinuationHandlers();
+    RegisterDayPlans();
     RegisterRealmPvpHandlers();
     RegisterRealmArenaObserverHandlers();
     RegisterRealmCraftHandlers();

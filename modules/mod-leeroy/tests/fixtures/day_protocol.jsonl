@@ -1,0 +1,4 @@
+{"name":"day_begin","kind":"command","valid":true,"msg":{"v":1,"ts":0,"type":"day_begin","id":"begin","members":[101],"activity":"camp","place":"camp","ends_ms":2000}}
+{"name":"day_revoke","kind":"command","valid":true,"msg":{"v":1,"ts":0,"type":"day_revoke","id":"revoke","origin_id":"begin","reason":"string","permit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","serial":3,"started_ms":100}}
+{"name":"day_status","kind":"command","valid":true,"msg":{"v":1,"ts":0,"type":"day_status","id":"query","origin_id":"begin"}}
+{"name":"day_state","kind":"event","valid":true,"msg":{"v":1,"ts":0,"type":"day_state","origin_id":"begin","permit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","serial":3,"guild":50,"human":1,"members":[101],"state":"closed","reason":"string","released":[],"started_ms":100,"succeeded":[]}}

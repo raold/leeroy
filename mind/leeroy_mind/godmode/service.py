@@ -13,6 +13,7 @@ from leeroy_mind.bridge import AckTimeout, BridgeError, NotConnected
 from leeroy_mind.guild.ports import JobWaiter
 from leeroy_mind.guild.protocol import StringDo
 from leeroy_mind.logs import log as log_event
+from leeroy_mind.realm.actions import ActionRejected
 
 from . import intents as I
 
@@ -108,7 +109,20 @@ class Godmode:
                            target_guid=app.human_guid or 0, emote=row["args"].get("emote", ""))
             job = None
             try:
-                ack = await bridge.send(cmd, preserve_id=True)
+                runner = getattr(getattr(app, "realm", None), "parts", {}).get("day")
+                if runner is None:
+                    ack = await bridge.send(cmd, preserve_id=True)
+                else:
+                    def valid():
+                        current = I.get(store.conn, ident)
+                        return (current is not None and current["status"] == "pending" and app.world.human_online
+                                and bridge.connected and app.human_guid == cmd.target_guid
+                                and (raid is None or str(raid.phase(app.clock.now())) not in RAID_QUIET)
+                                and I.fit(store.conn, current, app.personas, now=app.clock.now())[0])
+                    ack = await runner.handoff(wire, (cmd.guid,), "string", valid,
+                                               lambda: bridge.send(cmd, preserve_id=True))
+            except ActionRejected as exc:
+                status, reason = "not_taken", str(exc)
             except NotConnected:
                 status, reason = "not_taken", "no_link"  # nothing left the mind
             except BridgeError:

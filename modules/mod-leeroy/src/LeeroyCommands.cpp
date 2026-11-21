@@ -37,6 +37,7 @@
 
 namespace
 {
+thread_local std::uint64_t commandSerial = 0;
 // The decoder limits say and human_say to the seven channels handled below, so this is never sent.
 constexpr std::string_view kBadChannel = "bad field: channel";
 // Client and DB limits: a guild MOTD is 128 bytes, a friend note 48.
@@ -57,6 +58,12 @@ std::string ExecuteExtension(Leeroy::Command const& cmd, std::int64_t now)
         return Leeroy::EncodeAck(now, cmd.id, false, std::string(Leeroy::Err::UnknownType) + cmd.extType);
     try
     {
+        struct SerialScope
+        {
+            std::uint64_t previous = commandSerial;
+            ~SerialScope() { commandSerial = previous; }
+        } scope;
+        commandSerial = cmd.connectionSerial;
         LeeroyCommandResult const result = it->second(cmd.raw);
         return Leeroy::EncodeAck(now, cmd.id, result.ok, result.error);
     }
@@ -342,6 +349,8 @@ bool LeeroyQueueHumanChat(Player* human, Leeroy::Channel channel, std::string co
     human->GetSession()->QueuePacket(packet.release());   // the session frees it
     return true;
 }
+
+std::uint64_t LeeroyCommandSerial() { return commandSerial; }
 
 std::string LeeroyExecuteCommand(Leeroy::Command const& cmd)
 {

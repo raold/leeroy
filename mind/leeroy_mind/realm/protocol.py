@@ -270,6 +270,9 @@ class DayRevoke:
     id: str
     origin_id: str
     reason: str
+    permit: str
+    serial: int
+    started_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,6 +293,8 @@ class DayState:
     state: str
     reason: str
     released: tuple[str, ...]
+    started_ms: int
+    succeeded: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -835,7 +840,7 @@ EVENTS: dict[str, type] = {
     "world_roster": WorldRoster,
     "realm_forgotten": RealmForgotten,
 }
-NOISY = frozenset({"realm_job", "channel_chat", "game_event", "realm_visit_state"})
+NOISY = frozenset({"realm_job", "channel_chat", "game_event", "realm_visit_state", "day_state"})
 
 
 def register() -> None:

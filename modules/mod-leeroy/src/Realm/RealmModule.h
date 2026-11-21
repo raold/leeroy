@@ -78,7 +78,8 @@ public:
     bool Accept(Queued entry, std::string& error);
     using ActivityOutcome = std::function<void(Queued const&, bool clean, std::string const& reason)>;
     bool RegisterGuildFishing(Executor, Admission, std::function<PvpContinuationStep(PvpOwner const&)>, ActivityOutcome);
-    bool AcceptGuildFishing(std::string id, std::vector<std::uint32_t> guids, std::string& error);
+    bool AcceptGuildFishing(std::string id, std::vector<std::uint32_t> guids, std::string& error,
+        std::string const& dayPermit = {});
     std::optional<PvpOwner> PrepareGuildFishingContinuation(std::string_view originId,
         std::vector<std::uint32_t> const& members, std::string& error);
     std::string MutationReason(std::uint32_t guid, std::string_view operation = {}) const;
@@ -146,7 +147,7 @@ private:
     void ReconcileConfiguration();
     void TickContinuations(TickBudget& budget);
     bool AcceptDomain(Queued entry, std::string& error);
-    void PublishOutcome(Queued const& entry, RealmJob const& job);
+    void PublishOutcome(Queued const& entry, RealmJob const& job, bool released = false);
     void DrainGuildOutcomes();
     std::optional<PvpOwner> PrepareContinuation(std::string_view originId, PvpKind kind,
         std::vector<std::uint32_t> const& members, ActivityDomain domain, std::string& error);

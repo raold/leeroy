@@ -969,7 +969,8 @@ class TalkEngine(EmoteReactions):
         local = self.clock.local()
         topics = guild_topics.gather(self.store.conn, now=now, local=local,
                                      cast=self.personas.all(), human=hg,
-                                     item_name=self._item_name)
+                                     item_name=self._item_name, **({'day_plans': True} if
+                                         getattr(getattr(self.cfg, 'life', None), 'day_plans', False) else {}))
         night = night_of(local)
         if night not in self._guild_used:
             self._guild_used = {night: set()}

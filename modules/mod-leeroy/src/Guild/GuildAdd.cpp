@@ -7,6 +7,7 @@
 #include "RaidAssembly.h"
 #include "Realm/RealmModule.h"
 #include "Realm/RealmPorts.h"
+#include "Realm/DayPlans.h"
 #include "LeeroyGuildAddPolicy.h"
 
 #include "AiFactory.h"
@@ -45,6 +46,29 @@ bool builtFollowed = false;
 // sends it again on hello. Followed only while Leeroy.GuildAdd.FollowRoster is on.
 GuildAddRoster postedRoster;
 bool followRoster = false;
+
+struct PendingAdd
+{
+    uint32 size;
+    std::int64_t deadline;
+    Realm::BodyIdentity human;
+    std::uint64_t humanGeneration, epoch, bridgeSerial;
+    Difficulty difficulty;
+    std::set<ObjectGuid> group;
+    GuildAddRoster roster;
+    std::vector<uint32> picks;
+    std::map<uint32, std::pair<Realm::BodyIdentity, std::uint64_t>> bodies;
+    std::set<std::string> permits;
+};
+std::optional<PendingAdd> pendingAdd;
+
+std::set<ObjectGuid> GroupMembers(Player* human)
+{
+    std::set<ObjectGuid> members;
+    if (Group* group = human->GetGroup())
+        for (auto const& slot : group->GetMemberSlots()) members.insert(slot.guid);
+    return members;
+}
 
 GuildAddRole RoleOf(Player* player)
 {
@@ -156,7 +180,7 @@ GuildAddBody BodyOf(uint32 guid, Player* bot, Player* human, uint32 guildId, boo
     body.otherTeam = bot->GetTeamId(true) != human->GetTeamId(true);
     body.dead = !bot->IsAlive();
     body.inCombat = bot->IsInCombat();
-    Map* map = bot->GetMap();
+    Map* map = bot->FindMap();
     body.inBattleground = bot->InBattleground() || bot->InArena() || (map && map->IsBattlegroundOrArena());
     // A raid browser listing is no commitment: joining a group drops it.
     lfg::LfgState const lfg = sLFGMgr->GetState(bot->GetGUID());
@@ -234,7 +258,7 @@ void PublishGuildGroup(std::string reason, Player* human, Group* group,
     LeeroyModule::Instance().Publish(EncodeEvent(NowUnixMs(), MakeGuildGroupEvent(event)), false);
 }
 
-std::vector<std::string> Fill(Player* human, uint32 size)
+std::vector<std::string> Fill(Player* human, uint32 size, PendingAdd const* resume = nullptr, bool ownerAsk = false)
 {
     std::string why = HumanRefusal(human);
     // A size his copy cannot hold: refused before his group changes, since the core would turn the rest away.
@@ -265,12 +289,35 @@ std::vector<std::string> Fill(Player* human, uint32 size)
         : SavesOf(human->GetGUID());
     std::vector<GuildAddCandidate> candidates;
     std::map<std::string, std::uint32_t> unavailable;
+    std::map<uint32, std::string> dayMembers;
     for (uint32 guid : CastMembers())
     {
         if (guid == HumanGuid())
             continue;
         Player* bot = FindOnline(guid);
-        if (auto reason = GuildAddSkipReason(BodyOf(guid, bot, human, guildId, false, &outside, size)); !reason.empty())
+        auto token = ownerAsk && Realm::Config().dayPlans ? Realm::DayForMember(guid) : std::string{};
+        bool const owned = !token.empty() && Realm::DayOwnsMember(token, guid);
+        if (owned && !bot) bot = ObjectAccessor::FindConnectedPlayer(Realm::PlayerGuid(guid));
+        auto body = BodyOf(guid, bot, human, guildId, false, &outside, size);
+        if (owned && bot)
+        {
+            auto& realm = Realm::RealmModule::Instance();
+            auto holder = realm.Holder(guid);
+            if (!holder.empty())
+            {
+                body.fence = realm.MutationReason(guid, holder);
+                if (body.teleporting && Realm::DayMoving(token, bot))
+                {
+                    body.teleporting = false;
+                    // Both the admitted source and the exact worldport destination are open world.
+                    if (!bot->FindMap() && !bot->HasPendingBind() && bot->GetInstanceId() == 0)
+                        body.elsewhere = false;
+                }
+                if (body.inCombat && Realm::DayDueling(holder, bot)) body.inCombat = false;
+            }
+            dayMembers.emplace(guid, std::move(token));
+        }
+        if (auto reason = GuildAddSkipReason(body); !reason.empty())
         {
             ++unavailable[reason];
             continue;
@@ -283,6 +330,36 @@ std::vector<std::string> Fill(Player* human, uint32 size)
         LOG_INFO("module.leeroy", "mod-leeroy: add{} from the guild follows the posted roster ({} members, {} bench)",
             size, roster.preferred.size(), roster.bench.size());
     auto const plan = PlanGuildAdd(size, members, connected, std::move(candidates), roster);
+    if (resume || !dayMembers.empty())
+    {
+        std::vector<uint32> picks;
+        std::set<std::string> tokens;
+        for (auto const& pick : plan.picks)
+        {
+            picks.push_back(pick.guid);
+            if (dayMembers.contains(pick.guid)) tokens.insert(dayMembers.at(pick.guid));
+        }
+        if (resume && picks != resume->picks)
+            return {"The guild lineup changed before the day activity released"};
+        if (!tokens.empty())
+        {
+            auto identity = Realm::Identity(HumanGuid());
+            if (!identity) return {"Your session changed before the day activity released"};
+            auto& realm = Realm::RealmModule::Instance();
+            PendingAdd request{size, NowUnixMs() + 30000, *identity, realm.BodyGeneration(HumanGuid()),
+                realm.Epoch(), LeeroyModule::Instance().Bridge().ConnectionSerial(),
+                human->GetMap()->GetDifficulty(), GroupMembers(human), roster, picks, {}, tokens};
+            for (auto guid : picks)
+            {
+                auto current = Realm::Identity(guid, true);
+                if (!current || !current->player) return {"A guild member became unavailable"};
+                request.bodies.emplace(guid, std::pair{*current, realm.BodyGeneration(guid)});
+            }
+            pendingAdd = std::move(request);
+            for (auto const& token : tokens) Realm::RevokeDay(token, "guild_add");
+            return {"Waiting for the selected guild members to finish their day activity"};
+        }
+    }
     GuildAddCounts added{};
     GuildAddBuffs covered = plan.covered;
     std::uint32_t notBrought = 0;
@@ -420,7 +497,8 @@ public:
         if (!size)
             return true;
         StringWaiver const waiver;   // his own ask: a member he pulled to him is his to add
-        for (auto const& message : Fill(invoker, size))
+        pendingAdd.reset(); // His newest command supersedes an earlier unexecuted request.
+        for (auto const& message : Fill(invoker, size, nullptr, true))
             handler.PSendSysMessage("{}", message);
         return false; // Never playerbots' addclass bots for him.
     }
@@ -454,6 +532,61 @@ public:
         }
     }
 };
+}
+
+bool GuildAddAwaiting(std::uint32_t guid)
+{
+    return pendingAdd && pendingAdd->bodies.contains(guid);
+}
+
+void TickGuildAddHandoff()
+{
+    if (!pendingAdd) return;
+    auto const& request = *pendingAdd;
+    auto& realm = Realm::RealmModule::Instance();
+    auto identity = Realm::Identity(HumanGuid());
+    if (!identity || !identity->player || !SameLife(*identity, request.human))
+    {
+        pendingAdd.reset();
+        return;
+    }
+    Player* human = identity->player;
+    std::string error;
+    auto roster = GuildAddRosterInForce(followRoster, postedRoster, NowUnixMs());
+    auto& bridge = LeeroyModule::Instance().Bridge();
+    if (!GuildEnabled() || !Realm::Config().dayPlans || !bridge.Connected()
+        || bridge.ConnectionSerial() != request.bridgeSerial || realm.Epoch() != request.epoch || *identity != request.human
+        || realm.BodyGeneration(HumanGuid()) != request.humanGeneration || GroupMembers(human) != request.group
+        || !human->GetMap() || human->GetMap()->GetDifficulty() != request.difficulty
+        || roster.preferred != request.roster.preferred || roster.bench != request.roster.bench
+        || roster.untilMs != request.roster.untilMs || !HumanRefusal(human).empty())
+        error = "Your guild add request changed before the day activity released";
+    for (auto const& [guid, saved] : request.bodies)
+    {
+        auto current = Realm::Identity(guid, true);
+        if (!current || !SameLife(*current, saved.first) || realm.BodyGeneration(guid) != saved.second)
+            error = "A selected guild member changed before the day activity released";
+    }
+    if (error.empty())
+    {
+        if (NowUnixMs() >= request.deadline || std::any_of(request.permits.begin(), request.permits.end(),
+                [](auto const& token) { return Realm::DayUnresolved(token); }))
+            error = "Could not confirm release of the day activity";
+        else if (!std::all_of(request.permits.begin(), request.permits.end(),
+                [](auto const& token) { return Realm::DayReleased(token); }))
+            return;
+    }
+    auto saved = std::move(*pendingAdd);
+    pendingAdd.reset(); // Consume before calling group hooks.
+    ChatHandler handler(human->GetSession());
+    if (!error.empty())
+        handler.PSendSysMessage("{}", error);
+    else
+    {
+        StringWaiver const waiver;
+        for (auto const& message : Fill(human, saved.size, &saved))
+            handler.PSendSysMessage("{}", message);
+    }
 }
 
 std::string GuildAddJoinRefusal(Player* human, Player* bot)

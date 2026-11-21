@@ -939,6 +939,11 @@ def attach_realm(app) -> Realm:
     app.register_shutdown_receipt("realm_pvp", realm.on_realm_pvp)
     app.register_shutdown_drain(realm.close)
     build_parts(realm)
+    if getattr(getattr(getattr(app, 'cfg', None), 'life', None), 'day_plans', False):
+        from leeroy_mind.godmode.dayrun import DayRun
+        runner = DayRun(realm)
+        realm.parts['day'] = runner
+        realm.add_part(runner, event_types=('hello', 'day_state', 'group', 'guild_group', 'boss', 'job'))
     if (direct := realm.parts.get("direct")) is not None:
         # Like the recoveries in Realm.__init__: once, before anything can send.
         direct.recover(process_id=realm._process_id)

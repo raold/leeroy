@@ -57,7 +57,7 @@ _UNNAMED = re.compile(r"\[Item (\d+)\]")
 
 def gather(conn: sqlite3.Connection, *, now: float, local: datetime,
            cast: Mapping[int, Persona], human: int,
-           item_name: Callable[[int], str | None] = lambda item: None) -> list[GuildTopic]:
+           item_name: Callable[[int], str | None] = lambda item: None, day_plans: bool = False) -> list[GuildTopic]:
     """The guild's subjects right now; [] when the store cannot be read. An item the store's
     connection could not name (server.seeds names it from an attached library) is named by
     `item_name`; loot of his, and loot still unnamed, are left out. A loot topic is never its
@@ -81,6 +81,12 @@ def gather(conn: sqlite3.Connection, *, now: float, local: datetime,
         about = (tuple(s.about) if s.kind == "loot" else
                  _named(s.fact, cast) if s.kind == "birthday" else ())
         out.append(GuildTopic(seed_subject(s), s.key, text.format(fact=s.fact), owner, about))
+    if day_plans:
+        from leeroy_mind.godmode.dayrun import seeds as day_seeds
+        names = {guid: persona.character_name for guid, persona in cast.items()}
+        for seed in day_seeds(conn, now, names):
+            for member in seed.about:
+                out.append(GuildTopic("game", seed.key, seed.fact, member))
     return out
 
 

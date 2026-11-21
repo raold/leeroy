@@ -531,7 +531,16 @@ class RaidNight:
     async def _ack(self, command, epoch):
         self._check(epoch)
         try:
-            ack = await self.ports.send(command)
+            runner = getattr(getattr(getattr(self.ports, "app", None), "realm", None), "parts", {}).get("day")
+            if runner is not None and isinstance(command, (ClearLockout, FormRaid)):
+                targets = set(command.guids if isinstance(command, ClearLockout) else command.members)
+                targets.discard(self.ports.human_guid)
+                def valid():
+                    self._check(epoch)
+                    return targets <= {c.guid for c in self._candidates() if c.available}
+                ack = await runner.handoff(command.id, targets, "raid", valid, lambda: self.ports.send(command))
+            else:
+                ack = await self.ports.send(command)
         except Exception:
             self._check(epoch)
             raise _Failed(type(command).__name__ + " acknowledgement was unavailable") from None

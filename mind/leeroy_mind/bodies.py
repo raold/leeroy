@@ -395,12 +395,21 @@ class BodyLedger:
                 return None
         return proof.owner
 
-    def on_preempt(self, owner: str, fn: Callable[[set[int]], None]) -> None:
+    def on_preempt(self, owner: str, fn: Callable[[set[int]], None]) -> Callable[[], None]:
         self._check_reentry()
         owner = _identity(owner)
         if not callable(fn):
             raise ValueError("invalid body callback")
-        self._preempt.setdefault(owner, []).append(fn)
+        listeners = self._preempt.setdefault(owner, [])
+        listeners.append(fn)
+
+        def unsubscribe():
+            if fn in listeners:
+                listeners.remove(fn)
+            if not listeners and self._preempt.get(owner) is listeners:
+                self._preempt.pop(owner)
+
+        return unsubscribe
 
     def on_release(self, fn: Callable[[str, set[int]], None]) -> None:
         self._check_reentry()

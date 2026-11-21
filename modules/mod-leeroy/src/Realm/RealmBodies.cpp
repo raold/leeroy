@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "RealmBodies.h"
+#include "DayPlans.h"
 #include "RealmCleanup.h"
 #include "RealmPorts.h"
 #include "LeeroyEvents.h"
@@ -247,6 +248,7 @@ RealmStep Move(Queued& entry, std::uint32_t guid)
     entry.payload["step"] = state; // Save intended destination before any native mutation.
     if (!bot->TeleportTo(destination.map, destination.x, destination.y, destination.z, destination.o))
         return Unproved(state, "teleport_refused");
+    DayMoveIssued(entry, destination.map, destination.x, destination.y, destination.z);
     return Pending(state);
 }
 
@@ -522,6 +524,14 @@ struct DuelReceipt
 std::mutex DuelMutex;
 std::map<std::uint32_t, DuelReceipt> Duels;
 thread_local DuelReceipt* StartingDuel = nullptr;
+bool OnlyDuelCombat(Player* bot, Player* other)
+{
+    if (!bot->IsInCombat()) return true;
+    auto const& combat = bot->GetCombatManager();
+    auto const& pvp = combat.GetPvPCombatRefs();
+    return combat.GetPvECombatRefs().empty() && pvp.size() == 1 && pvp.contains(other->GetGUID());
+}
+
 void EndedDuel(Player* winner, Player* loser)
 {
     std::lock_guard lock(DuelMutex);
@@ -557,7 +567,7 @@ RealmStep Duel(Queued& entry, std::uint32_t guid)
         auto* bot = FindOnline(source);
         auto* other = FindOnline(target);
         if (!bot || !other) return Unproved(state, "duel_body_unavailable");
-        std::lock_guard lock(DuelMutex);
+        std::unique_lock lock(DuelMutex);
         auto it = Duels.find(source);
         if (it == Duels.end() || it->second.operation != entry.id || it->second.source != bot || it->second.target != other
             || it->second.sourceSession != bot->GetSession() || it->second.targetSession != other->GetSession()
@@ -572,6 +582,19 @@ RealmStep Duel(Queued& entry, std::uint32_t guid)
         }
         if (!receipt.ended && (!bot->duel || !other->duel || bot->duel.get() != receipt.sourceDuel
             || other->duel.get() != receipt.targetDuel)) return Unproved(state, "duel_changed_without_end");
+        if (!receipt.ended && DayRevoking(entry))
+        {
+            if (bot->duel->Opponent != other || other->duel->Opponent != bot ||
+                bot->duel->Initiator != bot || other->duel->Initiator != bot)
+                return Unproved(state, "duel_receipt_missing");
+            if (!OnlyDuelCombat(bot, other) || !OnlyDuelCombat(other, bot))
+                return Unproved(state, "foreign_combat");
+            auto why = module.ChargeAffectedBodies(entry.id,{source,target});
+            if (why == "busy:tick_budget") return Pending(state);
+            if (!why.empty()) return Unproved(state,why);
+            lock.unlock(); // DuelComplete synchronously calls EndedDuel.
+            bot->DuelComplete(DUEL_INTERRUPTED);
+        }
         // A long duel remains owned; elapsed time is not cancellation proof.
         return Pending(state);
     }
@@ -810,6 +833,12 @@ void QueueHandler(char const* kind, Parse parse, Payload payload, RealmModule::E
         Queued entry;
         entry.id = message.at("id").get<std::string>(); entry.kind = kind;
         payload(*command, entry);
+        if (message.contains("day_permit"))
+        {
+            if (entry.kind != "realm_move" && entry.kind != "rpg_status" && entry.kind != "duel")
+                return {false, "day_scope"};
+            entry.payload["day_permit"] = message.at("day_permit");
+        }
         if (!RealmModule::Instance().Accept(std::move(entry), error)) return {false, error};
         return {true, ""};
     });
@@ -851,6 +880,22 @@ public:
         Publish(MakePvpFlag(HumanGuid(), flagged)); // RealmModule also polls the same narrow flag every second.
     }
 };
+}
+
+bool DayDueling(std::string const& operation, Player* bot)
+{
+    if (!bot || !bot->duel || !bot->duel->Opponent || !bot->duel->Initiator) return false;
+    auto* other = bot->duel->Opponent;
+    std::lock_guard lock(DuelMutex);
+    auto found = Duels.find(bot->duel->Initiator->GetGUID().GetCounter());
+    if (found == Duels.end()) return false;
+    auto const& receipt = found->second;
+    if (receipt.operation != operation || receipt.ended || receipt.epoch != RealmModule::Instance().Epoch()
+        || !((receipt.source == bot && receipt.target == other) || (receipt.source == other && receipt.target == bot))
+        || receipt.sourceSession != receipt.source->GetSession() || receipt.targetSession != receipt.target->GetSession()
+        || receipt.sourceDuel != receipt.source->duel.get() || receipt.targetDuel != receipt.target->duel.get())
+        return false;
+    return OnlyDuelCombat(bot, other) && OnlyDuelCombat(other, bot);
 }
 
 void RegisterRealmBodyHandlers()

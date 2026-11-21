@@ -402,7 +402,7 @@ class ActionStore:
         if type(ev) is not dict or document(ev, limit=32768) != r.evidence: raise ValueError("invalid action evidence")
         allowed = {"ack", "job", "bot", "enrollment_job", "origin_failure", "status", "binding", "query_id",
                    "last_query", "cleanup_id", "cleanup_ids", "cleanup_admitted", "canceled", "dispatch_revision", "conflict", "failed_at",
-                   "abandoned", "skipped_at", "restart_released", "restart_started_ms", "dispatch_started_ms"}
+                   "abandoned", "skipped_at", "restart_released", "restart_started_ms", "dispatch_started_ms", "day_release"}
         if not set(ev) <= allowed: raise ValueError("invalid action evidence keys")
         if legacy and not set(ev) <= {"ack", "conflict", "failed_at"}:
             raise ValueError("invalid historical announcement evidence")
@@ -443,6 +443,8 @@ class ActionStore:
             integer(ev["dispatch_started_ms"], 1, 0x7FFFFFFFFFFFFFFF)
             if r.dispatched is None or r.transport_state == "not_entered":
                 raise ValueError("invalid native dispatch identity")
+        if "day_release" in ev and not self._day_proof(r, ev):
+            raise ValueError("invalid day release proof")
         if "restart_released" in ev or "restart_started_ms" in ev:
             _now(ev.get("restart_released"))
             integer(ev.get("restart_started_ms"), 1, 0x7FFFFFFFFFFFFFFF)
@@ -714,7 +716,50 @@ class ActionStore:
             return replace(reduced, state="completed", result_ok=False, result_reason=ABANDONED)
         if "restart_released" in ev and reduced.state != "conflict":
             return replace(reduced, state="completed", result_ok=False, result_reason=RESTART_RELEASED)
+        if ("day_release" in ev and reduced.state not in {"conflict", "completed"}
+                and r.transport_state == "settled"):
+            return replace(reduced, state="completed", result_ok=False, result_reason="day_released")
         return reduced
+
+    def _day_proof(self, record, evidence):
+        """Match a sealed native permit to this exact journal row and original process."""
+        if record.role != "root" or record.policy != "ordinary":
+            return False
+        command = json.loads(record.payload)
+        permit = self.conn.execute(
+            "SELECT p.plan,p.begin_id,p.boot,p.serial,p.token,p.guild,p.human,p.release_ids,s.kind,s.member "
+            "FROM day_step s JOIN day_permit p ON p.plan=s.plan WHERE s.id=?",
+            (record.command_id,)).fetchone()
+        if not permit:
+            return False
+        plan, origin, boot, serial, token, guild, human, released, step, member = permit
+        participants = {g for (g,) in self.conn.execute("SELECT member FROM day_plan WHERE action_ref=?",
+                                                        (f"day:{plan}",))}
+        kind = {"move": "realm_move", "fishing": "bot_do", "duel": "duel", "status": "rpg_status"}.get(step)
+        return (released is not None and command.get("day_permit") == token and bool(token)
+                and record.owner == f"day:{plan}" and kind == record.kind
+                and member in record.reserved_manifest and set(record.reserved_manifest) <= participants
+                and record.guild == guild and record.human == human and boot and evidence.get("dispatch_started_ms") == boot
+                and evidence.get("day_release") == {"origin": origin, "serial": serial,
+                    "admitted": record.command_id in json.loads(released)})
+
+    def day_released(self, plan, now):
+        """Caller has atomically stored the closed seal. Preserve conflicts and in-flight writers."""
+        rows = self.conn.execute("SELECT s.id,p.begin_id,p.serial,p.release_ids FROM day_step s JOIN day_permit p "
+                                 "ON p.plan=s.plan WHERE p.plan=?", (plan,)).fetchall()
+        complete = True
+        for ident, origin, serial, released in rows:
+            record = self.get(ident)
+            if record is None or record.state in TERMINAL:
+                continue
+            evidence = json.loads(record.evidence)
+            evidence["day_release"] = {"origin": origin, "serial": serial, "admitted": ident in json.loads(released)}
+            if not self._day_proof(record, evidence):
+                complete = False
+                continue
+            updated = self._save(self._reduce(record, evidence, now))
+            complete &= updated.state in TERMINAL
+        return complete
 
     def _settle(self, r, ev, now):
         r = replace(r, evidence=document(ev, limit=32768), updated=now)

@@ -13,18 +13,21 @@ FIXTURE = Path(__file__).resolve().parents[3] / "modules/mod-leeroy/tests/fixtur
 # The native parser/publisher contract, in table order. Payload discriminators
 # use arena_type/event_type so they never replace the envelope's type key.
 COMMAND_FIELDS = {
+    "day_begin": "id members activity place ends_ms",
+    "day_revoke": "id origin_id reason permit serial started_ms",
+    "day_status": "id origin_id",
     "realm_actors": "id guids gankers guilds",
     "realm_say": "id guid channel text to_guid",
     "realm_emote": "id guid emote target_guid social seat_id lease_seconds",
-    "realm_move": "id guid place slot social",
+    "realm_move": "id guid place slot social day_permit",
     "realm_visit": "id place",
-    "rpg_status": "id guid status quest_id",
+    "rpg_status": "id guid status quest_id day_permit",
     "leave_pvp": "id guids pvp_owner",
     "rearm": "id guids",
     "wg_join": "id guids",
     "arena_team": "id action captain_guid arena_type name team_id guid",
     "arena_queue": "id team_id captain_guid",
-    "duel": "id guid target_guid",
+    "duel": "id guid target_guid day_permit",
     "craft": "id guid spell_id count",
     "item_count": "id guid item_ids",
     "equip": "id guid item_id",
@@ -53,6 +56,7 @@ COMMAND_FIELDS = {
     "realm_forget": "id origin_id",
 }
 EVENT_FIELDS = {
+    "day_state": "ts origin_id permit serial guild human members state reason released started_ms succeeded",
     "realm_job": "ts id kind state reason guid value pvp_owner changed skipped released readback_guid check",
     "realm_visit_state": "ts id place guild_id human_guid ready near",
     "channel_chat": "ts channel from_guid from_name zone text via_bridge",
@@ -81,7 +85,8 @@ EVENT_FIELDS = {
 
 
 def fixtures():
-    return [json.loads(line) for line in FIXTURE.read_text(encoding="utf-8").splitlines() if line]
+    return [json.loads(line) for path in (FIXTURE, FIXTURE.with_name('day_protocol.jsonl'))
+            for line in path.read_text(encoding='utf-8').splitlines() if line]
 
 
 def owner_event():
@@ -94,7 +99,7 @@ def kill_event():
 
 def command_from_message(msg):
     fields = {key: value for key, value in msg.items() if key not in {"type", "v", "ts"}}
-    for key in {"guids", "gankers", "guilds", "item_ids"} & fields.keys():
+    for key in {"guids", "gankers", "guilds", "item_ids", "members"} & fields.keys():
         fields[key] = tuple(fields[key])
     if "items" in fields:
         fields["items"] = tuple(protocol.MailItem(item["item_id"], item["count"], item["from"])
@@ -105,7 +110,7 @@ def command_from_message(msg):
 def test_authoritative_maps_fields_and_immutable_message_shapes():
     assert list(protocol.COMMANDS) == list(COMMAND_FIELDS)
     assert list(protocol.EVENTS) == list(EVENT_FIELDS)
-    assert len(protocol.COMMANDS) == 37 and len(protocol.EVENTS) == 19
+    assert len(protocol.COMMANDS) == 40 and len(protocol.EVENTS) == 20
     for registry, expected in ((protocol.COMMANDS, COMMAND_FIELDS), (protocol.EVENTS, EVENT_FIELDS)):
         for name, cls in registry.items():
             assert [field.name for field in dataclasses.fields(cls)] == expected[name].split()
@@ -113,7 +118,7 @@ def test_authoritative_maps_fields_and_immutable_message_shapes():
             assert "__dict__" not in cls.__slots__
     assert protocol.COMMANDS["arena_queue"] is protocol.ArenaQueue
     assert protocol.EVENTS["arena_queue"] is protocol.ArenaQueueEvent
-    assert protocol.NOISY == frozenset({"realm_job", "channel_chat", "game_event", "realm_visit_state"})
+    assert protocol.NOISY == frozenset({"realm_job", "channel_chat", "game_event", "realm_visit_state", "day_state"})
     assert all(field.kw_only for field in dataclasses.fields(protocol.Announce)
                if field.name in {"attempts", "fight_s", "first"})
 
@@ -221,6 +226,9 @@ def test_events_parse_from_native_fixture():
             expected.setdefault("readback_guid", 0)
             expected.setdefault("check", "")
             assert type(parsed.value) is int
+        if msg["type"] == "day_state":
+            expected["released"] = tuple(expected["released"])
+            expected["succeeded"] = tuple(expected["succeeded"])
         if msg["type"] == "world_roster":
             expected["members"] = tuple({("class_" if k == "class" else k):v for k,v in m.items()} for m in msg["members"])
         assert dataclasses.asdict(parsed) == expected

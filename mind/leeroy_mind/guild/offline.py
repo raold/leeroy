@@ -768,7 +768,25 @@ class OfflineRaids:
                                        max_wipes=self.cfg.offline_max_wipes,
                                        max_wipes_per_boss=self.cfg.offline_max_wipes_per_boss,
                                        timeout_min=self.cfg.offline_timeout_min, min_members=plan.size * 4 // 5)
-            ack = await self.ports.send(command)
+            runner = getattr(getattr(getattr(self.ports, "app", None), "realm", None), "parts", {}).get("day")
+            if runner is None:
+                ack = await self.ports.send(command)
+            else:
+                from leeroy_mind.protocol import Ack
+                from leeroy_mind.realm.actions import ActionRejected
+                def valid():
+                    members = set(plan.members)
+                    return (self._owned and self._owned["id"] == command.id and not self._owned["cancelled"]
+                            and self._owned["day"] == self._day() and self._owned["phase"] == "awaiting_ack"
+                            and not self._online and not self.ports.human_online() and not self.ports.gpu_paused()
+                            and runnable(raid.key, self._features) and members <= set(self.ports.cast())
+                            and not members.intersection(self.ports.away()) and not any(members & b for b in self._busy())
+                            and self.ports.clock.now() < self._owned["deadline"])
+                try:
+                    ack = await runner.handoff(command.id, plan.members, "offline_raid", valid,
+                                               lambda: self.ports.send(command))
+                except ActionRejected as exc:
+                    ack = Ack(0, command.id, False, str(exc))
             if ack is None or ack.id != command.id:
                 self._owned["phase"] = "uncertain"
                 self._owned["cancelled"] = True
