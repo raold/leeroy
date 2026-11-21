@@ -368,6 +368,12 @@ class TrainingListener:
             self._muster = None  # Same-boss retries require a new resting boundary.
         await self._call("on_boss", ev)
 
+    def _guild_carrier(self, run, card):
+        if self.lust_provider is None and any(d.lever == "lust_at" for d in card.directives):
+            return False
+        return self.applier.guild_carrier(self.run_key(run), card, tank=run.plan.tank_guid,
+                                         human_lead=run.lead_is_human)
+
     async def _prepare(self, ev):
         if (not self._fresh(ev) or self._pull or ev.tank_guid != self.run.plan.tank_guid
                 or not ev.enabled or self._ending):
@@ -407,9 +413,7 @@ class TrainingListener:
                         top = store.champion(self.ports.conn, context)
                         champion = Card.from_row(top) if top else stock_card(context)
                         shadowed = any(c.lever == d.lever for c in champion.directives for d in proposed.directives)
-                        if (shadowed or any(d.lever == "lust_at" and not self.lust_provider for d in proposed.directives)
-                                or not self.applier.guild_carrier(self.run_key(run), proposed, tank=run.plan.tank_guid,
-                                                                  human_lead=run.lead_is_human)):
+                        if shadowed or not self._guild_carrier(run, proposed):
                             guild = None
                     card, arm = self.card_for(context, run, guild[0] if guild else 0)
                     if guild and any(c.lever == d.lever for c in card.directives for d in guild[1].directives):
@@ -446,7 +450,7 @@ class TrainingListener:
                             if baseline_ok and guild:
                                 baseline_ok = (self._valid(token) and not self._pull and self.guild_layer(context) == guild
                                                and await self._apply(run, "guild", guild[1], guild_strategy=guild[0]))
-                                if baseline_ok or self.applier.guild_pending(self.run_key(run)):
+                                if self.applier.guild_pending(self.run_key(run)):
                                     self._guild_applied = guild[0]
                             if baseline_ok and self._valid(token):
                                 ok = await self._apply(run, "arm" if arm is not None else "boss", card)
@@ -458,15 +462,17 @@ class TrainingListener:
                         pass
                     if not self._valid(token):
                         return
+                    if ok and guild and (self._pull or self.guild_layer(context) != guild
+                                         or not self._guild_carrier(run, guild[1])):
+                        # Timer ownership becomes effective here, after physical preparation.
+                        # Reprepare at the next safe muster if the selected cohort changed.
+                        self._muster = None
+                        ok = False
                     if ok:
                         self._effective_context = context
                         receipt = {}
                         if guild:
-                            if self._pull or self.guild_layer(context) != guild:
-                                if self.applier.guild_pending(self.run_key(run)):
-                                    self.ledger.set_in_play(context, guild_strategy=guild[0])
-                                self.ledger.mark_unscoreable(context)
-                                return
+                            self._guild_applied = guild[0]
                             self.guild_played(guild[0])
                             receipt["guild_strategy"] = guild[0]
                             # Timer/call levers run in the listener. The champion/arm wins an overlap.
@@ -490,6 +496,8 @@ class TrainingListener:
                             self._guild_applied = None
                         self.ledger.set_in_play(context, **receipt)
                         self.ledger.mark_unscoreable(context)
+                        if self._muster is None:
+                            return
                         # Never resume an uncertain/partially mutated apply.
                         # Terminal cleanup is the controller's mandatory barrier.
                 else:

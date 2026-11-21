@@ -182,3 +182,62 @@ def test_muster_selects_the_farm_cohort_it_can_play(fake, condition, cohort):
             listener.guild_played.assert_not_called()
         await listener.close()
     asyncio.run(play())
+
+
+@pytest.mark.parametrize("late_loss", [None, "shaman", "provider"])
+def test_lust_carrier_at_effect_boundary_controls_timer_and_recorded_cohort(fake, late_loss):
+    import asyncio
+    import json
+    from dataclasses import replace
+    from unittest.mock import Mock
+    from leeroy_mind.training.cards import Directive
+    from leeroy_mind.training.ledger import Ledger
+    from leeroy_mind.training.protocol import PullPulse
+    from .test_tg_applier import card
+    from .test_tg_gate import boss
+    from .test_tg_ledger import header, member, feed, run as open_raid
+    from .test_tg_listener import real_listener, status
+
+    async def play():
+        listener, run, ports = real_listener(fake)
+        run.session.raid_id = open_raid(fake, human=False, instance=100).session.raid_id
+        listener.ledger = Ledger(fake)
+        team = dict(ports.state.members)
+        team[102] = replace(team[102], cls=7)
+        ports.state = replace(ports.state, members=team, run_key=listener.run_key(run))
+        guild = (19, card(Directive("lust_at", 85), context="631:4:0"))
+        listener.guild_layer = lambda context: guild
+        listener.guild_played = Mock()
+        ports.applier.guild_allowed = lambda context, ident: ident == guild[0]
+        provider = listener.lust_provider
+        await listener.on_start(run)
+        revert = ports.applier.revert
+
+        async def lose_carrier(*args, **kwargs):
+            await revert(*args, **kwargs)
+            if late_loss == "provider":
+                listener.lust_provider = None
+            elif late_loss == "shaman":
+                ports.state = replace(ports.state, online=ports.state.online - {102})
+
+        ports.applier.revert = lose_carrier
+        await listener.on_dc_status(status(fake))
+        engaged = boss(fake, 4)
+        await listener.on_boss(engaged)
+        await listener.on_pulse(PullPulse(engaged.ts, f"{engaged.ts}-100-4", 631, 100, 4, 0, 80, 2))
+        await listener.tick()
+        h = header(fake, instance_id=100, id=f"{engaged.ts}-100-4", boss=4)
+        await feed(listener.ledger, member(h), h)
+        row = fake.conn.execute("SELECT covariates,scoreable FROM tg_pull WHERE id=?", (h.id,)).fetchone()
+        if late_loss:
+            listener.guild_played.assert_not_called()
+            provider.assert_not_awaited()
+            assert "guild_strategy" not in json.loads(row["covariates"])
+            assert not row["scoreable"]
+            assert (listener.run_key(run), "631:4:0", 0) in listener._farm_at_entry
+        else:
+            listener.guild_played.assert_called_once_with(19)
+            provider.assert_awaited_once_with(run)
+            assert json.loads(row["covariates"])["guild_strategy"] == 19
+        await listener.close()
+    asyncio.run(play())

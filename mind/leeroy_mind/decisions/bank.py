@@ -64,12 +64,13 @@ def approve(request, bank, *, given_today: int, cap: int) -> tuple[bool, str]:
 def given_today(conn, now):
     day = local_at(now).date()
     # At a DST boundary the offset at now can differ from the offset at midnight.
-    # Narrow the indexed receipt window, then classify each instant using its own local date.
+    # A backward clock step can put an already recorded debit later on this same date.
+    # Bound both sides of the scan, then classify each instant using its own local date.
     rows = conn.execute("SELECT coalesce(dispatched_ms,prepared_ms) FROM realm_direct "
                         "WHERE owner='decision' AND kind='bank_withdraw' "
                         "AND state IN ('prepared','dispatched','acked','unknown') "
                         "AND coalesce(dispatched_ms,prepared_ms) BETWEEN ? AND ?",
-                        (int((now-48*3600)*1000), int(now*1000)))
+                        (int((now-48*3600)*1000), int((now+48*3600)*1000)))
     return sum(local_at(ts/1000).date() == day for ts, in rows)
 
 

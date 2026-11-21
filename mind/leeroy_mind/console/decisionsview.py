@@ -59,10 +59,19 @@ def poll_card(conn, row, human: int) -> dict:
             counts[r["option"]] += 1
         if r["member"] == human:
             mine = r["option"]
+    eligible = len(voters_of(row))
+    if row["kind"] == "rank" and row["status"] == "closed":
+        snapshot = views.rows(conn, "SELECT json_extract(value,'$.rank_tally.eligible'), "
+                                    "json_extract(value,'$.rank_tally.counts.approve'), "
+                                    "json_extract(value,'$.rank_tally.counts.keep') FROM guild_decision "
+                                    "WHERE kind='rank' AND poll=?", (row["id"],))
+        if snapshot and all(type(n) is int and n >= 0 for n in snapshot[0]):
+            eligible, approve, keep = snapshot[0]
+            counts = {"approve": approve, "keep": keep}
     return {"id": row["id"], "channel": row["channel"], "question": row["question"],
             "options": [{"code": o, "count": n} for o, n in counts.items()], "status": row["status"],
             "opened": row["opened"], "closes": row["closes"], "result": row["result"], "kind": row["kind"],
-            "voters": len(voters_of(row)), "votes": sum(counts.values()), "his_vote": mine,
+            "voters": eligible, "votes": sum(counts.values()), "his_vote": mine,
             "he_votes": human in voters_of(row)}
 
 

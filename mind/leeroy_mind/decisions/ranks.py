@@ -89,18 +89,16 @@ class RankRules:
         return {row["guid"]: row for row in review_due(app.store.conn, cast, app.personas, app.guild.cfg.ranks,
                                                        trial, now=now)}
 
-    def authorized(self, app, poll, target):
-        if not self.seen or target not in members(app):
-            return False
+    def tally(self, app, poll):
         voters = polls.voters_of(poll)
         current = {g for g, m in members(app).items()
                    if m.rank == app.guild.cfg.ranks["officer"] and app.personas.get(g)}
         votes = dict(app.store.conn.execute("SELECT member,option FROM guild_poll_vote WHERE poll=?", (poll["id"],)))
-        if not current:
-            return False
-        if app.human_guid in votes and app.human_guid in voters:
+        if current and app.human_guid in votes and app.human_guid in voters:
             current.add(app.human_guid)
-        return sum(votes.get(g) == "approve" for g in current & voters) > len(current) // 2
+        counts = {choice: sum(votes.get(g) == choice for g in current & voters) for choice in ("approve", "keep")}
+        result = next((choice for choice, count in counts.items() if count > len(current) // 2), None)
+        return dict(eligible=len(current), counts=counts, result=result)
 
     async def tick(self, app, now):
         if not self.seen or not getattr(app, "guild", None):
@@ -114,7 +112,7 @@ class RankRules:
             v = json.loads(row["value"])
             poll = polls.get_poll(store.conn, row["poll"])
             if (due.get(v["guid"], {}).get("rank") != v["rank"] or not poll
-                    or not self.authorized(app, poll, v["guid"])):
+                    or self.tally(app, poll)["result"] != "approve"):
                 ledger.expire(store, row["id"], now=now)
                 continue
             ledger.take_effect(store, row["id"], now=now, effect_ref={"rank": v["rank"]})
@@ -146,17 +144,27 @@ class RankRules:
 
     async def closed(self, app, poll, winner):
         store, now = app.store, app.clock.now()
+        if not self.seen or not getattr(app, "guild", None):
+            return False
         row = ledger.pending(store.conn, "rank", poll["subject"])
         with store.transaction():
+            if not polls.mark_handled(store, poll["id"], now=now):
+                return
+            result = None
             if row and row["poll"] == poll["id"] and row["status"] == "proposed":
                 value = json.loads(row["value"])
                 target = value["guid"]
-                if (winner == "approve" and self.authorized(app, poll, target)
-                        and self.due(app, members(app), now).get(target, {}).get("rank") == value["rank"]):
+                tally = self.tally(app, poll)
+                if self.due(app, members(app), now).get(target, {}).get("rank") == value["rank"]:
+                    result = tally["result"]
+                # Preserve the closing electorate's counts for the poll card after later cast changes.
+                value["rank_tally"] = {"eligible": tally["eligible"], "counts": tally["counts"]}
+                store.conn.execute("UPDATE guild_decision SET value=? WHERE id=?", (json.dumps(value), row["id"]))
+                if result == "approve":
                     ledger.settle(store, row["id"], settled_by=0, poll=poll["id"], now=now)
                 else:
                     ledger.expire(store, row["id"], now=now)
-            polls.mark_handled(store, poll["id"], now=now)
+            store.conn.execute("UPDATE guild_poll SET result=? WHERE id=?", (result, poll["id"]))
 
 
 def rank_rules():

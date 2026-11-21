@@ -100,7 +100,8 @@ class DecisionsService:
     async def deliver(self) -> None:
         """Hand each closed poll's result to its kind, once. A kind should write
         polls.mark_handled in the transaction that records its decision; otherwise the receipt is
-        written when the hook returns. A failed hook is tried again on later ticks, at most
+        written when the hook returns. Explicit False defers a hook awaiting fresh evidence.
+        A failed hook is tried again on later ticks, at most
         MAX_HOOK_TRIES times; a poll whose kind has no hook (yet) waits for one."""
         store = self.app.store
         for row in polls.unhandled(store.conn):
@@ -108,7 +109,8 @@ class DecisionsService:
             if hook is None:
                 continue
             try:
-                await hook(self.app, row, row['result'])
+                if await hook(self.app, row, row['result']) is False:
+                    continue
             except Exception as error:
                 tries = polls.hook_failed(store, row['id'])
                 if tries >= MAX_HOOK_TRIES:

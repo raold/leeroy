@@ -208,3 +208,23 @@ def test_lineup_removed_after_withdrawal_preparation_stops_dispatch(store, guild
         app.bridge.send.assert_not_called()
         assert direct.state("decision", f"decision:{row['id']}:withdraw")[0] == "abandoned"
     asyncio.run(go())
+
+
+def test_backward_clock_step_cannot_reopen_today_allowance(store, clock):
+    from datetime import timedelta
+    from uuid import uuid4
+    from leeroy_mind.realm.actions import ActionContext
+    from leeroy_mind.realm.direct import DirectLedger
+
+    noon = clock.local().replace(hour=12, minute=0, second=0)
+    clock._t = noon.timestamp()
+    ctx = ActionContext(enabled=True, connected=True, presence_known=True, process_id="clock", generation=1,
+                        connection_epoch=1, guild=8, human=1)
+    direct = DirectLedger(store, process_id="clock", clock=clock)
+    cmd = protocol.BankWithdraw(uuid4().hex, 101, 46377, 20, 0, 102)
+    assert direct.prepare(cmd, owner="decision", ref="decision:1:withdraw", context=ctx, expects_job=True)
+    direct.before_send(cmd, context=ctx)
+    direct.on_job(protocol.RealmJob(0, cmd.id, "bank_withdraw", "done", "", 101, 20))
+    clock._t = (noon - timedelta(minutes=1)).timestamp()
+    given = bank.given_today(store.conn, clock.now())
+    assert bank.approve(request(), snapshot((0, 46377, 20), (1, 46377, 20)), given_today=given, cap=1) == (False, "cap")

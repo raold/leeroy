@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+import pytest
+
 from leeroy_mind.decisions import ledger, ranks
 from leeroy_mind.guild.roster import rank_changes
 
@@ -122,3 +124,61 @@ def test_owner_abstention_and_explicit_vote_in_one_officer_review(store, guild, 
         assert ledger.get(store.conn,ident)["status"] == expect
         if expect == "settled":
             ledger.overrule(store,ident,now=clock.now())
+
+
+@pytest.mark.parametrize("disconnect", [False, True])
+def test_scheduled_rank_result_uses_current_electorate_after_reconnect(store, guild, clock, disconnect):
+    import asyncio
+    from types import SimpleNamespace as NS
+    from leeroy_mind.decisions import polls
+    from leeroy_mind.decisions.service import DecisionsService
+    from leeroy_mind.console.decisionsview import poll_card
+
+    cast = {g: replace(m, rank=1 if g in (102, 103, 104) else 3) for g, m in store.cast().items()}
+    app = NS(store=store, human_guid=1, clock=clock, personas=guild, world=NS(members=cast),
+             guild=NS(cfg=NS(ranks=RANKS), roster=NS(_ranks_due=False)))
+    service = DecisionsService(app, NS())
+    rules = service.rules_for("rank")
+    ranks.observe_cast(store, {g: m for g, m in cast.items() if g != 105}, now=clock.now()-1)
+    ranks.observe_cast(store, cast, now=clock.now())
+
+    async def review(remaining, expected_result, expected_status):
+        app.world.members = cast
+        now = clock.now()
+        poll = polls.open_poll(store, channel="applications", question="Promote?", options=("approve", "keep"),
+                               voters=[102, 103, 104], closes=now+60, now=now, kind="rank", subject="rank:105")
+        ident = ledger.propose(store, kind="rank", subject="rank:105", value={"guid":105, "rank":4},
+                               positions=[], now=now, poll=poll)
+        for guid, choice in [(102, "approve"), (103, "keep"), (104, "keep")]:
+            assert polls.vote(store, poll, guid, choice, now=now)
+        clock._t = now + 60
+        polls.close_due(store, now=clock.now())
+        if disconnect:
+            await service.on_connection(False)
+            await service.deliver()
+            await service.on_connection(True)
+            await service.deliver()
+            waiting = polls.get_poll(store.conn, poll)
+            assert waiting["status"] == "closed" and waiting["handled"] is None and waiting["result"] is None
+            assert waiting["hook_tries"] == 0 and ledger.get(store.conn, ident)["status"] == "proposed"
+            assert not polls.vote(store, poll, 1, "approve", now=clock.now())
+
+        app.world.members = {g:m for g,m in cast.items() if g not in (102,103,104) or g in remaining}
+        ranks.observe_cast(store, app.world.members, now=clock.now())
+        rules.seen = True
+        await service.deliver()
+        closed = polls.get_poll(store.conn, poll)
+        assert closed["handled"] is not None and closed["result"] == expected_result
+        assert polls.tally(store.conn, poll) == {"approve": 1, "keep": 2}
+        app.world.members = cast
+        card = poll_card(store.conn, closed, app.human_guid)
+        assert card["voters"] == len(remaining)
+        assert {o["code"]: o["count"] for o in card["options"]} == {
+            "approve": int(102 in remaining), "keep": len(remaining & {103, 104})}
+        assert ledger.get(store.conn, ident)["status"] == expected_status
+        if expected_status == "settled":
+            ledger.overrule(store, ident, now=clock.now())
+
+    for remaining, result, status in [({102}, "approve", "settled"), ({102,103}, None, "expired"),
+                                      ({103,104}, "keep", "expired"), (set(), None, "expired")]:
+        asyncio.run(review(remaining, result, status))
