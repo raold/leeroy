@@ -116,7 +116,8 @@ def restyle_scene(p, scene, *, level, category, seed, names=()):
     from .words_scene import BED_RE, WATER_RE, GYM_PLACE_RE
     if any(BED_RE.search(t) or INDOOR_RE.search(t) for t in (scene.setting, scene.activity)):
         return scene
-    if category == "swim" and not WATER_RE.search(scene.setting):
+    if (category == "swim" and scene.setting not in kind.WATER_SETTINGS
+            and not WATER_RE.search(scene.setting)):
         return scene
     if category == "gym" and not GYM_PLACE_RE.search(scene.setting):
         return scene
@@ -133,7 +134,7 @@ def restyle_scene(p, scene, *, level, category, seed, names=()):
 
 def scene_valid(scene) -> bool:
     """Stored reveal metadata is only accepted with an exact catalogue outfit/place."""
-    from .kind import LUST_COLOURS
+    from .kind import LUST_COLOURS, WATER_SETTINGS
     from .words_scene import BED_RE, WATER_RE, GYM_PLACE_RE
     from .scene import INDOOR_RE
     if not valid(scene.outfit_reveal) or scene.audience != "him" or scene.style != LUST:
@@ -141,7 +142,8 @@ def scene_valid(scene) -> bool:
     if any(BED_RE.search(t) or INDOOR_RE.search(t) for t in (scene.setting, scene.activity)):
         return False
     for category in POOLS:
-        if category == "swim" and not WATER_RE.search(scene.setting):
+        if (category == "swim" and scene.setting not in WATER_SETTINGS
+                and not WATER_RE.search(scene.setting)):
             continue
         if category == "gym" and not GYM_PLACE_RE.search(scene.setting):
             continue

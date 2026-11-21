@@ -282,3 +282,16 @@ def test_weight_room_is_an_existing_gym_place_not_a_new_context():
     p, original = woman(age=30, stance="lust"), scene("gym", setting="in the weights room")
     changed = R.restyle_scene(p, original, level=5, category="gym", seed=1)
     assert changed.outfit_reveal == 5 and scene_renderable(p, changed) is None
+
+
+@pytest.mark.parametrize("level", range(1, 6))
+def test_all_existing_water_enums_receive_coverage_without_changing_other_render_holds(level):
+    p = woman(age=30, stance="lust")
+    for setting in kind.WATER_SETTINGS:
+        original = scene(setting=setting)
+        changed = R.restyle_scene(p, original, level=level, category="swimwear", seed=1)
+        assert changed.outfit_reveal == level and R.scene_valid(changed)
+        assert photos.choice_of(changed.outfit) in R.choices("swim", level)
+        # Existing independent context holds (including the public branch's hot-tub
+        # screen) remain exactly as before; coverage never bypasses them.
+        assert scene_renderable(p, changed) == scene_renderable(p, original)
