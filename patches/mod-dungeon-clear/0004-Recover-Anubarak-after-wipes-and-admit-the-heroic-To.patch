@@ -1,4 +1,4 @@
-From 7260013f70eb2204b2e90391806b45685c50ae62 Mon Sep 17 00:00:00 2001
+From 99e34705e08b473e8cc8122beecc67e6e86b0dcc Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 21 Nov 2026 07:47:32 -0500
 Subject: [PATCH 4/4] Recover Anubarak after wipes and admit the heroic ToC
@@ -14,14 +14,13 @@ Subject: [PATCH 4/4] Recover Anubarak after wipes and admit the heroic ToC
  6 files changed, 107 insertions(+), 3 deletions(-)
 
 diff --git a/README.md b/README.md
-index b514ba6..3b70fa2 100644
+index b514ba6..bced14e 100644
 --- a/README.md
 +++ b/README.md
-@@ -205,3 +205,17 @@ handed to testers without shell access.
- ## License
+@@ -136,6 +136,20 @@ itself takes a raid past him once he is dead. He is never fought or credited, an
+ group a person is in keeps the gate. Razorscale is started at the Expedition
+ Commander.
  
- AGPL-3.0-or-later (inherited from mod-playerbots). See `LICENSE`.
-+
 +### ToC wipe recovery and heroic admission
 +
 +After Anub'arak's wipe cleanup, an idle all-bot raid retries the instance script's
@@ -35,6 +34,10 @@ index b514ba6..3b70fa2 100644
 +This is an explicit administrative admission grant to the clicking bot, not an
 +earned kill or a raid-wide reward. It persists on that bot; no other achievement,
 +attempt count, character, normal raid or human-controlled raid is changed.
++
+ Faction-specific events run only for the relevant side, and heroic-only events
+ never fire on a normal run. If an event cannot complete (for example, a scripted
+ NPC the party let die), the run either stalls for the player or skips the step,
 diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h b/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
 index 1d5bba8..e931b1a 100644
 --- a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
