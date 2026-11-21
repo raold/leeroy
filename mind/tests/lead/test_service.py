@@ -515,6 +515,36 @@ def test_a_stop_waiting_on_an_older_start_never_ends_a_newer_one(app):
     run(main())
 
 
+def test_a_refused_newer_dungeon_ask_keeps_the_older_run_his(app):
+    gate = asyncio.Event()
+
+    class Slow(Wire):
+        async def send(self, cmd, *, preserve_id=False):
+            if isinstance(cmd, RaidControl) and cmd.action == "dc_on" and not Slow.seen:
+                Slow.seen = True
+                await gate.wait()   # the first dc_on started the run; its ack comes late
+                self.sent.append(cmd)
+                return Ack(0, cmd.id, True, "")
+            if isinstance(cmd, RaidControl) and cmd.action == "dc_on":
+                self.sent.append(cmd)
+                return Ack(0, cmd.id, False, "busy:realm_owner")   # refused before any change
+            return await super().send(cmd, preserve_id=preserve_id)
+
+    async def main():
+        Slow.seen = False
+        app.bridge = Slow(app)
+        app.leading.claims(chat("you lead", at=NAXX), 569)
+        await asyncio.sleep(0)
+        app.leading.claims(chat("Belra, you lead", at=NAXX), 570)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        gate.set()
+        await settle(app)
+        assert app.leading.dc is not None   # the first run is still his to stop
+        assert "tied up" in told(app, 570, 102)
+    run(main())
+
+
 def test_follow_me_ends_it_and_still_is_playerbots(app):
     async def main():
         app.leading.claims(chat("you lead"), 520)
