@@ -53,4 +53,6 @@ def test_on_needs_the_server_running_and_then_attaches_one_task(tmp_path):
     assert isinstance(service, DecisionsService) and on.engine.decisions_enabled is True
     assert on.registered == [service.run]
     # Part B's kinds hold state in game (the picker's roster): sent again on hello, dropped on disconnect
-    assert on.handlers == [('hello', service.on_hello)] and on.hooks == [service.on_connection]
+    assert on.handlers[0] == ('hello', service.on_hello)
+    assert [name for name, _ in on.handlers] == ['hello', 'cast']
+    assert on.hooks == [service.on_connection]

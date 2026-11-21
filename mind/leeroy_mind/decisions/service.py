@@ -192,7 +192,7 @@ class DecisionsService:
                     self._unrecorded.discard(ident)
                     return {'ok': True, 'outcome': 'undone', 'undone': True,
                             'message': f"Undone in game; the ledger had already ended it ({row['status']})."}
-                back = ledger.overrule(store, ident, now=self.app.clock.now(), restore_previous=True)
+                back = ledger.overrule(store, ident, now=self.app.clock.now(), restore_previous=getattr(self.rules_for(row['kind']), 'restore_previous', True))
                 self._unrecorded.discard(ident)
                 return {'ok': True, 'outcome': 'undone', 'undone': True,
                         'message': 'Undone in game and overruled.'

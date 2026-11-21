@@ -17,7 +17,8 @@ from .ledger import KINDS
 BUILTIN: tuple[str, ...] = ('leeroy_mind.decisions.lineup:lineup_rules',
                             'leeroy_mind.decisions.loot_rules:loot_rules',
                             'leeroy_mind.decisions.bank:bank_rules',
-                            'leeroy_mind.decisions.strategy:strategy_rules')
+                            'leeroy_mind.decisions.strategy:strategy_rules',
+                            'leeroy_mind.decisions.ranks:rank_rules')
 # Bank requests and ranks are the officers' business; their posts live in officers' channels
 OFFICER_KINDS = frozenset({'bank', 'rank'})
 # Kinds an officers' poll settles: who argued what stays with the officers until the poll is linked
