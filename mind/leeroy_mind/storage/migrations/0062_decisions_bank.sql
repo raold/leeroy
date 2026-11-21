@@ -48,3 +48,13 @@ CREATE UNIQUE INDEX realm_direct_live ON realm_direct(owner,ref)
 INSERT INTO realm_direct(rowid,command_id,owner,ref,kind,payload_sha256,guild,human,process_id,expects_job,state,reason,value,prepared_ms,dispatched_ms,settled_ms)
 SELECT rowid,* FROM prior_direct;
 DROP TABLE prior_direct;
+
+-- Keep pending native cleanup journals when admitting the guild layer.
+ALTER TABLE tg_applied RENAME TO prior_applied;
+DROP INDEX tg_applied_open;
+CREATE TABLE tg_applied (id INTEGER PRIMARY KEY, ts REAL NOT NULL, run TEXT NOT NULL,
+  layer TEXT NOT NULL CHECK (layer IN ('standing','pooled','guild','boss','arm')), context TEXT NOT NULL,
+  command TEXT NOT NULL, inverse TEXT NOT NULL, undone REAL);
+INSERT INTO tg_applied SELECT * FROM prior_applied;
+DROP TABLE prior_applied;
+CREATE INDEX tg_applied_open ON tg_applied(undone);

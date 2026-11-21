@@ -332,8 +332,8 @@ class Ledger:
             self.ports.conn.execute("INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                                     (key, json.dumps(value, separators=(",", ":"), allow_nan=False)))
 
-    def set_in_play(self, context, *, card_id=None, arm_id=None, change=""):
-        if (not _CONTEXT.fullmatch(context) or any(v is not None and not _int(v, 1) for v in (card_id, arm_id))
+    def set_in_play(self, context, *, card_id=None, arm_id=None, change="", guild_strategy=None):
+        if (not _CONTEXT.fullmatch(context) or any(v is not None and not _int(v, 1) for v in (card_id, arm_id, guild_strategy))
                 or type(change) is not str or len(change) > 5000):
             raise ValueError("invalid in-play context")
         raid_id = self._run_id()
@@ -345,7 +345,10 @@ class Ledger:
             raise ValueError("invalid saved in-play context")
         now = int(self.ports.clock.now() * 1000)
         history = [item for item in history if item["at_ms"] != now]
-        history.append(dict(at_ms=now, card_id=card_id, arm_id=arm_id, change=change))
+        entry = dict(at_ms=now, card_id=card_id, arm_id=arm_id, change=change)
+        if guild_strategy is not None:
+            entry["guild_strategy"] = guild_strategy
+        history.append(entry)
         self._put(key, sorted(history, key=lambda item: item["at_ms"])[-64:])
 
     def mark_unscoreable(self, context):
@@ -414,6 +417,8 @@ class Ledger:
         history = self._get(f"tg:in-play:{raid_id}:{context}", []) if raid_id is not None else []
         eligible = [item for item in history if item["at_ms"] <= h.start_ms]
         chosen = max(eligible, key=lambda item: item["at_ms"], default={})
+        if chosen.get("guild_strategy") is not None:
+            covariates["guild_strategy"] = chosen["guild_strategy"]
         token = None
         if raid_id is not None:
             key = f"tg:unscoreable:{raid_id}:{context}"

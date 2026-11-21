@@ -13,6 +13,7 @@ import re
 from leeroy_mind.guild.boss_calls import call_for, parse_dc_status
 from leeroy_mind.wow import BOSS_NAMES
 
+from .score import strategy_id
 from . import store
 from .cards import Card, LEVERS, stock_card
 from .ledger import combat_role, context_key
@@ -42,6 +43,7 @@ class TrainingListener:
         self.lust_provider, self.members_provider = lust_provider, members_provider
         self.prepare_run = prepare_run
         self.farm_basis = farm_basis
+        self.guild_layer = self.guild_played = None
         self.run = None
         self._muster = None
         self._pull = False
@@ -68,7 +70,7 @@ class TrainingListener:
         self._start_ready = False
         self._start_waiting = self._start_attempted = False
         self._start_retry_at = 0
-        self._effective_context = None
+        self._effective_context = self._guild_applied = None
 
     @staticmethod
     def run_key(run):
@@ -120,10 +122,10 @@ class TrainingListener:
     def set_experimenter(self, experimenter):
         self.experimenter = experimenter
 
-    def _farm(self, context, *, before_ms=None):
+    def _farm(self, context, *, before_ms=None, strategy=0):
         rows = store.pull_rows(self.ports.conn, context=context, scoreable=True)
         return is_farm([r["outcome"] for r in rows if r["complete"] and r["score"] is not None
-                        and r["score_basis"] == self.farm_basis and r["kind"] in {"his", "offline"}
+                        and strategy_id(r) == strategy and r["score_basis"] == self.farm_basis and r["kind"] in {"his", "offline"}
                         and (before_ms is None or r["start_ms"] < before_ms)])
 
     def _run_farm(self, context, run, *, before_ms=None):
@@ -132,10 +134,12 @@ class TrainingListener:
         A farm wipe must not turn the next pull into an untested progression
         experiment. The callback fallback excludes its just-stored pull.
         """
-        key = (self.run_key(run), context)
+        guild = self.guild_layer(context) if self.guild_layer and not self._pull else None
+        strategy = guild[0] if guild else self._guild_applied or 0
+        key = (self.run_key(run), context, strategy)
         if key not in self._farm_at_entry:
             cutoff = int(self.ports.clock.now() * 1000) if before_ms is None else before_ms
-            self._farm_at_entry[key] = self._farm(context, before_ms=cutoff)
+            self._farm_at_entry[key] = self._farm(context, before_ms=cutoff, strategy=strategy)
         return self._farm_at_entry[key]
 
     def card_for(self, context, run):
@@ -395,6 +399,10 @@ class TrainingListener:
                     self._old_next = False
                     self._queue("old_plan", boss)
                 if self._acting():
+                    guild = self.guild_layer(context) if self.guild_layer else None
+                    # A human-led run cannot carry a dungeon-clear setting.
+                    if guild and run.lead_is_human and any(d.lever != "lust_at" for d in guild[1].directives):
+                        guild = None
                     card, arm = self.card_for(context, run)
                     ok = False
                     try:
@@ -414,7 +422,15 @@ class TrainingListener:
                             # Experimenter cards are the complete merged
                             # baseline. Reinstalling pooled beneath an omitted
                             # trial key would silently turn stock into champion.
+                            if self._guild_applied is not None:
+                                await self.applier.revert(self.run_key(run), "guild")
+                                self._guild_applied = None
                             baseline_ok = arm is not None or await self._pooled(token, context)
+                            if baseline_ok and guild:
+                                baseline_ok = (self._valid(token) and not self._pull and self.guild_layer(context) == guild
+                                               and await self._apply(run, "guild", guild[1]))
+                                if baseline_ok:
+                                    self._guild_applied = guild[0]
                             if baseline_ok and self._valid(token):
                                 ok = await self._apply(run, "arm" if arm is not None else "boss", card)
                             if (ok and arm is not None and self._valid(token)
@@ -427,9 +443,20 @@ class TrainingListener:
                         return
                     if ok:
                         self._effective_context = context
+                        receipt = {}
+                        if guild:
+                            if self._pull or self.guild_layer(context) != guild:
+                                self.ledger.mark_unscoreable(context)
+                                return
+                            self.guild_played(guild[0])
+                            receipt["guild_strategy"] = guild[0]
+                            # Timer/call levers run in the listener. The champion/arm wins an overlap.
+                            keys = {d.lever for d in card.directives}
+                            card = replace(card, directives=tuple(d for d in guild[1].directives if d.lever not in keys)
+                                           + card.directives)
                         self._applied[context] = (card, arm, self.change_for(context))
                         self.ledger.set_in_play(context, card_id=card.id, arm_id=arm,
-                                                change=self.change_for(context))
+                                                change=self.change_for(context), **receipt)
                         self._release_ok = True
                     else:
                         self._effective_context = None
@@ -550,7 +577,7 @@ class TrainingListener:
                 or h.end_ms > self.ports.clock.now() * 1000 or h.id in self._seen):
             return
         row = self.ports.conn.execute("SELECT * FROM tg_pull WHERE id=?", (h.id,)).fetchone()
-        if (row is None or not rec.complete or not row["complete"] or not row["scoreable"]
+        if (row is None or strategy_id(row) or not rec.complete or not row["complete"] or not row["scoreable"]
                 or row["score"] is None or row["score_basis"] not in {"deaths_time", "mechanics_deaths_time"}
                 or row["raid_id"] != ctx.raid_id or row["end_ms"] != h.end_ms
                 or row["outcome"] != h.outcome or h.outcome not in {"killed", "wiped"}):

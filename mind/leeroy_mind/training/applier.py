@@ -29,8 +29,8 @@ from .vocab import Vocab
 
 
 log = logging.getLogger(__name__)
-Layer = Literal["standing", "pooled", "boss", "arm"]
-_RANK = {"pooled": 0, "standing": 1, "boss": 2, "arm": 3}
+Layer = Literal["standing", "pooled", "guild", "boss", "arm"]
+_RANK = {"pooled": 0, "standing": 1, "guild": 1.5, "boss": 2, "arm": 3}
 _TYPES = {c.__name__: c for c in (BotDo, CustomStrategy, DcSetting, RaidControl)}
 _DRIFT = {"not_primed", "no_target", "failed", "unknown_strategy", "unknown_action",
           "not_in_vocab", "bad_value", "bad_key", "bad_lines"}
@@ -513,7 +513,8 @@ class Applier:
 
     async def _send(self, run, layer, context, command, inverse, scope, keys=(), *,
                     resume_held=False, application=False):
-        if not self._matches(scope):
+        if (not self._matches(scope) or layer == "guild" and application
+                and not self.guild_allowed(context)):
             return _Receipt(0, {}, settled=True, reason="stale")
         native = scope.get("native")
         if native is not None:

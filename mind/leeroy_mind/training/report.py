@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from leeroy_mind.wow import BOSS_NAMES, boss_name, is_raid_fight
 
+from .score import strategy_id
 from .score import SCORE_BASES, _duration, _finite, _scored_rows, bootstrap_diff, is_farm, pull_score
 
 
@@ -137,7 +138,7 @@ def _schema(conn):
 
 def _human_use(conn, row, card, closed, basis):
     from leeroy_mind.guild.raids import CATALOG
-    if (row["kind"] != "his" or row["card_id"] != card or row["arm_id"] is not None
+    if (strategy_id(row) or row["kind"] != "his" or row["card_id"] != card or row["arm_id"] is not None
             or row["score_basis"] != basis or row["start_ms"] < closed * 1000):
         return False
     raid = conn.execute("SELECT * FROM guild_raid WHERE raid_id=?", (row["raid_id"],)).fetchone()
@@ -194,7 +195,7 @@ def _trial_references(conn, saved, trial, pulls, cutoff):
                 or not isinstance(ref["rows"], list) or not 1 <= len(ref["rows"]) <= MAX_ROWS):
             return False
         history = [p for p in pulls if p["context"] == context and p["score_basis"] == saved["basis"]
-                   and p["received"] <= trial["opened"]][-MAX_ROWS:]
+                   and strategy_id(p) == 0 and p["received"] <= trial["opened"]][-MAX_ROWS:]
         durations = [_duration(p) for p in history if p["outcome"] == "killed"]
         median = statistics.median(durations) if durations else None
         if (ref["median_kill_s"] != median or len(ref["rows"]) != len(history)
@@ -238,7 +239,7 @@ def _trials(conn, result, pulls, cutoff):
                 pull = by_id.get(obs["pull"])
                 receipt = _meta(conn, f"tg:obs:{arm['id']}:{obs['pull']}")
                 if (references_valid and pull is not None and isinstance(receipt, dict)
-                        and saved.get("basis") == pull["score_basis"]
+                        and strategy_id(pull) == 0 and saved.get("basis") == pull["score_basis"]
                         and pull["context"] in saved.get("contexts", [])
                         and row["opened"] * 1000 <= pull["start_ms"]
                         and pull["received"] <= observation_cutoff
@@ -595,9 +596,9 @@ def training_section(conn, week: str, *, now: float, names: Callable[[int], str]
     rows = [r for r in _scored_rows(valid) if r["kind"] in {"his", "offline"}]
     groups = defaultdict(list)
     for row in rows:
-        groups[(row["context"], row["score_basis"])].append(row)
+        groups[(row["context"], row["score_basis"], strategy_id(row))].append(row)
     contexts = []
-    for (context, basis), history in sorted(groups.items()):
+    for (context, basis, strategy), history in sorted(groups.items()):
         current = [r for r in history if start * 1000 <= r["start_ms"] < end * 1000]
         if not current:
             continue
@@ -626,7 +627,7 @@ def training_section(conn, week: str, *, now: float, names: Callable[[int], str]
                 coverage.update(reasons)
             if not row["checks_complete"] and not reasons:
                 coverage.add("coverage_unavailable")
-        contexts.append(dict(context=context, score_basis=basis,
+        contexts.append(dict(context=context, score_basis=basis, **({"guild_strategy": strategy} if strategy else {}),
             checks_complete_pulls=sum(bool(r["checks_complete"]) for r in current),
             checks_coverage=sorted(coverage), boss=boss_name(example["map"], example["boss_id"]),
             size=example["size"], farm=is_farm([r["outcome"] for r in history if r["start_ms"] < end * 1000]),

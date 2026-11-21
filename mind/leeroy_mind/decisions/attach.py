@@ -9,6 +9,13 @@ def attach_decisions(app):
     from .service import DecisionsService
     service = DecisionsService(app, config)  # with its own instances of the shipped kinds
     app.engine.decisions_enabled = True
+    training = getattr(app, "training", None)
+    if training is not None:
+        from . import strategy
+        rules = service.rules_for("strategy")
+        training.listener.guild_layer = lambda context: strategy.layer_for(app, context) if rules.native else None
+        training.listener.guild_played = lambda ident: strategy.played(app, ident)
+        training.applier.guild_allowed = lambda context: bool(rules.native and strategy.layer_for(app, context))
     app.register_event_handler('hello', service.on_hello)
     app.register_connection_hook(service.on_connection)
     app.register_background(service.run)

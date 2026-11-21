@@ -16,7 +16,8 @@ from .ledger import KINDS
 # Kind modules the console imports to learn reversibility: "module:factory" (Parts B and C add theirs)
 BUILTIN: tuple[str, ...] = ('leeroy_mind.decisions.lineup:lineup_rules',
                             'leeroy_mind.decisions.loot_rules:loot_rules',
-                            'leeroy_mind.decisions.bank:bank_rules')
+                            'leeroy_mind.decisions.bank:bank_rules',
+                            'leeroy_mind.decisions.strategy:strategy_rules')
 # Bank requests and ranks are the officers' business; their posts live in officers' channels
 OFFICER_KINDS = frozenset({'bank', 'rank'})
 # Kinds an officers' poll settles: who argued what stays with the officers until the poll is linked

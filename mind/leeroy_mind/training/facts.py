@@ -14,6 +14,7 @@ from leeroy_mind.talk.reactions import FACTS_LOGGED, FACTS_RULE, WIPE_KNOWN, WIP
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.wow import boss_name, is_raid_fight
 
+from .score import strategy_id
 from . import store
 
 
@@ -139,8 +140,9 @@ class TalkHook:
             priors = [] if since is None else self.ports.conn.execute(
                 "SELECT (end_ms-start_ms)/1000.0 FROM tg_pull WHERE context=? AND kind='his' "
                 "AND outcome='killed' AND complete=1 AND scoreable=1 "
-                "AND end_ms<=? AND end_ms>start_ms AND id<>? AND start_ms>=?",
-                (context, row["start_ms"], row["id"], since)).fetchall()
+                "AND end_ms<=? AND end_ms>start_ms AND id<>? AND start_ms>=? "
+                "AND coalesce(json_extract(covariates,'$.guild_strategy'),0)=?",
+                (context, row["start_ms"], row["id"], since, strategy_id(row))).fetchall()
             fact = kill_facts(rec, [p[0] for p in priors], boss_name(row["map"], row["boss_id"], ""))
         if not fact:
             return instruction

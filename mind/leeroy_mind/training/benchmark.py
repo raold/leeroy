@@ -25,6 +25,7 @@ from leeroy_mind.memory.writer import MemoryCandidate
 from leeroy_mind.protocol import Ack, encode_command
 from leeroy_mind.wow import BOSS_NAMES, NON_FIGHT_STEPS
 
+from .score import strategy_id
 from .protocol import GetRivals, GetTrainingCleanup, Pull, Rival, Rivals, StartBenchmark, TrainingCleanup
 from .score import is_farm
 
@@ -119,6 +120,8 @@ def _comparisons(state, rows, baselines):
 
 
 def _sealed_pull(row, state, *, baseline=False):
+    if strategy_id(row):
+        return False
     """Validate frozen measured facts without consulting later mutable rows."""
     if (not isinstance(row, dict) or type(row.get("id")) is not str or not row["id"]
             or row["complete"] != 1 or row["scoreable"] != 1 or row["assisted"] != 0
