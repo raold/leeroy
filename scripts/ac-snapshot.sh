@@ -14,6 +14,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 OUT="${AC_SNAPSHOT_OUT:-$AC_ROOT}"
 [ -e "$OUT/.git" ] || die "AC_SNAPSHOT_OUT is not a git checkout: $OUT"
+OUT="$(cd "$OUT" && pwd)"   # format-patch -o under git -C would resolve a relative path in the module
 OUT_CONF="$OUT/config"
 
 # Credentials, tokens and keys. Empty and numeric values are flags or unset, so
