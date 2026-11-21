@@ -56,6 +56,15 @@ def decision_seeds(conn, *, now, personas, officers) -> list[Seed]:
         channels = ('officer-chat',) if private and row['kind'] not in OFFICER_KINDS else CHANNELS[row['kind']]
         about = tuple(sorted(g for g in stakeholders(row) if g in personas and (not private or g in officers)))
         label = LABELS[row['kind']]
+        if proposed and row['kind'] == 'bank':
+            from .bank import given_today
+            req = json.loads(row['value'])
+            if req.get('officer') in officers and 'item' in req:
+                block = (f"{name(req['guid'])} | {req['kind']} | item {req['item']} x{req['count']} | "
+                         f"{given_today(conn, now)}/{req['cap']} stacks today")
+                out.append(Seed(f"bank_request:{row['id']}", 'bank_request', channels, block,
+                                (req['officer'],), True))
+                continue
         if proposed:
             fact = _fact(f'{label} proposed, {summary(row, name)}',
                          _positions(conn, json.loads(row['positions']), names, now=now))
@@ -76,6 +85,15 @@ def decision_seeds(conn, *, now, personas, officers) -> list[Seed]:
         about = tuple(sorted(p['guid'] for p in positions if p['guid'] in personas))
         out.append(Seed(f"decision:p{poll['id']}:poll", 'decision', (poll['channel'],), fact, about,
                         channel.officers_only))
+    from .restock import deliveries, history
+    for state in history(conn):
+        if (state.get("officer") not in officers or state.get("message")
+                or len(state["results"]) != len(state["stacks"])):
+            continue
+        rows = deliveries(state, names)
+        if rows:
+            out.append(Seed("restock:" + state["week"], "restock", ("bank-requests",),
+                            "\n".join(rows), (state["officer"],), True))
     return out
 
 

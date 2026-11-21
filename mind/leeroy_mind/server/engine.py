@@ -528,6 +528,11 @@ class ServerEngine:
                     burst=burst, keep_channel=True, review_required=True, guards=guards,
                     still_valid=lambda c=conversation,g=speaker,p=parent:self._valid(c,g,p))
                 from leeroy_mind.culture.seeds import joke_of
+                bank_open = parent is None and conversation.seed.kind in ("bank_request", "restock")
+                if bank_open:
+                    from leeroy_mind.decisions.bank import record_post
+                    meta.discord_fact_block = conversation.seed.fact
+                    meta.on_discord_record = lambda line, message, now: record_post(app, conversation.seed, speaker, message, now)
                 if joke_of(conversation.seed) is not None:  # a joke, or a meme about one
                     meta.on_discord_record = lambda line,message,now:self._record_joke(conversation,line,message,now)
                 elif conversation.seed.kind in ('loot_close', 'his_loot') and len(conversation.seed.about) > 1:
@@ -545,7 +550,7 @@ class ServerEngine:
                         conversation.reason = 'meme_unavailable'
                         break
                 opening_photo = meta.photo_seed is not None and dry == 0
-                if (parent is None and dry == 0 and not opening_photo
+                if (parent is None and dry == 0 and not opening_photo and not bank_open
                         and joke_of(conversation.seed) is None and conversation.seed.kind != 'joke'):
                     seeds.mark_used(app.store, conversation.seed, now=app.clock.now())
                     if self._diverse():

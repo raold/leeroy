@@ -73,6 +73,10 @@ def decisions_view(conn, *, now: float, enabled: bool = False) -> dict:
     out = {"enabled": enabled, "human": human, "missing": missing, "decisions": [], "polls": []}
     if missing:
         return out
+    if enabled and "meta" in have:
+        from leeroy_mind.decisions.restock import history, deliveries
+        out["restocks"] = [dict(week=s["week"], deliveries=deliveries(s, views.names(conn)), no_maker=s["no_maker"])
+                           for s in history(conn)]
     apply.load_builtin()
     names = views.names(conn)
     name = lambda g: names.get(g, f"#{g}")  # noqa: E731

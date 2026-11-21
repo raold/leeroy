@@ -80,6 +80,12 @@ function renderDecisions(view) {
     var tr = el("tr"), td = el("td", "muted", "The guild has not decided anything yet.");
     td.colSpan = 8; tr.appendChild(td); body.appendChild(tr);
   }
+  arr(view.restocks).forEach(function (week) {
+    var tr = el("tr"), details = arr(week.deliveries).join("; ") || "No stacks received";
+    if (arr(week.no_maker).length) { details += ". No maker for items " + week.no_maker.join(", "); }
+    tr.appendChild(el("td", "", "Weekly restock " + week.week));
+    var td = el("td", "", details); td.colSpan = 7; tr.appendChild(td); body.appendChild(tr);
+  });
   var polls = $("g-polls");
   clear(polls);
   arr(view.polls).forEach(function (p) { polls.appendChild(pollCard(p, reason, busy)); });

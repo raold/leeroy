@@ -380,6 +380,8 @@ class BankStock:
     tab: int
     item_id: int
     count: int
+    maker: int | None = field(default=None, metadata={"omit_none": True})
+    target: int | None = field(default=None, metadata={"omit_none": True})
 
 
 @dataclass(frozen=True, slots=True)

@@ -115,7 +115,7 @@ def test_a_poll_whose_kind_has_no_hook_waits_for_one(store, clock):
 
 def test_each_service_holds_its_own_kinds(store, clock):
     first, second = service(store, [clock.now()]), service(store, [clock.now()])
-    assert set(first.rules) == {'lineup', 'loot_rule'}
+    assert set(first.rules) == {'lineup', 'loot_rule', 'bank'}
     assert all(first.rules[k] is not second.rules[k] for k in first.rules)
     # A stand-in registered for a test goes ahead of a service's own
     stand_in = Kind(store)

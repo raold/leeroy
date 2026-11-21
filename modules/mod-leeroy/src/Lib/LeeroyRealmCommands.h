@@ -110,7 +110,7 @@ struct BankTabBuyCmd { std::uint32_t officerGuid = 0, tab = 0; std::string name,
 struct BankMoneyCmd { std::uint32_t amount = 0; };
 struct BankDepositCmd { std::uint32_t guid = 0, itemId = 0, count = 0, tab = 0; };
 struct BankWithdrawCmd { std::uint32_t guid = 0, itemId = 0, count = 0, tab = 0, requester = 0; };
-struct BankStockCmd { std::uint32_t officerGuid = 0, tab = 0, itemId = 0, count = 0; };
+struct BankStockCmd { std::uint32_t officerGuid = 0, tab = 0, itemId = 0, count = 0, maker = 0, target = 0; };
 struct GrantAchievementCmd { std::uint32_t guid = 0, achievementId = 0; };
 struct GuildRenameCmd { std::uint32_t guildId = 0; std::string name; };
 struct GuildGrowCmd { std::uint32_t guildId = 0; std::vector<std::uint32_t> guids; };

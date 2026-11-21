@@ -216,19 +216,11 @@ class BankRules:
         for req in requests_due(conn, bank, cast, app.personas, now=now):
             if req["guid"] == by:
                 continue
-            who = cast[req["guid"]].name
-            given = given_today(conn, now)
-            text = (f"I've checked the request for {who}.\n```\n{who} | {req['kind']} | "
-                    f"item {req['item']} x{req['count']} | {given}/{cap} stacks today\n```")
-            with app.store.transaction():
-                from .positions import bank_positions
-                personas = {g: app.personas.get(g) for g in cast if app.personas.get(g)}
-                positions = bank_positions(conn, dict(req, at=now), [g for g, m in cast.items() if m.rank == 1], personas)
-                ident = ledger.propose(app.store, kind="bank", subject=req["subject"], value=req, positions=positions, now=now)
-                message = discord.post(app.store, channel="bank-requests", author=by, origin="mind", text=text, now=now)
-                ledger.settle(app.store, ident, settled_by=by, message=message, now=now)
-                if "member_bank_mail" not in self.features or not getattr(app, "realm", None):
-                    ledger.talk_only(app.store, ident, reason="bank_mail_off", now=now)
+            from .positions import bank_positions
+            personas = {g: app.personas.get(g) for g in cast if app.personas.get(g)}
+            positions = bank_positions(conn, dict(req, at=now), [g for g, m in cast.items() if m.rank == 1], personas)
+            req.update(officer=by, cap=cap)
+            ledger.propose(app.store, kind="bank", subject=req["subject"], value=req, positions=positions, now=now)
 
     async def advance(self, app, row):
         store, ident = app.store, row["id"]
@@ -277,6 +269,27 @@ class BankRules:
                 await self.send(app, cmd, refs[1], actors)
             return True
         return False
+
+
+def record_post(app, seed, speaker, message, now):
+    """Same transaction as the officer's published words and exact factual block."""
+    from leeroy_mind.server.seeds import mark_used
+    if speaker != officer(app):
+        raise ValueError("bank_officer_changed")
+    if seed.kind == "bank_request":
+        ident = int(seed.key.split(":")[1])
+        ledger.settle(app.store, ident, settled_by=speaker, message=message, now=now)
+        rules = app.decisions.rules_for("bank")
+        if "member_bank_mail" not in (rules.features or ()) or not getattr(getattr(app, "realm", None), "enabled", False):
+            ledger.talk_only(app.store, ident, reason="bank_mail_off", now=now)
+    else:
+        key = "decisions:" + seed.key
+        state = json.loads(app.store.get_meta(key))
+        if state.get("message"):
+            raise ValueError("restock_already_posted")
+        state["message"] = message
+        app.store.set_meta(key, json.dumps(state))
+    mark_used(app.store, seed, now=now)
 
 
 def bank_rules():

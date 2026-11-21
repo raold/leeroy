@@ -619,6 +619,7 @@ class TurnMeta:
     server_anchor: str = ''
     server_thread: tuple[int, ...] = ()
     server_conversation: str = ''
+    discord_fact_block: str = ''
     godmode_intent: int | None = None  # the owner's intent this turn carries out (godmode)
     # the answer he is owed for his line or post (talk/owed.py): the guild's pace never holds it
     # back, its review keeps a draft, and a lost draft is rescued; owed_rescue marks the watchdog's
@@ -5453,6 +5454,10 @@ class Pipeline:
         None, or why it wasn't said: discord_<code> for what the store refused."""
         self._dm_to_him(turn)
         server_turn = self._server_turn(turn, meta)
+        if meta.discord_fact_block and not meta.said:
+            from leeroy_mind.discord.text import MAX_TEXT
+            block = "\n```\n" + meta.discord_fact_block + "\n```"
+            text = text[:max(0, MAX_TEXT-len(block))] + block
         from leeroy_mind.server.records import BadDayCounter
         photo = meta.photo if not meta.said else None
         atomic_record = photo is not None or meta.on_discord_record is not None or meta.outreach_item is not None

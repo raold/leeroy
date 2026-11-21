@@ -364,6 +364,19 @@ RealmStep Stock(Queued& entry, std::uint32_t guid)
     if (tab >= baseline.items.tabs) return Failure(entry, "no_tab");
     auto const moved = entry.payload.value("moved", 0u);
     if (moved >= requested) return {StepState::Unknown, "bank_progress_unproved"};
+    if (auto maker = entry.payload.value("maker", 0u))
+    {
+        if (maker == HumanGuid() || !IsCast(maker) || !guild->GetMember(PlayerGuid(maker))) return Failure(entry, "not_member");
+        std::uint64_t total = requested - moved;
+        bool freeSlot = false;
+        for (auto const& slot : baseline.items.slots)
+            if (slot.position.bank && slot.position.container == tab)
+            {
+                freeSlot |= !slot.item.guid;
+                if (slot.item.entry == itemId) total += slot.item.count;
+            }
+        if (!freeSlot || total > entry.payload.at("target").get<std::uint32_t>()) return Failure(entry, "stock_target");
+    }
     auto count = std::min(requested - moved, proto->GetMaxStackSize());
     // One created stack may be smaller than the template maximum to fill a
     // fragmented tab one exact destination at a time. No created stack is
@@ -609,7 +622,8 @@ void RegisterRealmBankHandlers()
     { entry.guids = {command.guid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}};
       if (command.requester) entry.payload["requester"] = command.requester; }, MoveItems);
     QueueHandler("bank_stock", ParseBankStock, [](BankStockCmd const& command, Queued& entry)
-    { entry.guids = {command.officerGuid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}}; }, Stock);
+    { entry.guids = {command.officerGuid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}};
+      if (command.maker) { entry.payload["maker"] = command.maker; entry.payload["target"] = command.target; } }, Stock);
 }
 void AddRealmBankScripts() { new BankPlayerScripts(); new BankGuildScripts(); }
 }

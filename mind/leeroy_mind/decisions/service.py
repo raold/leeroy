@@ -66,6 +66,9 @@ class DecisionsService:
         for ident in sorted(self._unrecorded):
             await self._record_undo(ident)
         await self.kinds(now)
+        if getattr(app, "realm", None) and getattr(self.config, "bank_restock_per_week", 0):
+            from .restock import run
+            await run(app)
 
     async def kinds(self, now: float) -> None:
         """Each registered kind's own minute work (proposing, posting, taking effect, ending): a

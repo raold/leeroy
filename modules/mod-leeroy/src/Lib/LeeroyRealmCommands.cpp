@@ -379,7 +379,9 @@ std::optional<BankWithdrawCmd> ParseBankWithdraw(json const& j, std::string& err
 }
 std::optional<BankStockCmd> ParseBankStock(json const& j, std::string& error)
 {
-    Fields f(j, error); BankStockCmd out; f.Number("officer_guid", out.officerGuid); f.Number("tab", out.tab, 0, 5);
+    Fields f(j, error); BankStockCmd out;
+    if (f.Find("maker") || f.Find("target")) { f.Number("maker", out.maker); f.Number("target", out.target, 1, 60000); }
+    f.Number("officer_guid", out.officerGuid); f.Number("tab", out.tab, 0, 5);
     f.Number("item_id", out.itemId); f.Number("count", out.count, 1, kMaxItemCount); return f.Result(std::move(out));
 }
 std::optional<GrantAchievementCmd> ParseGrantAchievement(json const& j, std::string& error)

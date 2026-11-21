@@ -38,7 +38,7 @@ COMMAND_FIELDS = {
     "bank_money": "id amount",
     "bank_deposit": "id guid item_id count tab",
     "bank_withdraw": "id guid item_id count tab requester",
-    "bank_stock": "id officer_guid tab item_id count",
+    "bank_stock": "id officer_guid tab item_id count maker target",
     "grant_achievement": "id guid achievement_id",
     "guild_rename": "id guild_id name",
     "guild_grow": "id guild_id guids",

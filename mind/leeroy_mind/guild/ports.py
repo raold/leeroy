@@ -131,6 +131,12 @@ class LazyArmory:
             backend = self._get()
             return {m.guid: m for m in query_roster(backend.chars, guild_id, self.cfg.mysql_exe)}
 
+    def professions(self, guids):
+        from leeroy_mind.personas.roster import run_mysql
+        from .skills import professions, skills_sql
+        with self._lock:
+            return professions(run_mysql(self._get().chars, skills_sql(guids), self.cfg.mysql_exe))
+
     def bank(self, guild_id):
         """The guild bank (bankread.parse_bank's dict): four read-only SELECTs on the character
         database, the credentials never leaving this process."""

@@ -12,4 +12,9 @@ def attach_decisions(app):
     app.register_event_handler('hello', service.on_hello)
     app.register_connection_hook(service.on_connection)
     app.register_background(service.run)
+    if config.bank_restock_per_week and getattr(app, "night_runner", None) is not None:
+        from .restock import run
+        async def restock_stage(ctx):
+            await run(app, start=True)
+        app.night_runner.add_stage("decisions_restock", restock_stage, after="snapshot", model=None)
     return service

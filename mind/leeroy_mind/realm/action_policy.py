@@ -182,7 +182,10 @@ def classify(cmd, *, child=False):
     elif kind == "bank_money": n("amount", 1, 60000)
     elif kind in {"bank_deposit", "bank_withdraw", "bank_stock"}:
         if kind == "bank_withdraw" and cmd.requester is not None: n("requester")
-        if kind == "bank_stock": scope, policy = (n("officer_guid"),), "ordinary"
+        if kind == "bank_stock":
+            scope, policy = (n("officer_guid"),), "ordinary"
+            if cmd.target is not None or cmd.maker is not None:
+                n("maker"); n("target", 1, 60000)
         n("item_id"); n("count", 0 if kind == "bank_deposit" else 1, 1000); n("tab", 0, 5)
     elif kind == "grant_achievement":
         scope = (n("guid"),)
