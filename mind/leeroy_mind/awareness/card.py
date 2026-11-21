@@ -71,6 +71,7 @@ class CardContext:
     here: tuple[str, ...] = ()
     self_line: str = ''
     decisions: bool = False  # [decisions] enabled: the Decisions part (D4)
+    decision_kinds: frozenset[str] | None = None  # the kinds switched on (None: every kind)
     intents: tuple[str, ...] = ()  # her own plans from his strings (godmode), caller-filtered
     holidays: bool = False  # culture's server calendar ([culture] calendar): its events join Upcoming
     # her attendance counts under "Your standing"; the live caller turns them off outside talk
@@ -516,6 +517,8 @@ def _decisions(reader, guid, officer, ctx, now):
     for row in reader.rows(("guild_decision",), "SELECT d.*,(SELECT channel FROM guild_poll WHERE id=d.poll) "
             "AS poll_channel FROM guild_decision d WHERE d.status IN ('proposed','settled','in_effect') "
             "AND d.proposed<=? ORDER BY coalesce(d.effect,d.settled,d.proposed) DESC,d.id DESC LIMIT 64", (now,)):
+        if ctx.decision_kinds is not None and row["kind"] not in ctx.decision_kinds:
+            continue  # a kind switched off is not in force, whatever its row still says
         message = reader.rows(("discord_message",), "SELECT channel FROM discord_message WHERE id=?",
                               (row["message"],)) if row["message"] else []
         message = message[0]["channel"] if message else None
@@ -535,6 +538,8 @@ def _decisions(reader, guid, officer, ctx, now):
                            "AND closes>? ORDER BY closes,id LIMIT 32", (now, now)):
         voters = _json(row["voters"], [])
         if not isinstance(voters, list) or guid not in voters or apply.private_channel(row["channel"]) and not room:
+            continue
+        if ctx.decision_kinds is not None and row["kind"] is not None and row["kind"] not in ctx.decision_kinds:
             continue
         options = _json(row["options"], [])
         options = [o for o in options if isinstance(o, str)] if isinstance(options, list) else []

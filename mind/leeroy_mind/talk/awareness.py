@@ -410,6 +410,7 @@ class LiveReview:
             romance_activities=bond[0] and not is_group(raw), jealousy=0 if is_group(raw) else bond[1], server=observed.server,
             here=here, self_line=self_line, holidays=getattr(e, 'culture_calendar', False),
             intents=intents, decisions=bool(getattr(e, 'decisions_enabled', False)),
+            decision_kinds=getattr(e, 'decisions_kinds', None),
             grounded=bool(getattr(meta, 'wow_grounded', False)))
         observation = card(CardSources(conn,world=observed.world),turn.speaker,context=context)
         def clean(text):

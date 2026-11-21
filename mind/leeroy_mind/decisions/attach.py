@@ -10,6 +10,7 @@ def attach_decisions(app):
     from .service import DecisionsService
     service = DecisionsService(app, config)  # with its own instances of the shipped kinds
     app.engine.decisions_enabled = True
+    app.engine.decisions_kinds = service.kinds_on  # the card's Decisions part leaves the others out
     training = getattr(app, "training", None)
     if training is not None and service.kind_on("strategy"):
         from . import strategy

@@ -26,7 +26,8 @@ stand-in ahead of both (tests).
 Part B's lineups and loot rules run whenever `enabled` is on. Each Part C kind runs only with its
 own switch on as well (`config.KIND_SWITCHES`, `DecisionsService.kinds_on`). A kind switched off
 proposes, polls, posts, seeds and changes nothing: the service skips its minute work and its poll
-results (a poll it left waits), and its rows and polls give the engine no seed. With
+results (a poll it left waits), and its rows and polls give the engine no seed and are left out
+of the awareness card's Decisions part (`CardContext.decision_kinds`). With
 `rank_reviews` off the cast is not observed for reviews and the roster sets ranks by the guild's
 own rules with no hold, exactly as before Part C (a review already in effect is no longer
 overlaid). With `boss_strategy` off nothing is wired into training: no guild layer and no wait

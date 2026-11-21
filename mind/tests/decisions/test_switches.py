@@ -88,6 +88,8 @@ def test_attach_wires_training_and_the_cast_only_for_their_switches(tmp_path):
     on = app_for(tmp_path, training())
     assert attach_decisions(on) is not None
     assert on.handlers == ['hello', 'cast'] and callable(on.training.listener.guild_layer)
+    assert off.engine.decisions_kinds == {'lineup', 'loot_rule'}
+    assert on.engine.decisions_kinds == {'lineup', 'loot_rule', 'rank', 'strategy'}
     assert on.training.applier.guild_hold is on.training.listener.guild_hold
 
 
