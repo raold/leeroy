@@ -78,7 +78,7 @@ def test_social_reads_the_drama(db):
     assert [r["id"] for r in v["rumours"]] == [1]
     r = v["rumours"][0]
     assert (r["about"], r["spreaders"], r["stiflers"], r["knowers"]) == (1103, [1101, 1102], [1104], 3)
-    assert r["text"] == f"{SECRET} rumour"
+    assert r["text"] == "Original account unavailable."  # an unjudged claim is not truth
     assert v["mood"]["value"] == 0.25 and v["mood"]["reasons"] == ["a good raid"]
     assert sum(v["octants"].values()) == 3 and len(v["octants"]) == 2
     assert v["names"]["1101"] == "Member1101"

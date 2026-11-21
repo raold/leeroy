@@ -141,6 +141,7 @@ def test_a_contradicted_or_rule_breaking_scene_is_still_rejected(h):
 def test_people_around_may_be_named_in_the_scene_but_not_in_its_memories_evidence(h):
     h.persona(103, outside_raids=["idling"])
     data = reply(scene="Arkon and Belra argued about kiting while Coros watched.")
+    data['bystanders'] = [{'who': 'Coros', 'noticed': 'Arkon and Belra argued about kiting.'}]
     ctx = seeded(h, data)
     run(enc.stage_encounters(ctx))
     assert encounter(h)["status"] == "done"
@@ -149,6 +150,7 @@ def test_people_around_may_be_named_in_the_scene_but_not_in_its_memories_evidenc
     for owner in (101, 102):
         (memory,) = h.rows(owner)
         assert not any(ref.startswith("around:") for ref in memory.evidence)
+    assert h.store.conn.execute("SELECT 1 FROM knows WHERE root='encounter:1' AND guid=103").fetchone()
 
 
 def test_a_guildmate_who_is_not_around_still_fails_the_name_check(h):
@@ -157,6 +159,29 @@ def test_a_guildmate_who_is_not_around_still_fails_the_name_check(h):
     assert encounter(h)["status"] == "rejected"
     reasons = [r[0] for r in h.store.conn.execute("SELECT reason FROM grounding_log")]
     assert "name not in evidence: ebbo" in reasons
+
+
+@pytest.mark.parametrize("bystanders", [[], [{'who': 'Coros', 'noticed': 'Ebbo watched them.'}]])
+def test_offered_but_unaware_observer_cannot_ground_the_scene(h, bystanders):
+    h.persona(103, outside_raids=["idling"])
+    data = reply(scene="Arkon and Belra argued while Coros watched.", bystanders=bystanders)
+    run(enc.stage_encounters(seeded(h, data)))
+    assert encounter(h)["status"] == "rejected"
+    assert not h.store.conn.execute("SELECT 1 FROM knows WHERE root='encounter:1' AND guid=103").fetchone()
+
+
+def test_a_valid_second_notice_still_gives_the_observer_knowledge(h):
+    drama_on(h)
+    h.persona(103, outside_raids=['idling'])
+    data = reply(scene="Arkon and Belra argued while Coros watched.", bystanders=[
+        {'who': 'Coros', 'noticed': 'Ebbo watched them.'},
+        {'who': 'Coros', 'noticed': 'Arkon and Belra argued about kiting.'}])
+    ctx = seeded(h, data)
+    run(enc.stage_encounters(ctx))
+    row = encounter(h)
+    assert row['status'] == 'done'
+    assert h.store.conn.execute('SELECT 1 FROM knows WHERE root=? AND guid=103',
+                                (f"encounter:{row['id']}",)).fetchone()
 
 
 def test_the_couple_rule_swaps_only_the_romance_sentence(h):
@@ -273,6 +298,29 @@ def test_a_man_and_a_woman_who_like_each_other_spark(h, monkeypatch):
     assert couples.partner(h.store, 102, 1) == (101, "notices")
     run(couples.stage_couples(ctx))  # the unit is done: nothing twice
     assert h.count("rel_delta") == 4
+
+
+def test_one_failed_couple_does_not_rollback_another_or_repeat_erosion(h, monkeypatch):
+    _dating(h, pull=0, held=80)
+    woman(h, 104, "fond")
+    couple(h, 103, 104, "late_nights", attraction=80)
+    pursue(h, 102); pursue(h, 104)
+    original = couples._draw_away
+    def draw(store, ctx, members, now, *, pairs=None):
+        if pairs[0][0] == 101:
+            raise ValueError("invented bad pair")
+        return original(store, ctx, members, now, pairs=pairs)
+    monkeypatch.setattr(couples, "_draw_away", draw)
+    ctx = h.ctx()
+    run(couples.stage_couples(ctx))
+    assert ctx.failures['couples'] == 1
+    assert h.store.get_relationship(104, 103).attraction == 70
+    assert not ctx.done('couples', 'all')
+    monkeypatch.setattr(couples, "_draw_away", original)
+    run(couples.stage_couples(ctx))
+    assert h.store.get_relationship(102, 101).attraction == 70
+    assert h.store.get_relationship(104, 103).attraction == 70
+    assert ctx.done('couples', 'all')
 
 
 @pytest.mark.parametrize("case", ["married", "two_men", "dislike", "his", "lust", "taken_by_member"])
@@ -528,6 +576,112 @@ def test_his_pursuit_always_wins_if_he_keeps_at_it(h, monkeypatch):
     assert nights is not None and nights <= 14
 
 
+def _private_exchange(h, t, *, channel='whisper', reply_channel=None, reply_to=102, gap=30):
+    now = h.clock.now()
+    hers = h.say(t, 102, 'How was your day?', channel=channel, to=1)
+    h.say(t + gap, 1, 'I caught up with an old friend.', channel=reply_channel or channel, to=reply_to)
+    h.clock.set(now)
+    return hers
+
+
+@pytest.mark.parametrize('channel', ['whisper', 'dm:102'])
+def test_sustained_private_conversation_can_draw_away_a_fond_partner(h, monkeypatch, channel):
+    from leeroy_mind.nightly.settings import night_of_ts
+    monkeypatch.setattr(couples, '_feud_chance', lambda ctx, guid: 0.)
+    _dating(h, 'confession', pull=20., held=64.)
+    _private_exchange(h, h.clock.now() - DAY - 600, channel=channel)
+    for n in range(14):
+        _private_exchange(h, h.clock.now() - 600, channel=channel)
+        ctx = h.ctx(night=night_of_ts(h.clock.now(), h.clock.local().tzinfo))
+        run(couples.stage_couples(ctx))
+        if h.count('breakup'):
+            break
+        h.clock.advance(DAY)
+    assert stage(h, 101, 102) == ('ex', 'ex')
+    assert h.store.conn.execute('SELECT public FROM breakup').fetchone()[0] == 0
+    acts = h.store.conn.execute("SELECT * FROM attraction_act WHERE act='answered'").fetchall()
+    assert acts and all(r['gain'] == 3. and not r['live'] for r in acts)
+    assert h.store.get_relationship(102, 1).attraction >= 30.
+
+
+@pytest.mark.parametrize('case', ['one_night', 'one_sided', 'different_medium', 'other_target',
+                                  'public', 'stale_reply', 'no_fresh_exchange', 'hurt', 'none_stance'])
+def test_stray_or_ineligible_conversation_gains_nothing(h, case):
+    _dating(h, 'confession', pull=20., held=64.)
+    now = h.clock.now()
+    if case != 'one_night':
+        _private_exchange(h, now - DAY - 600)
+    if case == 'one_sided':
+        h.say(now - 600, 1, 'How was your day?', channel='whisper', to=102)
+        h.clock.set(now)
+    elif case != 'no_fresh_exchange':
+        _private_exchange(h, now - 600,
+                          channel='guild' if case == 'public' else 'whisper',
+                          reply_channel='dm:102' if case == 'different_medium' else None,
+                          reply_to=104 if case == 'other_target' else 102,
+                          gap=500 if case == 'stale_reply' else 30)
+    if case == 'hurt':
+        h.store.conn.execute("UPDATE chat_line SET text='leave me alone' WHERE from_guid=1 AND ts>?", (now - DAY,))
+    if case == 'none_stance':
+        woman(h, 102, 'none')
+        h.rel(102, 1, attraction=99.)  # a stale score must not override an explicit stance change
+    run(couples.stage_couples(h.ctx()))
+    assert h.store.conn.execute("SELECT count(*) FROM attraction_act").fetchone()[0] == 0
+    assert stage(h, 101, 102) == ('confession', 'confession')
+
+
+@pytest.mark.parametrize('act', ['flirt', 'answered', 'hurt'])
+def test_conversation_credit_does_not_stack_on_live_credit_or_hurt(h, act):
+    _dating(h, 'confession', pull=20., held=64.)
+    now = h.clock.now()
+    _private_exchange(h, now - DAY - 600)
+    ref = _private_exchange(h, now - 600)
+    h.store.conn.execute('INSERT INTO attraction_act(guid,act,gain,mult,ref,ts,live) VALUES (?,?,?,1,?,?,1)',
+                         (102, act, 0 if act == 'hurt' else 3, f'chat:{ref}', now - 570))
+    run(couples.stage_couples(h.ctx()))
+    assert h.store.conn.execute('SELECT count(*) FROM attraction_act').fetchone()[0] == 1
+    assert h.store.get_relationship(102, 1).attraction == 20.
+
+
+def test_conversation_credit_resumes_once_and_respects_the_attraction_cap(h):
+    from leeroy_mind.nightly import attraction
+    _dating(h, 'confession', pull=20., held=100.)
+    now = h.clock.now()
+    _private_exchange(h, now - DAY - 600)
+    _private_exchange(h, now - 600)
+    attraction.reconcile(h.store, 102, now=now)
+    h.rel(102, 1, attraction=99.)
+    ctx = h.ctx()
+    run(couples.stage_couples(ctx))
+    run(couples.stage_couples(h.ctx()))
+    assert h.store.get_relationship(102, 1).attraction == 100.
+    assert h.store.conn.execute("SELECT count(*) FROM attraction_act WHERE act='answered'").fetchone()[0] == 1
+    assert ctx.persona(102).romance.stance == 'lust'
+    assert h.store.get_relationship(102, 101).attraction == 90.
+
+
+def test_conversation_uses_the_local_six_am_night_not_midnight(h, monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from leeroy_mind.nightly.settings import night_bounds
+    _dating(h, 'confession', pull=20., held=100.)
+    tz = ZoneInfo('America/New_York')
+    now = datetime(2026, 10, 30, 0, 30, tzinfo=tz).timestamp()
+    h.clock.set(now)
+    monkeypatch.setattr(h.clock, 'local', lambda: datetime.fromtimestamp(h.clock.now(), tz))
+    # Across local midnight, but both within the same local night: not yet sustained.
+    _private_exchange(h, now - 3600)
+    _private_exchange(h, now - 600)
+    ctx = h.ctx(night='2026-10-29', window=night_bounds('2026-10-29', tz))
+    with h.store.transaction():
+        couples._private_attention(h.store, ctx, 102, now)
+    assert h.store.get_relationship(102, 1).attraction == 20.
+    _private_exchange(h, now - DAY - 600)
+    with h.store.transaction():
+        couples._private_attention(h.store, ctx, 102, now)
+    assert h.store.get_relationship(102, 1).attraction == 23.
+
+
 def test_while_he_pursues_her_their_scenes_do_not_warm_her(h):
     _dating(h, "late_nights", pull=20.0, held=40.0)
     pursue(h, 102)
@@ -564,7 +718,7 @@ def test_what_counts_as_his_pursuit(h, how):
         with h.store.transaction():
             h.store.conn.execute("INSERT INTO attraction_act(guid,act,gain,mult,ref,ts,live) "
                                  "VALUES (102,'flirt',20,1,?,?,0)", (f"event:{event}", now - 60))
-        public = True
+        public = False  # local witnesses do not authorize disclosure to the whole guild
     else:
         pursue(h, 102, kind=None, channel="whisper" if how == "whisper" else "dm:102")
         public = False
@@ -580,6 +734,100 @@ def test_before_a_crush_she_just_drifts_away(h):
     assert h.count("breakup") == 0 and h.count("rumor") == 0
 
 
+def test_recent_pursuit_prevents_a_quiet_drift_from_resparking(h, monkeypatch):
+    monkeypatch.setattr(couples, 'SPARK_P', 1.0)
+    monkeypatch.setattr(couples, 'DRAWN_FACTOR', 1.0)
+    _dating(h, 'banter')
+    pursue(h, 102, channel='whisper')
+    ctx = h.ctx()
+    run(couples.stage_couples(ctx))
+    assert stage(h, 101, 102) == ('none', 'none')
+    assert couples._sparks(h.store, ctx, ctx.members()) == 0
+
+
+@pytest.mark.parametrize('channel,public', [('voice:private1', False), ('voice:private2', False),
+    ('voice:private3', False), ('raid', False), ('party', False), ('say', False),
+    ('guild', True), ('discord:general', True), ('discord:officers', False), ('unknown', False)])
+def test_breakup_disclosure_requires_a_guild_wide_audience(h, channel, public):
+    ref = pursue(h, 102, channel=channel)
+    assert couples._public_ref(h.store, ref) is public
+
+
+@pytest.mark.parametrize('text,status', [('Remarried, one cat', 'married'),
+    ('Partnered, lives in a flat', 'partnered'), ('Divorced from her husband', 'divorced'),
+    ('Shares a studio with a business partner', None), ('Her husband died', 'widowed')])
+def test_household_edge_cases(text, status):
+    assert couples.household_status(text) == status
+
+
+def test_a_current_partner_in_a_disclosure_keeps_her_taken():
+    p = SimpleNamespace(real_life=SimpleNamespace(household='Single mum'),
+                        disclosures=(SimpleNamespace(text='My partner works nights.'),))
+    assert couples.taken(p)
+    p.disclosures = (SimpleNamespace(text='My business partner works nights.'),)
+    assert not couples.taken(p)
+
+
+@pytest.mark.parametrize('household,text,expected', [
+    ('Divorced, lives alone', 'I was married for ten years before the divorce.', False),
+    ('Single mum', 'I used to have a boyfriend.', False),
+    ('Lives alone', 'I do not have a partner.', False),
+    ('Lives alone', "I don't have a boyfriend.", False),
+    ('Single', 'My partner and I split up last month.', False),
+    ('Single', 'My partner and I are separated.', False),
+    ('Single', 'I divorced my husband last year.', False),
+    ('Widowed', 'I lost my husband two years ago.', False),
+    ('Widowed', 'My husband died two years ago.', False),
+    ('Widowed', 'My late husband liked cats.', False),
+    ('Single', 'My sister is married.', False),
+    ('Single', "My sister's husband works nights.", False),
+    ('Single', "I've been married before.", False),
+    ('Single', 'I have been engaged before.', False),
+    ('Single', 'I am engaged in a difficult project at work.', False),
+    ('Single', "When I'm married, I want a small ceremony.", False),
+    ('Single mum', 'My partner works nights.', True),
+    ('Lives alone', 'I have a boyfriend.', True),
+    ('Lives alone', 'I have been married for ten years.', True),
+    ('Divorced', 'I was married once; now I have a partner.', True),
+    ('Widowed', 'I have remarried.', True),
+    ('Divorced', "I'm remarried now.", True),
+    ('Divorced', 'I am now married.', True),
+    ('Divorced', 'I now have a boyfriend.', True),
+    ('Widowed', 'I have now remarried.', True),
+    ('Divorced', 'My partner and I split up, but I have a new partner now.', True),
+    ('Divorced', "I've been married before, but now I'm remarried.", True),
+    ('Married', 'I was married before too.', True),
+])
+def test_only_a_current_own_disclosure_marks_a_free_household_taken(household, text, expected):
+    p = SimpleNamespace(real_life=SimpleNamespace(household=household),
+                        disclosures=(SimpleNamespace(text=text),))
+    assert couples.taken(p) is expected
+
+
+def test_public_cards_omit_member_romance_without_losing_friendship(monkeypatch):
+    monkeypatch.setattr(drama_config, '_PINNED', True)
+    rel = Relationship(a=101, b=102, romance_stage='late_nights', affinity=30)
+    pair = relationship_card('Belra', rel, is_human=False)
+    public = relationship_card('Belra', rel, is_human=False, show_member_romance=False)
+    assert "you're dating" in pair and "you're dating" not in public
+    assert "you like them" in public
+
+
+def test_scene_fiction_stays_out_of_notes_and_derived_gossip(h):
+    from leeroy_mind.nightly import relations
+    scene_id = h.mem(101, 'Coros gave me a pet turtle.', actors=(103,), source='offscreen',
+                     evidence=())
+    scene = h.store.get_memories([scene_id])[0]
+    heard_id = h.mem(101, 'Coros gave away a turtle.', actors=(103,), source='hearsay',
+                     evidence=(f'memory:{scene_id}',))
+    ctx = h.ctx()
+    assert not gossip.source_allowed(ctx, scene, 101, 102)
+    assert not gossip.source_allowed(ctx, h.store.get_memories([heard_id])[0], 101, 102)
+    run(relations.rewrite_notes(ctx, 101, 103))
+    assert not ctx.reasoner.llm.calls
+    assert h.store.get_relationship(101, 103).pinned == ()
+
+
 def test_a_woman_with_no_stance_toward_him_is_never_drawn_away(h):
     drama_on(h)
     woman(h, 102)
@@ -587,6 +835,11 @@ def test_a_woman_with_no_stance_toward_him_is_never_drawn_away(h):
     pursue(h, 102)
     run(couples.stage_couples(h.ctx()))
     assert stage(h, 101, 102) == ("late_nights", "late_nights")
+    before = h.store.get_relationship(102, 101).attraction
+    with h.store.transaction():
+        assert couples.after_scene(h.store, h.ctx(), {'a': 101, 'b': 102, 'id': 1},
+                                   total=2., valence=.5) != 'distracted'
+    assert h.store.get_relationship(102, 101).attraction == before + couples.FLIRT_GAIN
 
 
 # -- 4. jealousy becomes drama --------------------------------------------------------------
@@ -674,7 +927,7 @@ def test_third_person(text, ok):
     assert gossip.third_person(text, "Belra") is ok
 
 
-def test_a_first_person_telling_reaches_its_hearer_without_a_rumour(h):
+def test_a_first_person_source_is_kept_without_promoting_the_models_claim(h):
     ident = h.mem(101, "Coros took my bracers.", importance=8, valence=-0.6, actors=(103,))
     m = h.store.get_memories([ident])[0]
     ctx = h.ctx()
@@ -685,11 +938,11 @@ def test_a_first_person_telling_reaches_its_hearer_without_a_rumour(h):
             "claim": "I think Coros took them."}
     with h.store.transaction():
         heard = gossip.after_gossip(h.store, ctx, scene, data, [m], now=h.T)
-    assert heard is not None and h.count("rumor") == 0
+    assert heard is not None and h.count("rumor") == 1
     data = {**data, "claim": "Coros took Arkon's bracers."}
     with h.store.transaction():
         gossip.after_gossip(h.store, ctx, scene, data, [m], now=h.T)
-    assert h.store.conn.execute("SELECT canonical FROM rumor").fetchone()[0] == "Coros took Arkon's bracers."
+    assert h.store.conn.execute("SELECT canonical FROM rumor").fetchone()[0] == m.text
 
 
 def test_a_rumour_may_name_a_couple_when_the_switch_is_on(h):
@@ -705,7 +958,7 @@ def test_a_rumour_may_name_a_couple_when_the_switch_is_on(h):
             "claim": "Coros is dating Dunna."}
     with h.store.transaction():
         assert gossip.after_gossip(h.store, h.ctx(), scene, data, [m], now=h.T) is not None
-    assert h.store.conn.execute("SELECT canonical FROM rumor").fetchone()[0] == "Coros is dating Dunna."
+    assert h.store.conn.execute("SELECT canonical FROM rumor").fetchone()[0] == m.text
 
 
 # -- live talk ------------------------------------------------------------------------------
@@ -771,9 +1024,8 @@ def test_breakup_rumours_never_take_a_live_rumour_slot(h):
     assert h.store.conn.execute("SELECT count(*) FROM rumor WHERE root NOT LIKE 'rule:breakup:%'").fetchone()[0] == 1
 
 
-@pytest.mark.parametrize("extraversion,fallback", [(5.5, True), (8.0, False)])
-def test_only_a_plain_retelling_may_stand_in_for_the_claim(h, monkeypatch, extraversion, fallback):
-    """Ruling P2-3: a sharpened or bent retelling never becomes the rumour's canonical."""
+@pytest.mark.parametrize("extraversion", [5.5, 8.0])
+def test_neither_plain_nor_sharpened_retellings_replace_the_source(h, monkeypatch, extraversion):
     from nightly.test_night_gossip import scene, source
     monkeypatch.setattr(gossip, "trait_today", lambda *args: {
         "extraversion": extraversion, "neuroticism": 5.5, "conscientiousness": 5.5})
@@ -783,7 +1035,7 @@ def test_only_a_plain_retelling_may_stand_in_for_the_claim(h, monkeypatch, extra
     with h.store.transaction():
         assert gossip.after_gossip(h.store, h.ctx(), scene(h, a=m.owner), data, [m], now=h.T)
     row = h.store.conn.execute("SELECT canonical FROM rumor").fetchone()
-    assert (row is not None and row[0] == retold) is fallback and (row is None) is not fallback
+    assert row[0] == m.text
 
 
 def test_a_correction_tells_the_source_never_the_claim(h, monkeypatch):
@@ -793,12 +1045,18 @@ def test_a_correction_tells_the_source_never_the_claim(h, monkeypatch):
     m = source(h)
     h.rel(102, 101, trust=60)
     tell(h, m, claim="Coros stole the bracers and sold them.")
-    assert h.store.conn.execute("SELECT canonical FROM rumor").fetchone()[0] == \
-        "Coros stole the bracers and sold them."
-    enc = scene(h, a=103)
-    enc["_shown_refs"] = (f"memory:{m.id}",)
+    assert h.store.conn.execute("SELECT canonical FROM rumor").fetchone()[0] == m.text
+    # Old rows may still contain the unjudged claim: correction prompts must repair their view too.
+    h.store.conn.execute("UPDATE rumor SET canonical='Coros stole the bracers and sold them.'")
+    offer = gossip.rumor_offer(h.ctx(), {'a': 103, 'b': 102, 'volition': 'correct', 'ref': 'rule:rumor:1'})
+    assert offer is not None and offer['rumor']['canonical'] == m.text
+    correction_prompt = enc._gossip_prompt(h.ctx(), {'a': 103, 'b': 102, 'volition': 'correct'},
+                                          Evidence(), 103, [], offer)
+    assert m.text in correction_prompt and 'sold them' not in correction_prompt
+    correction_scene = scene(h, a=103)
+    correction_scene["_shown_refs"] = (f"memory:{m.id}",)
     with h.store.transaction():
-        fixed = gossip.after_correction(h.store, h.ctx(), enc, 1, 102, now=h.T)
+        fixed = gossip.after_correction(h.store, h.ctx(), correction_scene, 1, 102, now=h.T)
     assert h.store.get_memories([fixed])[0].text == "Turns out Coros took my bracers."
 
 

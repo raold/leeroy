@@ -17,6 +17,7 @@ def test_texture_counts_ties_explanations_moves_and_caps(h):
         h.rel(a, b, affinity=value)
     h.store.conn.execute("INSERT INTO rel_delta(a,b,dim,delta,evidence,ts) VALUES (101,102,'affinity',2,'[]',?)", (h.T,))
     h.store.conn.execute("INSERT INTO rel_delta(a,b,dim,delta,evidence,ts) VALUES (101,1,'romance_stage',1,'[\"chat:1\"]',?)", (h.T,))
+    h.store.conn.execute("INSERT INTO rel_delta(a,b,dim,delta,evidence,ts) VALUES (102,103,'romance_stage',1,'[\"chat:1\"]',?)", (h.T,))
     h.store.conn.execute("INSERT INTO rel_cap(night,a,b,dim,used) VALUES (?,101,102,'affinity',11)", (h.night,))
     result = social.texture(h.store, (h.T - 1, h.T + 1), human=1, speed=10)
     assert result == {"pairs": 3, "non_neutral_share": 2 / 3, "negative_ties": 1,

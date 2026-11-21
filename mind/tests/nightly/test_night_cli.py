@@ -93,6 +93,24 @@ def test_standalone_runner_attaches_enabled_claims_after_notes(h, data, tiny_pip
     assert invoked == [NIGHT]
 
 
+@pytest.mark.parametrize('enabled', [True, False])
+def test_manual_night_attaches_couples_and_restores_the_romance_pin(h, data, tiny_pipeline, monkeypatch, enabled):
+    from leeroy_mind.drama import config as drama_config, couples
+    pipeline = sys.modules['leeroy_mind.nightly.pipeline']
+    invoked = []
+    async def step(ctx):
+        invoked.append(drama_config.pinned())
+        assert ctx.settings.member_romance is True
+    monkeypatch.setattr(couples, 'stage_couples', step)
+    monkeypatch.setattr(drama_config, '_PINNED', not enabled)
+    monkeypatch.setattr(pipeline, 'STAGES', (Stage('romance', pipeline.STAGES[0].fn, None),))
+    with (data / 'mind.toml').open('a', encoding='utf-8') as config:
+        config.write(f'\n[drama]\nmember_romance={str(enabled).lower()}\n')
+    assert cli.nightly_main(['run', '--night', NIGHT], make_llm=lambda: client(h)) == 0
+    assert invoked == ([True] if enabled else [])
+    assert drama_config.pinned() is not enabled
+
+
 @pytest.mark.parametrize("mode,runs", [("record", 1), ("off", 0)])
 def test_standalone_runner_attaches_the_threads_recorder_after_encounters(
         h, data, tiny_pipeline, monkeypatch, mode, runs):
