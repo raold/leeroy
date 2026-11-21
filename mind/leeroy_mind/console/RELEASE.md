@@ -2,6 +2,10 @@
 
 Use this checklist in an authorized installation window. The owner must be known offline for the release. The later in-game acceptance pass starts after services are healthy. Keep the private log, backup locations and rollback line with the release owner.
 
+For bank decisions, day plans and member heroics, ship dormant first, then use
+the [staged rollout](ROLLOUT.md): one key change at a time, real behavior and
+return evidence before the next feature, and explicit stop/rollback criteria.
+
 ## 1. Establish the release inputs
 
 - [ ] Identify the last installed commit, the public merge commits still needed and the intended checkout, data directory and native build. Verify the expected artifacts and linked native CI for the final source. The historical console dependencies (tasks 15, 16 and 21–27) and the release helper are on public main.
