@@ -111,7 +111,8 @@ inline constexpr std::string_view HandlerError = "handler error";   // an extens
 enum class BossState : std::uint8_t { Engaged, Killed, Wiped };
 
 // EncounterState values: NOT_STARTED 0, IN_PROGRESS 1, FAIL 2, DONE 3, SPECIAL 4, TO_BE_DECIDED 5
-std::optional<BossState> ClassifyBossTransition(std::uint8_t newState, std::uint8_t oldState);
+std::optional<BossState> ClassifyBossTransition(std::uint8_t newState, std::uint8_t oldState,
+    std::uint32_t map = 0, std::uint32_t boss = 0);
 
 enum class LootMethod : std::uint8_t { Need, Greed, Master };
 enum class BgWinner : std::uint8_t { Horde, Alliance, None };

@@ -335,7 +335,7 @@ void TrainingTap::OnBossState(uint32 id, uint8 newState, uint8 oldState, Map* ma
 {
     if (!map || oldState == 5 || !_impl->running.load() || !TelemetryOn() || !MindArmed()
         || !LeeroyModule::Instance().Enabled()) return;
-    auto transition = ClassifyBossTransition(newState, oldState);
+    auto transition = ClassifyBossTransition(newState, oldState, map->GetId(), id);
     if (!transition) return;
     if (*transition == BossState::Engaged)
     {

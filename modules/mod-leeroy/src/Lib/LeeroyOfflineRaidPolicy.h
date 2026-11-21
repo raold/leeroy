@@ -230,6 +230,13 @@ SlotRelease DecideSlotRelease(bool benchmark, bool failedReported, std::uint32_t
 // before the running-only policy can meaningfully count members or inspect encounter state.
 std::string OfflineRaidStopReason(bool humanOnline, bool moduleEnabled, bool keepCast,
     bool driverPresent, std::uint32_t elapsedMs, std::uint32_t timeoutMs, bool instanceStrategies = true);
+// Gunship's DC pass sets the progression slot, never its encounter-credit bit.
+inline bool EarnedRaidKill(std::uint32_t map, std::uint32_t boss, std::uint8_t state,
+    std::uint32_t completedMask)
+{
+    return state == 3 && (map != 631 || boss != 2 || (completedMask & (1u << 2)) != 0);
+}
+
 }
 
 #endif

@@ -991,7 +991,7 @@ bool ReadBosses(Job& job, Player* leader, bool baseline)
             ++job.event.wipes;
         }
         job.previousBossStates[index] = current;
-        if (current == DONE)
+        if (EarnedRaidKill(leader->GetMapId(), index, current, instance->GetCompletedEncounterMask()))
             ++job.event.kills;
     }
     return true;

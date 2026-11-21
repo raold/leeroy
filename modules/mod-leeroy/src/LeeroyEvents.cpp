@@ -508,7 +508,7 @@ public:
     // check; ClassifyBossTransition drops the loading and same-state calls.
     void OnBeforeSetBossState(uint32 id, EncounterState newState, EncounterState oldState, Map* instance) override
     {
-        std::optional<Leeroy::BossState> const state = Leeroy::ClassifyBossTransition(newState, oldState);
+        std::optional<Leeroy::BossState> const state = Leeroy::ClassifyBossTransition(newState, oldState, instance ? instance->GetId() : 0, id);
         if (!state || !instance)
             return;
 

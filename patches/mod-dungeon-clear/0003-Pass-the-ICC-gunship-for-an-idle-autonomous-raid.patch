@@ -1,0 +1,398 @@
+From ed2a1c4c6d22927997364fb4a14091c9a82dd59c Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 07:47:55 -0500
+Subject: [PATCH 3/3] Pass the ICC gunship for an idle autonomous raid
+
+---
+ README.md                                     |  15 ++
+ mod-dungeon-clear.cmake                       |   1 +
+ .../Data/DungeonEventRegistry.cpp             |   1 +
+ .../Data/Events/DungeonEventTables.h          |   1 +
+ .../Data/Events/IcecrownCitadelEvents.cpp     | 162 ++++++++++++++++++
+ .../Overrides/ObjectiveHookRegistry.cpp       |   1 +
+ .../Overrides/ObjectiveHookRegistry.h         |   1 +
+ .../Util/DcIcecrownPassDecision.h             |  34 ++++
+ src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h |   2 +
+ t/TestIcecrown.cpp                            |  50 ++++++
+ t/run_tests.sh                                |   2 +-
+ 11 files changed, 269 insertions(+), 1 deletion(-)
+ create mode 100644 src/Ai/Dungeon/DungeonClear/Data/Events/IcecrownCitadelEvents.cpp
+ create mode 100644 src/Ai/Dungeon/DungeonClear/Util/DcIcecrownPassDecision.h
+ create mode 100644 t/TestIcecrown.cpp
+
+diff --git a/README.md b/README.md
+index b514ba6..17e0ff1 100644
+--- a/README.md
++++ b/README.md
+@@ -205,3 +205,18 @@ handed to testers without shell access.
+ ## License
+ 
+ AGPL-3.0-or-later (inherited from mod-playerbots). See `LICENSE`.
++
++### ICC bot-only gunship pass
++
++After Marrowgar and Deathwhisper, an autonomous raid passes the vehicle battle
++to Deathbringer's Rise and starts the faction captain's Saurfang intro. All raid
++slots must resolve to living idle bots in the same copy, with no human-controlled
++player anywhere in the instance. Combat, transport, vehicle and teleport defer
++the pass. It retries after a wipe and stops moving anyone once Saurfang is done.
++
++The core requires gunship's persisted boss slot DONE to fight later bosses. This
++is a progression pass, not a kill: no encounter credit, achievement, victory spell
++or hull kill is issued. Loaded armories are re-locked synchronously; later loads
++retain their stock locks. Leeroy must exclude this unearned slot from kill reports.
++A fresh instance or its normal reset is needed to play gunship after this pass;
++the automatic pass never resets a saved instance. Mixed/human raids are unchanged.
+diff --git a/mod-dungeon-clear.cmake b/mod-dungeon-clear.cmake
+index 46f9cec..fcba3e6 100644
+--- a/mod-dungeon-clear.cmake
++++ b/mod-dungeon-clear.cmake
+@@ -123,6 +123,7 @@ if (BUILD_TESTING)
+             "${MOD_PATH}/t/TestTrialOfTheChampion.cpp"
+             "${MOD_PATH}/t/TestTrialOfTheCrusader.cpp"
+             "${MOD_PATH}/t/TestUlduar.cpp"
++            "${MOD_PATH}/t/TestIcecrown.cpp"
+             "${MOD_PATH}/t/TestOculus.cpp"
+             "${MOD_PATH}/t/TestGundrak.cpp"
+             "${MOD_PATH}/t/TestBlackwingLair.cpp"
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp b/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp
+index 3dd4605..9a62ebf 100644
+--- a/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp
+@@ -616,6 +616,7 @@ namespace
+             RegisterTrialOfTheChampionEvents(t);
+             RegisterTrialOfTheCrusaderEvents(t);
+             RegisterUlduarEvents(t);
++            RegisterIcecrownEvents(t);
+             RegisterOculusEvents(t);
+             RegisterKarazhanEvents(t);
+             return t;
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h b/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
+index 1d5bba8..6236e10 100644
+--- a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
++++ b/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
+@@ -5415,6 +5415,7 @@ namespace DcUlduar
+ // Ulduar (603) — TWO events: the Leviathan pass (conditional) and Razorscale's
+ // commander (anchored). See UlduarEvents.cpp.
+ void RegisterUlduarEvents(std::vector<DungeonEvent>& out);
++void RegisterIcecrownEvents(std::vector<DungeonEvent>& out);
+ 
+ // --- The Oculus (map 578) ---------------------------------------------------
+ //
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/IcecrownCitadelEvents.cpp b/src/Ai/Dungeon/DungeonClear/Data/Events/IcecrownCitadelEvents.cpp
+new file mode 100644
+index 0000000..5ff221f
+--- /dev/null
++++ b/src/Ai/Dungeon/DungeonClear/Data/Events/IcecrownCitadelEvents.cpp
+@@ -0,0 +1,162 @@
++/*
++ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license.
++ */
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
++#include "Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcIcecrownPassDecision.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcPartyState.h"
++#include "Ai/Dungeon/DungeonClear/DcValueKeys.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcThrottle.h"
++#include "Ai/Dungeon/DungeonClear/Util/DungeonEventExecutor.h"
++#include "Creature.h"
++#include "GameObject.h"
++#include "Group.h"
++#include "InstanceScript.h"
++#include "Log.h"
++#include "Map.h"
++#include "MotionMaster.h"
++#include "Player.h"
++#include "PlayerbotAI.h"
++#include "Playerbots.h"
++#include "SpellMgr.h"
++#include "TypeContainerVisitor.h"
++#include <unordered_map>
++#include <vector>
++
++namespace
++{
++    using namespace DcIcecrownPass;
++    struct RelockArmories
++    {
++        template<class T> void Visit(T&) {}
++        void Visit(std::unordered_map<ObjectGuid, GameObject*>& objects)
++        {
++            // Visit the already-loaded object store once. A radius scan here
++            // could load grids across the entire raid on the world thread.
++            for (auto const& item : objects)
++            {
++                GameObject* chest = item.second;
++                if (IsArmory(chest->GetEntry()))
++                    chest->SetGameObjectFlag(GO_FLAG_LOCKED | GO_FLAG_NOT_SELECTABLE | GO_FLAG_NODESPAWN);
++            }
++        }
++    };
++
++    bool Autonomous(Player* p)
++    {
++        if (!p || DcPlayerbotCompat::IsHumanControlled(p)) return false;
++        PlayerbotAI* ai = GET_PLAYERBOT_AI(p);
++        return ai && !DcPlayerbotCompat::IsRealPlayer(ai->GetMaster());
++    }
++
++    // A persisted instance-wide progression change is never made around a human,
++    // even one in another group. Require the whole raid to be present and idle;
++    // unknown/offline slots, another copy, a vehicle or a teleport all defer it.
++    bool Census(Player* bot, std::vector<Player*>& members)
++    {
++        if (!bot || bot->GetMapId() != MapId || !bot->GetGroup() || !bot->GetGroup()->isRaidGroup()) return false;
++        for (auto const& ref : bot->GetMap()->GetPlayers())
++            if (!Autonomous(ref.GetSource())) return false;
++        for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
++        {
++            Player* m = ref->GetSource();
++            if (!Autonomous(m) || !m->IsInWorld() || m->GetMap() != bot->GetMap() || !m->IsAlive()
++                || m->IsInCombat() || m->IsBeingTeleported() || m->GetVehicle() || m->GetTransport()) return false;
++            members.push_back(m);
++        }
++        return !members.empty() && members.size() == bot->GetGroup()->GetMembersCount();
++    }
++
++    bool Eligible(Player* bot, std::vector<Player*>& members)
++    {
++        if (!Census(bot, members)) return false;
++        InstanceScript* inst = bot->GetInstanceScript();
++        return inst && !inst->IsEncounterInProgress() && Ready(inst->GetBossState(Marrowgar),
++            inst->GetBossState(Deathwhisper), inst->GetBossState(Gunship), inst->GetBossState(Saurfang), true, true);
++    }
++
++    bool LootPending(Player* bot, AiObjectContext* context)
++    {
++        return !context || context->GetValue<bool>(DcKey::Stock::HasAvailableLoot)->Get()
++            || context->GetValue<bool>(DcKey::Stock::CanLoot)->Get()
++            || DcPartyState::IsAnyPartyMemberLooting(bot);
++    }
++
++    bool PassDue(Player* bot, AiObjectContext* context)
++    {
++        std::vector<Player*> members;
++        if (!Eligible(bot, members) || LootPending(bot, context)) return false;
++        InstanceScript* inst = bot->GetInstanceScript();
++        if (inst->GetBossState(Gunship) != DONE) return true;
++        for (Player* m : members)
++            if (Outside(m->GetPositionX(), m->GetPositionY(), m->GetPositionZ())) return true;
++        Creature* captain = inst->GetCreature(CaptainData);
++        return captain && captain->IsAlive() && captain->IsVisible() && captain->HasNpcFlag(UNIT_NPC_FLAG_GOSSIP);
++    }
++
++    ObjectiveArriveResult Pass(Player* bot, AiObjectContext* context, DungeonBossInfo const&)
++    {
++        std::vector<Player*> members;
++        if (!context || !Eligible(bot, members) || LootPending(bot, context)) return ObjectiveArriveResult::Done;
++        InstanceScript* inst = bot->GetInstanceScript();
++        bool const opening = inst->GetBossState(Gunship) != DONE;
++        if (opening)
++        {
++            // Core CheckLowerSpire refuses Saurfang (and all later bosses) unless
++            // this slot is DONE. Do not call UpdateEncounterState, cast victory
++            // credit or kill a hull. SetBossState unlocks loaded armories, so put
++            // their original locks back synchronously, before any bot can loot.
++            if (!inst->SetBossState(Gunship, DONE) || inst->GetBossState(Gunship) != DONE)
++                return ObjectiveArriveResult::Done;
++            RelockArmories relock;
++            VisitorHelper(relock, bot->GetMap()->GetObjectsStore());
++            LOG_INFO("playerbots.dungeonclear", "dc_icc_gunship_pass instance={} earned=0", bot->GetInstanceId());
++        }
++        // The stock teleporter uses EFFECT_1, not EFFECT_0.
++        SpellTargetPosition const* target = sSpellMgr->GetSpellTargetPosition(RiseSpell, EFFECT_1);
++        float const x = target && target->target_mapId == MapId ? target->target_X : X;
++        float const y = target && target->target_mapId == MapId ? target->target_Y : Y;
++        float const z = target && target->target_mapId == MapId ? target->target_Z : Z;
++        float const o = target && target->target_mapId == MapId ? target->target_Orientation : O;
++        unsigned moved = 0;
++        for (Player* m : members)
++            if (Outside(m->GetPositionX(), m->GetPositionY(), m->GetPositionZ()))
++            {
++                m->GetMotionMaster()->Clear();
++                m->NearTeleportTo(x, y, z, o, false, false, true);
++                ++moved;
++            }
++        if (opening)
++            // Replay the script's normal saved-instance entry recovery. It restores
++            // hidden Saurfang actors when gunship is DONE, without running a
++            // ship victory, moving the transports, or awarding encounter credit.
++            inst->OnPlayerEnter(bot);
++        if (moved || opening) return ObjectiveArriveResult::Done;
++
++        Creature* captain = inst->GetCreature(CaptainData);
++        if (!captain || !captain->IsVisible() || !captain->HasNpcFlag(UNIT_NPC_FLAG_GOSSIP))
++            return ObjectiveArriveResult::Done;
++        DcRunState& st = DcRun::Of(context);
++        if (!st.Throttled(DcThrottle::IccIntro, 3000))
++        {
++            if (bot->GetDistance(captain) > 4.0f)
++                bot->GetMotionMaster()->MovePoint(0, captain->GetPositionX(), captain->GetPositionY(), captain->GetPositionZ());
++            else
++                DungeonEventExecutor::SelectGossip(bot, captain, 0);
++        }
++        return ObjectiveArriveResult::Running;
++    }
++}
++
++void RegisterIcecrownEvents(std::vector<DungeonEvent>& out)
++{
++    out.push_back(EventBuilder(DcIcecrownPass::MapId, DcIcecrownPass::Event, "Gunship pass and Saurfang intro")
++        .Conditional(&PassDue).Repeatable().Optional().StepsOwnMovement().Custom(DcIcecrownPass::Hook).Build());
++}
++
++void RegisterIcecrownHooks(ObjectiveHookRegistry::HookTable& out)
++{
++    ObjectiveHookRegistry::AddHook(out, DcIcecrownPass::Hook, &Pass);
++}
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp
+index 70ab58f..ac872bb 100644
+--- a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp
+@@ -848,6 +848,7 @@ namespace
+             RegisterTrialOfTheChampionHooks(t);
+             RegisterTrialOfTheCrusaderHooks(t);
+             RegisterUlduarHooks(t);
++            RegisterIcecrownHooks(t);
+             RegisterOculusHooks(t);
+             RegisterKarazhanChessHooks(t);
+             RegisterKarazhanHooks(t);
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h
+index 9402fd5..0978b09 100644
+--- a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h
+@@ -205,6 +205,7 @@ void RegisterTrialOfTheCrusaderHooks(ObjectiveHookRegistry::HookTable& out);
+ // UlduarDriver.cpp; the ruling is in DungeonEventTables.h (namespace DcUlduar)
+ // and its decisions are the pure kernel Util/DcUlduarPassDecision.h.
+ void RegisterUlduarHooks(ObjectiveHookRegistry::HookTable& out);
++void RegisterIcecrownHooks(ObjectiveHookRegistry::HookTable& out);
+ 
+ // The Oculus (map 578) — the flight driver (38: muster, fly, land, Eregos) and the
+ // Eregos hold's telemetry (39). See OculusDriver.cpp. Its decisions are the pure
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcIcecrownPassDecision.h b/src/Ai/Dungeon/DungeonClear/Util/DcIcecrownPassDecision.h
+new file mode 100644
+index 0000000..ae08359
+--- /dev/null
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcIcecrownPassDecision.h
+@@ -0,0 +1,34 @@
++#ifndef _PLAYERBOT_DCICECROWNPASSDECISION_H
++#define _PLAYERBOT_DCICECROWNPASSDECISION_H
++
++// ICC's script slots match its DBC encounter bits. This pass changes progression,
++// never the completed encounter mask. No reward is earned for the gunship.
++namespace DcIcecrownPass
++{
++    constexpr unsigned MapId = 631, Marrowgar = 0, Deathwhisper = 1, Gunship = 2, Saurfang = 3;
++    constexpr unsigned Hook = 70, Event = 1, CaptainData = 13;
++    constexpr unsigned RiseSpell = 70858;
++    constexpr float X = -549.073f, Y = 2211.29f, Z = 539.223f, O = 0.523333f;
++    inline bool IsArmory(unsigned entry)
++    {
++        switch (entry)
++        {
++            case 202178: case 202180: case 202177: case 202179:
++            case 201873: case 201874: case 201872: case 201875: return true;
++            default: return false;
++        }
++    }
++    inline bool Ready(unsigned marrowgar, unsigned deathwhisper, unsigned gunship,
++                      unsigned saurfang, bool botsOnly, bool ready)
++    {
++        return marrowgar == 3 && deathwhisper == 3 && (gunship == 0 || gunship == 2 || gunship == 3)
++            && (saurfang == 0 || saurfang == 2) && botsOnly && ready;
++    }
++    inline bool Outside(float x, float y, float z)
++    {
++        // The rise platform, not merely the upper floor: rampart bots also need
++        // the pass. Once Saurfang falls Ready stops all movement, in every wing.
++        return x < -600.0f || x > -450.0f || y < 2100.0f || y > 2300.0f || z < 530.0f || z > 560.0f;
++    }
++}
++#endif
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h b/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
+index cc48de4..3ec983f 100644
+--- a/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
+@@ -125,6 +125,8 @@ enum class DcThrottle : uint8
+     UbrsStadiumFire,     // floor between two forged AT 2026 fires (Rend's script
+                          // takes ~1s to read IN_PROGRESS)
+ 
++    IccIntro,
++
+     Count
+ };
+ 
+diff --git a/t/TestIcecrown.cpp b/t/TestIcecrown.cpp
+new file mode 100644
+index 0000000..5a78ade
+--- /dev/null
++++ b/t/TestIcecrown.cpp
+@@ -0,0 +1,50 @@
++#include "gtest/gtest.h"
++#include "Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcIcecrownPassDecision.h"
++using namespace DcIcecrownPass;
++TEST(Icecrown, RequiresBothRealPredecessorsAndAnIdleSaurfang)
++{
++    for (unsigned first = 0; first < 6; ++first)
++        for (unsigned second = 0; second < 6; ++second)
++            for (unsigned ship = 0; ship < 6; ++ship)
++                for (unsigned last = 0; last < 6; ++last)
++                    EXPECT_EQ(Ready(first, second, ship, last, true, true),
++                        first == 3 && second == 3 && (ship == 0 || ship == 2 || ship == 3) && (last == 0 || last == 2));
++}
++TEST(Icecrown, HumansMissingMembersAndBusyPartiesDefer)
++{
++    EXPECT_FALSE(Ready(3, 3, 0, 0, false, true));
++    EXPECT_FALSE(Ready(3, 3, 0, 0, true, false));
++}
++TEST(Icecrown, RecoveryMovesEntranceAndRampartsButNotTheRise)
++{
++    EXPECT_TRUE(Outside(-17, 2211, 30));
++    EXPECT_TRUE(Outside(-615, 2211, 199));
++    EXPECT_TRUE(Outside(-435, 2400, 539));
++    EXPECT_FALSE(Outside(X, Y, Z));
++    EXPECT_FALSE(Outside(-522, 2248, 539));
++    EXPECT_FALSE(Ready(3, 3, 3, 3, true, true));
++}
++
++TEST(Icecrown, PassIsRegisteredAndRearmsAfterWipes)
++{
++    auto const* event = DungeonEventRegistry::Find(MapId, Event);
++    ASSERT_NE(event, nullptr);
++    EXPECT_TRUE(event->repeatable);
++    EXPECT_FALSE(event->required);
++    EXPECT_TRUE(event->condition);
++    EXPECT_FALSE(event->encounterActive);
++    EXPECT_FALSE(event->drivesInCombat);
++    EXPECT_TRUE(ObjectiveHookRegistry::Has(Hook));
++    EXPECT_TRUE(event->stepsOwnMovement);
++    ASSERT_EQ(event->steps.size(), 1u);
++}
++
++TEST(Icecrown, RelocksBothFactionsAndAllSizesWithoutTouchingOtherLoot)
++{
++    for (unsigned entry : {202178u,202180u,202177u,202179u,201873u,201874u,201872u,201875u})
++        EXPECT_TRUE(IsArmory(entry));
++    EXPECT_FALSE(IsArmory(202239)); // Saurfang cache
++    EXPECT_FALSE(IsArmory(195046)); // Kologarn cache
++}
+diff --git a/t/run_tests.sh b/t/run_tests.sh
+index 23a504d..a5dfdbe 100755
+--- a/t/run_tests.sh
++++ b/t/run_tests.sh
+@@ -32,7 +32,7 @@ cmake --build build --target dungeon_clear_tests -j$(nproc)
+ # mmaps/ for the map, so listing one costs nothing when the navmesh is absent.
+ echo "Running unit tests..."
+ cd "${BUILD_DIR}"
+-./dungeon_clear_tests --gtest_filter='*DungeonClear*:Dc*:RoomAggro*:BossRoster*:DungeonEvent*:EventBuilder*:CullingOfStratholme*:TrialOfTheChampion*:TrialOfTheCrusader*:Ulduar*:Oculus*:BlackMorassRouteProbe*'
++./dungeon_clear_tests --gtest_filter='*DungeonClear*:Dc*:RoomAggro*:BossRoster*:DungeonEvent*:EventBuilder*:CullingOfStratholme*:TrialOfTheChampion*:TrialOfTheCrusader*:Ulduar*:Icecrown*:Oculus*:BlackMorassRouteProbe*'
+ 
+ echo "----------------------------------------------------------"
+ echo "Tests completed successfully!"
+-- 
+2.56.0.windows.2
+

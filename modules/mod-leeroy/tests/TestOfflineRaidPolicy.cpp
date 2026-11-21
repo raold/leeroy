@@ -687,3 +687,13 @@ LEEROY_TEST(OfflineDriverChecksAnExistingConfiguredBodyBeforeLogin)
     CHECK_EQ(OfflineDriverConflict(4, 1, false, {3,4}), "driver_unavailable:driver_is_member");
     CHECK(OfflineDriverConflict(5, 1, false, {3,4}).empty());
 }
+
+LEEROY_TEST(OfflineRaid_GunshipProgressionPassNeedsSeparateEarnedCredit)
+{
+    CHECK(!EarnedRaidKill(631, 2, 3, 0));
+    CHECK(!EarnedRaidKill(631, 2, 3, 1u << 3));
+    CHECK(EarnedRaidKill(631, 2, 3, 1u << 2));
+    CHECK(!EarnedRaidKill(631, 2, 1, 1u << 2));
+    CHECK(EarnedRaidKill(631, 3, 3, 0));
+    CHECK(EarnedRaidKill(603, 2, 3, 0));
+}
