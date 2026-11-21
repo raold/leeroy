@@ -60,6 +60,7 @@ INPUT_LIMIT = 256
 OWNED_KEY = "guild:offline:owned"
 DAY_PREFIX = "guild:offline:day:"
 LOGOUT_KEY = "guild:offline:last-logout"
+LOGIN_KEY = "guild:offline:last-login"
 REASON_LIMIT = 200
 PROGRESS_FRESH_S = 120
 # Instance maps a level-80 cast member is found in: the Wrath raids and 5-mans (DUNGEONS lacks
@@ -410,14 +411,28 @@ class OfflineRaids:
     async def on_login(self, ev):
         if ev.guid == self.ports.human_guid and ev.human:
             self._online = True
+            with self.ports.conn:
+                _put(self.ports.conn, LOGIN_KEY, self.ports.clock.local().timestamp())
             self._cancel()
 
     async def on_logout(self, ev):
+        """His away clock (offline_min_away_min) starts at his logout. Every hello re-reports his
+        presence as a login or a logout, so one that finds him offline when he was last seen offline
+        leaves the clock where his logout put it (2026-11-19: six restarts kept the day's retry back)."""
         if ev.guid == self.ports.human_guid and ev.human:
+            was_online = self._online or self._last_seen_online()
             self._online = False
+            if not was_online and self._last_logout is not None:
+                return
             self._last_logout = self.ports.clock.local()
             with self.ports.conn:
                 _put(self.ports.conn, LOGOUT_KEY, self._last_logout.timestamp())
+
+    def _last_seen_online(self):
+        """The stored login is newer than the stored logout: he was in game when this process began."""
+        login, logout = _get(self.ports.conn, LOGIN_KEY), _get(self.ports.conn, LOGOUT_KEY)
+        numbers = (int, float)
+        return type(login) in numbers and (type(logout) not in numbers or login >= logout)
 
     def _valid_job(self, ev):
         if (not self.active or ev.id != self._owned["id"] or ev.kind != "offline_raid"
