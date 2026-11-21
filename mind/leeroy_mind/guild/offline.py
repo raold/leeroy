@@ -221,7 +221,7 @@ class OfflineRaids:
         self._gpu_waiting = False  # logged the owner's GPU pause holding the day's raid back
         self._unsupported_logged = set()
         # The last hello's features: which raids beyond the baseline the runner can run (RUNNABLE_WITH).
-        # None before the first hello, so a restarted mind plans only the baseline until native greets it.
+        # Empty before the first hello, so a restarted mind plans only the baseline until native greets it.
         self._features = frozenset()
         self._owned = _get(ports.conn, OWNED_KEY)
         # A restart must see a new native heartbeat before using any saved observation.
