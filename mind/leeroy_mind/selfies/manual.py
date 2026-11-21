@@ -431,7 +431,8 @@ class ManualRender:
         why a run cannot start now; the last run's record either way."""
         out = {"selfies": True, "snaps": bool(self.cfg.snaps), "running": self.running,
                "stopping": self.running and self._stopping is not None, "progress": None,
-               "backlog": None, "refusal": None, "code": None, "last": self._last}
+               "backlog": None, "refusal": None, "code": None, "last": self._last,
+               "resume": self.resume_pending}
         if self.running:
             out["progress"] = dict(self._progress or {})
             return out
@@ -525,10 +526,12 @@ class ManualRender:
 
     def stop(self, reason: str) -> None:
         """Tell a running run to stop, with no await (Free GPU, his Stop); the first reason
-        stays."""
+        stays. With no run, the same reasons drop a resume that waits."""
         if self.running and self._stopping is None:
             self._stopping = reason
             self._task.cancel()
+        elif not self.running and reason in NO_RESUME:
+            self._drop_resume(reason)
 
     async def cancel(self, reason: str) -> None:
         task = self._task

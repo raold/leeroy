@@ -556,6 +556,19 @@ def test_a_pause_or_an_empty_backlog_drops_a_pending_resume(app):
     run(go())
 
 
+def test_free_gpu_drops_a_pending_resume_at_once_and_the_status_shows_it(app):
+    async def go():
+        m = await preempted_by(app, "voice_gpu")
+        assert m.snapshot()["resume"] is True
+        m.stop("gpu_pause")  # gpucontrol's Free GPU, with no run to stop
+        assert not m.resume_pending and m.snapshot()["resume"] is False
+        await app.clock.advance(manual_mod.RESUME_AFTER_S)
+        await m.tick()
+        assert not m.running
+    setup_backlog(app)
+    run(go())
+
+
 def test_his_stop_with_nothing_running_cancels_a_pending_resume(app):
     async def go():
         m = await preempted_by(app, "voice_gpu")
