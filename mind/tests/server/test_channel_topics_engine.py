@@ -209,3 +209,18 @@ def test_off_keeps_the_old_routing(app, monkeypatch):
     assert [s.channels for s in seen] == [('memes',)]
     assert len(app.turns) == 8  # the drawn length, as before
     assert all('React to the meme' not in t.instruction for t, m in app.turns)
+
+
+def test_a_burst_is_drawn_only_where_the_channel_has_room_for_it(app, monkeypatch):
+    # [talk] realism's burst sends 2-3 posts for one turn (or 2 and a correction): never into
+    # the last posts of a channel's day
+    app.engine.cfg = replace(app.engine.cfg, talk=replace(app.engine.cfg.talk, realism=True))
+    monkeypatch.setattr(se, 'BURST_SHARE', 1.0)
+    with app.store.transaction():
+        for _ in range(topics.daily('irl') - 5):
+            dstore.post(app.store, channel='irl', author=101, origin='mind',
+                        text='an invented line', now=app.clock.now())
+    app.observed.seeds = [Seed('purpose:irl:d', 'purpose', ('irl',), 'Real life')]
+    converse(app)
+    # room 5: the opener, then replies with room 4, 3 (a burst fits) and 2, 1 (it does not)
+    assert [m.burst for t, m in app.turns] == [False, True, True, False, False]

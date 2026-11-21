@@ -210,8 +210,9 @@ With it on:
   #pets and #pics 12, #memes 8, a class channel 10, any other 15), counted from the store
   (`posted_today`, in the snapshot's read). A conversation opens only where `MIN_ROOM` (3)
   more fit, runs no longer than the room left, and ends `channel_full` when the channel is
-  full. The guild's own business above is never held back; answers to him are counted but
-  never refused.
+  full; a reply is drawn as a `[talk] realism` burst (2-3 posts, or 2 and a correction) only
+  while `BURST_POSTS` (3) still fit, so a turn never posts past the day's room. The guild's
+  own business above is never held back; answers to him are counted but never refused.
 - Every server turn on a channel with a purpose (an opener, a reply, an aside; never #general,
   a DM, a group DM, a template or the post his godmode intent asked for, whose subject is his)
   gets the channel's hold line, "Stay on what this channel is

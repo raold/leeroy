@@ -465,8 +465,9 @@ class ServerEngine:
                 observed = await self._observe(conversation)
                 if observed is None:
                     break
-                if (self._topical() and topics.capped(conversation.seed)
-                        and topics.room(conversation.channel, getattr(observed, 'posted', None)) <= 0):
+                room = (topics.room(conversation.channel, getattr(observed, 'posted', None))
+                        if self._topical() and topics.capped(conversation.seed) else None)
+                if room is not None and room <= 0:
                     conversation.reason = 'channel_full'  # its day's posts are in
                     break
                 eligible = [g for g in conversation.cast if g != last and g in observed.personas
@@ -569,7 +570,9 @@ class ServerEngine:
                 # Now and then a reply goes out as a quick burst of 2-3 messages a few seconds
                 # apart (realism.plan splits it at its sentence breaks; only with [talk] realism).
                 # An opener carries its subject: never only a few words.
+                # A burst's posts must all fit in the channel's day (server/topics.py BURST_POSTS).
                 burst = (parent is not None and not memes
+                         and (room is None or room >= topics.BURST_POSTS)
                          and getattr(app.engine.cfg.talk, 'realism', False) is True
                          and self.shape_rng.random() < BURST_SHARE)
                 if burst:

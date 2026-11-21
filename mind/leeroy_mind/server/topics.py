@@ -15,8 +15,9 @@ all its just random prattling"). Pure but for `posted_today`'s one SELECT.
   event-only purpose, is None.
 - `room` and `DAILY`: a channel's member posts left today (from local midnight; `posted_today`
   counts them), so a conversation opens only where MIN_ROOM more fit, runs no longer than the
-  room left, and ends (`channel_full`) once the channel is full; EXEMPT seeds are never held
-  back by it, and answers to him (D1) are counted but never refused.
+  room left, ends (`channel_full`) once the channel is full, and draws a reply as a burst only
+  while BURST_POSTS posts still fit; EXEMPT seeds are never held back by it, and answers to him
+  (D1) are counted but never refused.
 - #memes: a conversation there is a meme post and MEME_REPLIES short reactions to it."""
 from __future__ import annotations
 
@@ -45,6 +46,9 @@ CLASS_DAILY = 10
 MIN_ROOM = 3  # a conversation opens only where this many more posts still fit today
 MEME_REPLIES = (1, 3)  # the reactions a meme post draws, at most
 SCAN_ROWS = 5000  # posted_today reads at most this many of the newest messages
+# The most posts one server turn makes: [talk] realism's burst of 2-3 (or 2 and a correction);
+# every other server turn is one line. A burst is drawn only where this many still fit today.
+BURST_POSTS = 3
 
 
 def daily(cid: str) -> int:
@@ -129,6 +133,6 @@ def capped(seed) -> bool:
     return seed.kind not in EXEMPT
 
 
-__all__ = ["CLASS_DAILY", "DAILY", "DEFAULT_DAILY", "EXEMPT", "MEMES", "MEME_KINDS", "SCAN_ROWS",
+__all__ = ["BURST_POSTS", "CLASS_DAILY", "DAILY", "DEFAULT_DAILY", "EXEMPT", "MEMES", "MEME_KINDS", "SCAN_ROWS",
            "MEME_REPLIES", "MIN_ROOM", "capped", "daily", "posted_today", "room", "route",
            "routed"]
