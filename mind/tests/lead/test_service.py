@@ -428,6 +428,68 @@ def test_an_older_start_never_overwrites_his_newer_one(app):
     run(main())
 
 
+def test_a_newer_ask_never_sent_keeps_the_older_lead(app):
+    gate = asyncio.Event()
+
+    class Slow(Wire):
+        async def send(self, cmd, *, preserve_id=False):
+            if isinstance(cmd, LeadDo) and cmd.guid == 101:
+                self.app.leading.on_job(job(cmd))
+                await gate.wait()
+                self.sent.append(cmd)
+                return Ack(0, cmd.id, True, "")
+            return await super().send(cmd, preserve_id=preserve_id)
+
+    async def main():
+        app.bridge = Slow(app)
+        app.leading.claims(chat("Arkon, you lead"), 562)
+        await asyncio.sleep(0)
+        app.bridge.connected = False   # his second ask never reaches the game
+        app.leading.claims(chat("Belra, you lead"), 563)
+        await asyncio.sleep(0)
+        app.bridge.connected = True
+        gate.set()
+        await settle(app)
+        assert app.leading.active is not None and app.leading.active.guid == 101
+    run(main())
+
+
+def test_a_newer_dungeon_lead_is_never_stopped_by_an_older_handover(app, monkeypatch):
+    async def speak(turn, *, why="speak", **kw):
+        return ["ok"]
+    monkeypatch.setattr(app.engine, "speak", speak)
+    gate = asyncio.Event()
+
+    class Slow(Wire):
+        async def send(self, cmd, *, preserve_id=False):
+            if isinstance(cmd, RaidControl) and cmd.action == "dc_on" and not gate.is_set():
+                Slow.first = Slow.first + 1
+                if Slow.first == 1:
+                    await gate.wait()   # the handover's dc_on answers late
+            return await super().send(cmd, preserve_id=preserve_id)
+
+    async def main():
+        Slow.first = 0
+        app.leading.claims(chat("you lead"), 564)
+        await settle(app)
+        app.bridge = Slow(app)
+        active = app.leading.active
+        app.leading.on_job(job(SimpleNamespace(id=active.id, guid=TANK), kind="lead",
+                               state="ended", reason="instance"))
+        await app.clock.advance(svc.HANDOVER_S + 1, 1.0)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        app.leading.claims(chat("Belra, you lead", at=NAXX), 565)   # his newer ask
+        for _ in range(5):
+            await asyncio.sleep(0)
+        gate.set()
+        await settle(app)
+        actions = [c.action for c in app.bridge.sent if isinstance(c, RaidControl)]
+        assert "dc_off" not in actions and app.leading.dc is not None
+        assert app.leading.dc.leader == 102
+    run(main())
+
+
 def test_follow_me_ends_it_and_still_is_playerbots(app):
     async def main():
         app.leading.claims(chat("you lead"), 520)

@@ -81,7 +81,7 @@ class Asked:
     ended: str = ""              # world: that lead ended (native's why) before her answer was told
     told: bool = False           # her answer's instruction has been written
     cancelled: bool = False      # his end came while it was being carried out
-    gen: int = 0                 # world, dc: its place among his asks (LeadService._gen)
+    gen: int = 0                 # world, dc: its place among the asks that reached the bridge
     ready: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -115,9 +115,12 @@ class LeadService:
         self.handing: Active | None = None
         # his ask still being carried out (a start or a dungeon-clear start): his end waits for it
         self._pending: Asked | None = None
-        # his asks to lead, counted: only the newest may install what it started (native's lead is
-        # the last start it was sent: a newer one replaces an older)
+        # starts sent to the game (lead_do, dc_on, a handover's), counted: only the newest may
+        # install what it started (native's lead is the last start it was sent: a newer one replaces
+        # an older); an ask that never reached the bridge counts nothing
         self._gen = 0
+        # the handover his end cancelled (its lead's id): a run it started meanwhile is stopped again
+        self._cancelled: str | None = None
         # the start in flight (its command id) and a "lead ended" native sent before its ack
         self._starting: str | None = None
         self._early: object = None
@@ -290,8 +293,6 @@ class LeadService:
         log_event("lead_read", line=line_id, activity=start.activity, who=start.who, where=where,
                   guid=leader, kind=asked.kind, code=asked.code or "-")
         if asked.kind in ("world", "dc"):
-            self._gen += 1
-            asked.gen = self._gen
             self._pending = asked
             self._spawn(self._start(asked) if asked.kind == "world" else self._dc_on(asked))
         return "lead"
@@ -331,7 +332,7 @@ class LeadService:
             cmd = LeadDo(id=wire, action="start", guid=asked.leader, activity=start.activity,
                          spot=start.place.name if isinstance(start.place, S.Spot) else "")
             self._starting, self._early = wire, None
-            outcome, code = await self._send(cmd, job=True)
+            outcome, code = await self._send(cmd, job=True, asked=asked)
             if asked.gen != self._gen and outcome in ("done", "unknown"):
                 outcome, code = "refused", "superseded"  # his newer ask replaced it in the game
             asked.outcome, asked.code = (("done", "") if outcome == "done" else ("", "")
@@ -383,7 +384,8 @@ class LeadService:
                 if self.dc is dc and (outcome == "done" or code in DC_GONE):
                     self.dc = None  # stopped, or there is no run left to stop
             elif self.handing is not None:
-                self.handing = None  # dungeon-clear is never asked: he leads in there
+                self._cancelled = self.handing.id  # dungeon-clear is never asked: he leads in there
+                self.handing = None
                 outcome, code = "done", ""
             else:
                 outcome, code = "refused", "no_lead"
@@ -412,7 +414,8 @@ class LeadService:
         try:
             group = self._group()
             tanks = self._tanks({g for g in group if self._able(g)})
-            outcome, code, tank = await self._dc(tanks[0] if tanks else asked.leader, "dc_on")
+            outcome, code, tank = await self._dc(tanks[0] if tanks else asked.leader, "dc_on",
+                                                 asked=asked)
             if asked.gen != self._gen and outcome in ("done", "unknown"):
                 outcome, code = "refused", "superseded"  # his newer ask leads now
             asked.outcome, asked.code, asked.tank = (
@@ -434,7 +437,8 @@ class LeadService:
                 self._pending = None
             asked.ready.set()
 
-    async def _dc(self, tank: int, action: str) -> tuple[str, str, int]:
+    async def _dc(self, tank: int, action: str, *, asked: Asked | None = None
+                  ) -> tuple[str, str, int]:
         """Guild life's raid_control for his group's dungeon-clear, led by `tank`; native names the
         tank dungeon-clear elects when it is another (leader_mismatch:<guid>), asked once more.
         (outcome, code, the tank)."""
@@ -442,7 +446,7 @@ class LeadService:
         for _ in range(2):
             cmd = RaidControl(id=uuid.uuid4().hex, member_guid=self.app.human_guid, action=action,
                               leader_guid=tank)
-            outcome, code = await self._send(cmd)
+            outcome, code = await self._send(cmd, asked=asked)
             found = _MISMATCH.fullmatch(code) if outcome == "refused" else None
             if found is None:
                 return outcome, code, tank
@@ -454,12 +458,17 @@ class LeadService:
             tank = elected
         return "refused", "dc_refused", 0
 
-    async def _send(self, cmd, *, job: bool = False) -> tuple[str, str]:
+    async def _send(self, cmd, *, job: bool = False, asked: Asked | None = None
+                    ) -> tuple[str, str]:
         """One command: ("done", ""), ("refused", code), ("no_link", "no_link") or ("unknown",
-        "unknown") when the ack was lost (and, for a start, no done job came)."""
+        "unknown") when the ack was lost (and, for a start, no done job came). `asked`: a start
+        whose first command this is takes its place among the starts sent (LeadService._gen)."""
         bridge = getattr(self.app, "bridge", None)
         if bridge is None or not getattr(bridge, "connected", False):
             return "no_link", "no_link"
+        if asked is not None and not asked.gen:
+            self._gen += 1
+            asked.gen = self._gen
         if job:
             self.jobs.expect(cmd.id)
         try:
@@ -526,14 +535,23 @@ class LeadService:
             self.handing = None
             return
         tanks = self._tanks({g for g in group if self._able(g)})
-        outcome, code, tank = await self._dc(tanks[0] if tanks else active.guid, "dc_on")
-        if self.handing is not active:
+        sent = Asked(0, active.channel, active.guid, "dc")  # its place among the starts sent
+        outcome, code, tank = await self._dc(tanks[0] if tanks else active.guid, "dc_on",
+                                             asked=sent)
+        if self._cancelled == active.id:
             # his end came while dungeon-clear was being asked: what it started is stopped again
-            if outcome in ("done", "unknown"):
+            self._cancelled = None
+            if outcome in ("done", "unknown") and sent.gen == self._gen:
                 off, code, _ = await self._dc(tank, "dc_off")
                 if off != "done" and code not in DC_GONE:
                     self.dc = Dc(tank, active.guid, active.channel)  # still his to stop again
             log_event("lead_handover", guid=active.guid, outcome="cancelled", code="-")
+            return
+        if self.handing is not active or sent.gen != self._gen:
+            # his newer ask came meanwhile: it leads now, and this one leaves it alone
+            if self.handing is active:
+                self.handing = None
+            log_event("lead_handover", guid=active.guid, outcome="superseded", code="-")
             return
         self.handing = None
         if outcome in ("done", "unknown"):
