@@ -231,3 +231,53 @@ def test_real_raid_lost_control_never_arms_a_group_or_waits_for_its_job(tmp_path
         assert not ports.conn.execute("SELECT 1 FROM meta WHERE key=?", (FORMED_GROUP_KEY,)).fetchone()
         await rig.realm.close()
     asyncio.run(go())
+
+
+def test_raid_night_rechecks_cast_only_after_multi_guid_lockout_refusal(tmp_path, clock, raid_setup):
+    from leeroy_mind.protocol import Ack
+
+    async def go():
+        ports, _, controller = raid_setup
+        ports.online = True
+        rig = Rehearsal(tmp_path, Store(ports.conn, clock=clock), clock)
+        move = await rig.begin(activity="inn", place="org_inn")
+        ports.app = rig.app
+        inside = {101, ports.human_guid}
+        checks = []
+        previous = rig.app.send
+        async def native(cmd, **guard):
+            if not isinstance(cmd, ClearLockout):
+                return await previous(cmd, **guard)
+            checks.append(cmd)
+            present = [g for g in cmd.guids if g in inside]
+            if present:
+                assert set(present) == inside and rig.day.permit(1)["state"] == "open"
+                inside.remove(101)  # Cast member finishes the outbound transfer before the fresh request.
+                return Ack(0, cmd.id, False, "in_instance:" + ",".join(map(str, present)))
+            return Ack(0, cmd.id, True, "")
+        rig.app.send = native
+        pending = asyncio.create_task(form(raid_setup))
+        await awaiting(rig)
+        first, retry = checks
+        assert set(retry.guids) == set(first.guids) - {ports.human_guid}
+        assert first.day_check.request_id != retry.day_check.request_id
+        assert not ports.sent
+        await rig.app.event(rig.receipt("closed", "raid", released=(move.id,), succeeded=()))
+        await asyncio.wait_for(pending, 2)
+        [original] = [cmd for cmd in ports.sent if isinstance(cmd, ClearLockout)]
+        assert original.id == retry.day_check.request_id and original.day_prepared == retry.id
+        assert original.guids == retry.guids and any(isinstance(cmd, FormRaid) for cmd in ports.sent)
+        assert not rig.realm.action_store.holds()
+        await rig.realm.close()
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("suffix", ["", "101,", "101,,1", "101,101", "001,101", "0", "4294967296",
+                                    "101,999", "101,1:extra", "101,1 detail", "１", "1," * 500])
+def test_lockout_refusal_accepts_only_distinct_canonical_requested_guids(suffix):
+    from leeroy_mind.godmode.dayrun import check_refusal
+    from leeroy_mind.guild.protocol import StringDo
+    command = ClearLockout("clear", 533, (101, 1, 4294967295))
+    assert check_refusal(command, "in_instance:" + suffix) == "refused"
+    assert check_refusal(command, "in_instance:4294967295,1") == "in_instance:4294967295,1"
+    assert check_refusal(StringDo("string", 101, "come_to_me"), "in_instance:101,1") == "refused"

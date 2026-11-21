@@ -690,3 +690,64 @@ def test_queued_day_step_pauses_at_writer_during_owner_check_and_survives_a_refu
             await asyncio.gather(guard, return_exceptions=True)
             await rig.realm.close()
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("reason", ["ended", "context_changed", "reboot"])
+@pytest.mark.parametrize("phase", [None, "arrival", "activity"])
+def test_verifying_terminal_settles_plan_listener_and_seed_but_preserves_proved_memory(tmp_path, store, clock,
+                                                                                      reason, phase):
+    import asyncio
+    from leeroy_mind.bridge import AckTimeout
+    from leeroy_mind.guild.protocol import Job
+    from leeroy_mind.realm.actions import ActionRejected
+    from leeroy_mind.realm.protocol import RealmJob
+
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        move = await rig.begin()
+        released, succeeded = [move.id], []
+        if phase:
+            await rig.app.event(RealmJob(0, move.id, "realm_move", "done", "", 101, 0))
+            succeeded.append(move.id)
+            await rig.app.event(rig.receipt(released=tuple(released), succeeded=tuple(succeeded)))
+            await rig.tick()
+            fish = next(cmd for cmd in rig.app.sent if isinstance(cmd, BotDo))
+            released.append(fish.id)
+            if phase == "activity":
+                await rig.app.event(Job(0, fish.id, "bot_do", "done", "", "", (101,), (), 0, 0, 0, 0, 0, 0))
+                succeeded.append(fish.id)
+                await rig.app.event(rig.receipt(released=tuple(released), succeeded=tuple(succeeded)))
+                await rig.tick()
+        def memory():
+            return [row[0] for row in store.conn.execute("SELECT text FROM memory WHERE owner=101")]
+        facts = memory()
+        assert bool(facts) == bool(phase)
+        async def lose(check, **guard):
+            assert check.day_check
+            raise AckTimeout("check")
+        rig.app.send = lose
+        with pytest.raises(ActionRejected, match="day_check_unknown"):
+            await rig.day.handoff(StringDo("owner", 101, "come_to_me"), (101,), "string", lambda: True, lose)
+        terminal_reason = "context_changed" if reason == "reboot" else reason
+        await rig.app.event(rig.receipt("closed", terminal_reason, released=("b" * 32,), succeeded=()))
+        assert rig.day.permit(1)["state"] == "verifying" and 1 in rig.day.listeners
+        if phase != "activity":
+            assert rig.realm.action_store.holds()
+        if reason == "reboot":
+            await rig.app.connection(False)
+            rig.hello_boot += 1
+            await rig.connect()
+        else:
+            await rig.app.event(rig.receipt("closed", reason, released=tuple(released), succeeded=tuple(succeeded)))
+        row = rig.day.rows(1)[0]
+        eligible = bool(phase and reason == "ended")
+        assert (row["status"], row["reason"]) == ("done" if eligible else "skipped", terminal_reason)
+        unresolved = reason == "reboot" and phase != "activity"
+        assert rig.day.permit(1)["state"] == ("unresolved" if unresolved else "closed")
+        assert bool(rig.realm.action_store.holds()) == unresolved and 1 not in rig.day.listeners
+        assert dayrun.seed_valid(store.conn, "day:1", clock.now()) == eligible
+        assert bool(list(dayrun.seeds(store.conn, clock.now(), {101: "Example"}))) == eligible
+        assert dayrun.card_lines(store.conn, 101, clock.now(), {101: "Example"}) == facts
+        assert memory() == facts
+        await rig.realm.close()
+    asyncio.run(go())

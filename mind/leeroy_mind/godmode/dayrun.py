@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from leeroy_mind.bridge import BridgeError, NotConnected
 from leeroy_mind.bodies import BodyEvidenceUnavailable
-from leeroy_mind.guild.protocol import BotDo, DayOwnerCheck, StartOfflineRaid
+from leeroy_mind.guild.protocol import BotDo, ClearLockout, DayOwnerCheck, StartOfflineRaid
 from leeroy_mind.nightly.attraction import reflection_row
 from leeroy_mind.protocol import Hello
 from leeroy_mind.realm.actions import ActionRejected
@@ -34,13 +34,21 @@ NATIVE_REASONS = set(REASONS) | {'ended', 'context_changed', 'action_unproved', 
                                   'admission_refused', 'holiday_ended', 'changed_tie'}
 
 
-def check_refusal(error):
+def check_refusal(command, error):
     """Reduce a native diagnostic to a code before it reaches any owner controller."""
     error = (error or "").strip()
     if error.startswith("unknown type"):
         return "unsupported"
     if error.startswith("bad field"):
         return "invalid"
+    if isinstance(command, ClearLockout) and error.startswith("in_instance:"):
+        # ClearLockout reports exactly those requested GUIDs still transferring to or inside its map.
+        manifest = {str(guid) for guid in command.guids if type(guid) is int and 0 < guid <= 0xFFFFFFFF}
+        suffix = error.removeprefix("in_instance:")
+        if len(suffix) > 11 * len(manifest):
+            return "refused"
+        named = suffix.split(",")
+        return error if len(named) == len(set(named)) and set(named) <= manifest else "refused"
     return error if re.fullmatch(r"[a-z_]{1,40}(?::(?:[a-z_]{1,40}|[0-9]{1,10})){0,2}", error) else "refused"
 
 
@@ -259,7 +267,7 @@ class DayRun:
         if ev.state != "open":
             if ev.reason in REASONS:
                 self.close(plan, "preempted", ev.reason, notify=False)
-            elif permit["state"] in {"opening", "open"}:
+            elif permit["state"] in {"opening", "open", "verifying"}:
                 status = "done" if permit["evidence"] is not None and ev.reason == "ended" else "skipped"
                 self.close(plan, status, ev.reason, notify=False)
         with self.store.transaction():
@@ -293,7 +301,7 @@ class DayRun:
                     if (p["guild"], p["human"]) != (c.guild, c.human):
                         continue
                     if (p["process"], p["epoch"]) != (c.process_id, str(c.connection_epoch)):
-                        if p["state"] in {"opening", "open"}:
+                        if p["state"] in {"opening", "open", "verifying"}:
                             self.close(p["plan"], "skipped", "context_changed", notify=False)
                         if p["boot"] != self.boot:
                             resolved = self.boot and self.realm.action_store.day_previous_boot_resolved(p)
@@ -595,7 +603,7 @@ class DayRun:
                     # The admission check could have revoked its permits. No original write was entered.
                     verify_permits()
                     raise ActionRejected("day_check_unknown")
-                return "" if ack.ok else check_refusal(ack.error)
+                return "" if ack.ok else check_refusal(check, ack.error)
 
             # The opening row is committed before its spawned DayBegin reaches the writer. Only
             # an authenticated DayState can introduce its origin to an owner check. A definite
