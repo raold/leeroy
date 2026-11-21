@@ -100,6 +100,15 @@ Inspect feedback, reward weights, arms, lessons, Turing measures and the weekly 
 
 ## Ops
 
+**Raid debrief** reads the latest completed raid (or current raid before the
+first completion) and expands per-boss pulls, responder movements, member
+spell hits, deaths and proven checker failures. Separate sections retain
+unassigned group-rez reasons/hazards and bound offline stops/outcomes. Missing
+evidence is unverified, not success. It refreshes at most once a minute with
+a separate four-second budget. Older raids are available with
+`python -m leeroy_mind training debrief --raid ID --data-dir <mind-data>`.
+See [debrief evidence and limits](../training/README.md#raid-debrief).
+
 Open the named **FAIL** and read its check, source, age and reason. Compare Mind's links, the relevant journal or the schedule's last result. Verify the same check on a fresh poll after correcting its cause. Panels for health, night, Realm holds, raids, selfies, backups, release drift and schedules can fail independently. Switches report configuration, dependencies and a restart cue. Confirm effective behavior with a fresh greeting or operation receipt. Cached Git drift, a completed snapshot and a verified off-machine backup answer different questions.
 
 To act, enable `[control] ops_actions = true` and restart mind and console. Controls must be on, the mind verified, owner freshly known offline, and no competing operation or open human raid. An open offline raid blocks actions other than stopping that run. Preview names the target and consequences. Confirm the fresh one-use request. If confirmation times out, inspect the recorded operation before retrying.

@@ -10,6 +10,52 @@ from test_opscontrol import app, add_root, ROOT_ID
 from leeroy_mind.console import opsview
 
 
+def test_raid_debrief_keyboard_details_and_mobile_layout(app, tmp_path):
+    pw = pytest.importorskip("playwright.async_api")
+    async def go():
+        async with served(app) as (c, endpoint), pw.async_playwright() as playwright:
+            try:
+                browser = await playwright.chromium.launch(**({"channel":"msedge"} if sys.platform=="win32" else {}))
+            except pw.Error as error:
+                pytest.skip("Optional browser executable is unavailable: " + type(error).__name__)
+            report = dict(raid=dict(id=1,name="Icecrown Citadel",offline=True,started=1,ended=600,outcome="too_few",kills=1,wipes=1),
+                logs=dict(files=2,records=4,note="Observed counts are lower bounds.",native_timezone="UTC"),
+                bosses=[dict(map=631,boss_id=9,difficulty=0,boss="Valithria Dreamwalker",pulls=1,kills=0,wipes=1,
+                    incomplete=0,aborted=0,mechanics=[dict(name="Dream portals",evidence="no_direct_action_telemetry")],
+                    hits=[dict(guid=101,spell=123,hits=2,requested=300,mechanics=["Test hazard"])])],
+                group_rez=[dict(reason="fenced",fence="raid,realm",records=2,max_dead=2,max_casters=1,last=500)])
+            sources = {name:lambda:opsview.panel() for name in opsview.PANELS}
+            sources["debrief"] = lambda:opsview.panel(**report)
+            c._ops = opsview.OpsView(app.data_dir,app.data_dir,sources=sources)
+            page = await browser.new_page(viewport={"width":390,"height":900})
+            errors = []
+            page.on("pageerror",lambda error:errors.append(str(error)))
+            async def guard(route):
+                if not route.request.url.startswith(c.origin+"/"):
+                    errors.append("outside fixture")
+                    return await route.abort()
+                await route.continue_()
+            await page.route("**/*",guard)
+            try:
+                await page.goto(c.url)
+                await page.locator("#t-ops").click()
+                panel = page.locator(".raid-debrief")
+                await pw.expect(panel).to_be_visible(timeout=10000)
+                summary = panel.locator("summary").filter(has_text="Valithria")
+                await summary.focus()
+                await page.keyboard.press("Enter")
+                await pw.expect(panel.get_by_text("Dream portals: no direct action telemetry; success unverified",exact=True)).to_be_visible()
+                await pw.expect(panel.get_by_text("Member #101 · spell 123 · Test hazard · 2 hits · 300 requested damage",exact=True)).to_be_visible()
+                await panel.locator("summary").filter(has_text="Unassigned group").click()
+                await pw.expect(panel.get_by_text("group_rez_blocked",exact=False)).to_be_visible()
+                assert await page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                await panel.screenshot(path=str(tmp_path/"raid-debrief-mobile.png"))
+                assert not errors
+            finally:
+                await browser.close()
+    run(go())
+
+
 def test_ops_preview_freezes_draft_discards_closed_dialog_and_saves_snapshot(app):
     pw = pytest.importorskip("playwright.async_api")
     async def go():
