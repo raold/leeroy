@@ -28,6 +28,9 @@ inline constexpr std::string_view kModuleVersion = "0.1.0";
 // mind sends them only to a hello that lists it.
 // lead: lead_do, a cast member of his group leading it in the open world while he follows (Leeroy.Lead.Enable,
 // LeeroyLead.h); a mind sends it only to a hello that lists it.
+// The build adds more at hello time (EncodeHello's `extra`): dc_toc and dc_ulduar, the raids the dungeon-clear it was
+// built with can run for an offline raid (LeeroyOfflineRaidPolicy.h DcRaidFeatures); a mind plans those raids only
+// on a hello that lists them.
 inline constexpr std::string_view kFeatures[] = {"item_links", "playstyle", "raidlead", "mechanics", "regear",
     "dummy_party_on_arrival", "invites", "lead"};
 
@@ -150,8 +153,10 @@ struct LootDropEvent
 std::string DumpLine(nlohmann::json const& j);
 
 // Every encoder returns one line without '\n' carrying "v":1, "type", "ts".
-// startedMs names the worldserver process (Unix ms at script registration); 0 leaves it out.
-std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid, std::int64_t startedMs = 0);
+// startedMs names the worldserver process (Unix ms at script registration); 0 leaves it out. `extra` features follow
+// kFeatures in order, each listed once.
+std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid, std::int64_t startedMs = 0,
+    std::vector<std::string> const& extra = {});
 std::string EncodeLogin(std::int64_t ts, bool login, std::uint32_t guid, bool human);
 std::string EncodeChat(std::int64_t ts, ChatEvent const& e);
 std::string EncodeBoss(std::int64_t ts, BossEvent const& e);

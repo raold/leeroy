@@ -490,7 +490,33 @@ LEEROY_TEST(OfflineRaid_NaxxSapphironAndKelThuzadAreOutOfDungeonClearsReach)
 {
     CHECK(DcUnreachableBosses(533) == std::vector<std::uint32_t>({13, 14}));
     CHECK(DcUnreachableBosses(631).empty());
-    CHECK(DcUnreachableBosses(603).empty());
+    CHECK(DcUnreachableBosses(649).empty());     // Trial of the Crusader: every stage, then Anub'arak.
+}
+
+LEEROY_TEST(OfflineRaid_UlduarEndsWhenTheBossesPastTheLeviathanAreDone)
+{
+    // Ulduar's 14 slots: the Leviathan is passed, never fought, and dungeon-clear's roster reaches Ignis (1),
+    // Razorscale (2), XT-002 (3), Kologarn (5) and Auriaya (6) only.
+    CHECK(DcUnreachableBosses(603) == std::vector<std::uint32_t>({0, 4, 7, 8, 9, 10, 11, 12, 13}));
+    std::vector<std::uint8_t> ulduar(14, 0);
+    CHECK(!ClearedReachable(ulduar, DcUnreachableBosses(603)));
+    for (std::uint32_t boss : {1u, 2u, 3u, 5u})
+        ulduar[boss] = 3;
+    CHECK(!ClearedReachable(ulduar, DcUnreachableBosses(603)));   // Auriaya is left.
+    ulduar[6] = 3;
+    CHECK(ClearedReachable(ulduar, DcUnreachableBosses(603)));    // The Leviathan (0) untouched, never a kill.
+    ulduar[4] = 1;
+    CHECK(!ClearedReachable(ulduar, DcUnreachableBosses(603)));   // The Assembly pulled on the way: fight it out.
+    ulduar[4] = 3;
+    CHECK(ClearedReachable(ulduar, DcUnreachableBosses(603)));
+}
+
+LEEROY_TEST(OfflineRaid_DungeonClearRaidFeaturesNameWhatTheBuildCanRun)
+{
+    CHECK(DcRaidFeatures(false, false).empty());
+    CHECK(DcRaidFeatures(true, false) == std::vector<std::string>({"dc_toc"}));
+    CHECK(DcRaidFeatures(false, true) == std::vector<std::string>({"dc_ulduar"}));
+    CHECK(DcRaidFeatures(true, true) == std::vector<std::string>({"dc_toc", "dc_ulduar"}));
 }
 
 LEEROY_TEST(OfflineRaid_EveryReachableBossDoneEndsTheRunAsClearedReachable)

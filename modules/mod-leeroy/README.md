@@ -39,6 +39,37 @@ After mind restart no saved heartbeat authorizes a stop; fresh native evidence i
 required. Lost-terminal handling (deadline plus 15 minutes) is unchanged. No schema
 migration. **Deploying this feature requires a native rebuild and updated mind.**
 
+# Trial of the Crusader and Ulduar offline raids (patches/mod-dungeon-clear)
+
+The local mod-dungeon-clear commits (`patches/mod-dungeon-clear`, exported by `scripts/ac-snapshot.sh` and applied
+to its upstream by the `patches` and `build` workflows) teach dungeon-clear both raids, and advertise it in
+`Ai/Dungeon/DungeonClear/DcCapabilities.h`. `mod-leeroy.cmake` probes that header (configure line
+`[mod-leeroy] dungeon-clear offline raids: toc 1, ulduar 1`) and the hello lists `dc_toc` and `dc_ulduar`
+(`LeeroyDcRaidFeatures`, pure `DcRaidFeatures`); the mind plans each raid only on a hello that lists its feature.
+
+- **Trial of the Crusader (649).** Five arena objectives, one per stage, each held until the instance script's own boss
+  slot reads DONE; Barrett Ramsey's gossip starts each stage and is clicked by a conditional driver whenever he offers
+  it, the raid muster ready and the last kill looted (bounded); the faction champions and the twins, released 25-45 yd
+  off and never coming on their own, are pulled when a stage is in progress and nothing is engaged; when the Lich King
+  breaks the floor, the bots (who have no client to fall with) are put on Anub'arak's chamber floor; Anub'arak is an
+  ordinary boss row. A wipe needs nothing new: the script summons Barrett again with his retry option. Every stage is a
+  kill (boss states 0-4), so a full clear ends `cleared`. The Champions' Cache and heroic's Tribute Chest are looted
+  like boss corpses (DcEncounterChests). Known gap: after an Anub'arak wipe the script resummons him only when a player
+  enters the map, which a restart's same-map teleport is not, so such a run stalls until the mind stops it.
+- **Ulduar (603).** Flame Leviathan is a siege-vehicle fight bots cannot drive (stock playerbots boards a vehicle only
+  when the bot's master sits in one, and an offline raid's members are mastered by the driver outside the instance).
+  The ruling: he is never fought, killed or credited (skipped by design); a raid of bots only, with no member a person
+  controls, is moved past his gate to the Ulduar Teleporter's Colossal Forge destination (spell 64028's
+  spell_target_position), which the instance itself offers only once he is dead. No loot, kill, achievement or boss
+  state comes of it; every boss after him is fought for real; a group a person is in keeps the gate exactly as before.
+  Razorscale is started at the Expedition Commander. Dungeon-clear's roster then reaches Ignis, Razorscale, XT-002,
+  Kologarn and Auriaya; the rest are spell-credit encounters it never lists or lie behind the tram and the Keepers'
+  gate, so with those five done native ends the run `cleared_reachable` (`DcUnreachableBosses(603)` = 0, 4, 7-13).
+  Kologarn's Cache of Living Stone is looted.
+
+Neither raid is in the default rotation: add `toc10`, `ulduar10` (or the 25-man keys) to `[guild] offline_rotation` once
+a run has been watched live.
+
 # Offline raids dungeon-clear cannot run, and named stalls
 
 Dungeon-clear drives the offline raid's tank, so a raid it cannot route is a raid the guild
@@ -77,9 +108,10 @@ engaged, failed or mid-event, as a manual `dc skip` could make it), native ends 
 `cleared_reachable kills= out_of_reach=13,14`) instead of idling into the mind's stall stop or
 the timeout.
 
-The mind never plans `toc` or `ulduar` (`guild/offline.py` `UNSUPPORTED`, logged once per
-process as `offline_raid_unsupported raid= reason=`), whatever `[guild] offline_rotation` says,
-and the default rotation is now `icc25, icc10, naxx10` (Naxxramas bosses all have static
+The mind never plans `toc` or `ulduar` on a worldserver whose hello lacks `dc_toc` /
+`dc_ulduar` (`guild/offline.py` `UNSUPPORTED`, `RUNNABLE_WITH`; logged once per hello as
+`offline_raid_unsupported raid= reason=`), whatever `[guild] offline_rotation` says (see the next
+section for the build that lists them), and the default rotation is now `icc25, icc10, naxx10` (Naxxramas bosses all have static
 spawns; none sits behind a vehicle event before it; `naxx25` is left out because he raids it
 himself). A rotation of only unsupported raids holds the day. The planner also passes over, for
 the day, any raid at a size he holds a permanent save for this lockout week (heroic or not;

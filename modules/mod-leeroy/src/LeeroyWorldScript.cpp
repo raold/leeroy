@@ -150,7 +150,8 @@ public:
             uint32 const human = module.HumanGuid();
             Player* humanPlayer = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(human));
             bool const humanOnline = humanPlayer && humanPlayer->IsInWorld();
-            bridge.Greet(serial, Leeroy::EncodeHello(now, module.GuildId(), humanOnline ? human : 0, _startedMs),
+            bridge.Greet(serial, Leeroy::EncodeHello(now, module.GuildId(), humanOnline ? human : 0, _startedMs,
+                    LeeroyDcRaidFeatures()),
                 Leeroy::EncodeCast(now, cast.BuildMembers(module.GuildId())));
             _greetedSerial = serial;
             LeeroyResetAfk();   // the new mind hears about everyone already AFK on the next poll

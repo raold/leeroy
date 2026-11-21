@@ -13,6 +13,11 @@
 #if !defined(LEEROY_HAS_OLLAMA_FILTER) || !defined(LEEROY_HAS_DUNGEON_CLEAR) || !defined(LEEROY_HAS_TRANSMOG)
 #error "LEEROY_HAS_OLLAMA_FILTER, LEEROY_HAS_DUNGEON_CLEAR and LEEROY_HAS_TRANSMOG come from mod-leeroy.cmake; re-run cmake"
 #endif
+#if !defined(LEEROY_DC_RAID_TOC) || !defined(LEEROY_DC_RAID_ULDUAR)
+#error "LEEROY_DC_RAID_TOC and LEEROY_DC_RAID_ULDUAR come from mod-leeroy.cmake; re-run cmake"
+#endif
+
+#include "LeeroyOfflineRaidPolicy.h"
 
 #if LEEROY_HAS_OLLAMA_FILTER
 #include "mod-ollama-chat_dispatch.h"
@@ -135,4 +140,10 @@ void LeeroyResetDcTanks()
 #if LEEROY_HAS_DUNGEON_CLEAR
     DcTanks().Reset();
 #endif
+}
+
+std::vector<std::string> LeeroyDcRaidFeatures()
+{
+    return Leeroy::Guild::DcRaidFeatures(LEEROY_HAS_DUNGEON_CLEAR && LEEROY_DC_RAID_TOC,
+        LEEROY_HAS_DUNGEON_CLEAR && LEEROY_DC_RAID_ULDUAR);
 }
