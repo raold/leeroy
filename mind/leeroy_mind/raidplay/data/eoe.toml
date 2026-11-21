@@ -30,6 +30,9 @@ playerbots_dir = "src/Ai/Raid/EoE"
 #   whatever their role, Revivify their own drake and Life Burst at five combo points; the rest Flame Spike
 #   and Engulf in Flames at two. It never casts Flame Shield or Blazing Speed.
 # - The "power spark" trigger is registered but no strategy uses it.
+# - Opt-in local playerbots patch 0014 (Playerbots.RaidVehicleSupport = 1) replaces the phase-3
+#   driver with master-independent safe-ring flight, role-aware drake healers and energy/combo-aware
+#   damage/healing/Surge shields. It defaults off; the coverage declarations below describe stock.
 # Phase 3 is fought on drakes: bots on a vehicle are outside the native responder, so none of its
 # mechanics are answered by moving bodies (area = "none"). Vortex also seats every player on a vehicle.
 
