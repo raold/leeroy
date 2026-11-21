@@ -655,3 +655,248 @@ LEEROY_TEST(Hazard_AnAnswerIsMemoisedPerPhaseAndTankReading)
     CHECK(physical != HazardSelectionKey(8, 1, false));  // the zones changed
     CHECK(HazardSelectionKey(1, 0xFFFFFFFFu, true) != HazardSelectionKey(2, 0xFFFFFFFFu, true));
 }
+
+// Npcs that go off when a player comes near (2026-11-21: bots walked into the Living Poison of Naxxramas's
+// Construct Quarter hall). Measured from the core's scripts and Spell.dbc; see the README.
+LEEROY_TEST(Hazard_OnlyTheMeasuredProximityNpcsAreAllowListed)
+{
+    for (std::uint32_t entry : {16027u, 34362u, 33292u, 39137u})
+    {
+        auto const rule = ProximityHazardFor(entry);
+        CHECK(rule.has_value());
+        CHECK_EQ(rule->entry, entry);
+    }
+    CHECK(!ProximityHazardFor(0).has_value());
+    CHECK(!ProximityHazardFor(40681).has_value()); // the Living Inferno: an add a tank holds (HeldAuraHazard)
+    CHECK(!ProximityHazardFor(16290).has_value()); // a Fallout Slime: an add the raid kills in its cloud
+    CHECK(!ProximityHazardFor(34628).has_value()); // a Concentrated Darkness orb: the raid collects its colour
+}
+
+LEEROY_TEST(Hazard_AProximityNpcsZoneIsItsTriggerOrItsLargerBlast)
+{
+    auto const poison = *ProximityHazardFor(16027);
+    auto const mine = *ProximityHazardFor(34362);
+    auto const cloud = *ProximityHazardFor(33292);
+    auto const trap = *ProximityHazardFor(39137);
+    CHECK_EQ(poison.blast, 0u);
+    CHECK_EQ(HazardProximityRadius(poison, 5.0f, 1.5f), 1.5f); // Explode's 5 yards would shut its lanes
+    CHECK_EQ(mine.blast, 66351u);
+    CHECK_EQ(HazardProximityRadius(mine, 3.0f, 1.0f), 3.0f); // the blast beats its 1.9-yard trigger
+    CHECK_EQ(HazardProximityRadius(mine, 0.0f, 1.0f), 1.9f); // no spell to read: the trigger still holds
+    CHECK_EQ(HazardProximityRadius(cloud, 0.0f, 1.0f), 7.0f); // 6 yards from its edge
+    CHECK_EQ(HazardProximityRadius(cloud, 0.0f, -1.0f), 6.0f);
+    CHECK_EQ(trap.blast, 73529u);
+    CHECK_EQ(HazardProximityRadius(trap, 10.0f, 1.0f), 10.0f);
+    CHECK_EQ(HazardProximityRadius(trap, 40.0f, 1.0f), 3.0f); // a blast past the large cap: its trigger alone
+    CHECK_EQ(HazardProximityRadius(ProximityHazardRule{}, 0.0f, 1.0f), 0.0f);
+}
+
+LEEROY_TEST(Hazard_NobodyHoldsAProximityNpc)
+{
+    HazardZone const poison{0, 0, 0, 1.5f, 1};
+    CHECK(HazardApplies(poison, 1, true));
+    CHECK_EQ(HazardZonesFor({poison}, 1, true).size(), std::size_t(1));
+    CHECK(HazardAt({2.5f, 0, 0}, HazardZonesFor({poison}, 1, true), 1.5f).has_value()); // a tank steps out too
+}
+
+LEEROY_TEST(Hazard_AMovingHazardLeadsAlongItsPath)
+{
+    HazardZone const poison{0, 0, 0, 1.5f, 7, 1};
+    HazardZone const led = HazardLeadZone(poison, HazardPoint{0, -20, 0}, 2.5f);
+    CHECK(std::fabs(led.x) < 0.001f);
+    CHECK(std::fabs(led.y + 1.25f) < 0.001f);      // halfway to where it is in a second
+    CHECK(std::fabs(led.radius - 2.75f) < 0.001f); // round both
+    CHECK_EQ(led.id, poison.id);
+    CHECK_EQ(led.phase, poison.phase);
+    HazardZone const close = HazardLeadZone(poison, HazardPoint{0.5f, 0, 0}, 2.5f); // never past its path's point
+    CHECK(std::fabs(close.x - 0.25f) < 0.001f);
+    CHECK(std::fabs(close.radius - 1.75f) < 0.001f);
+    CHECK(HazardLeadZone(poison, std::nullopt, 2.5f) == poison);
+    CHECK(HazardLeadZone(poison, HazardPoint{0, -20, 0}, 0.0f) == poison);
+    CHECK(HazardLeadZone(poison, HazardPoint{0, -20, 0}, std::nanf("")) == poison);
+    CHECK(HazardLeadZone(poison, HazardPoint{0, 0, 0}, 2.5f) == poison); // at its point already
+    CHECK(led.moving && close.moving && !poison.moving);
+}
+
+// A slime that walks onto a bot again and again is no mover walking the bot back in: never counted, never yielded.
+LEEROY_TEST(Hazard_AMovingHazardNeverYieldsTheExit)
+{
+    HazardZone slime{0, 0, 0, 1.5f, 5};
+    slime.moving = true;
+    HazardZone const pool{0, 0, 0, 4, 6};
+    HazardExitGuard guard;
+    for (std::uint64_t now = 0; now < 10000; now += 1000)
+        CHECK(NoteHazardZoneEntry(guard, {slime}, now) == HazardEntry::Exit);
+    CHECK(!guard.zones.contains(5));
+    // Standing in both, the pool's entries count as ever, but the bot still steps out of the slime.
+    CHECK(NoteHazardZoneEntry(guard, {slime, pool}, 11000) == HazardEntry::Exit);
+    CHECK(NoteHazardZoneEntry(guard, {slime, pool}, 12000) == HazardEntry::Exit);
+    CHECK(NoteHazardZoneEntry(guard, {slime, pool}, 13000) == HazardEntry::Exit);
+    CHECK(HazardExitYielded(guard, {6}, 13000));
+    CHECK(!HazardExitYielded(guard, {5, 6}, 13000));
+    CHECK(NoteHazardZoneEntry(guard, {pool}, 14000) == HazardEntry::Yielded); // the pool alone is let through
+}
+
+namespace
+{
+// instance_naxxramas.cpp LivingPoisonDataList: start, end and despawn; one slime per lane every 5 s, walking at
+// 2.5 yards a second (speed_walk 1).
+struct PoisonLane
+{
+    HazardPoint start, end;
+    float despawn;
+};
+PoisonLane const kPoisonLanes[3]{
+    {{3128.59f, -3118.81f, 293.346f}, {3130.322f, -3156.51f, 293.324f}, 15.2f},
+    {{3154.25f, -3125.7f, 293.43f}, {3144.779f, -3158.416f, 293.324f}, 14.8f},
+    {{3175.42f, -3134.86f, 293.34f}, {3158.778f, -3164.201f, 293.312f}, 14.8f},
+};
+constexpr float kPoisonSpeed = 2.5f;
+
+struct Poison
+{
+    HazardPoint at;
+    std::optional<HazardPoint> next;
+    std::uint64_t id;
+};
+
+std::vector<Poison> PoisonsAt(float t)
+{
+    std::vector<Poison> out;
+    for (int lane = 0; lane < 3; ++lane)
+        for (int wave = 0; static_cast<float>(wave) * 5.0f <= t; ++wave)
+        {
+            PoisonLane const& l = kPoisonLanes[lane];
+            float const age = t - static_cast<float>(wave) * 5.0f;
+            if (age >= l.despawn)
+                continue;
+            float const length = Dist(l.start, l.end);
+            float const walked = std::min(length, age * kPoisonSpeed);
+            HazardPoint const at{l.start.x + (l.end.x - l.start.x) * walked / length,
+                l.start.y + (l.end.y - l.start.y) * walked / length, l.start.z};
+            out.push_back({at, walked < length ? std::optional<HazardPoint>(l.end) : std::nullopt,
+                static_cast<std::uint64_t>(wave * 3 + lane + 1)});
+        }
+    return out;
+}
+
+// What the scan publishes for them: each slime's zone, led along its lane.
+std::vector<HazardZone> PoisonZones(float t)
+{
+    float const radius = HazardProximityRadius(*ProximityHazardFor(16027), 5.0f, 1.5f);
+    std::vector<HazardZone> zones;
+    for (Poison const& p : PoisonsAt(t))
+        zones.push_back(HazardLeadZone({p.at.x, p.at.y, p.at.z, radius, p.id}, p.next, kPoisonSpeed));
+    return zones;
+}
+
+struct Crossing
+{
+    bool reached = false;
+    float nearest = 1000.0f; // the closest any slime's centre came to the bot's
+    int yields = 0;          // ticks a yield left the bot standing in a zone to follow
+};
+
+// A bot following him across the hall at 7 yards a second, 0.1 s a tick, as the filter drives it: the zones of
+// the last 500 ms pass; standing in one, the exit (kept while clear, entries counted per slime); else follow,
+// a detour waypoint kept until reached, blocked or the zones change. `aware` false walks straight, as stock.
+Crossing CrossHall(HazardPoint bot, HazardPoint goal, float start, bool aware)
+{
+    float const reach = 1.5f;
+    float const step = HazardDetourStep(1.5f, reach);
+    Crossing out;
+    std::vector<HazardZone> zones;
+    std::optional<HazardPoint> kept, leave;
+    bool planned = false; // an exit was planned since the bot last stood clear (the job's exit memo)
+    HazardDetourTrack track;
+    HazardExitGuard guard;
+    for (int tick = 0; tick < 600; ++tick)
+    {
+        float const t = start + static_cast<float>(tick) * 0.1f;
+        auto const now = static_cast<std::uint64_t>(t * 1000.0f);
+        for (Poison const& p : PoisonsAt(t))
+            out.nearest = std::min(out.nearest, Dist(bot, p.at));
+        if (Dist(bot, goal) - reach <= 1.5f)
+        {
+            out.reached = true;
+            return out;
+        }
+        if (aware && tick % 5 == 0)
+        {
+            zones = PoisonZones(t);
+            kept.reset(); // a new version: the memoised waypoint is asked again
+        }
+        std::vector<HazardZone> inside;
+        for (HazardZone const& zone : zones)
+            if (InHazard(bot, zone, reach))
+                inside.push_back(zone);
+        std::optional<HazardPoint> target;
+        if (inside.empty())
+        {
+            leave.reset();
+            planned = false;
+        }
+        else if (leave && HazardClear(*leave, zones, reach))
+            target = leave;
+        else if (!planned && NoteHazardZoneEntry(guard, inside, now) != HazardEntry::Exit)
+            ++out.yields; // left to follow
+        else
+        {
+            // a fresh entry, or still inside with the exit taken by a slime: planned again
+            auto const spots = HazardExitSpots(bot, goal, goal, zones, reach, 1);
+            leave = spots.empty() ? std::nullopt : std::optional<HazardPoint>(spots.front());
+            planned = true;
+            target = leave;
+        }
+        if (!target)
+        {
+            if (kept && (Dist(bot, *kept) <= step || !HazardSegmentClear(bot, *kept, zones, reach)))
+                kept.reset();
+            if (!kept && inside.empty() && !HazardSegmentClear(bot, goal, zones, reach)
+                && HazardDetourAllowed(track, bot, goal))
+            {
+                auto const waypoints = HazardDetour(bot, goal, zones, reach, step);
+                if (!waypoints.empty())
+                    kept = waypoints.front();
+            }
+            target = kept.value_or(goal);
+        }
+        float const left = Dist(bot, *target);
+        if (left > 0.001f)
+        {
+            float const move = std::min(0.7f, left);
+            bot.x += (target->x - bot.x) / left * move;
+            bot.y += (target->y - bot.y) / left * move;
+        }
+    }
+    return out;
+}
+}
+
+// The owner's hallway: three lanes of slimes 12.5 yards apart, each set off at 1.5 yards. Walking straight sets
+// them off; with the zones a follower crosses every lane between them, whenever it starts. The paths cross the
+// middle of the lanes: a slime that appears on a bot standing at its pipe (a lane's start) is not foreseen.
+LEEROY_TEST(Hazard_AFollowerCrossesTheLivingPoisonLanesWithoutSettingOneOff)
+{
+    int runs = 0, reached = 0, setOff = 0, straightSetOff = 0, yields = 0;
+    float nearest = 1000.0f;
+    for (float y : {-3140.0f, -3145.0f, -3150.0f})
+        for (int offset = 0; offset < 40; ++offset)
+        {
+            float const start = 20.0f + static_cast<float>(offset) * 0.125f; // every phase of the 5 s waves
+            HazardPoint const from{3105.0f, y, 293.3f};
+            HazardPoint const goal{3192.0f, y - 3.0f, 293.3f};
+            ++runs;
+            Crossing const crossing = CrossHall(from, goal, start, true);
+            reached += crossing.reached ? 1 : 0;
+            setOff += crossing.nearest <= 1.5f ? 1 : 0;
+            nearest = std::min(nearest, crossing.nearest);
+            yields += crossing.yields;
+            straightSetOff += CrossHall(from, goal, start, false).nearest <= 1.5f ? 1 : 0;
+        }
+    CHECK(straightSetOff > runs / 4); // the hall is a real hazard to a straight walk
+    CHECK_EQ(setOff, 0);
+    CHECK(nearest > 2.5f); // measured 3.04
+    CHECK_EQ(yields, 0);   // a slime walking onto a bot never counts as the bot walking back in
+    CHECK_EQ(reached, runs);
+}

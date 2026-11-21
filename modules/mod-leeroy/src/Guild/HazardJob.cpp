@@ -13,6 +13,7 @@
 #include "Group.h"
 #include "Log.h"
 #include "Map.h"
+#include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
@@ -254,6 +255,33 @@ struct HazardScanner
                 object->GetGUID().GetRawValue(), object->GetPhaseMask(), held});
     }
 
+    // An allow-listed npc that goes off when a player comes near: its trigger or its blast (this difficulty's
+    // version) where it stands and, while it walks, a second ahead along its path. Nobody holds it.
+    void NoteProximity(Creature const* unit, ProximityHazardRule const& rule)
+    {
+        float blast = 0.0f;
+        if (SpellInfo const* info = rule.blast ? sSpellMgr->GetSpellInfo(rule.blast) : nullptr)
+        {
+            info = sSpellMgr->GetSpellForDifficultyFromSpell(info, unit);
+            for (std::uint8_t i = 0; i < MAX_SPELL_EFFECTS; ++i)
+                blast = std::max(blast, info->Effects[i].CalcRadius());
+        }
+        float const radius = HazardProximityRadius(rule, blast, unit->GetCombatReach());
+        if (radius <= 0.0f || !seen.insert(unit->GetGUID()).second)
+            return;
+        std::optional<HazardPoint> next;
+        float speed = 0.0f;
+        if (Movement::MoveSpline const* spline = unit->movespline;
+            spline && spline->Initialized() && !spline->Finalized())
+        {
+            G3D::Vector3 const point = spline->CurrentDestination();
+            next = HazardPoint{point.x, point.y, point.z};
+            speed = spline->Velocity();
+        }
+        zones.push_back(HazardLeadZone({unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(), radius,
+            unit->GetGUID().GetRawValue(), unit->GetPhaseMask(), false}, next, speed));
+    }
+
     void Visit(DynamicObjectMapType& m)
     {
         for (auto itr = m.begin(); itr != m.end(); ++itr)
@@ -298,6 +326,11 @@ struct HazardScanner
             Creature* unit = itr->GetSource();
             if (!unit || !Near(unit) || !unit->IsAlive() || unit->IsCritter() || reference->IsFriendlyTo(unit))
                 continue;
+            if (auto const rule = ProximityHazardFor(unit->GetEntry()))
+            {
+                NoteProximity(unit, *rule);
+                continue;
+            }
             // An unselectable trigger npc, as stock; any other unit only for an allow-listed burning aura of an add
             // (HeldAuraHazard), which tanks stand in.
             bool const trigger = unit->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE);
@@ -560,9 +593,13 @@ public:
         float const reach = bot->GetCombatReach();
         HazardPoint const at = PointOf(bot);
         std::vector<std::uint64_t> inside;
+        std::vector<HazardZone> standing;
         for (HazardZone const& zone : *zones)
             if (InHazard(at, zone, reach))
+            {
                 inside.push_back(zone.id);
+                standing.push_back(zone);
+            }
         if (inside.empty())
         {
             std::lock_guard<std::mutex> lock(memoLock);
@@ -590,11 +627,17 @@ public:
             else if (found != exitMemo.end() && !found->second.moved && found->second.version == selection
                 && Close(found->second.asked, at))
                 known = true; // nothing reachable a moment ago
-            else if (HazardEntry const entry = NoteHazardEntry(guard, inside, now); entry != HazardEntry::Exit)
+            else if (found == exitMemo.end())
             {
-                yielded = true;
-                if (entry == HazardEntry::YieldStarts)
-                    LOG_INFO("module.leeroy", "hazard_exit_yield guid={} zones={}", guid, inside.size());
+                // A fresh entry (the last answer found the bot in no zone) counts toward the yield, never into a
+                // zone that moves (it walked onto the bot). Still inside, an exit that a moving hazard (or a new
+                // zone) took is planned again uncounted.
+                if (HazardEntry const entry = NoteHazardZoneEntry(guard, standing, now); entry != HazardEntry::Exit)
+                {
+                    yielded = true;
+                    if (entry == HazardEntry::YieldStarts)
+                        LOG_INFO("module.leeroy", "hazard_exit_yield guid={} zones={}", guid, inside.size());
+                }
             }
             if (yielded)
                 exitMemo.erase(guid);

@@ -15,7 +15,8 @@ namespace Leeroy::Guild
 // Ground hazards the owner's group keeps out of: the three kinds stock playerbots' avoid aoe knows (a hostile
 // area aura's dynamic object, a damaging trap, an unselectable trigger npc with a periodic damage aura), each up
 // to Playerbots.MaxAoeAvoidRadius, plus the measured larger ones a player steps out of (LargeHazardRule) and the
-// measured adds whose own aura burns round them (HeldAuraHazard), which a tank holds in their fire.
+// measured adds whose own aura burns round them (HeldAuraHazard), which a tank holds in their fire, and the measured
+// npcs that go off when a player comes near (ProximityHazardRule), which nobody holds.
 
 // No hazard counts above this: a bigger one covers the room, and nobody steps out of it.
 inline constexpr float kHazardLargeCapYards = 35.0f;
@@ -76,14 +77,41 @@ bool HeldAuraHazard(HazardSpellIds const& ids);
 // any other spell, one on the stock whitelist, or no radius.
 float HazardHeldAuraRadius(HazardSpellIds const& ids, float spellRadius, float unitReach, bool whitelisted);
 
+// Npcs that go off when a player comes near (a slime that explodes, a mine, a cloud that wakes an add, a trap):
+// the allow-list by creature entry. Nobody holds one, so tanks keep out too, and the moving ones are scanned where
+// they are each pass.
+struct ProximityHazardRule
+{
+    std::uint32_t entry = 0;
+    float trigger = 0;       // how near sets it off, centre to centre
+    bool edges = false;      // its check counts its own reach on top (SelectNearbyTarget), not centre to centre
+    std::uint32_t blast = 0; // the spell it then casts, whose radius counts when larger; 0: the trigger alone
+};
+std::optional<ProximityHazardRule> ProximityHazardFor(std::uint32_t entry);
+// Its zone: the trigger distance (plus its own reach for an `edges` check), or the blast's radius when larger, up
+// to kHazardLargeCapYards; 0 for a rule with nothing to measure.
+float HazardProximityRadius(ProximityHazardRule const& rule, float blastRadius, float unitReach);
+
+struct HazardPoint
+{
+    float x = 0, y = 0, z = 0;
+};
+
 struct HazardZone
 {
     float x = 0, y = 0, z = 0, radius = 0;
     std::uint64_t id = 0;    // the object's guid, so a zone is known again from pass to pass
     std::uint32_t phase = 0; // the object's phase mask: a body in no shared phase never meets it (0: every phase)
     bool held = false;       // an add's own aura (HeldAuraHazard): tanks hold the add in it
+    bool moving = false;     // it walks, and is led along its path (HazardLeadZone)
     bool operator==(HazardZone const&) const = default;
 };
+
+// A moving hazard is kept out of where it will be this soon as well as where it is: the zone becomes the circle
+// round both (its centre half that way ahead, its radius half that much larger), toward `next`, the point its
+// path makes for, at `speed` yards a second, never past that point. Unchanged when it stands still.
+inline constexpr float kHazardLeadSeconds = 1.0f;
+HazardZone HazardLeadZone(HazardZone zone, std::optional<HazardPoint> next, float speed);
 
 // Whether a zone concerns a body in these phases: a zone in another phase never does (Halion's two realms), nor an
 // add's own aura a tank (it holds the add there).
@@ -93,11 +121,6 @@ std::vector<HazardZone> HazardZonesFor(std::vector<HazardZone> const& zones, std
 // What an answer worked out from one body's share of the zones is memoised against: the snapshot's zones version
 // with the phases and the tank reading that chose the share, so a body that changes realm or role asks again.
 std::uint64_t HazardSelectionKey(std::uint64_t zonesVersion, std::uint32_t phaseMask, bool tank);
-
-struct HazardPoint
-{
-    float x = 0, y = 0, z = 0;
-};
 
 // Within the zone's radius plus the bot's reach, on the zone's floor.
 bool InHazard(HazardPoint p, HazardZone const& zone, float reach);
@@ -166,6 +189,9 @@ enum class HazardEntry : std::uint8_t
 // Notes a fresh entry into the zones the bot stands in, each counted on its own; a zone's
 // kHazardExitsPerWindow-th entry in the window yields it for kHazardYieldMs.
 HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now);
+// As NoteHazardEntry for the zones themselves: one that moves walks onto the bot, no mover walks the bot back
+// into it, so it is never counted and never yielded (Exit whenever the bot stands in one).
+HazardEntry NoteHazardZoneEntry(HazardExitGuard& guard, std::vector<HazardZone> const& inside, std::uint64_t now);
 
 // A body the tick looks at: one of the owner's group, or one whose non-combat avoid aoe it added.
 struct HazardMemberFacts
