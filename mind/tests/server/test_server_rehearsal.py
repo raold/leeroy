@@ -182,7 +182,9 @@ def test_whole_server_day(tmp_path, monkeypatch):
                                   guild_id=21,human_guid=0,ts=int(START.timestamp()*1000))], cast=cast)
         port = await bridge.start()
         conf = tmp_path/'mind.toml'
-        conf.write_text(f'[bridge]\nport={port}\n[server]\nenabled=true\n'
+        # [server] channel_topics off: its daily room per channel would end the starts this
+        # measures once the three stocked channels fill (test_channel_topics_* cover the switch)
+        conf.write_text(f'[bridge]\nport={port}\n[server]\nenabled=true\nchannel_topics=false\n'
                         '[guards]\nenabled=true\n[claims]\nenabled=true\n'
                         '[talk]\nchattiness=4\nopeners_per_hour=0\n', encoding='utf-8')
         store = Store(open_migrated(tmp_path/'mind.db'),clock=clock)

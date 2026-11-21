@@ -204,9 +204,12 @@ class LiveReview:
         member = e.world.members.get(turn.speaker)
         parent = meta.discord.reply_to if is_discord(turn.channel) and meta.discord else turn.trigger_line
         topic_on = getattr(e, '_wow_topic_on', None)
+        held_to = getattr(e, '_channel_topic', None)  # [server] channel_topics
         return Draft(turn.speaker, channel, text, parent_id=parent,
             exemplars=tuple(getattr(meta, 'wow_exemplars', ()) or ()),
             wow_topic=bool(topic_on(turn)) if callable(topic_on) else False,
+            channel_topic=(held_to(turn, meta) or '') if callable(held_to) else '',
+            with_photo=getattr(meta, 'photo', None) is not None,
             thread_ids=tuple(h.id for h in history[-16:]), embedding=embedding,
             to_guid=to, room=room, now=e.clock.now(), map=0 if is_discord(turn.channel) else getattr(member, "map", 0),
             zone=0 if is_discord(turn.channel) else getattr(member, "zone", 0), real_answer_due=self.owed(turn,meta),

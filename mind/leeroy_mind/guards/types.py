@@ -32,6 +32,11 @@ class Draft:
     # A WoW turn with [talk] wow_topic on (talk/wowtopic.py): the chat register is checked
     # (guards/register.py) and her own words are rationed tighter (guards/voice.py)
     wow_topic: bool = False
+    # [server] channel_topics: the layout channel whose purpose the draft keeps to
+    # (discord/topics.py off_topic; Pipeline._channel_topic), '' for none; `with_photo`: it goes
+    # out with a picture (a meme image, a photo), which is the post itself
+    channel_topic: str = ''
+    with_photo: bool = False
 
 
 @dataclass(frozen=True)

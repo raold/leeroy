@@ -434,7 +434,7 @@ def test_a_text_meme_teases_kindly_and_spends_its_joke_on_delivery(tmp_path, mon
             await finished(app.server.engine)
         run(go())
         first = app.turns[0][0].instruction
-        assert 'text meme or a two-line copypasta' in first and 'keep it kind.' in first
+        assert 'original text meme' in first and 'keep it kind.' in first
         assert app.store.get_meta(TEASED_KEY.format(date=app.clock.local().date(), guid=102))
         assert app.store.conn.execute('SELECT uses_total FROM lexicon WHERE id=1').fetchone()[0] == 1
         assert app.store.get_meta('server:seed:meme:joke:1') is not None

@@ -19,6 +19,9 @@ class ServerConfig:
     in_game_share: float = .5
     dms_per_day: int = 3
     reactions: bool = True
+    # each channel keeps to its purpose: routing, daily room, hold lines and the topic guard
+    # (server/topics.py, discord/topics.py)
+    channel_topics: bool = True
 
 
 def _invalid(path: Path, key: str) -> ServerConfig:
@@ -42,7 +45,7 @@ def load_server_config(path: Path) -> ServerConfig:
         return _invalid(path, 'unknown')
     values = dict(table)
     for key, value in table.items():
-        if key in ('enabled', 'reactions'):
+        if key in ('enabled', 'reactions', 'channel_topics'):
             valid = type(value) is bool
         elif key == 'dms_per_day':
             valid = type(value) is int and 0 <= value <= 12

@@ -62,6 +62,8 @@ async def snapshot(app, now, *, include_seeds=False):
     # compiling modules (about 1 s of the 2 s at the first read after a start).
     from leeroy_mind.tuning.edits import apply_feelings, feeling_overlay
     from . import seats  # noqa: F401  (state_of reads the seats lazily)
+    from .topics import posted_today
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     if include_seeds:
         from .seeds import gather, fresh
         if photos_on:
@@ -118,6 +120,8 @@ async def snapshot(app, now, *, include_seeds=False):
                 if photos_on:
                     seeds += fresh(conn, photo_seeds(conn, now=now, local=local, dial=photo_dial), now=now)
             meta = dict(conn.execute("SELECT key,value FROM meta WHERE key LIKE 'server:%'"))
+            # each channel's member posts today ([server] channel_topics' daily room)
+            posted = posted_today(conn, midnight)
             group_audiences = {}
             if include_seeds and groups_config is not None and groups_config.enabled:
                 extra,group_audiences = group_seeds(conn,source,now=now,local=local,human=human,config=groups_config)
@@ -127,7 +131,8 @@ async def snapshot(app, now, *, include_seeds=False):
                 seeds += [s for s in extra if s.kind == 'group_start']
             return SimpleNamespace(personas=personas, states=states, ties=ties, in_play=playing, officers=officers,
                 away=away, classes={g:m.class_ for g,m in cast.items()}, cast=cast, human=human, local=local,
-                seeds=seeds, relationships=relationships, meta=meta,group_audiences=group_audiences)
+                seeds=seeds, relationships=relationships, meta=meta,group_audiences=group_audiences,
+                posted=posted)
     for attempt, budget in enumerate(READ_CPU_S):
         try:
             return await asyncio.to_thread(read, budget)

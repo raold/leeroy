@@ -13,7 +13,8 @@ import time
 from leeroy_mind.claims.store import vector as checked_vector
 from leeroy_mind.claims.visibility import claim_visible
 from leeroy_mind.discord.channels import channel_id, discord_sql, is_discord, is_private, is_group
-from leeroy_mind.discord.layout import dm_peer
+from leeroy_mind.discord import topics as channel_topics
+from leeroy_mind.discord.layout import channel as layout_channel, dm_peer
 from leeroy_mind.discord.text import is_emoji_message
 from leeroy_mind.eval.talk import contradiction, nonsequitur, repetition, unawareness
 from leeroy_mind.eval.talk.common import Line, day, evening, similarity, words
@@ -93,6 +94,8 @@ HINTS = {
     'phrase_exemplar': ('it copies words from one of your own past lines shown as examples; they '
                         'show how you talk, so say something new that way'),
     register.CODE: register.HINT,
+    channel_topics.CODE: channel_topics.HINT,
+    channel_topics.MEME_CODE: channel_topics.MEME_HINT,
 }
 EXEMPLARS_MAX = 8  # Draft.exemplars: talk/grounding.py shows at most 3
 FILLER = {'agree': ({'same','agreed','true','this','yeah','yep','ya','+1','facts','fr'}, '👍'),
@@ -252,6 +255,9 @@ def _validate(draft, now):
         raise ValueError('guard_exemplars_invalid')
     if type(draft.wow_topic) is not bool:
         raise ValueError('guard_wow_topic_invalid')
+    if (type(draft.with_photo) is not bool or not isinstance(draft.channel_topic, str)
+            or draft.channel_topic and layout_channel(draft.channel_topic) is None):
+        raise ValueError('guard_channel_topic_invalid')
 
 
 def _visible(line, draft, officer):
@@ -675,6 +681,14 @@ def review(stores: GuardStores, draft: Draft) -> Verdict:
     # [talk] wow_topic: raid and guild chat reads as chat (guards/register.py)
     if draft.wow_topic and register.reasons(draft.text):
         rewrite.append(register.CODE)
+    # [server] channel_topics: a channel turn of the server's own keeps to its channel's purpose
+    # (discord/topics.py); one rewrite, then a draft still off is not sent
+    if draft.channel_topic and draft.channel == 'discord':
+        strayed = channel_topics.off_topic(draft.channel_topic, draft.text,
+                                           parent=parent.text if parent else '',
+                                           opener=draft.parent_id is None, photo=draft.with_photo)
+        if strayed:
+            rewrite.append(strayed)
     # A line already dropped as a repeat or echo stays dropped; phrases only add a rewrite.
     cooled = (phrases.check(reader, draft, now, sheet) if cfg.phrase_cooldown and not drop
               else phrases.Found())
