@@ -218,6 +218,39 @@ test("a retry waits without holding one of the active loads", async (t) => {
   cache.forgetKey("bad"); await bad;
 });
 
+test("an unwanted retry settles its waiters and a later get starts fresh", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  var wanted = true, loads = 0;
+  var cache = new FaceCache({ retryMs: [1000], retryWanted: () => wanted,
+    load: () => { loads++; throw new Error("offline"); } });
+  var answer = cache.get("101"); await tick();
+  wanted = false;
+  t.mock.timers.tick(1000); await tick();
+  assert.equal(await answer, null);
+  assert.equal(cache.active, 0);
+  assert.equal(cache.entries.size, 0);
+  t.mock.timers.tick(60000); await tick();
+  assert.equal(loads, 1);
+  wanted = true;
+  cache.load = () => { loads++; return "blob:101"; };
+  assert.equal(await cache.get("101"), "blob:101");
+  assert.equal(loads, 2);
+});
+
+test("one eviction pass snapshots displayed photos once even when all are pinned", async () => {
+  var snapshots = 0, dropped = [];
+  var cache = new FaceCache({maxEntries: 2, load: key => "blob:" + key,
+    drop: value => dropped.push(value),
+    inUseSnapshot: () => { snapshots++; return (key, value) => value !== "blob:103"; }});
+  await cache.get("101"); await cache.get("102");
+  assert.equal(snapshots, 0);
+  await cache.get("103");
+  assert.equal(snapshots, 1);
+  await cache.get("104");
+  assert.equal(snapshots, 2);
+  assert.deepEqual(dropped, ["blob:103"]);
+});
+
 test("a reload answering the photo it had keeps it: nothing is let go or replaced", async () => {
   var replaced = [], seen = [];
   var t = rig(function (key, n) { return n === 1 ? { url: "blob:1" } : "same"; });
@@ -388,6 +421,7 @@ async function later(ms, fn) {
 test("a face drawn again reuses the photo already decoded", async () => {
   var face = await stage();
   var row = document.createElement("div");
+  page.roots = [row];
   var first = row.appendChild(face(2201, "Arkon", "feed"));
   assert.equal(first.tagName, "SPAN");  // the initials until the photo is in
   await settled();
@@ -400,6 +434,7 @@ test("a face drawn again reuses the photo already decoded", async () => {
   assert.equal(again.className, "av");
   assert.equal(face(2201, "Arkon", "feed", { speaking: true }).className, "av speaking");
   assert.equal(askedFor(2201), 1);
+  page.roots = [];
 });
 
 test("one photo serves a member's faces of every size", async () => {
@@ -656,4 +691,54 @@ test("a refused key is not asked again on its own; the next key (forgetFaces) as
   assert.equal(askedFor(2209), 2);
   assert.equal(row.children[0].tagName, "IMG");    // drawn again without a poll of its tab
   page.roots = [];
+});
+
+test("hidden page, hidden photos and detached faces stop retries until a new draw", async (t) => {
+  var face = await stage(), fetchBefore = globalThis.fetch;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    for (const mode of ["page", "photos", "detached"]) {
+      page.roots = []; page.mod.forgetFaces();
+      document.hidden = false; document.documentElement = {dataset: {photos: "shown"}};
+      var loads = 0, row = document.createElement("div"); page.roots = [row];
+      globalThis.fetch = () => { loads++; return Promise.resolve({status: 503}); };
+      row.appendChild(face(103, "Member103", "feed")); await settled();
+      // Repeated redraws share a single completion listener; detached predecessors stay detached.
+      for (var i = 0; i < 100; i++) { row.replaceChild(face(103, "Member103", "feed"), row.children[0]); }
+      if (mode === "page") { document.hidden = true; }
+      if (mode === "photos") { document.documentElement.dataset.photos = "hidden"; }
+      if (mode === "detached") { page.roots = []; }
+      t.mock.timers.tick(1000); await settled();
+      t.mock.timers.tick(30000); await settled();
+      assert.equal(loads, 1, mode);
+      document.hidden = false; document.documentElement.dataset.photos = "shown";
+      page.roots = [row];
+      globalThis.fetch = () => { loads++; return ok("ok"); };
+      row.replaceChild(face(103, "Member103", "feed"), row.children[0]); await settled();
+      assert.equal(loads, 2, mode);
+      assert.equal(row.children[0].tagName, "IMG", mode);
+    }
+  } finally {
+    page.roots = []; page.mod.forgetFaces(); globalThis.fetch = fetchBefore;
+    document.hidden = false; delete document.documentElement;
+  }
+});
+
+test("permanent client errors wait for a new draw after the miss TTL; 408 and 429 retry", async (t) => {
+  var face = await stage(), fetchBefore = globalThis.fetch;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    for (const status of [400, 401, 403, 405, 410, 422, 408, 429]) {
+      page.roots = []; page.mod.forgetFaces();
+      var calls = 0, row = document.createElement("div"); page.roots = [row];
+      globalThis.fetch = () => { calls++; return Promise.resolve({status}); };
+      row.appendChild(face(104, "Member104", "feed")); await settled();
+      t.mock.timers.tick(1000); await settled();
+      assert.equal(calls, status === 408 || status === 429 ? 2 : 1, String(status));
+      if (status !== 408 && status !== 429) {
+        await later(301000, async () => { face(104, "Member104", "feed"); await settled(); });
+        assert.equal(calls, 2);
+      }
+    }
+  } finally { page.roots = []; page.mod.forgetFaces(); globalThis.fetch = fetchBefore; }
 });

@@ -7,8 +7,9 @@
 // Only a 404 says there is no photo; that member is asked for again when the cache's memory of the
 // miss (5 minutes) runs out. A first load with no answer (a server error, no connection, a
 // timeout) is asked again within seconds, backing off to every 30 s, and the initials already
-// drawn turn into the photo when it comes, with no redraw of their tab. One the key was refused
-// for waits for the next key (forgetFaces). A reload with no answer, or a refused key, keeps the
+// drawn turn into the photo when it comes, with no redraw of their tab. Retries end when the page
+// is hidden, photos are hidden, or no attached face needs the key; the next draw can ask anew.
+// A permanent 4xx is remembered for five minutes or until forgetFaces. A reload with no answer keeps the
 // photo shown. A guid that names nobody (0 on a line with no member, below 0, not a whole number)
 // is never asked for: it is the initials.
 //
@@ -75,7 +76,7 @@ function loadFace(key, previous) {
     .then(function (r) {
       if (r.status === 404) { return null; }
       var no = new Error("HTTP " + r.status);
-      no.final = r.status === 403;  // the key refused: asked again under the next key (forgetFaces)
+      no.final = r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429;
       if (r.status !== 200) { throw no; }
       return r.blob();
     })
@@ -91,12 +92,26 @@ var cache = new FaceCache({
   retryMs: [1000, 2000, 5000, 10000, 30000],
   drop: function (p) { URL.revokeObjectURL(p.url); },
   replaced: function (key) { redraw('[data-face-guid="' + key + '"]'); },
-  inUse: function (key, p) {
-    var shown = shownOf(key);
-    for (var i = 0; i < shown.length; i++) { if (shown[i].src === p.url) { return true; } }
-    return false;
+  retryWanted: function (key) { return !document.hidden && !photosHidden() && shownOf(key).length > 0; },
+  inUseSnapshot: function () {
+    var urls = new Set();
+    document.querySelectorAll('[data-face-guid]').forEach(function (node) { if (node.src) { urls.add(node.src); } });
+    return function (key, p) { return urls.has(p.url); };
   },
 });
+
+// One listener per load, holding only its key. Repeated feed redraws never keep detached rows
+// alive through a shared retrying promise. At completion, find the faces still on the page.
+var watching = new Map();
+function watch(key, asked) {
+  if (watching.get(key) === asked) { return; }
+  watching.set(key, asked);
+  asked.then(function (p) {
+    if (watching.get(key) !== asked) { return; }
+    watching.delete(key);
+    if (p && !photosHidden()) { redraw('[data-face-guid="' + key + '"]'); }
+  });
+}
 
 // Every photo let go and asked for again (a new key): the faces on the page are drawn again
 export function forgetFaces() {
@@ -160,9 +175,7 @@ export function face(guid, name, kind, opts) {
   if (photosHidden()) { return box; }
   var key = String(g), known = cache.peek(key), asked = cache.get(key);
   if (known) { return tracked(photo(known, cls)); }  // a reload that changes it draws this again
-  asked.then(function (p) {
-    if (p && box.parentNode && !photosHidden()) { box.parentNode.replaceChild(tracked(photo(p, cls)), box); }
-  });
+  watch(key, asked);
   return box;
 }
 
