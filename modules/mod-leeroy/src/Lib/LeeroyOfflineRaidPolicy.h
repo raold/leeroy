@@ -43,12 +43,42 @@ struct OfflineRaidState
     std::uint32_t membersPresent, wipes, maxWipesOnOneBoss, bossesDone, bossesTotal;
     bool dcEnabled;
     std::uint32_t dcOffMs, restarts;
+    std::uint32_t shortMs; // How long the leader has been out or the roster under the minimum, without a break.
 };
 
 enum class Verdict { Continue, Restart, Done };
 struct Decision { Verdict verdict; std::string reason; };
 
+// leader_lost and too_few end a run only once the leader has been out, or the roster under the minimum, for
+// this long without a break: one tick's reading is not a lost raid. Until then the run waits (no restart and
+// no clear), so a body that is back by then never stops it.
+inline constexpr std::uint32_t OfflineShortRosterStopMs = 10000;
 Decision Decide(OfflineRaidState const& state, OfflineRaidLimits const& limits);
+
+// A member is inside the run's copy while its body is there: in the job's group, in the world, on the run's
+// map and copy. A near teleport moves it within that copy and keeps it inside: dungeon-clear's stranded
+// recovery (2026-11-14, Naxx 10: three members in one tick; 2026-11-16, ICC 25: sixteen), its raid-wipe
+// regroup at the entrance, the Trial of the Crusader floor drop and the Ulduar Leviathan pass all move
+// members, the tank included, that way, and each such tick used to stop the run too_few or leader_lost.
+// Only a worldport (a far teleport) takes a member out until it arrives.
+struct RunBody
+{
+    bool inJobGroup = false, inWorld = false, teleportNear = false, worldport = false;
+    bool sameMap = false, sameCopy = false;
+};
+bool InsideRunInstance(RunBody const& body);
+
+// Everyone inside is dead and no boss is engaged: nobody is left to run dungeon-clear's own rez recovery or
+// raid-wipe regroup (2026-11-15, ICC 10: all nine died at Lady Deathwhisper, dungeon-clear stayed on, and the
+// raid lay there until the mind's 30-minute stall watchdog stopped it). After this hold the job switches
+// dungeon-clear off, and its dc_stopped restart revives everyone at the entrance.
+inline constexpr std::uint32_t OfflineFullWipeMs = 30000;
+struct FullWipeHold
+{
+    std::uint32_t heldMs = 0;
+    bool Observe(std::uint32_t inside, std::uint32_t deadInside, bool dcEnabled, std::optional<bool> bossEngaged,
+        std::uint32_t diffMs);
+};
 bool IsWipe(std::uint8_t oldState, std::uint8_t newState);
 std::uint32_t AdvanceElapsed(std::uint32_t elapsed, std::uint32_t diff);
 

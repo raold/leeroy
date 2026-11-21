@@ -60,6 +60,7 @@ INPUT_LIMIT = 256
 OWNED_KEY = "guild:offline:owned"
 DAY_PREFIX = "guild:offline:day:"
 LOGOUT_KEY = "guild:offline:last-logout"
+LOGIN_KEY = "guild:offline:last-login"
 REASON_LIMIT = 200
 PROGRESS_FRESH_S = 120
 # Instance maps a level-80 cast member is found in: the Wrath raids and 5-mans (DUNGEONS lacks
@@ -116,6 +117,25 @@ def setup_retry_after(reason: str) -> int | None:
     if len(parts) != 3 or parts[0] != "setup" or parts[1] not in {"grouping", "teleporting", "starting"}:
         return None
     return BUSY_RETRY_S if parts[2] == "too_few" or retry_after(parts[2]) is not None else None
+
+
+SKIP_CODE_LIMIT = 40
+
+
+def setup_skips(skipped, plan: RaidPlan) -> dict:
+    """Why native left planned members out, as codes and counts, and the code of each lead (the tank,
+    the loot master) it left out: a grouping too_few is a lead it could not use as often as a roster
+    under the minimum (2026-11-19: the loot master in flight, 22 of 25 usable). Never a name."""
+    counts, leads = {}, {}
+    for skip in skipped:
+        code = str(skip.reason)[:SKIP_CODE_LIMIT]
+        if code.startswith("cleanup:"):
+            continue
+        counts[code] = counts.get(code, 0) + 1
+        for lead, guid in (("tank", plan.tank_guid), ("loot", plan.loot_guid)):
+            if skip.guid == guid:
+                leads[lead] = code
+    return dict(skipped=dict(sorted(counts.items())), leads=dict(sorted(leads.items())))
 
 
 # Native start refusals that name one requested body by guid (StartRaidJob, InstanceConflict).
@@ -410,14 +430,28 @@ class OfflineRaids:
     async def on_login(self, ev):
         if ev.guid == self.ports.human_guid and ev.human:
             self._online = True
+            with self.ports.conn:
+                _put(self.ports.conn, LOGIN_KEY, self.ports.clock.local().timestamp())
             self._cancel()
 
     async def on_logout(self, ev):
+        """His away clock (offline_min_away_min) starts at his logout. Every hello re-reports his
+        presence as a login or a logout, so one that finds him offline when he was last seen offline
+        leaves the clock where his logout put it (2026-11-19: six restarts kept the day's retry back)."""
         if ev.guid == self.ports.human_guid and ev.human:
+            was_online = self._online or self._last_seen_online()
             self._online = False
+            if not was_online and self._last_logout is not None:
+                return
             self._last_logout = self.ports.clock.local()
             with self.ports.conn:
                 _put(self.ports.conn, LOGOUT_KEY, self._last_logout.timestamp())
+
+    def _last_seen_online(self):
+        """The stored login is newer than the stored logout: he was in game when this process began."""
+        login, logout = _get(self.ports.conn, LOGIN_KEY), _get(self.ports.conn, LOGOUT_KEY)
+        numbers = (int, float)
+        return type(login) in numbers and (type(logout) not in numbers or login >= logout)
 
     def _valid_job(self, ev):
         if (not self.active or ev.id != self._owned["id"] or ev.kind != "offline_raid"
@@ -473,10 +507,16 @@ class OfflineRaids:
         if ev.state == "failed":
             # The day receipt outlives both the next day's job and the server log. It is a
             # diagnostic only: terminal handling above is already saved and queued.
-            log.info("offline_raid_failed reason=%s", str(ev.reason)[:REASON_LIMIT])
+            skips = setup_skips(ev.skipped, RaidPlan(**self._owned["plan"]))
+            log.info("offline_raid_failed reason=%s skipped=%s leads=%s", str(ev.reason)[:REASON_LIMIT],
+                     ",".join(f"{code}:{n}" for code, n in skips["skipped"].items()) or "-",
+                     ",".join(f"{lead}:{code}" for lead, code in skips["leads"].items()) or "-")
             try:
                 if self._owned.get("day"):
-                    self._update_day(failed=str(ev.reason)[:REASON_LIMIT])
+                    changes = dict(failed=str(ev.reason)[:REASON_LIMIT])
+                    if skips["skipped"]:
+                        changes["setup_skips"] = skips
+                    self._update_day(**changes)
             except Exception:
                 log.warning("offline raid failure reason was not stored")
 
