@@ -5,7 +5,7 @@ CREATE TABLE day_plan (
                                              'holiday','offline','questing')),
   place TEXT, partners TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(partners)),
   status TEXT NOT NULL CHECK (status IN ('planned','running','done','skipped','preempted')),
-  reason TEXT, action_ref TEXT, UNIQUE(night, member, starts));
+  reason TEXT, action_ref TEXT, phase TEXT, evidence INTEGER REFERENCES game_event(id), UNIQUE(night, member, starts));
 CREATE INDEX day_plan_due ON day_plan(status,starts,ends);
 CREATE TABLE day_permit (
   plan INTEGER PRIMARY KEY REFERENCES day_plan(id), begin_id TEXT UNIQUE NOT NULL,
@@ -15,7 +15,8 @@ CREATE TABLE day_permit (
   evidence INTEGER REFERENCES game_event(id));
 CREATE TABLE day_step (
   id TEXT PRIMARY KEY, plan INTEGER NOT NULL REFERENCES day_permit(plan),
-  kind TEXT NOT NULL, member INTEGER NOT NULL, UNIQUE(plan,kind,member));
+  kind TEXT NOT NULL, member INTEGER NOT NULL, dispatched INTEGER NOT NULL DEFAULT 0 CHECK(dispatched IN (0,1)),
+  UNIQUE(plan,kind,member));
 CREATE TABLE day_handoff (
   request_id TEXT PRIMARY KEY, reason TEXT NOT NULL, members TEXT NOT NULL CHECK(json_valid(members)),
   process TEXT NOT NULL, epoch TEXT NOT NULL, guild INTEGER NOT NULL, human INTEGER NOT NULL,

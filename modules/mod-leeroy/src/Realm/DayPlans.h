@@ -2,10 +2,30 @@
 #ifndef MOD_LEEROY_REALM_DAY_PLANS_H
 #define MOD_LEEROY_REALM_DAY_PLANS_H
 #include "RealmModule.h"
+#include "LeeroyCommands.h"
 namespace Leeroy::Realm
 {
 enum class DayHandoff;
+// Optional control fields on the four actual higher-owner commands. A check runs admission only.
+class DayOwnerCheck
+{
+public:
+    DayOwnerCheck(nlohmann::json const& message, std::vector<std::uint32_t> members, std::string reason);
+    bool Checking() const { return checking; }
+    std::string Token(std::uint32_t guid) const;
+    LeeroyCommandResult Accept() const;
+    std::string error;
+private:
+    bool checking = false;
+    std::int64_t expires = 0;
+    nlohmann::json original;
+    std::string checkId, why;
+    std::vector<std::uint32_t> targets;
+    std::set<std::string> tokens;
+};
 void RegisterDayPlans();
+void InvalidateDayOwnerChecks();
+void RegisterDayOwnerCheck(std::string const& originalType, LeeroyCommandHandler handler);
 void TickDayPlans();
 std::string CheckDayStep(Queued const& entry);
 std::string DayMutationRefusal(Queued const& entry);
@@ -13,6 +33,7 @@ void DayAdmitted(Queued const& entry);
 void DayFinished(Queued const& entry, bool released, bool success);
 bool DayRevoking(Queued const& entry);
 std::string DayForMember(std::uint32_t guid);
+std::string DayPreviewFence(std::string const& token, std::uint32_t guid);
 bool DayOwnsMember(std::string const& token, std::uint32_t guid);
 void DayMoveIssued(Queued const& entry, std::uint32_t map, float x, float y, float z);
 bool DayMoving(std::string const& token, Player* bot);

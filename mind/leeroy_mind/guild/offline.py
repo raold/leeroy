@@ -786,8 +786,7 @@ class OfflineRaids:
                             and not any(members & b for b in self._busy())
                             and self.ports.clock.now() < self._owned["deadline"])
                 try:
-                    ack = await runner.handoff(command.id, plan.members, "offline_raid", valid,
-                                               lambda: self.ports.send(command))
+                    ack = await runner.handoff(command, plan.members, "offline_raid", valid, self.ports.send)
                 except ActionRejected as exc:
                     ack = Ack(0, command.id, False, str(exc))
             if ack is None or ack.id != command.id:

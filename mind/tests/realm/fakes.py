@@ -45,7 +45,8 @@ class RealmApp:
         return (self._hello_ts is not None and event_type(ev) not in {"hello", "cast"}
                 and ev.ts < self._hello_ts - 5000)
 
-    async def send(self, cmd, *, preserve_id=False):
+    async def send(self, cmd, *, preserve_id=False, expected_epoch=None):
+        assert expected_epoch in (None, self._transport.epoch)
         assert preserve_id is True
         self.sent.append(cmd)
         return Ack(0, cmd.id, True, "")

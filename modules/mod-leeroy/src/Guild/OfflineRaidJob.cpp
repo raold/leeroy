@@ -1,6 +1,8 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "OfflineRaidJob.h"
+#include "Realm/DayPlans.h"
+#include "Realm/RealmPorts.h"
 #include "Strings.h"
 #include "BotCommands.h"
 #include "PlayStyle.h"
@@ -291,7 +293,7 @@ std::string InstanceConflict(OfflineRaidCmd const& cmd)
     return {};
 }
 
-std::string Unusable(Player* player)
+std::string Unusable(Player* player, std::string const& dayToken = {})
 {
     if (!player)
         return "offline";
@@ -306,11 +308,14 @@ std::string Unusable(Player* player)
     if (player->GetGroup() && (player->GetGroup()->isLFGGroup() || player->GetGroup()->isBGGroup()
         || player->GetGroup()->isBFGroup()))
         return "in_lfg";
-    if (player->IsBeingTeleported() || player->HasPendingBind())
+    bool dayMoving = !dayToken.empty() && Realm::DayMoving(dayToken, player);
+    if ((player->IsBeingTeleported() && !dayMoving) || player->HasPendingBind())
         return "teleporting";
-    if (player->GetMap()->IsDungeon())
+    auto map = player->FindMap();
+    if ((!map && !dayMoving) || (map && map->IsDungeon()))
         return "in_instance";
-    if (player->IsInCombat())
+    if (player->IsInCombat() && (dayToken.empty() || !Realm::DayDueling(dayToken,
+        Realm::RealmModule::Instance().Holder(player->GetGUID().GetCounter()), player)))
         return "in_combat";
     return {};
 }
@@ -1572,7 +1577,11 @@ LeeroyCommandResult HandleStartOfflineRaid(nlohmann::json const& message)
     auto const cmd = ParseOfflineRaid(message, error);
     if (!cmd)
         return Fail(error);
-    return StartRaidJob(message.at("id").get<std::string>(), *cmd, RaidJobMode::Offline);
+    auto manifest = cmd->members;
+    manifest.push_back(cmd->leaderGuid);
+    Realm::DayOwnerCheck check(message, std::move(manifest), "offline_raid");
+    if (!check.error.empty()) return Fail(check.error);
+    return StartRaidJob(message.at("id").get<std::string>(), *cmd, RaidJobMode::Offline, {}, &check);
 }
 
 LeeroyCommandResult HandleStopOfflineRaid(nlohmann::json const& message)
@@ -1595,7 +1604,7 @@ LeeroyCommandResult HandleStopOfflineRaid(nlohmann::json const& message)
 
 LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     [[maybe_unused]] OfflineRaidCmd const& command, [[maybe_unused]] RaidJobMode mode,
-    [[maybe_unused]] std::vector<uint32> const& bosses)
+    [[maybe_unused]] std::vector<uint32> const& bosses, [[maybe_unused]] Realm::DayOwnerCheck const* check)
 {
 #if !LEEROY_HAS_DUNGEON_CLEAR
     return Fail("driver_unavailable:no_dungeon_clear");
@@ -1622,7 +1631,8 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
         return Fail("human_online");
     for (uint32 low : Requested(*cmd))
     {
-        if (Realm::RealmOwns(low)) return Fail("busy:realm_owner:" + std::to_string(low));
+        if (Realm::RealmOwns(low) && (!check || check->Token(low).empty()))
+            return Fail("busy:realm_owner:" + std::to_string(low));
         if (auto* player = FindOnline(low); player && GroupHasRealmOwner(player->GetGroup()))
             return Fail("busy:realm_group:" + std::to_string(low));
         if (Training::DummyTrialOwns(low)) return Fail("busy:" + std::to_string(low));
@@ -1640,9 +1650,11 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     if (auto const conflict = InstanceConflict(*cmd); !conflict.empty())
         return Fail(conflict);
     Player* leader = FindOnline(cmd->leaderGuid);
+    auto dayToken = check ? check->Token(cmd->leaderGuid) : std::string{};
+    if (!leader && !dayToken.empty()) leader = ObjectAccessor::FindConnectedPlayer(Realm::PlayerGuid(cmd->leaderGuid));
     if (!leader || (!benchmark && !Controlled(leader)) || !PlayerbotAI::IsTank(leader, true))
         return Fail("leader_not_tank");
-    if (auto const reason = benchmark ? std::string{} : Unusable(leader); !reason.empty())
+    if (auto const reason = benchmark ? std::string{} : Unusable(leader, dayToken); !reason.empty())
         return Fail("leader_unavailable:" + reason);
     if (benchmark)
         for (uint32 low : Requested(*cmd))
@@ -1659,7 +1671,9 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
         return Fail("no_entrance");
 
     std::string why;
-    DcTestDriver::Readiness const readiness = DcTestDriver::Ensure(&why);
+    bool const preview = check && check->Checking();
+    if (preview && !DcTestDriver::Get()) return Fail("driver_pending");
+    auto const readiness = preview ? DcTestDriver::Readiness::Ready : DcTestDriver::Ensure(&why);
     if (readiness == DcTestDriver::Readiness::PendingLogin)
         return Fail("driver_pending");
     if (readiness == DcTestDriver::Readiness::Unavailable)
@@ -1670,6 +1684,7 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     for (uint32 low : Requested(*cmd))
         if (low == driver->GetGUID().GetCounter()) return Fail("driver_unavailable:driver_is_member");
 
+    if (preview) return check->Accept();
     auto job = std::make_unique<Job>();
     job->command = *cmd;
     job->mode = mode;
@@ -2040,6 +2055,7 @@ void SweepLeftoverGroups()
 
 void RegisterOfflineRaidHandler()
 {
+    Realm::RegisterDayOwnerCheck("start_offline_raid", HandleStartOfflineRaid);
     RegisterCommand("start_offline_raid", HandleStartOfflineRaid);
     RegisterCommand("offline_raid_stop", HandleStopOfflineRaid);
 }

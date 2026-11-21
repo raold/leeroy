@@ -692,6 +692,8 @@ class Realm:
         if name in {"login", "logout"} and self.app.is_backlog(ev):
             return
         if not self.enabled or self._stopping:
+            if not self._stopping and name in {"hello", "day_state"} and (day := self.parts.get("day")):
+                await day.on_event(ev)
             return
         if name == "login" and ev.human and ev.guid == self._human and self._presence_known:
             self.recall.on_login(self.ports.now())
@@ -739,6 +741,8 @@ class Realm:
                 log.warning("realm_forget_failed: %s", type(error).__name__)
         self._flush_rejections()
         if not self.enabled or self._stopping:
+            if not self._stopping and (day := self.parts.get("day")):
+                await day.tick()
             return
         state = self.ports.raid_state()
         self.recall.on_raid_state(self._raid_state, state)
@@ -785,6 +789,8 @@ class Realm:
         await asyncio.shield(self._close_task)
 
     async def _drain(self):
+        if (day := self.parts.get("day")) is not None:
+            await day.shutdown()
         await self.forget.close()
         if self._children:
             await asyncio.gather(*tuple(self._children), return_exceptions=True)
@@ -945,9 +951,10 @@ def attach_realm(app) -> Realm:
     app.register_shutdown_receipt("realm_pvp", realm.on_realm_pvp)
     app.register_shutdown_drain(realm.close)
     build_parts(realm)
-    if getattr(getattr(getattr(app, 'cfg', None), 'life', None), 'day_plans', False):
+    plan_admission = getattr(getattr(getattr(app, 'cfg', None), 'life', None), 'day_plans', False)
+    if plan_admission or app.store.conn.execute("SELECT 1 FROM day_permit WHERE state!='closed' LIMIT 1").fetchone():
         from leeroy_mind.godmode.dayrun import DayRun
-        runner = DayRun(realm)
+        runner = DayRun(realm, admission=plan_admission)
         realm.parts['day'] = runner
         realm.add_part(runner, event_types=('hello', 'day_state', 'group', 'guild_group', 'boss', 'job'))
     if (direct := realm.parts.get("direct")) is not None:

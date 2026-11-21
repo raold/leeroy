@@ -6,11 +6,12 @@
 #include "LeeroyGuildCommands.h"
 #include <cstdint>
 
+namespace Leeroy::Realm { class DayOwnerCheck; }
 namespace Leeroy::Guild
 {
 enum class RaidJobMode { Offline, Benchmark };
 LeeroyCommandResult StartRaidJob(std::string const& id, OfflineRaidCmd const&, RaidJobMode,
-    std::vector<std::uint32_t> const& bosses = {});
+    std::vector<std::uint32_t> const& bosses = {}, Realm::DayOwnerCheck const* check = nullptr);
 LeeroyCommandResult HandleStartOfflineRaid(nlohmann::json const& message);
 LeeroyCommandResult HandleStopOfflineRaid(nlohmann::json const& message);
 // Reservations include requested members before grouping and survive unresolved teardown.

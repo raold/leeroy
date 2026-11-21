@@ -74,3 +74,36 @@ def test_offline_raid_revalidates_selected_tank_after_native_release(tmp_path, c
         assert ports.conn.execute("SELECT state FROM day_handoff").fetchone()[0] == "expired"
         await rig.realm.close()
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("variant,refusal", [("raid","busy:realm_owner"), ("offline","keep_cast_off"),
+                                            ("offline","training_journal_pending")])
+def test_independently_refused_native_owner_does_not_preempt_the_day(tmp_path, clock, raid_setup, offline_setup,
+                                                                     variant, refusal):
+    from leeroy_mind.protocol import Ack
+    async def go():
+        ports, _, controller = raid_setup if variant == "raid" else offline_setup
+        ports.online = variant == "raid"
+        rig = Rehearsal(tmp_path, Store(ports.conn, clock=clock), clock)
+        await rig.begin(activity="inn", place="org_inn")
+        ports.app = rig.app
+        original_send = rig.app.send
+        checks = []
+        async def reply(cmd, **kwargs):
+            if getattr(cmd, "day_check", None):
+                checks.append(cmd)
+                return Ack(0, cmd.id, False, refusal)
+            return await original_send(cmd, **kwargs)
+        rig.app.send = reply
+        if variant == "raid":
+            try:
+                await form(raid_setup)
+            except RuntimeError:
+                pass
+        else:
+            await controller.tick()
+        assert len(checks) == 1 and len(checks[0].guids if variant == "raid" else checks[0].members) > 1
+        assert not ports.sent and rig.day.permit(1)["state"] == "open"
+        assert rig.day.rows(1)[0]["status"] != "preempted"
+        await rig.realm.close()
+    asyncio.run(go())

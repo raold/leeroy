@@ -259,6 +259,18 @@ void PublishGuildGroup(std::string reason, Player* human, Group* group,
     LeeroyModule::Instance().Publish(EncodeEvent(NowUnixMs(), MakeGuildGroupEvent(event)), false);
 }
 
+void PreviewDayBody(GuildAddBody& body, std::string const& token, Player* bot)
+{
+    auto guid = bot->GetGUID().GetCounter();
+    body.fence = Realm::DayPreviewFence(token, guid);
+    if (Realm::DayMoving(token, bot))
+    {
+        body.teleporting = false;
+        if (!bot->FindMap() && !bot->HasPendingBind() && !bot->GetInstanceId()) body.elsewhere = false;
+    }
+    if (Realm::DayDueling(token, Realm::RealmModule::Instance().Holder(guid), bot)) body.inCombat = false;
+}
+
 std::vector<std::string> Fill(Player* human, uint32 size, PendingAdd const* resume = nullptr, bool ownerAsk = false)
 {
     std::string why = HumanRefusal(human);
@@ -271,8 +283,6 @@ std::vector<std::string> Fill(Player* human, uint32 size, PendingAdd const* resu
         return {why};
     }
 
-    if (ownerAsk)
-        pendingAdd.reset(); // Only an accepted owner ask supersedes an earlier unexecuted request.
     Group* group = human->GetGroup();
     std::vector<GuildAddMember> connected;
     uint32 members = 1;
@@ -304,20 +314,7 @@ std::vector<std::string> Fill(Player* human, uint32 size, PendingAdd const* resu
         auto body = BodyOf(guid, bot, human, guildId, false, &outside, size);
         if (owned && bot)
         {
-            auto& realm = Realm::RealmModule::Instance();
-            auto holder = realm.Holder(guid);
-            if (!holder.empty())
-            {
-                body.fence = realm.MutationReason(guid, holder);
-                if (body.teleporting && Realm::DayMoving(token, bot))
-                {
-                    body.teleporting = false;
-                    // Both the admitted source and the exact worldport destination are open world.
-                    if (!bot->FindMap() && !bot->HasPendingBind() && bot->GetInstanceId() == 0)
-                        body.elsewhere = false;
-                }
-                if (body.inCombat && Realm::DayDueling(token, holder, bot)) body.inCombat = false;
-            }
+            PreviewDayBody(body, token, bot);
             dayMembers.emplace(guid, std::move(token));
         }
         if (auto reason = GuildAddSkipReason(body); !reason.empty())
@@ -358,7 +355,7 @@ std::vector<std::string> Fill(Player* human, uint32 size, PendingAdd const* resu
                 if (!current || !current->player) return {"A guild member became unavailable"};
                 request.bodies.emplace(guid, std::pair{*current, realm.BodyGeneration(guid)});
             }
-            pendingAdd = std::move(request);
+            ReplaceDayAddWaiter(pendingAdd, plan, std::optional{std::move(request)});
             for (auto const& token : tokens) Realm::RevokeDay(token, "guild_add");
             return {"Waiting for the selected guild members to finish their day activity"};
         }
@@ -408,6 +405,8 @@ std::vector<std::string> Fill(Player* human, uint32 size, PendingAdd const* resu
 
     if (!joined.empty())
     {
+        if (ownerAsk)
+            ReplaceDayAddWaiter(pendingAdd, plan, std::optional<PendingAdd>{});
         std::vector<std::uint32_t> guids;
         for (auto const& [guid, role] : joined)
             guids.push_back(guid);
@@ -590,7 +589,7 @@ void TickGuildAddHandoff()
     }
 }
 
-std::string GuildAddJoinRefusal(Player* human, Player* bot)
+std::string GuildAddJoinRefusal(Player* human, Player* bot, std::string const& dayToken)
 {
     if (!human || !bot || !human->GetMap())
         return "offline";
@@ -605,8 +604,11 @@ std::string GuildAddJoinRefusal(Player* human, Player* bot)
     constexpr uint32 kParty = 5;
     std::vector<GuildAddSave> const outside = human->GetMap()->IsDungeon() ? std::vector<GuildAddSave>{}
         : SavesOf(human->GetGUID());
-    return GuildAddSkipReason(BodyOf(bot->GetGUID().GetCounter(), bot, human, LeeroyModule::Instance().GuildId(),
-        false, &outside, kParty));
+    auto guid = bot->GetGUID().GetCounter();
+    auto body = BodyOf(guid, bot, human, LeeroyModule::Instance().GuildId(), false, &outside, kParty);
+    if (!dayToken.empty() && Realm::DayOwnsMember(dayToken, guid))
+        PreviewDayBody(body, dayToken, bot);
+    return GuildAddSkipReason(body);
 }
 
 bool GuildAddBring(Player* bot, Player* human) { return Bring(bot, human, 0, 1); }

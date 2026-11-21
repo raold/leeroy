@@ -119,8 +119,8 @@ class Godmode:
                                 and bridge.connected and app.human_guid == cmd.target_guid
                                 and (raid is None or str(raid.phase(app.clock.now())) not in RAID_QUIET)
                                 and I.fit(store.conn, current, app.personas, now=app.clock.now())[0])
-                    ack = await runner.handoff(wire, (cmd.guid,), "string", valid,
-                                               lambda: bridge.send(cmd, preserve_id=True))
+                    ack = await runner.handoff(cmd, (cmd.guid,), "string", valid,
+                                               lambda original, **guard: bridge.send(original, preserve_id=True, **guard))
             except ActionRejected as exc:
                 status, reason = "not_taken", str(exc)
             except NotConnected:

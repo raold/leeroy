@@ -8,7 +8,7 @@ import re
 from uuid import uuid4
 
 from leeroy_mind.bodies import BodyEvidenceUnavailable
-from leeroy_mind.guild.protocol import BotDo
+from leeroy_mind.guild.protocol import BotDo, DayOwnerCheck
 from leeroy_mind.nightly.attraction import reflection_row
 from leeroy_mind.protocol import Hello
 from leeroy_mind.realm.actions import ActionRejected
@@ -40,16 +40,21 @@ def disposition(record):
 
 def fact(row, names, phase='activity'):
     partners = json.loads(row["partners"])
-    company = " with " + ", ".join(names[g] for g in partners) if partners and all(
-        g in names for g in partners) else ""
-    activity = 'Arrived' if phase == 'arrival' else ACTED[row['activity']]
-    return f"{activity}{company} at {row['place'].replace('_', ' ')}."
+    companions = ", ".join(names[g] for g in partners) if partners and all(g in names for g in partners) else ""
+    place = row['place'].replace('_', ' ')
+    if phase == "arrival":
+        return f"Arrived at {place}."
+    activity = ACTED[row['activity']]
+    if phase == "shared" and companions:
+        if row['activity'] == 'duel_practice':
+            return f"{activity} with {companions} at {place}."
+        return f"{activity} at {place}. {companions} was there."
+    return f"{activity} at {place}."
 
 
 def card_lines(conn, guid, now, names):
-    row = conn.execute("SELECT d.*,p.evidence,p.phase FROM day_plan d LEFT JOIN day_permit p ON "
-        "d.action_ref='day:'||p.plan WHERE member=? AND starts<=? AND ends>? AND "
-        "(d.status='preempted' OR (d.status IN ('running','done') AND p.evidence IS NOT NULL)) "
+    row = conn.execute("SELECT d.* FROM day_plan d WHERE member=? AND starts<=? AND ends>? AND "
+        "(d.status='preempted' OR (d.status IN ('running','done','skipped') AND d.evidence IS NOT NULL)) "
         "ORDER BY starts DESC LIMIT 1", (guid, now, now-86400)).fetchone()
     if not row:
         return []
@@ -62,18 +67,16 @@ def seed_valid(conn, key, now):
     prefix, _, plan = key.partition(":")
     if prefix != "day" or not plan.isascii() or not plan.isdecimal() or len(plan) > 18:
         return False
-    return conn.execute("SELECT 1 FROM day_plan d JOIN day_permit p ON d.id=p.plan "
-                        "WHERE d.id=? AND status IN ('running','done') AND p.evidence IS NOT NULL "
+    return conn.execute("SELECT 1 FROM day_plan d WHERE d.id=? AND status IN ('running','done') AND d.evidence IS NOT NULL "
                         "AND starts<=? AND ends>?", (int(plan), now, now - 86400)).fetchone() is not None
 
 
 def seeds(conn, now, names):
     from leeroy_mind.server.seeds import Seed
-    rows = conn.execute("SELECT d.*,p.phase FROM day_plan d JOIN day_permit p ON d.id=p.plan "
-        "WHERE status IN ('running','done') AND p.evidence IS NOT NULL AND starts<=? AND ends>? "
+    rows = conn.execute("SELECT d.* FROM day_plan d WHERE status IN ('running','done') AND d.evidence IS NOT NULL AND starts<=? AND ends>? "
         "ORDER BY starts DESC,id LIMIT 40", (now,now-86400))
     for row in rows:
-        members = (row["member"], *json.loads(row["partners"]))
+        members = (row["member"], *json.loads(row["partners"])) if row["phase"] == "shared" else (row["member"],)
         if all(g in names for g in members):
             description = fact(row, names, row['phase'])
             yield Seed(f"day:{row['id']}", "day", ("general",),
@@ -82,7 +85,8 @@ def seeds(conn, now, names):
 
 
 class DayRun:
-    def __init__(self, realm):
+    def __init__(self, realm, *, admission=True):
+        self.admission = admission
         self.realm = realm
         self.app = realm.app
         self.store = self.app.store
@@ -98,6 +102,7 @@ class DayRun:
             self.conn.execute("UPDATE day_handoff SET state='expired' WHERE state='waiting'")
         self.owners = {}
         self.listeners = {}
+        self.cleanup_tasks = set()
 
     def changed(self):
         before = self.wakeup
@@ -112,8 +117,9 @@ class DayRun:
         return self.conn.execute("SELECT * FROM day_permit WHERE plan=?", (plan,)).fetchone()
 
     def context_valid(self, *, cleanup=False):
-        c = self.realm.action_context()
-        return c.enabled and c.connected and c.presence_known and self.realm._transport_epoch == self.epoch and bool(self.boot) and (self.advertised or cleanup)
+        c = self.realm._forget_context() if cleanup else self.realm.action_context()
+        return ((cleanup or c.enabled and self.admission and self.advertised) and c.connected and c.presence_known
+                and self.realm._transport_epoch == self.epoch and bool(self.boot))
 
     def reason(self, rows):
         now = self.app.clock.now()
@@ -178,8 +184,27 @@ class DayRun:
             elif isinstance(command, DayStatus) and not ack.ok and ack.error == 'day_unknown':
                 self.close(plan, "skipped", "action_unproved")
                 with self.store.transaction():
-                    self.conn.execute("UPDATE day_permit SET state='unresolved' WHERE plan=? AND state!='closed'", (plan,))
-        task = self.realm.spawn(send)
+                    state = ("closed" if self.realm.action_store.day_previous_boot_resolved(permit, never_dispatched=True)
+                             else "unresolved")
+                    self.conn.execute("UPDATE day_permit SET state=? WHERE plan=? AND state!='closed'", (state, plan))
+                self.changed()
+        if not self.realm.enabled and not isinstance(command, DayBegin) and self.context_valid(cleanup=True):
+            if len(self.cleanup_tasks) >= 20:
+                sending.discard(plan)
+                return
+            context = self.realm._forget_context()
+            async def cleanup():
+                if self.realm._forget_context() == context:
+                    await send()
+            task = asyncio.create_task(cleanup())
+            self.cleanup_tasks.add(task)
+            def finished(done):
+                self.cleanup_tasks.discard(done)
+                if not done.cancelled():
+                    done.exception()  # An uncertain transport retains the permit for a later query.
+            task.add_done_callback(finished)
+        else:
+            task = self.realm.spawn(send)
         if task is None:
             sending.discard(plan)
         else:
@@ -255,8 +280,10 @@ class DayRun:
                         if p["state"] in {"opening", "open"}:
                             self.close(p["plan"], "skipped", "context_changed", notify=False)
                         if p["boot"] != self.boot:
+                            resolved = self.boot and self.realm.action_store.day_previous_boot_resolved(p)
+                            state = "closed" if resolved else "unresolved"
                             with self.store.transaction():
-                                self.conn.execute("UPDATE day_permit SET state='unresolved' WHERE plan=?", (p["plan"],))
+                                self.conn.execute("UPDATE day_permit SET state=? WHERE plan=?", (state, p["plan"]))
                         self.due.pop(p["plan"], None)
                 self.changed()
         elif isinstance(ev, DayState):
@@ -356,10 +383,16 @@ class DayRun:
     def record(self, plan, rows, ids, phase):
         now = self.app.clock.now()
         members = [r["member"] for r in rows]
+        if phase == "shared":
+            members = sorted({g for r in rows for g in (r["member"], *json.loads(r["partners"]))})
         names = {g:m.name for g,m in self.store.cast().items()}
         with self.store.transaction():
             p = self.permit(plan)
-            if p['phase'] == phase or p['phase'] == 'activity' or p['state'] != 'open':
+            if p["state"] != "open":
+                return
+            rows = [r for r in rows if self.conn.execute("SELECT phase FROM day_plan WHERE id=?",
+                                                         (r["id"],)).fetchone()[0] not in (phase, "activity", "shared")]
+            if not rows:
                 return
             payload = {"members": members, "plan": plan, "actions": ids, "activity": rows[0]["activity"],
                        "place": rows[0]["place"]}
@@ -370,14 +403,27 @@ class DayRun:
                 memory = reflection_row(r["member"],fact(r,names,phase), now=now, actors=members,
                     evidence=(f"event:{event}",), key=f"day:{r['id']}", importance=3,valence=.2)
                 self.app.writer.put(replace(memory,kind="event",source="game",place=r["place"]))
-            self.conn.execute("UPDATE day_permit SET evidence=?,phase=? WHERE plan=?",(event,phase,plan))
-            self.conn.execute("UPDATE day_plan SET status='running' WHERE action_ref=?",(f"day:{plan}",))
+                self.conn.execute("UPDATE day_plan SET status='running',evidence=?,phase=? WHERE id=?",
+                                  (event, phase, r["id"]))
+            self.conn.execute("UPDATE day_permit SET evidence=? WHERE plan=?", (event, plan))
 
     def advance(self, permit, now):
         plan = permit["plan"]
         rows = self.rows(plan)
         row = rows[0]
         state = permit["state"]
+        c = self.realm.action_context()
+        if (self.boot and self.boot != permit["boot"] and self.context_valid(cleanup=True)
+                and (c.guild, c.human) == (permit["guild"], permit["human"])
+                and self.realm.action_store.day_previous_boot_resolved(permit)):
+            self.close(plan, "skipped", "context_changed", notify=False)
+            with self.store.transaction():
+                self.conn.execute("UPDATE day_permit SET state='closed' WHERE plan=?", (plan,))
+            self.changed()
+            return
+        if (not self.admission or not self.realm.enabled) and state in ("opening", "open"):
+            self.close(plan, "skipped", "context_changed")
+            state = "revoking"
         if permit["release_ids"] is not None:
             with self.store.transaction():
                 if self.realm.action_store.day_released(plan, now):
@@ -419,8 +465,6 @@ class DayRun:
             if ident is None:
                 if not self.realm.bodies.may_move_all(owner, guids, rank="realm_day"):
                     return
-                if kind != "move" and permit["phase"] is None:
-                    self.record(plan, rows, [steps["move", g] for g in guids], "arrival")
                 self.submit(permit,rows,kind,guid)
                 return
             result = self.realm.action_store.get(ident)
@@ -436,12 +480,20 @@ class DayRun:
                     self.due[plan] = now + 5
                     self.send_control(permit, DayStatus(uuid4().hex, permit["begin_id"]))
                 return
-        self.record(plan, rows, list(steps.values()), "activity")
+            if kind == "duel":
+                self.record(plan, rows, [ident], "shared")
+            else:
+                phase = "arrival" if kind == "move" else "shared" if kind == "status" and len(rows) == 2 else "activity"
+                self.record(plan, [r for r in rows if r["member"] == guid], [ident], phase)
+        with self.store.transaction():
+            self.conn.execute("UPDATE day_permit SET phase='activity' WHERE plan=?", (plan,))
 
     async def tick(self):
         now = self.app.clock.now()
         for p in self.conn.execute("SELECT * FROM day_permit WHERE state!='closed'").fetchall():
             self.advance(p,now)
+        if not self.admission or not self.realm.enabled:
+            return
         with self.store.transaction():
             self.conn.execute("UPDATE day_plan SET status='skipped',reason='expired' WHERE status='planned' "
                               "AND action_ref IS NULL AND ends<=?", (now,))
@@ -451,8 +503,15 @@ class DayRun:
                                          "d.action_ref='day:'||p.plan WHERE p.state!='closed'").fetchone()[0]
             self.start(r,now,occupied)
 
-    async def handoff(self, request_id, members, reason, valid, send):
+    async def shutdown(self):
+        for task in self.cleanup_tasks:
+            task.cancel()
+        if self.cleanup_tasks:
+            await asyncio.gather(*self.cleanup_tasks, return_exceptions=True)
+
+    async def handoff(self, command, members, reason, valid, send):
         """Submit the original owner action once, after overlapping native permits report closed."""
+        request_id = command.id
         targets = set(members)
         manifest = json.dumps(sorted(targets))
         if any(g in self.owners for g in targets):
@@ -465,20 +524,30 @@ class DayRun:
         if not valid():
             raise ActionRejected("day_takeover_expired")
         if not blocks:
-            return await send()
+            return await send(command)
         context = self.realm.action_context()
         if not self.context_valid(cleanup=True):
             raise ActionRejected("day_takeover_expired")
+        if any(self.permit(plan)["boot"] != self.boot for (plan,) in blocks):
+            raise ActionRejected("day_cleanup_unresolved")
         self.owners.update((g, request_id) for g in targets)
         try:
             with self.store.transaction():
                 self.conn.execute("INSERT INTO day_handoff VALUES(?,?,?,?,?,?,?,?,'waiting')",
                     (request_id, reason, manifest, context.process_id, str(context.connection_epoch),
                      context.guild, context.human, self.app.clock.now() + 30))
-            for (plan,) in blocks:
-                self.close(plan,"preempted",reason)
             loop = asyncio.get_running_loop()
             deadline = loop.time() + 30
+            origins = tuple(self.permit(plan)["begin_id"] for (plan,) in blocks)
+            binding = DayOwnerCheck(request_id, origins, int((self.app.clock.now() + 30) * 1000))
+            check = replace(command, id=uuid4().hex, day_check=binding)
+            writer_epoch = self.epoch
+            ack = await self.app.bridge.send(check, preserve_id=True, expected_epoch=writer_epoch)
+            if not ack or ack.id != check.id or not ack.ok:
+                raise ActionRejected(ack.error if ack and ack.id == check.id else "day_admission_unproved")
+            for (plan,) in blocks:
+                self.close(plan, "preempted", reason, notify=False)
+            command = replace(command, day_prepared=check.id)
             while True:
                 active = [p for (plan,) in blocks if (p := self.permit(plan))["state"] != "closed"]
                 if not active:
@@ -490,11 +559,11 @@ class DayRun:
                     await asyncio.wait_for(self.wakeup.wait(), min(1, deadline - loop.time()))
                 except TimeoutError:
                     pass
-            if self.realm.action_context() != context or not valid():
+            if loop.time() >= deadline or self.realm.action_context() != context or not valid():
                 raise ActionRejected("day_takeover_expired")
             with self.store.transaction():
                 self.conn.execute("UPDATE day_handoff SET state='sent' WHERE request_id=?", (request_id,))
-            return await send()
+            return await send(command, expected_epoch=writer_epoch)
         finally:
             with self.store.transaction():
                 self.conn.execute("UPDATE day_handoff SET state='expired' WHERE request_id=? AND state='waiting'", (request_id,))

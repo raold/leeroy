@@ -133,6 +133,7 @@ def choose(topics: list[GuildTopic], weights: Mapping[int, float],
         if not picked or personas.get(picked[0]) is None:
             return None
         own = [t for t in game_topics(personas[picked[0]]) if t.key not in used]
+        own.extend(t for t in by_subject["game"] if t.owner == picked[0])
         return (picked[0], rng.choice(own)) if own else None
     options = by_subject[subject]
     positive = [w for w in weights.values() if w > 0]

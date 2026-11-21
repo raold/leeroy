@@ -384,7 +384,7 @@ class BridgeClient:
             except BridgeError:
                 return
 
-    async def send(self, cmd: Command, *, preserve_id: bool = False) -> Ack:
+    async def send(self, cmd: Command, *, preserve_id: bool = False, expected_epoch: int | None = None) -> Ack:
         """Send a command and wait for its ack (real-time timeout).
 
         Acks, pongs and the cast that answers get_cast resolve in the reader, while events go to
@@ -423,6 +423,9 @@ class BridgeClient:
             self._cast_ids.append(cmd_id)
         try:
             try:
+                if expected_epoch is not None and (writer is not self._writer or
+                        self.transport_state != TransportState(expected_epoch, True)):
+                    raise NotConnected("bridge writer changed before dispatch")
                 writer.write(line)
                 await writer.drain()
             except OSError as exc:

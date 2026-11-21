@@ -3,6 +3,8 @@
 #include "LeeroyDayPlan.h"
 #include "RealmPorts.h"
 #include "Guild/GuildAdd.h"
+#include "Guild/Strings.h"
+#include "Group.h"
 #include <cmath>
 #include <random>
 
@@ -12,6 +14,34 @@ namespace
 {
 using Json = nlohmann::json;
 std::map<std::string, DayPermit> permits; // Indexed by opaque capability. World thread only.
+struct PreparedOwner
+{
+    Json original;
+    std::uint64_t serial, epoch, humanGeneration;
+    std::uint32_t guild, human;
+    std::int64_t expires;
+    std::optional<BodyIdentity> owner;
+    std::set<std::uint32_t> group;
+    std::set<std::string> tokens;
+    bool consumed;
+    std::map<std::uint32_t, std::pair<std::optional<BodyIdentity>, std::uint64_t>> bodies;
+};
+std::map<std::string, PreparedOwner> prepared;
+std::set<std::uint32_t> OwnerGroup(std::optional<BodyIdentity> const& owner)
+{
+    std::set<std::uint32_t> members;
+    if (owner && owner->player && owner->player->GetGroup())
+        for (auto const& slot : owner->player->GetGroup()->GetMemberSlots())
+            members.insert(slot.guid.GetCounter());
+    return members;
+}
+bool OwnerWaiting(std::uint32_t guid)
+{
+    return std::any_of(prepared.begin(), prepared.end(), [&](auto const& it) {
+        return !it.second.consumed && NowUnixMs() < it.second.expires && it.second.bodies.contains(guid);
+    });
+}
+
 bool Enabled()
 {
     return Config().dayPlans && RealmModule::Instance().On();
@@ -91,8 +121,9 @@ LeeroyCommandResult Begin(Json const& message)
     }
     auto& module = RealmModule::Instance();
     auto const& places = module.Places();
-    if (std::none_of(places.begin(), places.end(),
-                     [&](auto const& p) { return p.name == place && DayPlaceMatches(activity, p.kind); }))
+    auto destination = std::find_if(places.begin(), places.end(),
+                                    [&](auto const& p) { return p.name == place && DayPlaceMatches(activity, p.kind); });
+    if (destination == places.end())
         return {false, "day_scope"};
     DayPermit p;
     p.origin = id;
@@ -102,6 +133,7 @@ LeeroyCommandResult Begin(Json const& message)
     p.epoch = module.Epoch();
     p.activity = activity;
     p.place = place;
+    p.destination = *destination;
     p.ends = ends;
     std::size_t away = 0;
     for (auto const& [token, old] : permits)
@@ -110,11 +142,11 @@ LeeroyCommandResult Begin(Json const& message)
     if (away + guids.size() > 20 || permits.size() >= ActionQueue::Capacity)
         return {false, "day_capacity"};
     auto* human = FindOnline(HumanGuid());
-    if (human && human->IsInCombat())
+    if (Guild::HisFight(human))
         return {false, "busy:combat"};
     for (auto guid : guids)
     {
-        if (!IsCast(guid) || Guild::GuildAddAwaiting(guid) || !DayForMember(guid).empty())
+        if (!IsCast(guid) || OwnerWaiting(guid) || Guild::GuildAddAwaiting(guid) || !DayForMember(guid).empty())
             return {false, "day_scope"};
         if (auto why = AdmissionReason(guid, Purpose::Move); !why.empty())
             return {false, why};
@@ -133,6 +165,102 @@ LeeroyCommandResult Begin(Json const& message)
 }
 } // namespace
 
+DayOwnerCheck::DayOwnerCheck(Json const& message, std::vector<std::uint32_t> members, std::string reason)
+{
+    if (!message.contains("day_check") && !message.contains("day_prepared"))
+        return;
+    if (!CommandCurrent()) { error = "day_owner_session"; return; }
+    original = message;
+    original.erase("ts");
+    targets = std::move(members);
+    why = std::move(reason);
+    auto& module = RealmModule::Instance();
+    if (message.contains("day_prepared"))
+    {
+        auto found = prepared.find(message.value("day_prepared", std::string{}));
+        original.erase("day_prepared");
+        if (found == prepared.end()) { error = "day_owner_expired"; return; }
+        auto& saved = found->second;
+        auto owner = Identity(HumanGuid(), true);
+        if (!DayRequestMatches(saved.original, original, saved.serial, LeeroyCommandSerial(), saved.expires,
+                               NowUnixMs(), saved.consumed) || saved.epoch != module.Epoch() ||
+            saved.guild != GuildId() || saved.human != HumanGuid() ||
+            saved.humanGeneration != module.BodyGeneration(HumanGuid()) ||
+            saved.owner != owner || OwnerGroup(owner) != saved.group)
+        { error = "day_owner_changed"; return; }
+        for (auto const& [guid, body] : saved.bodies)
+        {
+            auto current = Identity(guid, true);
+            if (module.BodyGeneration(guid) != body.second || current.has_value() != body.first.has_value() ||
+                (current && !SameLife(*current, *body.first)))
+            { error = "day_owner_changed"; return; }
+        }
+        if (DayGuildAddProgress(saved.tokens, saved.expires) != DayHandoff::Ready)
+        { error = "day_cleanup_unresolved"; return; }
+        saved.consumed = true; // Keep the check ID fenced through its original deadline.
+        return;
+    }
+    checking = true;
+    auto wire = message.at("type").get<std::string>();
+    constexpr std::string_view prefix = "day_check_";
+    if (!wire.starts_with(prefix)) { error = "day_owner_scope"; return; }
+    original["type"] = wire.substr(prefix.size());
+    auto const& check = message.at("day_check");
+    if (!check.is_object() || !check.contains("request_id") || !check["request_id"].is_string() ||
+        !check.contains("origins") || !check["origins"].is_array() || check["origins"].empty() ||
+        check["origins"].size() > 40 || prepared.size() >= 40)
+    { error = "day_owner_scope"; return; }
+    expires = check.value("expires_ms", std::int64_t{});
+    auto now = NowUnixMs();
+    if (expires <= now || expires > now + 35000) { error = "day_owner_expired"; return; }
+    expires = std::min<std::int64_t>(expires, now + 30000);
+    checkId = message.at("id").get<std::string>();
+    auto requestId = check.at("request_id").get<std::string>();
+    if (requestId.empty() || requestId.size() > 128 || requestId == checkId || prepared.contains(checkId))
+    { error = "day_owner_scope"; return; }
+    original.erase("day_check");
+    original["id"] = requestId;
+    std::set<std::string> origins;
+    for (auto const& origin : check.at("origins"))
+    {
+        auto p = ByOrigin(origin.get<std::string>());
+        if (!p || p->guild != GuildId() || p->human != HumanGuid() ||
+            std::none_of(targets.begin(), targets.end(), [&](auto g) { return p->Covers(g); }) ||
+            !origins.insert(p->origin).second)
+        { error = "day_owner_scope"; return; }
+        tokens.insert(p->token);
+    }
+    for (auto guid : targets)
+    {
+        auto current = DayForMember(guid);
+        if (OwnerWaiting(guid) || (!current.empty() && !tokens.contains(current)))
+        { error = "day_owner_scope"; return; }
+    }
+}
+std::string DayOwnerCheck::Token(std::uint32_t guid) const
+{
+    if (checking)
+        for (auto const& token : tokens)
+            if (DayOwnsMember(token, guid) && DayPreviewFence(token, guid).empty())
+                return token;
+    return {};
+}
+LeeroyCommandResult DayOwnerCheck::Accept() const
+{
+    if (!checking || !error.empty() || !CommandCurrent() || NowUnixMs() >= expires)
+        return {false, "day_owner_expired"};
+    auto& module = RealmModule::Instance();
+    auto owner = Identity(HumanGuid(), true);
+    PreparedOwner request{original, LeeroyCommandSerial(), module.Epoch(), module.BodyGeneration(HumanGuid()), GuildId(), HumanGuid(),
+                          expires, owner, OwnerGroup(owner), tokens, false, {}};
+    for (auto guid : targets)
+        request.bodies.emplace(guid, std::pair{Identity(guid, true), module.BodyGeneration(guid)});
+    if (!prepared.emplace(checkId, std::move(request)).second) return {false, "day_owner_scope"};
+    for (auto const& token : tokens)
+        RevokeDay(token, why); // Same world-thread turn as the original typed request's complete admission.
+    return {true, {}};
+}
+
 std::string DayForMember(std::uint32_t guid)
 {
     for (auto const& [token, p] : permits)
@@ -149,6 +277,18 @@ bool DayOwnsMember(std::string const& token, std::uint32_t guid)
     return it->second.Owns(guid, module.Holder(guid), Identity(guid, true), module.BodyGeneration(guid),
                            module.Epoch());
 }
+std::string DayPreviewFence(std::string const& token, std::uint32_t guid)
+{
+    auto& realm = RealmModule::Instance();
+    auto operation = realm.Holder(guid);
+    if (!DayOwnsMember(token, guid))
+        return realm.MutationReason(guid);
+    if (auto continuation = realm.FindPvpOwner(operation);
+        continuation && DayFishingCleaning(*continuation, realm.GuildEpoch()))
+        return realm.ValidateContinuation(continuation->token, guid, ContinuationMode::Cleanup);
+    return realm.MutationReason(guid, operation);
+}
+
 Player* DayPartner(std::string const& token, std::uint32_t guid)
 {
     if (!DayOwnsMember(token, guid))
@@ -183,7 +323,7 @@ std::string CheckDayStep(Queued const& entry)
                                        entry.payload.at("status").get<std::string>() != DayStatusFor(p->activity)))
         return "day_scope";
     auto* human = FindOnline(HumanGuid());
-    if (human && human->IsInCombat())
+    if (Guild::HisFight(human))
         return "busy:combat";
     for (auto g : entry.guids)
         if (!DayOwnsMember(p->token, g) || !RealmModule::Instance().Holder(g).empty())
@@ -200,8 +340,12 @@ std::string DayMutationRefusal(Queued const& entry)
         !bridge.Connected() || bridge.ConnectionSerial() != permit->serial ||
         permit->ends <= static_cast<std::uint64_t>(NowUnixMs()))
         return "day_revoked";
-    if (auto* human = FindOnline(HumanGuid()); human && human->IsInCombat())
+    if (Guild::HisFight(FindOnline(HumanGuid())))
         return "busy:combat";
+    auto const& places = RealmModule::Instance().Places();
+    if (std::none_of(places.begin(), places.end(), [&](auto const& p) { return permit->LocationMatches(p); }))
+        return "day_place_changed";
+    Player* first = nullptr;
     for (auto const& [guid, member] : permit->members)
     {
         auto* bot = FindOnline(guid);
@@ -212,6 +356,11 @@ std::string DayMutationRefusal(Queued const& entry)
             return "busy:day_member";
         if (entry.kind == "realm_move")
             continue;
+        if (bot->GetMapId() != permit->destination.map ||
+            bot->GetDistance(permit->destination.x, permit->destination.y, permit->destination.z) > 30.f ||
+            (first && !first->IsWithinDistInMap(bot, 30.f)))
+            return "day_place_changed";
+        first = bot;
         auto move = std::find_if(permit->steps.begin(), permit->steps.end(), [&](auto const& s) {
             return s.second.kind == "realm_move" && s.second.succeeded && s.second.members.front() == guid;
         });
@@ -227,7 +376,7 @@ std::string DayMutationRefusal(Queued const& entry)
 void DayAdmitted(Queued const& entry)
 {
     if (auto p = Tagged(entry))
-        p->steps.emplace(entry.id, DayPermit::Step{entry.kind, entry.guids});
+        p->steps.emplace(entry.id, DayPermit::Step{entry.kind, entry.guids, false, false, std::nullopt, 0});
 }
 void DayMoveIssued(Queued const& entry, std::uint32_t map, float x, float y, float z)
 {
@@ -275,6 +424,8 @@ void DayFinished(Queued const& entry, bool released, bool success)
 bool DayRevoking(Queued const& entry)
 {
     auto p = Tagged(entry);
+    if (p && p->reason.empty() && Guild::HisFight(FindOnline(HumanGuid())))
+        RevokeDay(p->token, "combat");
     return p && !p->reason.empty();
 }
 void RevokeDay(std::string const& token, std::string const& reason)
@@ -299,12 +450,13 @@ DayHandoff DayGuildAddProgress(std::set<std::string> const& tokens, std::int64_t
 }
 void TickDayPlans()
 {
+    std::erase_if(prepared, [](auto const& it) { return NowUnixMs() >= it.second.expires; });
     if (permits.empty())
         return;
     auto now = static_cast<std::uint64_t>(NowUnixMs());
     auto& bridge = LeeroyModule::Instance().Bridge();
     auto* human = FindOnline(HumanGuid());
-    bool const combat = human && human->IsInCombat();
+    bool const combat = Guild::HisFight(human);
     for (auto& [token, p] : permits)
         if (p.reason.empty() && (combat || !Enabled() || p.epoch != RealmModule::Instance().Epoch() ||
                                  !bridge.Connected() || p.serial != bridge.ConnectionSerial() || now >= p.ends))
@@ -312,6 +464,16 @@ void TickDayPlans()
     std::erase_if(permits,
                   [&](auto const& item) { return item.second.Released() && now > item.second.ends + 86400000; });
 }
+void InvalidateDayOwnerChecks() { prepared.clear(); }
+
+void RegisterDayOwnerCheck(std::string const& originalType, LeeroyCommandHandler handler)
+{
+    RegisterCommand("day_check_" + originalType, [handler](Json const& msg) -> LeeroyCommandResult {
+        if (!msg.contains("day_check") || msg.contains("day_prepared")) return {false, "day_owner_scope"};
+        return handler(msg);
+    });
+}
+
 void RegisterDayPlans()
 {
     RegisterCommand("day_begin", Begin);

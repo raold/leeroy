@@ -14,6 +14,8 @@ from typing import Protocol
 from uuid import uuid4
 
 from leeroy_mind.clock import night_of
+from leeroy_mind.protocol import Ack
+from leeroy_mind.realm.actions import ActionRejected
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.wow import is_raid_fight
 
@@ -533,14 +535,16 @@ class RaidNight:
         try:
             runner = getattr(getattr(getattr(self.ports, "app", None), "realm", None), "parts", {}).get("day")
             if runner is not None and isinstance(command, (ClearLockout, FormRaid)):
-                targets = set(command.guids if isinstance(command, ClearLockout) else command.members)
+                targets = set(command.guids if isinstance(command, ClearLockout) else (command.leader_guid, *command.members))
                 targets.discard(self.ports.human_guid)
                 def valid():
                     self._check(epoch)
                     return targets <= {c.guid for c in self._candidates() if c.available}
-                ack = await runner.handoff(command.id, targets, "raid", valid, lambda: self.ports.send(command))
+                ack = await runner.handoff(command, targets, "raid", valid, self.ports.send)
             else:
                 ack = await self.ports.send(command)
+        except ActionRejected as error:
+            ack = Ack(0, command.id, False, str(error))
         except Exception:
             self._check(epoch)
             raise _Failed(type(command).__name__ + " acknowledgement was unavailable") from None

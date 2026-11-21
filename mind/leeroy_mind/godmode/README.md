@@ -159,8 +159,9 @@ The night selects two to four blocks for the following server-calendar day betwe
 America/New_York. Posted raids reserve the rest of the window from their start. Shared blocks have reciprocal
 participant rows and one `day:<leader plan id>` claim at rank `realm_day`. At most twenty members may be away.
 Offline blocks change only the schedule. Public cards and participant-led openers describe proved visits and
-activity starts. A shared visit produces a keyed event memory for each participant. The activity receipt updates
-that memory. Fishing requires native per-member success. RPG status is a one-shot request.
+activity starts. Each arrival creates one individual keyed event memory. The activity receipt updates it.
+Company requires a current native witness at the cohort's fixed destination. Fishing describes only the member
+whose native operation succeeded. RPG status is a one-shot request.
 
 An owner add, validated raid formation, offline raid or game string can interrupt the whole block. For a day
 teleport already in flight, the original request waits up to 30 seconds for native to confirm release. Native
@@ -168,13 +169,20 @@ observes its own destination, cleans its exact duel or fishing operation, and cl
 combat, group, instance and ownership checks run again before the original request proceeds. Timeout or changed
 identity ends the request. An unresolved operation stays in the Realm journal for the existing operator workflow.
 
-The handoff entry point for a higher-priority mind caller is `app.realm.parts["day"].handoff(request_id, members,
-reason, valid, send)`. Supply the original command ID, complete intended roster, a synchronous revalidation
-callback and the async original send. The day runner journals the waiting request before revocation and consumes
-it before sending. A process restart expires its outstanding requests. Recovery on the same native boot may
-query or revoke the old permit. Only its matching boot, serial, token, begin ID, guild, human and participants
-can reconcile settled day-step rows. A different native boot or body lifetime cannot establish release of an
-old operation. Recovery never replays a body command.
+The handoff entry point for a higher-priority mind caller is `app.realm.parts["day"].handoff(command, members,
+reason, valid, send)`. Supply the original typed command with its reserved ID, its full intended roster, a
+synchronous revalidation callback and the async original send. The send accepts the command and the optional
+`expected_epoch` writer guard. The day runner journals the owner request. Overlapping permits require a
+read-only native check specific to the original command type. Only a successful check revokes them.
+The actual owner command keeps its ID and ordinary acknowledgement. Its check ID, arguments, native session,
+body lifetimes, current bridge writer and deadline must still match.
+
+A mind restart expires the old process's waiting requests. The current process can query or revoke an old permit
+on the same native boot, including when new planning is off. The original boot, serial, token, begin ID, guild,
+human and participant set reconcile its physical steps. After a native reboot, an intent that never crossed its
+durable writer barrier can close without an activity claim. Dispatched unknown operations retain their holds.
+The existing explicit operator abandonment for an exact root can resolve its old-boot journal. A new incarnation
+alone gives no evidence of release. Recovery never replays a body command.
 
 Migration `0064_day_plans.sql` adds the plan, permit, step and handoff tables. Deploy with
 `ac-release.sh --native` to install the changed worldserver and mind together.

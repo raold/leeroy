@@ -1,5 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyDayPlan.h"
+#include "LeeroyOwnerFight.h"
+#include "LeeroyGuildAddPolicy.h"
 #include "TestHarness.h"
 #include "LeeroyProtocol.h"
 #include <fstream>
@@ -114,4 +116,92 @@ LEEROY_TEST(DayAddWaitsForEveryExactCohortReleaseAndExpiresWithoutReplaying)
     CHECK(GuildAddDayProgress(selected, 2, 2) == DayHandoff::Unresolved);
     selected.push_back(nullptr);
     CHECK(GuildAddDayProgress(selected, 1, 2) == DayHandoff::Unresolved);
+}
+
+
+LEEROY_TEST(DayDispatchReadsTheGroupFightAgainAfterAdmission)
+{
+    struct Body;
+    struct Reference
+    {
+        Body* source;
+        Body* GetSource() const { return source; }
+        Reference* next() const { return nullptr; }
+    };
+    struct Party
+    {
+        Reference ref;
+        Reference* GetFirstMember() { return &ref; }
+    };
+    struct Body
+    {
+        bool combat;
+        int map;
+        Party* party;
+        bool IsInCombat() const { return combat; }
+        int GetMap() const { return map; }
+        Party* GetGroup() const { return party; }
+    };
+    Body friendBody{false, 1, nullptr};
+    Party party{{&friendBody}};
+    Body owner{false, 1, &party};
+    CHECK(!Leeroy::OwnerGroupInCombat(&owner));
+    friendBody.combat = true;
+    CHECK(Leeroy::OwnerGroupInCombat(&owner));
+    friendBody.map = 2;
+    CHECK(!Leeroy::OwnerGroupInCombat(&owner));
+}
+
+LEEROY_TEST(DayFishingCleaningSuppliesTheTankToThePickerWithoutLosingAnAcceptedAdd)
+{
+    using namespace Leeroy::Guild;
+    ContinuationLedger ledger("00000000000000000000000000000001");
+    std::string error;
+    auto owner = ledger.Prepare("fish", PvpKind::Fishing, {101}, 3, 8, 1, 1, error, ActivityDomain::Guild);
+    CHECK(owner);
+    CHECK(ledger.Advance(owner->token, owner->revision, PvpStage::Cleaning, "finish"));
+    owner = ledger.Get(owner->token);
+    CHECK(DayFishingCleaning(*owner, 3));
+    CHECK(!DayFishingCleaning(*owner, 4));
+    auto const appFence = ledger.Validate(owner->token, ContinuationMode::Application, true, 3, 8, 1);
+    CHECK(!appFence.empty());
+    GuildAddBody body;
+    body.online = body.cast = true;
+    body.fence = ledger.Validate(owner->token, ContinuationMode::Cleanup, true, 3, 8, 1);
+    CHECK(GuildAddSkipReason(body).empty());
+    std::vector<GuildAddCandidate> eligible{{101, GuildAddRole::Tank, 1, 2, 200}};
+    auto ten = PlanGuildAdd(10, 5, {}, eligible);
+    CHECK(!ten.picks.empty() && ten.picks.front().guid == 101);
+    std::optional<int> waiter;
+    ReplaceDayAddWaiter(waiter, ten, std::optional{10});
+    CHECK(waiter == 10);
+    auto five = PlanGuildAdd(5, 5, {}, eligible);
+    ReplaceDayAddWaiter(waiter, five, std::optional<int>{});
+    CHECK(waiter == 10);
+    body.fence = "busy:training_owner";
+    CHECK(!GuildAddSkipReason(body).empty());
+    body.fence.clear();
+    body.dead = true;
+    CHECK(!GuildAddSkipReason(body).empty());
+}
+
+LEEROY_TEST(DayPreparedOwnerBindsOriginalTypeArgumentsSerialAndDeadline)
+{
+    nlohmann::json original{{"type","clear_lockout"},{"id","request"},{"guids",{101,102}},{"map_id",533}};
+    CHECK(DayRequestMatches(original, original, 5, 5, 30, 29, false));
+    CHECK(!DayRequestMatches(original, original, 5, 6, 30, 29, false));
+    CHECK(!DayRequestMatches(original, original, 5, 5, 30, 30, false));
+    CHECK(!DayRequestMatches(original, original, 5, 5, 30, 29, true));
+    auto altered = original;
+    altered["guids"] = {101};
+    CHECK(!DayRequestMatches(original, altered, 5, 5, 30, 29, false));
+    DayPermit p;
+    p.destination = {"north_pond",1,2,1.f,2.f,3.f,0.f,"fish"};
+    CHECK(p.LocationMatches(p.destination));
+    auto replacement = p.destination;
+    replacement.map = 0;
+    CHECK(!p.LocationMatches(replacement));
+    replacement = p.destination;
+    replacement.x += 4.f;
+    CHECK(!p.LocationMatches(replacement));
 }

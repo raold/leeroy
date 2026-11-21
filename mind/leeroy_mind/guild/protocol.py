@@ -15,6 +15,13 @@ _AUTO_MIN_MEMBERS = object()
 
 
 @dataclass(frozen=True, slots=True)
+class DayOwnerCheck:
+    request_id: str
+    origins: tuple[str, ...]
+    expires_ms: int
+
+
+@dataclass(frozen=True, slots=True)
 class FormRaid:
     id: str
     leader_guid: int
@@ -24,6 +31,8 @@ class FormRaid:
     map_id: int
     main_tank_guid: int
     assistants: tuple[int, ...] = ()
+    day_check: DayOwnerCheck | None = field(default=None, kw_only=True, metadata={"omit_none": True})
+    day_prepared: str = field(default="", kw_only=True, metadata={"omit_default": True})
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +51,8 @@ class ClearLockout:
     map_id: int
     guids: tuple[int, ...]
     difficulties: tuple[int, ...] = (0, 1, 2, 3)
+    day_check: DayOwnerCheck | None = field(default=None, kw_only=True, metadata={"omit_none": True})
+    day_prepared: str = field(default="", kw_only=True, metadata={"omit_default": True})
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +88,8 @@ class StartOfflineRaid:
     max_wipes_per_boss: int = 3
     timeout_min: int = 180
     min_members: int = cast(int, _AUTO_MIN_MEMBERS)
+    day_check: DayOwnerCheck | None = field(default=None, kw_only=True, metadata={"omit_none": True})
+    day_prepared: str = field(default="", kw_only=True, metadata={"omit_default": True})
 
     def __post_init__(self) -> None:
         # Omitted and explicitly invalid values stay distinct: the server must
@@ -161,6 +174,8 @@ class StringDo:
     spot: str = field(default="", metadata={"omit_default": True})
     slot: int = field(default=0, metadata={"omit_default": True})
     via: str = field(default="", metadata={"omit_default": True})
+    day_check: DayOwnerCheck | None = field(default=None, kw_only=True, metadata={"omit_none": True})
+    day_prepared: str = field(default="", kw_only=True, metadata={"omit_default": True})
 
 
 @dataclass(frozen=True, slots=True)

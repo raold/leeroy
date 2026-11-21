@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <utility>
 #include <nlohmann/json.hpp>
 
 namespace Leeroy::Guild
@@ -161,6 +162,14 @@ struct GuildAddPlan
     GuildAddBuffs covered = 0;         // what his connected members bring before the fill
     std::vector<GuildAddPick> picks;   // tanks, then healers, then damage
 };
+
+// Apply an already validated selection to the single synchronous owner waiter.
+template <class Request>
+void ReplaceDayAddWaiter(std::optional<Request>& waiter, GuildAddPlan const& plan, std::optional<Request> replacement)
+{
+    if (!plan.full && !plan.picks.empty())
+        waiter = std::move(replacement);
+}
 
 // members counts every slot of his group (him and offline members included); connected are the members whose role
 // is known, him included. Each counts toward its own role while that role still has room, so a re-run fills only

@@ -3,6 +3,8 @@
 #define MOD_LEEROY_DAY_PLAN_H
 
 #include "LeeroyRealmIdentity.h"
+#include "LeeroyRealmCommands.h"
+#include "LeeroyRealmContinuations.h"
 #include <map>
 #include <array>
 #include <cmath>
@@ -25,7 +27,7 @@ struct DayPermit
         std::string kind;
         std::vector<std::uint32_t> members;
         bool released = false, succeeded = false;
-        std::optional<std::array<float, 3>> destination;
+        std::optional<std::array<float, 3>> destination{};
         std::uint32_t map = 0;
         bool InTransitTo(std::uint32_t mapId, float x, float y, float z) const
         {
@@ -38,7 +40,14 @@ struct DayPermit
     std::uint32_t guild = 0, human = 0;
     std::map<std::uint32_t, Member> members;
     std::map<std::string, Step> steps;
+    Place destination;
     bool unresolved = false;
+    bool LocationMatches(Place const& current) const
+    {
+        return destination.name == current.name && destination.kind == current.kind && destination.map == current.map &&
+               destination.zone == current.zone && destination.x == current.x && destination.y == current.y &&
+               destination.z == current.z && destination.o == current.o;
+    }
     bool Covers(std::uint32_t guid) const
     {
         return members.contains(guid);
@@ -89,6 +98,18 @@ struct DayPermit
         return kind == "rpg_status" && activity != "duel_practice";
     }
 };
+inline bool DayFishingCleaning(ContinuationOwner const& owner, std::uint64_t guildEpoch)
+{
+    return owner.domain == ActivityDomain::Guild && owner.kind == PvpKind::Fishing && owner.originEpoch == guildEpoch &&
+           owner.stage == PvpStage::Cleaning && owner.internalCleanup;
+}
+
+inline bool DayRequestMatches(nlohmann::json const& original, nlohmann::json const& candidate,
+                              std::uint64_t serial, std::uint64_t currentSerial, std::int64_t deadline,
+                              std::int64_t now, bool consumed)
+{
+    return !consumed && serial == currentSerial && now < deadline && original == candidate;
+}
 enum class DayHandoff { Waiting, Ready, Unresolved };
 inline DayHandoff GuildAddDayProgress(std::vector<DayPermit const*> const& permits, std::int64_t now,
                                       std::int64_t deadline)

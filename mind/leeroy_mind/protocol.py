@@ -464,6 +464,9 @@ def encode_command(cmd, ts_ms: int) -> bytes:
     if type_name is None:
         raise ValueError(f"not a registered command: {type(cmd).__name__}")
     body = _jsonable(cmd)
+    # Old native guild handlers ignore optional fields. They must reject a read-only day check by type.
+    if type_name in {"string_do", "clear_lockout", "form_raid", "start_offline_raid"} and body.get("day_check"):
+        type_name = "day_check_" + type_name
     if isinstance(cmd, (Say, HumanSay)) and cmd.channel not in SAY_CHANNELS:
         raise ValueError(f"channel not allowed: {cmd.channel!r}")
     if isinstance(cmd, (Say, HumanSay, SetMotd)):

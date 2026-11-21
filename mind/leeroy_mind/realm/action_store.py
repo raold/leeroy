@@ -678,6 +678,12 @@ class ActionStore:
                 child_data = json.loads(r.evidence)
                 child_data["dispatch_revision"] = data["status"]["revision"]
                 r = replace(r, evidence=document(child_data, limit=32768))
+            if r.owner.startswith("day:") and (token := json.loads(r.payload).get("day_permit")):
+                marked = self.conn.execute("UPDATE day_step SET dispatched=1 WHERE id=? AND dispatched=0 AND plan IN "
+                    "(SELECT plan FROM day_permit WHERE token=? AND 'day:'||plan=? AND state='open')",
+                    (command_id, token, r.owner))
+                if marked.rowcount != 1:
+                    raise ValueError("day step not enrolled")
             if started_ms:
                 r = replace(r, evidence=document({**json.loads(r.evidence), "dispatch_started_ms": started_ms}, limit=32768))
             return self._save(replace(r, state="dispatched", transport_state="inflight", process_id=process_id,
@@ -746,6 +752,32 @@ class ActionStore:
                 and record.guild == guild and record.human == human and boot and evidence.get("dispatch_started_ms") == boot
                 and evidence.get("day_release") == {"origin": origin, "serial": serial,
                     "admitted": record.command_id in json.loads(released)})
+
+    def day_previous_boot_resolved(self, permit, *, never_dispatched=False):
+        """Resolve the journal's exact old steps; an intent alone never crossed the writer barrier."""
+        plan = permit["plan"]
+        owner = f"day:{plan}"
+        steps = dict(self.conn.execute("SELECT id,dispatched FROM day_step WHERE plan=?", (plan,)))
+        records = self._records("owner=? OR command_id IN (SELECT id FROM day_step WHERE plan=?)", (owner, plan))
+        ids = {r.command_id for r in records}
+        if not ids <= steps.keys() or any(entered and (never_dispatched or ident not in ids)
+                                         for ident, entered in steps.items()):
+            return False
+        for r in records:
+            if (r.owner != owner or r.role != "root" or r.policy != "ordinary" or r.state not in TERMINAL
+                    or r.transport_state == "inflight" or r.guild != permit["guild"] or r.human != permit["human"]
+                    or json.loads(r.payload).get("day_permit") != permit["token"]):
+                return False
+            if r.result_reason == ABANDONED:
+                row = self.conn.execute("SELECT value FROM meta WHERE key=?", (ABANDON_RECEIPT + r.command_id,)).fetchone()
+                if not row:
+                    return False
+                receipt = json.loads(row[0])
+                if (receipt.get("seq") != r.seq or receipt.get("kind") != r.kind
+                        or receipt.get("members") != list(r.reserved_manifest)
+                        or receipt.get("at") != json.loads(r.evidence).get("abandoned")):
+                    return False
+        return True
 
     def day_released(self, plan, now):
         """Caller has atomically stored the closed seal. Preserve conflicts and in-flight writers."""
@@ -1131,6 +1163,10 @@ class ActionStore:
 
     def _prune(self, keep=256, now=None):
         roots = tuple(r for r in self._records("role='root' AND state IN ('completed','not_sent')") if not _durable(r))
+        if any(r.owner.startswith("day:") and json.loads(r.payload).get("day_permit") for r in roots):
+            pending_days = {r[0] for r in self.conn.execute("SELECT s.id FROM day_step s JOIN day_permit p "
+                                                            "ON p.plan=s.plan WHERE p.state!='closed'")}
+            roots = tuple(r for r in roots if r.command_id not in pending_days)
         protected = {r.command_id for r in roots if r.result_ok is False and "failed_at" in json.loads(r.evidence)
                      and (now is None or now < json.loads(r.evidence)["failed_at"] + 600)
                      or leave_skipped_guids(r) and (now is None or skipped_backoff(r, now))}

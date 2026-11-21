@@ -275,6 +275,7 @@ void RealmModule::Start()
 
 void RealmModule::Reload()
 {
+    InvalidateDayOwnerChecks(); // A waiting original request belongs to the configuration that admitted it.
     auto const& cfg = Config();
     bool const enabled = cfg.enable && cfg.realmEnable && cfg.guildId && cfg.humanGuid;
     bool const changed = On() != enabled || _state->guild != cfg.guildId || _state->human != cfg.humanGuid;
