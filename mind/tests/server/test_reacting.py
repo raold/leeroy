@@ -355,6 +355,21 @@ def test_a_reaction_refused_for_another_connections_commit_is_written_on_the_sec
     assert any(r.getMessage().endswith('code=busy_snapshot') and 'server_reaction_retry' in r.getMessage() for r in caplog.records)
 
 
+def test_stepped_away_member_cannot_send_a_delayed_reaction(store, clock, monkeypatch):
+    async def go():
+        reactor, _ = setup(store, clock, monkeypatch)
+        away = {102}
+        reactor.app.engine = SimpleNamespace(life=SimpleNamespace(is_away=lambda g: g in away))
+        mid = post(store, clock, author=101)
+        await reactor._write(mid, 102, 101, 'general', '👍', 0)
+        assert store.conn.execute('SELECT count(*) FROM discord_reaction').fetchone()[0] == 0
+        away.clear()
+        await reactor._write(mid, 102, 101, 'general', '👍', 0)
+        assert store.conn.execute('SELECT count(*) FROM discord_reaction').fetchone()[0] == 1
+        await reactor.close()
+    run(go())
+
+
 def test_a_failed_reaction_logs_the_error_class(store,clock,monkeypatch,caplog):
     import sqlite3
     async def go():

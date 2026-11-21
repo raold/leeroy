@@ -74,6 +74,41 @@ def test_pulled_into_play_forces_playing_presence(tmp_path):
         run(app.stop())
 
 
+@pytest.mark.parametrize('server_enabled', [False, True])
+def test_short_away_presence_is_live_and_its_console_snapshot_expires(tmp_path, server_enabled):
+    from leeroy_mind.server.state import STEPPED_KEY, PLAY_STALE_S, read_play
+    from leeroy_mind.life.interrupt import Away
+    app = mind_app(tmp_path, toml=f'[server]\nenabled={str(server_enabled).lower()}\n[life]\navailability=6')
+    try:
+        now = app.clock.now()
+        life = app.engine.life
+        life._away[101] = Away(now, now + 600, 'whisper', 'work', '2026-01-01', 0)
+        app.world.human_online = True
+        app.world.group = SimpleNamespace(members=(app.human_guid, 101), leader_guid=app.human_guid)
+        life.tick(now)
+        refresh_play(app, now)
+        state = state_of(app, 101, now)
+        assert state.presence == Presence('idle', False, state.presence.zone)
+        assert state.status is None and state.reading is None
+        assert read_play(app.store.conn, now, key=STEPPED_KEY) == {101}
+        assert not read_play(app.store.conn, now + PLAY_STALE_S + 1, key=STEPPED_KEY)
+        life.tick(now + 60)
+        assert read_play(app.store.conn, now + PLAY_STALE_S + 1, key=STEPPED_KEY) == {101}
+        life._away.clear()
+        life.tick(now + 61)
+        assert not read_play(app.store.conn, now + 61, key=STEPPED_KEY)
+        assert state_of(app, 101, now + 61).presence.playing
+        # A restarted life service has no active away, even with history left in meta.
+        app.store.set_meta(STEPPED_KEY, json.dumps({'guids': [101], 'at': now + 61}))
+        from leeroy_mind.life.service import LifeService
+        restarted = LifeService(store=app.store, clock=app.clock, personas=app.personas,
+                                world=app.world, cfg=app.cfg, engine=app.engine)
+        restarted.tick(now + 62)
+        assert not read_play(app.store.conn, now + 62, key=STEPPED_KEY)
+    finally:
+        run(app.stop())
+
+
 def test_tie_kind_bands_and_feud_and_crush(store):
     for score, label in [(60, 'friend'), (30, 'fond'), (-30, 'rival'), (0, 'neutral')]:
         store.conn.execute('INSERT OR REPLACE INTO relationship(a,b,affinity) VALUES (101,102,?)', (score,))

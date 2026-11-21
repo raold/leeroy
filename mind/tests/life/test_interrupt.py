@@ -210,6 +210,9 @@ def test_her_lines_fit_her():
     assert interrupt.own_boss(persona(job="self-employed illustrator"))
     assert not interrupt.own_boss(persona(job="ward nurse", rhythm="runs to the gym after shifts"))
     assert not interrupt.own_boss(SimpleNamespace())
+    assert not interrupt.own_boss(persona(rhythm="runs her kids to nursery"))
+    assert interrupt.own_boss(persona(job="runs her nursery"))
+    assert interrupt.drives(persona(job="bus driver"))
     assert not interrupt.drives(persona(rhythm="takes the bus into town for work"))
     assert not interrupt.drives(persona(household="small flat by the metro"))
     assert interrupt.drives(persona(job="trains rescue dogs")) and interrupt.drives(persona())
@@ -1027,6 +1030,38 @@ def test_health_reads_her_away(store, tmp_path, monkeypatch):
     assert due("dm:101", second, rig.clock.now()) >= (round(a.until) + BACK_FIND_S[1]
                                                       + OWNER_LATE_MARGIN_S)
     rig.close()
+
+
+def test_health_keeps_previous_away_and_updates_early_return_atomically(store, clock, tmp_path, monkeypatch):
+    from leeroy_mind.life.service import parse_aways
+    from leeroy_mind.discord import owntime
+    monkeypatch.setattr(owntime, "due_at", lambda *args, **kw: kw['post_ts'])
+    r = rig(store, clock, tmp_path)
+    try:
+        now = r.clock.now()
+        life = r.engine.life
+        # Old persisted format still reads; a second interruption preserves it.
+        store.set_meta(AWAY_KEY.format(guid=101), f"{now - 3600},{now - 2700}")
+        store.set_meta(AWAY_KEY.format(guid=105), "1000,1100")
+        a = Away(since=now, until=now + 900, channel="dm:101", reason="work", night="2026-11-21",
+                 minute=0, back="back")
+        life._mark(101, a)
+        history = parse_aways(store.get_meta(AWAY_KEY.format(guid=101)))
+        assert history == ((now - 3600, now - 2700), (now, now + 900))
+        due = _own_time_due(store.conn, HUMAN, now, 6)
+        assert due("dm:101", 1, now - 3570) == now - 2700 + BACK_FIND_S[1] + OWNER_LATE_MARGIN_S
+        a.until = now + 60
+        life._mark(101, a)
+        assert parse_aways(store.get_meta(AWAY_KEY.format(guid=101))) == (
+            (now - 3600, now - 2700), (now, now + 60))
+        # A second connection sees the prune immediately, without an unrelated later unit.
+        import sqlite3
+        path = store.conn.execute("PRAGMA database_list").fetchone()["file"]
+        with sqlite3.connect(path) as other:
+            assert other.execute("SELECT 1 FROM meta WHERE key=?", (AWAY_KEY.format(guid=105),)).fetchone() is None
+        assert not parse_aways("nan,inf;inf,inf;bad")
+    finally:
+        r.close()
 
 
 def test_restart_forgets_away(store, tmp_path, monkeypatch):

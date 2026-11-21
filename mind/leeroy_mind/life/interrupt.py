@@ -84,11 +84,12 @@ _BUSINESS = (r"business|shop|salon|bakery|studio|store|cafe|caf\u00e9|bar|compan
 _OWN_BOSS = re.compile(
     r"\b(?:self[- ]employed|freelanc\w*|business owner|owner of|founder|proprietor|entrepreneur"
     r"|sole trader|contractor|(?:her|his|their) own boss|own boss"
-    rf"|(?:own(?:s|ed)?|runs?|running) (?:a|an|her|his|their) (?:own )?(?:\w+ ){{0,2}}"
+    rf"|(?:own(?:s|ed)?|runs?|running) (?:a|an|her|his|their) (?:own )?"
+    rf"(?:(?!(?:kids?|children|sons?|daughters?)\b)\w+ ){{0,2}}"
     rf"(?:{_BUSINESS}))\b")
 # her days say she takes the bus, the metro or the train, cycles or walks, or does not drive
 _NO_CAR = re.compile(
-    r"\b(?:bus(?:es)?|tube|subway|metro|tram|public transport|underground|commuter train"
+    r"\b(?:bus(?:es)?(?!\s+(?:driver|mechanic)\b)|tube|subway|metro|tram|public transport|underground|commuter train"
     r"|(?:takes?|taking|on|by) (?:the )?trains?|(?:cycles?|bikes?|walks?) to work"
     r"|(?:doesn|don|can)['\u2019]?t drive|does not drive|no car|no licen[cs]e)\b")
 

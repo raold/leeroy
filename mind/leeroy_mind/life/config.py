@@ -15,6 +15,7 @@ META_KEY = "life:availability"
 AVAILABILITY_MAX = 10
 CAP_KEY = "life:dm_wait_cap_s"
 CAP_MAX = 3600
+STEPPED_KEY = 'life:stepped-away'  # fresh active presence, never the historical health bounds
 
 _availability = 0
 _state = False

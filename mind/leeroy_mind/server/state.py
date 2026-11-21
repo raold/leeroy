@@ -6,6 +6,7 @@ import re
 
 from leeroy_mind.discord import layout
 from leeroy_mind.discord.channels import is_private
+from leeroy_mind.life.config import STEPPED_KEY
 from leeroy_mind.discord.presence import Presence, RNG_SEED, STATUS_SHARE, her_local, presence_of, status_text
 
 PLAY_KEY = 'server:playing'
@@ -37,6 +38,7 @@ class StateInputs:
     server: bool = False
     voice_session: bool = False
     heroic: bool = False
+    stepped_away: bool = False
 
 
 def live_voice_session(app) -> bool:
@@ -53,7 +55,8 @@ def capture(app, guid: int) -> StateInputs:
         frozenset(g for g in cast if app.world.is_officer(g)), frozenset(app.world.online),
         pulled_into_play(app), app.human_guid, app.clock.local().tzinfo,
         comms.room_of(guid) if comms is not None else None,
-        getattr(app, 'server', None) is not None, live_voice_session(app), guid in heroic_players(app))
+        getattr(app, 'server', None) is not None, live_voice_session(app), guid in heroic_players(app),
+        bool(getattr(app.engine, 'life', None) and app.engine.life.is_away(guid)))
 
 
 def company_in(conn, channel, guid, now, cast, human) -> tuple[int, ...]:
@@ -97,8 +100,8 @@ def refresh_play(app, now: float) -> None:
         app.store.set_meta(PLAY_KEY, json.dumps({'guids': sorted(pulled_into_play(app)), 'at': now}))
 
 
-def read_play(conn, now: float) -> frozenset[int]:
-    row = conn.execute('SELECT value FROM meta WHERE key=?', (PLAY_KEY,)).fetchone()
+def read_play(conn, now: float, *, key=PLAY_KEY) -> frozenset[int]:
+    row = conn.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
     try:
         value = json.loads(row[0]) if row else {}
         if (not isinstance(value, dict) or type(value.get('at')) not in (int, float)
@@ -121,6 +124,8 @@ def state_of(app, guid: int, now: float, *, conn=None, observed=None) -> Discord
     presence = presence_of(p, local=local, body_online=guid in observed.online,
         body_zone=getattr(member, 'zone', 0), rng_seed=RNG_SEED,
         in_his_group=guid in observed.playing) if p is not None else Presence('offline', False, 0)
+    if observed.stepped_away and presence.state != 'offline':
+        presence = Presence('idle', False, presence.zone)
     row = conn.execute('SELECT channel,ts,reply_to FROM discord_message WHERE author=? '
         'AND origin=\'mind\' AND deleted IS NULL AND ts<=? ORDER BY ts DESC,id DESC LIMIT 1', (guid, now)).fetchone()
     last, reading = None, None
@@ -149,6 +154,8 @@ def state_of(app, guid: int, now: float, *, conn=None, observed=None) -> Discord
         seats = read_seats(conn, now, human=observed.human).get('rooms', {})
         room = next((room for room, guids in seats.items() if guid in guids), None)
     status = "Playing — Halls of Lightning" if observed.heroic else (status_text(p, local, presence, rng_seed=RNG_SEED) if p else None)
+    if observed.stepped_away:
+        status, reading = None, None
     return DiscordState(presence, status,
                         reading, room, last, mentions, company)
 
