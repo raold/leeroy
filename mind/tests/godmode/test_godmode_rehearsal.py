@@ -345,6 +345,17 @@ def test_godmode_rehearsal(tmp_path, monkeypatch):
 
             await world.push(dict(type="logout", guid=1, human=True))
             await until(lambda: not app.world.human_online and app.guild._ready())
+            # His login schedules a second Realm recall after 45 seconds. Finish that independent
+            # action before starting the LFG scene so its actual reservation cannot race a guarded turn.
+            await clock.advance(46, 1)
+            for _ in range(120):
+                await clock.advance(1, 1)
+                if app.realm.recall._second_at is None and not app.realm.recall._busy and conn.execute(
+                    "SELECT 1 FROM realm_action WHERE kind='leave_pvp' AND state='completed'"
+                ).fetchone():
+                    break
+            else:
+                raise AssertionError("the owner's Realm recall did not settle")
             await app.guild.heroics.tick()
             bad = await action(
                 101,

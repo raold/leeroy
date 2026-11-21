@@ -241,6 +241,56 @@ def test_midnight_preserves_a_still_valid_single_proposal(tmp_path, store, clock
     asyncio.run(go())
 
 
+def test_running_presence_spans_real_native_heartbeats_then_expires(tmp_path, store, clock):
+    import asyncio
+    from leeroy_mind.server.state import read_heroic_presence as heroic_play
+
+    async def go():
+        rig = Rig(tmp_path, store, clock)
+        await rig.connect()
+        await rig.agree()
+        await rig.h.tick()
+        for interval in (0, 60):
+            if interval:
+                await clock.advance(interval, interval)
+                assert rig.h.members_in_play() == heroic_play(store.conn, clock.now()) == frozenset(range(11, 16))
+            await rig.app.event(rig.event("progress", stage="running", instance_id=47, members_in_instance=5,
+                                         boss_engaged=False, last_progress_ts=int(clock.now() * 1000)))
+        await clock.advance(heroics.HEARTBEAT_FRESH + 1, 1000)
+        assert not rig.h.members_in_play() and not heroic_play(store.conn, clock.now())
+
+    asyncio.run(go())
+
+
+def test_released_slot_preserves_unreturned_bodies_and_permits_a_disjoint_proposal(tmp_path, store, clock):
+    import asyncio, json
+    from conftest import make_persona
+
+    async def go():
+        rig = Rig(tmp_path, store, clock)
+        await rig.connect()
+        await rig.agree()
+        await rig.h.tick()
+        group = {g + 10: replace(m, guid=g+10, name=m.name + "x") for g, m in roster().items()}
+        store.upsert_cast(list(group.values()), clock.now())
+        rig.app.world.members.update(group)
+        rig.app.world.online.update(group)
+        rig.app.personas.update({g: make_persona(g, m.name) for g,m in group.items()})
+        await rig.app.event(rig.event("failed", reason="cleanup_failed:world_restart", map_id=602,
+                                     returned=False, slot_held=True, revision=12))
+        await clock.advance(86400, 86400)
+        await rig.h.tick()
+        assert store.conn.execute("SELECT COUNT(*) FROM member_heroic").fetchone()[0] == 1
+        await rig.app.event(rig.event("failed", reason="cleanup_failed:world_restart", map_id=602,
+                                     returned=False, slot_held=False, revision=13))
+        await rig.h.tick()
+        r = store.conn.execute("SELECT roster FROM member_heroic WHERE phase='offered'").fetchone()
+        assert r and set(json.loads(r[0])).isdisjoint(range(11, 16))
+        assert heroics.holds(store.conn)[0].guids == frozenset(range(11, 16))
+
+    asyncio.run(go())
+
+
 def test_driver_waits_one_minute_eight_times_without_cast_reservation(tmp_path, store, clock):
     import asyncio
 

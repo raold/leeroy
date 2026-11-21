@@ -11,6 +11,7 @@
 #include "Realm/RealmPorts.h"
 #include "Realm/DayPlans.h"
 #include "LeeroyGuildAddPolicy.h"
+#include "LeeroyMemberDungeon.h"
 #include "LeeroyDayPlan.h"
 
 #include "AiFactory.h"
@@ -265,11 +266,7 @@ void PublishGuildGroup(std::string reason, Player* human, Group* group,
 
 void PreviewDungeonBody(GuildAddBody& body, std::string const& dungeon, uint32 guid)
 {
-    if (body.fence == "busy:training_owner" && CanProjectDungeonBody(dungeon,guid))
-    {
-        body.fence.clear();
-        body.grouped = body.elsewhere = body.inCombat = body.dead = body.teleporting = false;
-    }
+    if (body.fence == "busy:training_owner") ProjectDungeonAddBody(body,CanProjectDungeonBody(dungeon,guid));
 }
 
 void PreviewDayBody(GuildAddBody& body, std::string const& token, Player* bot)

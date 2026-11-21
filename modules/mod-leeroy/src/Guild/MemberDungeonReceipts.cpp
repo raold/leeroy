@@ -12,6 +12,7 @@
 #include "TrainingRivals.h"
 #include "TrainingCommands.h"
 #include "MapMgr.h"
+#include "Log.h"
 #include "Realm/RealmPorts.h"
 #include "LeeroyOfflineRaidPolicy.h"
 #include "LeeroyMemberDungeon.h"
@@ -31,6 +32,9 @@ constexpr char const* CreateStore =
     "active_slot TINYINT UNSIGNED NULL, settled TINYINT UNSIGNED NOT NULL, payload MEDIUMBLOB NOT NULL, "
     "PRIMARY KEY(realm,start_id), UNIQUE KEY one_active(realm,active_slot)) ENGINE=InnoDB";
 std::map<std::string,DungeonReceipt> outstanding;
+std::map<std::string,DungeonWriteProof> unverified;
+struct Unreadable { bool slot; std::vector<uint32> roster; };
+std::map<std::string,Unreadable> unreadable;
 bool loaded = false, exists = false;
 uint32 retry = 0;
 
@@ -59,19 +63,28 @@ bool Load()
         std::map<std::string,DungeonReceipt> restored;
         if (expected)
         {
-            auto rows = CharacterDatabase.Query("SELECT start_id,revision,payload FROM leeroy_member_dungeon_receipt "
+            auto rows = CharacterDatabase.Query("SELECT start_id,revision,payload,COALESCE(active_slot,0) FROM leeroy_member_dungeon_receipt "
                 "WHERE realm={} AND settled=0 LIMIT 129", ::realm.Id.Realm);
             if (!rows) return false;
             do
             {
                 auto* fields = rows->Fetch();
                 auto id = fields[0].Get<std::string>();
-                auto data = Json::parse(fields[2].Get<std::string>(), nullptr, false);
-                if (!DungeonReceiptIdValid(id) || !ValidDungeonReceipt(data)) return false;
+                auto raw = fields[2].Get<std::string>();
+                auto data = raw.size()<=32768 ? Json::parse(raw,nullptr,false) : Json{};
+                bool const slot = fields[3].Get<uint64>()!=0;
+                if (!DungeonReceiptIdValid(id) || !fields[1].Get<uint64>() || !ValidDungeonReceipt(data) ||
+                    data.at("settled")==true || data.at("slot")!=slot ||
+                    (data.at("terminal").is_object() && data.at("terminal").at("id")!=id))
+                {
+                    if (unreadable.emplace(id,Unreadable{slot,DungeonKnownRoster(data)}).second)
+                        LOG_ERROR("module.leeroy","leeroy: member_dungeon recovery unreadable receipt; ownership retained");
+                    continue;
+                }
                 restored.emplace(id,DungeonReceipt{id, fields[1].Get<uint64>(), std::move(data)});
             } while (rows->NextRow());
         }
-        if (restored.size() != expected) return false;
+        if (restored.size()+unreadable.size() != expected) return false;
         outstanding = std::move(restored);
     }
     return loaded = true;
@@ -83,9 +96,34 @@ std::optional<DungeonReceipt> Lookup(std::string const& id)
     auto row = CharacterDatabase.Query("SELECT revision,payload FROM leeroy_member_dungeon_receipt WHERE realm={} AND start_id=UNHEX('{}')",
         ::realm.Id.Realm, Hex(id));
     if (!row) return std::nullopt;
-    auto data = Json::parse(row->Fetch()[1].Get<std::string>(), nullptr, false);
-    if (!ValidDungeonReceipt(data)) return std::nullopt;
+    auto raw = row->Fetch()[1].Get<std::string>();
+    if (raw.size()>32768 || !row->Fetch()[0].Get<uint64>()) return std::nullopt;
+    auto data = Json::parse(raw,nullptr,false);
+    if (!ValidDungeonReceipt(data) || (data.at("terminal").is_object() && data.at("terminal").at("id")!=id)) return std::nullopt;
     return DungeonReceipt{id, row->Fetch()[0].Get<uint64>(), std::move(data)};
+}
+}
+
+namespace
+{
+void Remember(DungeonReceipt const& row)
+{
+    if (row.data.at("settled").get<bool>()) outstanding.erase(row.id);
+    else outstanding[row.id] = row;
+}
+
+DungeonWriteRead Verify(DungeonReceipt& receipt)
+{
+    auto intent = unverified.find(receipt.id);
+    auto row = Lookup(receipt.id);
+    auto result = intent->second.Observe(row ? row->revision : 0,row ? &row->data : nullptr);
+    if (result == DungeonWriteRead::Committed || result == DungeonWriteRead::Previous)
+    {
+        receipt = std::move(*row);
+        Remember(receipt);
+        unverified.erase(intent);
+    }
+    return result;
 }
 }
 
@@ -107,35 +145,48 @@ bool BeginDungeonReceipt(DungeonReceipt& receipt, std::string const& id, uint32 
     Json data = {{"version",1},{"guild",guild},{"human",human},{"leader",leader},{"roster",roster},
         {"map",602},{"difficulty",1},{"stage","accepted"},{"slot",true},{"settled",false},{"bodies",Json::array()},
         {"terminal",nullptr},{"instance",0},{"group",0},{"issued_ms",NowUnixMs()}};
-    if (Lookup(id)) return false;
+    if (Lookup(id) || unverified.contains(id)) return false;
+    receipt.id = id;
+    unverified.emplace(id,DungeonWriteProof{0,Json{},data});
     CharacterDatabase.DirectExecute("INSERT INTO leeroy_member_dungeon_receipt(realm,start_id,revision,active_slot,settled,payload) "
         "VALUES({},UNHEX('{}'),1,1,0,UNHEX('{}'))", ::realm.Id.Realm, Hex(id), Hex(data.dump()));
-    auto row = Lookup(id);
-    if (!row || row->revision != 1 || row->data != data) return false;
-    receipt = *row;
-    outstanding[id] = receipt;
-    return true;
+    return Verify(receipt)==DungeonWriteRead::Committed;
 }
 
 bool SaveDungeonReceipt(DungeonReceipt& receipt, Json const& next)
 {
+    if (unverified.contains(receipt.id))
+    {
+        // Never rebase a new transition built from stale memory. Its caller rebuilds it from the verified row.
+        auto state = Verify(receipt);
+        if (state != DungeonWriteRead::Previous) return state==DungeonWriteRead::Committed && receipt.data==next;
+    }
     if (receipt.data == next) return true;
     auto payload = next.dump();
     if (payload.size() > 32768 || !receipt.revision || !ValidDungeonReceipt(next)) return false;
+    unverified.emplace(receipt.id,DungeonWriteProof{receipt.revision,receipt.data,next});
     CharacterDatabase.DirectExecute("UPDATE leeroy_member_dungeon_receipt SET revision=revision+1,active_slot={},settled={},payload=UNHEX('{}') "
         "WHERE realm={} AND start_id=UNHEX('{}') AND revision={}", next.at("slot").get<bool>() ? "1" : "NULL",
         unsigned(next.at("settled").get<bool>()), Hex(payload), ::realm.Id.Realm, Hex(receipt.id), receipt.revision);
-    auto row = Lookup(receipt.id);
-    if (!row || row->revision != receipt.revision+1 || row->data != next) return false;
-    receipt = *row;
-    if (next.at("settled").get<bool>()) outstanding.erase(receipt.id);
-    else outstanding[receipt.id] = receipt;
-    return true;
+    return Verify(receipt)==DungeonWriteRead::Committed;
 }
 
 bool DungeonRecoveryConflicts(std::vector<uint32> const& guids, bool requiresSlot)
 {
     if (!loaded) return true;
+    for (auto const& [id,bad] : unreadable)
+    {
+        if (requiresSlot && bad.slot) return true;
+        for (auto g : guids)
+            if (bad.roster.empty() || std::find(bad.roster.begin(),bad.roster.end(),g)!=bad.roster.end()) return true;
+    }
+    for (auto const& [id,intent] : unverified)
+        if (!intent.revision)
+        {
+            if (requiresSlot) return true;
+            auto const& roster = intent.after.at("roster");
+            for (auto guid : guids) if (std::find(roster.begin(),roster.end(),guid)!=roster.end()) return true;
+        }
     for (auto const& [id, row] : outstanding)
     {
         if (requiresSlot && row.data.at("slot").get<bool>()) return true;
@@ -169,7 +220,7 @@ bool DungeonReturnsPersisted(DungeonReceipt const& receipt)
 
 bool DungeonReturned(std::string const& id, std::vector<uint32> const& guids)
 {
-    if (!loaded || outstanding.contains(id)) return false;
+    if (!loaded || outstanding.contains(id) || unverified.contains(id) || unreadable.contains(id)) return false;
     auto row = Lookup(id);
     if (!row || !row->data.value("settled",false) || row->data.value("guild",0u) != LeeroyModule::Instance().GuildId() ||
         row->data.value("human",0u) != HumanGuid()) return false;
@@ -199,6 +250,7 @@ LeeroyCommandResult PublishDungeonReceipt(std::string const& id)
     progress.instanceId = data.value("instance",0u);
     auto event = data.at("terminal").is_object() ? data.at("terminal") : MakeJobEvent(progress);
     event["returned"] = data.at("settled");
+    event["slot_held"] = data.at("slot");
     event["map_id"] = data.at("map");
     event["revision"] = row->revision;
     LeeroyModule::Instance().Publish(EncodeEvent(data.value("terminal_ms",NowUnixMs()),event),false);
@@ -207,6 +259,15 @@ LeeroyCommandResult PublishDungeonReceipt(std::string const& id)
 
 namespace
 {
+bool MatchesParty(Json const& data, Group* group)
+{
+    if (!group || group->isRaidGroup() || group->isLFGGroup() || group->isBGGroup() || group->isBFGroup() ||
+        group->GetDungeonDifficulty()!=DUNGEON_DIFFICULTY_HEROIC) return false;
+    std::vector<uint32> members;
+    for (auto const& slot : group->GetMemberSlots()) members.push_back(slot.guid.GetCounter());
+    return DungeonMatchesGroup(data,group->GetGUID().GetCounter(),group->GetLeaderGUID().GetCounter(),members);
+}
+
 // Recover on the world thread from the exact persisted party and locations. On a new boot there
 // is no authority over an AI master, training journal or replacement party from the old session.
 bool RecoverBodies(DungeonReceipt& receipt)
@@ -220,15 +281,11 @@ bool RecoverBodies(DungeonReceipt& receipt)
     auto const& bodies = data.at("bodies");
     if (bodies.size() != 5) return false;
     auto* group = groupId ? sGroupMgr->GetGroupByGUID(groupId) : nullptr;
-    if (group && (group->GetLeaderGUID().GetCounter() != leader || group->isRaidGroup() ||
-        group->isLFGGroup() || group->isBGGroup() || group->isBFGroup() ||
-        group->GetDungeonDifficulty() != DUNGEON_DIFFICULTY_HEROIC)) return false;
+    if (group && !MatchesParty(data,group)) return false;
     std::set<uint32> members;
     if (group)
         for (auto const& slot : group->GetMemberSlots()) members.insert(slot.guid.GetCounter());
     auto expected = data.at("roster").get<std::vector<uint32>>();
-    if (!std::all_of(members.begin(),members.end(),[&](auto g) {
-        return std::find(expected.begin(),expected.end(),g) != expected.end(); })) return false;
     bool groupProof = false;
     bool released = true;
     for (auto const& body : bodies)
@@ -259,7 +316,12 @@ bool RecoverBodies(DungeonReceipt& receipt)
         if (player)
         {
             auto* ai = GET_PLAYERBOT_AI(player);
+            auto queue = sLFGMgr->GetState(player->GetGUID());
             if (!ai || ai->GetMaster() || IsSelfBot(player) || !player->IsInWorld() || player->IsBeingTeleported() ||
+                player->GetGuildId()!=data.at("guild") || player->IsGameMaster() || player->HasPendingBind() ||
+                player->IsInFlight() || player->GetVehicle() || player->GetTransport() || player->duel ||
+                player->InBattleground() || player->InBattlegroundQueue() || StringStayHeld(guid) ||
+                (queue!=lfg::LFG_STATE_NONE && queue!=lfg::LFG_STATE_RAIDBROWSER) ||
                 !player->GetSession() || player->GetSession()->IsLoggingOut() || player->IsInCombat() ||
                 player->GetGroupInvite() || player->GetOriginalGroup() || player->GetTradeData() ||
                 (player->GetGroup() && player->GetGroup() != group)) return false;
@@ -267,7 +329,7 @@ bool RecoverBodies(DungeonReceipt& receipt)
                 player->GetDistance2d(x,y) <= 5 && std::abs(player->GetPositionZ()-z) <= 5;
             bool copy = instance && player->GetMapId() == 602 && player->GetInstanceId() == instance;
             if (!origin && !copy) return false;
-            if (!group && data.value("recovery_authorized",false))
+            if (!group && DungeonReturnAuthorized(data))
             {
                 if (copy)
                 {
@@ -290,7 +352,9 @@ bool RecoverBodies(DungeonReceipt& receipt)
                 player->GetRaidDifficulty() != Difficulty(body.at("raid").get<uint32>()) ||
                 (guid == leader && player->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER) != leaderFlag)) released = false;
         }
-        else if (!group && !durableGroup && !fields[8].Get<uint8>() && data.value("recovery_authorized",false)
+        else if (fields[8].Get<uint8>()) return false; // The live session is not available for affirmative proof.
+        else if (body.at("changed")==true && body.at("returned")!=true && !DungeonReturnAuthorized(data)) released=false;
+        else if (!group && !durableGroup && DungeonReturnAuthorized(data)
             && (!atOrigin || mask != fields[5].Get<uint8>() || !flagMatches))
         {
             // Only a disconnected, groupless character still at its proved location qualifies.
@@ -309,12 +373,28 @@ bool RecoverBodies(DungeonReceipt& receipt)
     {
         if (!groupProof || members.size() != expected.size()) return false;
         auto next = data;
-        next["recovery_authorized"] = true;
+        AuthorizeDungeonReturn(next);
         if (!SaveDungeonReceipt(receipt,next)) return false;
         group->Disband();
         return false;
     }
     return released;
+}
+
+bool HeldAfterRestart(Json const& data)
+{
+    auto* group = sGroupMgr->GetGroupByGUID(data.at("group").get<uint32>());
+    if (!MatchesParty(data,group)) return false;
+    auto roster = DungeonKnownRoster(data);
+    auto* driver = FindOnline(data.value("driver",0u));
+    if (!driver || driver->GetGUID().GetCounter()==HumanGuid() || IsCast(driver->GetGUID().GetCounter())) return false;
+    for (auto guid : roster)
+    {
+        auto* p = FindOnline(guid);
+        if (p && IsCast(guid) && Realm::IsOnRandomBotAccount(guid) && p->GetGroup()==group &&
+            !IsSelfBot(p) && GET_PLAYERBOT_AI(p) && GET_PLAYERBOT_AI(p)->GetMaster()==driver) return true;
+    }
+    return false;
 }
 
 void RecoverDungeonReceipt(DungeonReceipt& receipt)
@@ -343,10 +423,10 @@ void RecoverDungeonReceipt(DungeonReceipt& receipt)
     }
     data["settled"] = complete;
     if (complete) data["slot"] = false;
-    if (!complete && data.contains("failed_ms") && now-data.at("failed_ms").get<int64>() >= OfflineSlotReleaseMs)
+    if (!complete && data.contains("failed_ms") && data.at("slot")==true)
     {
-        auto group = sGroupMgr->GetGroupByGUID(data.value("group",0u));
-        if (!group) data["slot"] = false;
+        auto since = std::max<int64>(0,now-data.at("failed_ms").get<int64>());
+        if (DungeonCanReleaseSlot(true,since,HeldAfterRestart(data))) data["slot"] = false;
     }
     if (data != receipt.data && SaveDungeonReceipt(receipt,data)) PublishDungeonReceipt(receipt.id);
 }
@@ -357,12 +437,43 @@ void TickDungeonRecovery(uint32 diff)
     if (retry > diff) { retry -= diff; return; }
     retry = 5000;
     if (!Load()) return;
+    // A failed first readback never started the runner. Discover its exact committed insertion or prove absence.
+    std::vector<std::string> starts;
+    for (auto const& [id,write] : unverified) if (!write.revision) starts.push_back(id);
+    for (auto const& id : starts)
+    {
+        DungeonReceipt receipt{id,0,Json{}};
+        auto state = Verify(receipt);
+        if (state==DungeonWriteRead::Committed) continue;
+        if (state==DungeonWriteRead::Conflict)
+        {
+            if (auto existing=Lookup(id)) { Remember(*existing); unverified.erase(id); }
+            continue;
+        }
+        auto count = CharacterDatabase.Query("SELECT COUNT(*) FROM leeroy_member_dungeon_receipt WHERE realm={} AND start_id=UNHEX('{}')",
+            ::realm.Id.Realm,Hex(id));
+        if (count && !count->Fetch()[0].Get<uint64>()) unverified.erase(id);
+    }
     // Reconcile copies of the receipts: a successful save may erase the entry.
     auto pending = outstanding;
     for (auto& [id, row] : pending)
     {
-        if (!MemberDungeonFor(row.data.at("leader").get<uint32>()).empty()) continue;
-        RecoverDungeonReceipt(row);
+        if (unreadable.contains(id)) continue;
+        try
+        {
+            if (MemberDungeonFor(row.data.at("leader").get<uint32>())==id) continue;
+            if (unverified.contains(id))
+            {
+                auto read = Verify(row);
+                if ((read!=DungeonWriteRead::Committed && read!=DungeonWriteRead::Previous) || row.data.at("settled")==true) continue;
+            }
+            RecoverDungeonReceipt(row);
+        }
+        catch (Json::exception const&)
+        {
+            if (unreadable.emplace(id,Unreadable{true,DungeonKnownRoster(row.data)}).second)
+                LOG_ERROR("module.leeroy","leeroy: member_dungeon recovery invalid field; ownership retained");
+        }
     }
 }
 }

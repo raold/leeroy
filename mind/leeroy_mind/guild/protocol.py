@@ -260,6 +260,7 @@ class Job:
     kept: int | None = None
     map_id: int | None = None
     returned: bool | None = None
+    slot_held: bool | None = None
     revision: int | None = None
 
 

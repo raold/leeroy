@@ -20,7 +20,7 @@ bool DummyTrialOwns(std::uint32_t guid);
 // World-thread, read-only exclusion. Includes original and current original-group
 // members while DC override/hold cleanup or an exact job receipt is retained.
 // Unknown legacy membership is conservatively busy; the DC0 variant returns false.
-bool TrainingDcOwns(std::uint32_t guid);
+bool TrainingDcOwns(std::uint32_t guid, std::uint32_t exceptJobLeader = 0, std::uint64_t exceptJobToken = 0);
 // The leaders whose training DC run or job holds this body (TrainingDcOwns, by owner).
 std::vector<std::uint32_t> TrainingDcOwners(std::uint32_t guid);
 void TickVocab();

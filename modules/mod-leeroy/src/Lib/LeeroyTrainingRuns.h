@@ -93,12 +93,22 @@ public:
         for (auto const& [leader, job] : _jobs) leaders.push_back(leader);
         return leaders;
     }
-    bool Owns(std::uint32_t guid) const
+    template<class CurrentOwner>
+    bool OwnsBesides(std::uint32_t guid, std::uint32_t exceptLeader, std::uint64_t exceptToken,
+        CurrentOwner currentOwner) const
     {
         if (!guid) return false;
         for (auto const& [leader, job] : _jobs)
-            if (guid == leader || job.manifest.Owns(guid)) return true;
+        {
+            if (exceptToken && leader == exceptLeader && job.token == exceptToken &&
+                job.manifest.Known() && job.manifest.Owns(guid)) continue;
+            if (guid == leader || job.manifest.Owns(guid) || currentOwner(job,guid)) return true;
+        }
         return false;
+    }
+    bool Owns(std::uint32_t guid) const
+    {
+        return OwnsBesides(guid,0,0,[](auto const&,auto) { return false; });
     }
 private:
     std::uint64_t _next = 1;

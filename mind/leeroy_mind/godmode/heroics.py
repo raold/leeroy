@@ -21,7 +21,8 @@ OWNER = "member_dungeon"
 CHANNEL = "lfg-and-alts"
 MAP, NAME = 602, "Halls of Lightning"
 BOSSES = {0: "General Bjarngrim", 3: "Volkhan", 1: "Ionar", 2: "Loken"}
-WINDOW, DRIVER_GAP, MAX_DRIVER, HEARTBEAT_FRESH = 3600, 60, 8, 45
+# Running heartbeats arrive every 60 seconds. Keep a 15-second delivery margin.
+WINDOW, DRIVER_GAP, MAX_DRIVER, HEARTBEAT_FRESH = 3600, 60, 8, 75
 HELD = "sent IS NOT NULL AND returned=0 AND phase IN ('sent','running','terminal')"
 
 
@@ -269,6 +270,7 @@ class Heroics:
             | self.ports.in_dungeon()
             | self.guild.raid_night.members_in_play()
             | self.guild.offline.members_in_play()
+            | {g for hold in holds(self.conn) for g in hold.guids}
         )
         guild, human = self.context()
         days = {
@@ -572,7 +574,8 @@ class Heroics:
                         if ack and ack.ok and ack.id == cmd.id:
                             self.stopping.add(r["id"])
                     await self.status(r["id"])
-            return
+            if any(r["slot_held"] for r in owned):
+                return
         if self.lease:
             await self.release()
         if not self.enabled or not self.advertised or self.ports.human_online() or self.ports.gpu_paused():
@@ -686,23 +689,27 @@ class Heroics:
             ev.state not in ("done", "failed")
             or ev.revision is None
             or type(ev.returned) is not bool
+            or ev.slot_held is not None and type(ev.slot_held) is not bool
             or ev.map_id != MAP
             or r["terminal"]
             and (ev.state, ev.reason, ev.kills, ev.wipes)
             != (r["terminal"], r["reason"], r["kills"], r["wipes"])
         ):
             return
-        self.attached = None
-        self.set_playing(None)
+        if self.attached in (None, ev.id):
+            self.attached = None
+            self.set_playing(None)
         with self.store.transaction():
             self.write(
                 "UPDATE member_heroic SET phase='terminal',terminal=?,reason=?,returned=?,revision=?,"
+                "slot_held=MIN(slot_held,?),"
                 "instance=?,kills=?,wipes=?,result_at=COALESCE(result_at,?) WHERE id=?",
                 (
                     ev.state,
                     ev.reason[:80],
                     ev.returned,
                     ev.revision,
+                    not ev.returned and ev.slot_held is not False,
                     ev.instance_id,
                     ev.kills,
                     ev.wipes,

@@ -7,7 +7,7 @@ CREATE TABLE member_heroic (
     phase TEXT NOT NULL CHECK(phase IN ('offered','chat','agreed','sent','running','terminal','talk_only')),
     reason TEXT NOT NULL DEFAULT '', tries INTEGER NOT NULL DEFAULT 0, next_try REAL NOT NULL DEFAULT 0,
     sent REAL, instance INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0,
-    terminal TEXT, returned INTEGER NOT NULL DEFAULT 0, result_at REAL,
+    terminal TEXT, returned INTEGER NOT NULL DEFAULT 0, slot_held INTEGER NOT NULL DEFAULT 1, result_at REAL,
     kills INTEGER NOT NULL DEFAULT 0, wipes INTEGER NOT NULL DEFAULT 0,
     UNIQUE(guild,human,day)
 );

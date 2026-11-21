@@ -142,6 +142,7 @@ struct Member
     bool restartDropped = false;
     bool returnIssued = false;
     bool finished = false;
+    bool handbackProved = false;
     bool cleanupNoted = false;
     bool abandoned = false;
     uint32 returnRetryAt = 0;
@@ -433,7 +434,8 @@ bool Checkpoint(Job& job, std::string const& effect, uint32 actor = 0)
         data["bodies"].push_back({{"guid",m.guid},{"map",m.origin.GetMapId()},{"x",m.origin.GetPositionX()},
             {"y",m.origin.GetPositionY()},{"z",m.origin.GetPositionZ()},{"o",m.origin.GetOrientation()},
             {"raid",m.originalDifficulty},{"dungeon",m.originalDungeonDifficulty},{"leader",m.originalLeaderFlag},
-            {"changed",m.changed},{"moved",m.moved},{"returned",m.finished && !m.abandoned},{"abandoned",m.abandoned}});
+            {"changed",m.changed},{"moved",m.moved},{"returned",m.handbackProved},{"abandoned",m.abandoned}});
+    if (effect == "disband") AuthorizeDungeonReturn(data);
     if (SaveDungeonReceipt(job.receipt, data)) return true;
     Stop(job, "receipt_unavailable", true);
     return false;
@@ -543,7 +545,7 @@ void ReassertMasters(Job& job)
         facts.masterIsDriver = ai && Identity(ai->GetMaster()) == job.driverBody.player;
         facts.masterEmpty = ai && !ai->GetMaster();
         facts.foreignLease = Realm::RealmOwns(member.guid) || Training::DummyTrialOwns(member.guid);
-        if (Dungeon(job) && player && !AtOrigin(member,player) && !Present(job,player)) continue;
+        if (Dungeon(job) && player && !Present(job,player) && (!AtOrigin(member,player) || player->IsInCombat())) continue;
         if (!ReassertDriverMaster(facts)) continue;
         ai->SetMaster(driver);
         RaidStrategies(job, player, ai);
@@ -804,7 +806,9 @@ void Teleporting(Job& job)
             SetupFailure(job, "foreign_bind:" + std::to_string(job.command.leaderGuid));
             return;
         }
-        if (Dungeon(job) && (leader->GetDungeonDifficulty() != job.difficulty ||
+        if (Dungeon(job) && (!DungeonEntrySource(AtOrigin(job.members.front(),leader),leader->IsInCombat(),
+            CanProjectDungeonBody(job.event.id,job.command.leaderGuid) && GET_PLAYERBOT_AI(leader)->GetMaster()==Driver(job)) ||
+            leader->GetDungeonDifficulty() != job.difficulty ||
             sMapMgr->PlayerCannotEnter(job.command.mapId, leader, false) != Map::CAN_ENTER ||
             sInstanceSaveMgr->PlayerGetDestinationInstanceId(leader, job.command.mapId, job.difficulty)))
         { SetupFailure(job, "entry_refused"); return; }
@@ -913,7 +917,9 @@ void Teleporting(Job& job)
                 SetupFailure(job, "foreign_bind:" + std::to_string(member.guid));
                 return;
             }
-            if (Dungeon(job) && (player->GetDungeonDifficulty() != job.difficulty || player->IsInCombat() ||
+            if (Dungeon(job) && (!DungeonEntrySource(AtOrigin(member,player),player->IsInCombat(),
+                CanProjectDungeonBody(job.event.id,member.guid) && GET_PLAYERBOT_AI(player)->GetMaster()==Driver(job)) ||
+                player->GetDungeonDifficulty() != job.difficulty ||
                 sInstanceSaveMgr->PlayerGetDestinationInstanceId(player, job.command.mapId, job.difficulty) != job.event.instanceId ||
                 sMapMgr->PlayerCannotEnter(job.command.mapId, player, false) != Map::CAN_ENTER))
             { SetupFailure(job, "entry_refused"); return; }
@@ -1319,7 +1325,7 @@ bool BenchmarkRecoveryLocation(Job const& job, Member const& member, Player* pla
 void CleanupFailure(Job& job, Member& member, std::string reason, bool retain = false)
 {
     job.cleanupFailed = true;
-    member.finished = !Benchmark(job) && job.event.trainingRun.empty() && !retain;
+    member.finished = !Dungeon(job) && !Benchmark(job) && job.event.trainingRun.empty() && !retain;
     if (!member.cleanupNoted)
     {
         job.event.skipped.emplace_back(member.guid, "cleanup:" + reason);
@@ -1437,6 +1443,7 @@ bool Teardown(Job& job)
                 continue;
             }
             if (member.journalRestored) continue;
+            if (Dungeon(job) && AtOrigin(member,player) && player->IsInCombat()) { pendingRestore = true; continue; }
             player->CombatStop(true);
             if (player->IsBeingTeleported()) { pendingRestore = true; continue; }
             if (Training::RestoreJournaled(player, "*")) member.journalRestored = true;
@@ -1488,8 +1495,25 @@ bool Teardown(Job& job)
     Group* group = FindGroup(job);
     if (!pendingTransfer && OwnsGroup(job, group, !Benchmark(job) && !Dungeon(job)))
     {
-        group->Disband(); // Disband deletes the Group; no pointer to it is used below.
-        job.groupReleased = true;
+        if (Dungeon(job) && group->GetMembersCount() == job.members.size())
+        {
+            bool const exact = group->GetLeaderGUID() == Guid(job.command.leaderGuid) &&
+                std::all_of(job.members.begin(),job.members.end(),[&](Member const& m) {
+                    auto* p = FindOnline(m.guid);
+                    if (!Controlled(job,p) || p->GetGroup()!=group || p->IsBeingTeleported() ||
+                        (!AtOrigin(m,p) && !Present(job,p)) || Realm::RealmOwns(m.guid) ||
+                        Training::TrainingDcOwns(m.guid) || Training::DummyTrialOwns(m.guid)) return false;
+                    auto* master = GET_PLAYERBOT_AI(p)->GetMaster();
+                    return !master || master == Driver(job);
+                });
+            if (!exact) group = nullptr; // Individually return only independently proved bodies below.
+            else if (!Checkpoint(job,"disband")) return false;
+        }
+        if (group)
+        {
+            group->Disband(); // Disband deletes the Group; no pointer to it is used below.
+            job.groupReleased = true;
+        }
     }
 
     for (Member& member : job.members)
@@ -1521,6 +1545,14 @@ bool Teardown(Job& job)
             continue;
         }
         PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
+        if (Dungeon(job) && (Realm::RealmOwns(member.guid) || Training::DummyTrialOwns(member.guid) ||
+            Training::TrainingDcOwns(member.guid,job.command.leaderGuid,job.trainingToken) ||
+            (AtOrigin(member,player) && player->IsInCombat()) || (ai->GetMaster() && ai->GetMaster()!=Driver(job)) ||
+            !BenchmarkRecoveryLocation(job,member,player)))
+        {
+            CleanupFailure(job,member,"handback_unproved",true);
+            continue;
+        }
         if (member.masterAssigned && ((ai->GetMaster() && Identity(ai->GetMaster()) != job.driverBody.player)
             || (!member.masterReleased && !ai->GetMaster())))
         {
@@ -1593,7 +1625,15 @@ bool Teardown(Job& job)
                 if (member.originalLeaderFlag) player->SetPlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
                 else player->RemovePlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
             }
-            if (Dungeon(job)) player->SaveToDB(false,false);
+            if (Dungeon(job))
+            {
+                member.handbackProved = AtOrigin(member,player) && !player->GetGroup() && !ai->GetMaster() &&
+                    player->GetDungeonDifficulty()==member.originalDungeonDifficulty &&
+                    player->GetRaidDifficulty()==member.originalDifficulty &&
+                    (member.guid!=job.command.leaderGuid || player->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER)==member.originalLeaderFlag);
+                if (!member.handbackProved) { CleanupFailure(job,member,"handback_unproved",true); continue; }
+                player->SaveToDB(false,false);
+            }
             member.finished = true;
             continue;
         }
@@ -1654,7 +1694,10 @@ bool RunTeardown(Job& job)
     }
     if (complete && Dungeon(job))
     {
-        if (job.stageElapsed < job.nextStoreCheck) complete = false;
+        complete = std::all_of(job.members.begin(),job.members.end(),[](auto const& m) {
+            return DungeonHandback(m.changed,m.handbackProved,m.abandoned);
+        });
+        if (!complete || !Checkpoint(job,"returned") || job.stageElapsed < job.nextStoreCheck) complete = false;
         else if (!DungeonReturnsPersisted(job.receipt))
         {
             complete = false;
@@ -1707,8 +1750,7 @@ bool RunTeardown(Job& job)
             data["terminal_ms"] = NowUnixMs();
         }
         if (job.failedReported && !data.contains("failed_ms")) data["failed_ms"] = NowUnixMs();
-        bool const returned = complete && std::none_of(job.members.begin(), job.members.end(),
-            [](auto const& m){ return m.abandoned || (m.changed && !m.finished); });
+        bool const returned = complete;
         data["settled"] = returned;
         if (complete) data["slot"] = false;
         if (!SaveDungeonReceipt(job.receipt, data)) return false;
@@ -1756,6 +1798,7 @@ bool ReleaseStuckSlot(Job& job)
         auto next = job.receipt.data;
         next["slot"] = false;
         if (!SaveDungeonReceipt(job.receipt, next)) return false;
+        PublishDungeonReceipt(job.event.id);
     }
     std::string unfinished;
     for (auto const& member : job.members)
@@ -2037,7 +2080,8 @@ bool CanProjectDungeonBody([[maybe_unused]] std::string const& start, [[maybe_un
     if (!Controlled(job, player) || player->GetOriginalGroup() ||
         player->GetGroupInvite() || player->GetTradeData() || Realm::RealmOwns(guid) ||
         Training::DummyTrialOwns(guid) || HasPendingBotCommands({guid}) || Training::HasTrainingJournal(guid) ||
-        Training::TrainingDcOwns(guid) || Training::TrainingCleanupPending() || StringStayHeld(guid) ||
+        Training::TrainingDcOwns(guid,job.command.leaderGuid,job.trainingToken) ||
+        Training::TrainingCleanupPending() || StringStayHeld(guid) ||
         player->HasPendingBind() || player->IsInFlight() || player->GetTransport() || player->GetVehicle() ||
         RecallPvpBusy(ReadRecallPvp(player))) return false;
     auto queue = sLFGMgr->GetState(player->GetGUID());
