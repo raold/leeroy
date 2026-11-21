@@ -435,6 +435,7 @@ Apply them to a checkout of each module with
 ./ac-health.sh [--json]      # read-only health check of the live install
 ./ac-guild-backup.sh         # verified, pruned backups of the guild's data to another machine
 ./ac-snapshot.sh             # copy live configs and module patches into this repo
+./ac-module-to-git.sh [--go] [--subdir P] <module> <url> <commit>  # swap a zip-extracted module for its git clone
 ```
 
 They assume this repo is the install root, with the core checked out in
