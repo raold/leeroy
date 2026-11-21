@@ -39,6 +39,7 @@ class NightlySettings:
     romance_activities: bool = False
     member_romance: bool = False  # [drama] member_romance (drama.config)
     drama_threads: str = "off"  # [drama] threads: off | record (drama.pulls)
+    day_plans: bool = False
     grace_minutes: int = 10
     retry_minutes: int = 60
     max_attempts: int = 3
@@ -137,6 +138,7 @@ def load_settings(cfg: MindConfig, data_dir: Path, *, culture=None) -> NightlySe
         jealousy=cfg.romance.jealousy, chattiness=cfg.talk.chattiness,
         wow_vs_life=load_life(data_dir / "mind.toml"), female_share=cfg.cast.female_share,
         data_dir=data_dir, learn_enabled=load_learn_config(data_dir / "mind.toml").enabled,
+        day_plans=cfg.life.day_plans,
         learn_coach=load_learn_config(data_dir / "mind.toml").coach,
         learn_bandit=load_learn_config(data_dir / "mind.toml").bandit,
         culture_enabled=(culture if culture is not None else load_culture_config(data_dir / "mind.toml")).enabled,

@@ -88,6 +88,11 @@ def classify(cmd, *, child=False):
     if kind == "realm_forget":
         raise ValueError("realm_forget requires an operator abandonment receipt")
     identity(cmd.id)
+    if kind in {"day_begin", "day_revoke", "day_status"}:
+        raise ValueError("day permits are managed outside the body queue")
+    permit = getattr(cmd, "day_permit", "")
+    if permit != "" and (type(permit) is not str or not re.fullmatch("[0-9a-f]{32}", permit)):
+        raise ValueError("invalid day permit")
     if kind == "arena_queue" or kind == "arena_team" and cmd.action != "create":
         raise ValueError("arena requires Task24 atomic full-roster admission")
     scope, policy = (), "ack"
@@ -127,10 +132,14 @@ def classify(cmd, *, child=False):
         if kind == 'realm_move':
             n("slot", 0, 119)
             if type(cmd.social) is not bool: raise ValueError('invalid social flag')
+            if permit and (cmd.social or cmd.place == "near_human"):
+                raise ValueError("day move requires a fixed public place")
     elif kind == "rpg_status":
         e("status", {"idle", "rest", "wander npc", "wander random", "go grind", "go camp", "do quest", "do gather", "travel flight"})
         n("quest_id", 0)
         if cmd.quest_id and cmd.status != "do quest": raise ValueError("invalid quest status")
+        if permit and (cmd.quest_id or cmd.status not in {"idle", "rest", "wander npc", "do gather"}):
+            raise ValueError("invalid day status")
     elif kind in {"leave_pvp", "rearm", "wg_join", "guild_grow", "bot_do"}:
         maximum = 40 if kind in {"wg_join", "bot_do"} else 30 if kind == "guild_grow" else 150
         scope, policy = members(cmd.guids, 1, maximum), "wg" if kind == "wg_join" else "defaults" if kind == "bot_do" else "ordinary"
@@ -142,7 +151,12 @@ def classify(cmd, *, child=False):
         if kind == "guild_grow": n("guild_id")
         if kind == "bot_do":
             s("action", 1, 64); s("param", 1, 128); s("training_run", 0, 128)
-            if cmd.action != "nc" or cmd.param != "-bg,-lfg" or type(cmd.target_guid) is not int or cmd.target_guid != 0 or cmd.training_run != "":
+            if permit:
+                if (len(scope) != 1 or cmd.action != "do" or cmd.param != "go fishing"
+                        or type(cmd.target_guid) is not int or cmd.target_guid != 0 or cmd.training_run):
+                    raise ValueError("unsupported day fishing command")
+                policy = "ordinary"
+            elif cmd.action != "nc" or cmd.param != "-bg,-lfg" or type(cmd.target_guid) is not int or cmd.target_guid != 0 or cmd.training_run != "":
                 raise ValueError("unsupported BotDo shape")
     elif kind == "arena_team":
         e("action", {"create"})

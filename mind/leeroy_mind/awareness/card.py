@@ -79,6 +79,7 @@ class CardContext:
     # the turn carries talk/grounding.py's raid and guild card ([talk] wow_grounding), which says
     # the raid, its loot, her DKP and the next raid night: this card leaves those out
     grounded: bool = False
+    day_plans: bool = False
 
 
 @dataclass(frozen=True)
@@ -590,8 +591,12 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         return Card(guid, ())
     conversation = _context(guid, officer, context)
     here = ([context.self_line] if context.self_line else []) + list(context.here[:6]) if context.server and discord else []
+    day = []
+    if context.day_plans and {"day_plan", "day_permit"} <= reader.tables:
+        from leeroy_mind.godmode.dayrun import card_lines
+        day = card_lines(reader.conn, guid, now, context.names or {})
     if discord:
-        here += list(context.intents[:2])
+        here += [*context.intents[:2], *day]
     if context.server and discord:
         conversation += _directed_emotes(reader,guid,human,context,now)
     if discord and (not context.server or is_private(context.channel)):
@@ -604,7 +609,7 @@ def card(app_or_stores, guid: int, *, context: CardContext) -> Card:
         return Card(guid,tuple(Part(k,title,tuple(lines)) for k,title,lines in parts if lines),tuple(sorted(reader.missing)))
     game, recent, human = ([], [], human) if discord else _game(reader, source, guid, meta, now, context)
     if not discord:
-        game = [*game, *context.intents[:2]]
+        game = [*game, *context.intents[:2], *day]
     if context.channel == "whisper" and context.to_guid == human and human:
         for row in reader.rows(("chat_line",), "SELECT text FROM chat_line WHERE channel='whisper' "
                 "AND from_guid=? AND to_guid=? AND ts BETWEEN ? AND ? ORDER BY ts DESC,id DESC LIMIT 3",

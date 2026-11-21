@@ -215,12 +215,14 @@ class LivePorts:
     def persona_state(self, guid):
         return self.app.store.get_state(guid)
 
-    async def send(self, cmd):
+    async def send(self, cmd, *, expected_epoch=None):
         if not self.enabled:
             raise RuntimeError("guild transport unavailable")
         if not isinstance(cmd, StopOfflineRaid):
             # A stop's terminal rides the start command's id; a mailbox entry would never be drained.
             self.jobs.expect(cmd.id)
+        if expected_epoch is not None:
+            return await self.app.bridge.send(cmd, preserve_id=True, expected_epoch=expected_epoch)
         return await self.app.bridge.send(cmd, preserve_id=True)
 
     async def wait_job(self, cmd_id, timeout_s):

@@ -140,8 +140,26 @@ def tie_kind(conn, a: int, b: int) -> str:
                     '((a=? AND b=?) OR (a=? AND b=?)) LIMIT 1', (a,b,b,a)).fetchone():
         return 'feud'
     row = conn.execute('SELECT affinity,romance_stage FROM relationship WHERE a=? AND b=?', (a,b)).fetchone()
-    from leeroy_mind.tuning.edits import apply_feelings, feeling_overlay
-    offsets = feeling_overlay(conn).get((a, b))
+    from leeroy_mind.tuning.edits import feeling_overlay
+    return _relationship_kind(row, feeling_overlay(conn).get((a, b)))
+
+
+def roster_ties(conn, members):
+    """The same directional ties as tie_kind, read once for a whole roster."""
+    from leeroy_mind.tuning.edits import feeling_overlay
+    offsets = feeling_overlay(conn)
+    rows = {(a, b): (affinity, stage) for a, b, affinity, stage in
+            conn.execute("SELECT a,b,affinity,romance_stage FROM relationship") if a in members and b in members}
+    ties = {pair: _relationship_kind(rows.get(pair), offsets.get(pair))
+            for pair in rows.keys() | offsets.keys() if pair[0] in members and pair[1] in members}
+    for a, b in conn.execute("SELECT a,b FROM feud WHERE ended IS NULL"):
+        if a in members and b in members:
+            ties[a, b] = ties[b, a] = "feud"
+    return ties
+
+
+def _relationship_kind(row, offsets):
+    from leeroy_mind.tuning.edits import apply_feelings
     if offsets:  # the owner's godmode feelings, as Store.get_relationship reads them
         felt = apply_feelings({'affinity': row[0] if row else 0.0,
                                'romance_stage': row[1] if row else 'none'}, offsets)

@@ -429,3 +429,30 @@ def test_each_greeter_is_told_what_this_login_said_and_the_retry_names_it(store,
                                      "AND dropped IS NOT NULL").fetchall()
         assert [d[0] for d in drops] == ["tells"]
     run(main())
+
+
+def test_selected_game_day_opener_keeps_its_switch_and_schedule_fence(store, clock, tmp_path):
+    from dataclasses import replace
+    from leeroy_mind.talk.budget import BurstPlan
+
+    async def go():
+        rig = make_rig(store, clock, tmp_path, script=numbered("thought {n} here"))
+        engine = rig.engine
+        now = clock.now()
+        with store.transaction():
+            evidence = store.conn.execute("INSERT INTO game_event(ts,type,guid,payload) VALUES(?,'day_activity',101,'{}')",
+                                          (now,)).lastrowid
+            plan = store.conn.execute("INSERT INTO day_plan(night,member,starts,ends,activity,place,status,evidence,phase) "
+                "VALUES('2026-10-28',101,?,?,'inn','org_inn','done',?,'arrival')", (now-1, now+1, evidence)).lastrowid
+        engine.apply_config(replace(engine.cfg, life=replace(engine.cfg.life, day_plans=True)))
+        seen = []
+        async def pending(turn, meta):
+            assert meta.still_valid()
+            engine.apply_config(replace(engine.cfg, life=replace(engine.cfg.life, day_plans=False)))
+            seen.append(meta.still_valid())
+            return []
+        engine._speak = pending
+        topic = guild_topics.GuildTopic("game", f"day:{plan}", "Arrived at org inn.", 101)
+        await engine._burst(BurstPlan(2, 2, "guild"), first=(101, topic))
+        assert seen == [False]
+    run(go())

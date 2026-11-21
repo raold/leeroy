@@ -1,6 +1,8 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "Strings.h"
+#include "LeeroyOwnerFight.h"
+#include "Realm/DayPlans.h"
 #include "GuildAdd.h"
 #include "GuildPorts.h"
 #include "RaidAssembly.h"
@@ -46,6 +48,12 @@
 
 namespace Leeroy::Guild
 {
+// His fight: him, or anyone of his group on his map, in combat (RaidLead's own test of his group's fight).
+bool HisFight(Player* human)
+{
+    return OwnerGroupInCombat(human);
+}
+
 namespace
 {
 constexpr std::uint32_t kSpellDuel = 7266;
@@ -128,18 +136,6 @@ std::uint32_t AreaFlags(std::uint32_t area)
 bool Travelling(Player* player)
 {
     return player->IsBeingTeleported() || player->IsInFlight() || player->GetTransport() || player->GetVehicle();
-}
-
-// His fight: him, or anyone of his group on his map, in combat (RaidLead's own test of his group's fight).
-bool HisFight(Player* human)
-{
-    if (human->IsInCombat())
-        return true;
-    if (Group* group = human->GetGroup())
-        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
-            if (Player* member = ref->GetSource(); member && member->GetMap() == human->GetMap() && member->IsInCombat())
-                return true;
-    return false;
 }
 
 bool Battleground(Player* player)
@@ -249,7 +245,7 @@ bool AtFishSpot(std::uint32_t guid, Player* bot)
         && bot->GetDistance(spot.x, spot.y, spot.z) <= kInviteSpotYards;
 }
 
-StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot)
+StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot, std::string const& dayToken = {})
 {
     StringFacts f;
     LeeroyModule& module = LeeroyModule::Instance();
@@ -277,12 +273,22 @@ StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot)
     if (!bot || !human || !f.cast)
         return f;
     f.online = true;
-    f.fence = Fence(guid, bot);
+    f.fence = dayToken.empty() ? Fence(guid, bot) : Realm::DayPreviewFence(dayToken, guid);
     f.dead = !bot->IsAlive();
     f.combat = bot->IsInCombat();
     f.travelling = Travelling(bot);
     f.duel = bot->duel != nullptr;
     f.instance = !bot->GetMap() || bot->GetMap()->IsDungeon() || bot->HasPendingBind();
+    if (!dayToken.empty())
+    {
+        if (Realm::DayMoving(dayToken, bot))
+        {
+            f.travelling = bot->IsInFlight() || bot->GetTransport() || bot->GetVehicle();
+            if (!bot->FindMap() && !bot->HasPendingBind() && !bot->GetInstanceId()) f.instance = false;
+        }
+        if (Realm::DayDueling(dayToken, Realm::RealmModule::Instance().Holder(guid), bot))
+            f.combat = f.duel = false;
+    }
     f.battleground = Battleground(bot);
     lfg::LfgState const lfg = sLFGMgr->GetState(bot->GetGUID());
     f.queued = bot->InBattlegroundQueue() || (lfg != lfg::LFG_STATE_NONE && lfg != lfg::LFG_STATE_RAIDBROWSER);
@@ -298,7 +304,7 @@ StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot)
     f.groupRaid = his && his->isRaidGroup();
     f.groupMembers = his ? his->GetMembersCount() : 0;
     if (cmd.kind == StringKind::JoinGroup)
-        f.joinRefusal = GuildAddJoinRefusal(human, bot);
+        f.joinRefusal = GuildAddJoinRefusal(human, bot, dayToken);
     if (cmd.kind == StringKind::Fish)
     {
         f.fishing = bot->GetSkillValue(SKILL_FISHING) > 0;
@@ -559,8 +565,13 @@ LeeroyCommandResult HandleStringDo(nlohmann::json const& message)
     std::string const id = message.at("id").get<std::string>();
     StringWaiver const waiver;   // his own ask passes his earlier come_to_me's fence
     Player* human = FindOnline(HumanGuid());
+    Realm::DayOwnerCheck check(message, {cmd->guid}, "string");
+    if (!check.error.empty()) return {false, check.error};
+    auto token = check.Token(cmd->guid);
     Player* bot = cmd->guid == HumanGuid() ? nullptr : FindOnline(cmd->guid);
-    std::string why = StringRefusal(cmd->kind, ReadFacts(*cmd, human, bot));
+    if (!bot && !token.empty()) bot = ObjectAccessor::FindConnectedPlayer(Realm::PlayerGuid(cmd->guid));
+    std::string why = StringRefusal(cmd->kind, ReadFacts(*cmd, human, bot, token));
+    if (check.Checking()) return why.empty() ? check.Accept() : LeeroyCommandResult{false, why};
     std::string outcome;
     if (why.empty())
         why = Carry(*cmd, id, human, bot, outcome);
@@ -726,7 +737,11 @@ void ReloadStrings()
     invitesOn = sConfigMgr->GetOption<bool>("Leeroy.Invites.Enable", false);
 }
 
-void RegisterStringsHandler() { RegisterCommand(std::string(kStringDoType), HandleStringDo); }
+void RegisterStringsHandler()
+{
+    Realm::RegisterDayOwnerCheck(std::string(kStringDoType), HandleStringDo);
+    RegisterCommand(std::string(kStringDoType), HandleStringDo);
+}
 
 void ForgetStrings(std::uint32_t guid)
 {

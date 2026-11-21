@@ -1187,6 +1187,8 @@ class MindApp:
             cfg = replace(cfg, ollama=replace(cfg.ollama, url=self._runtime_url),
                           models=replace(cfg.models, embedding=self._runtime_embedding))
         changed = cfg.models.live != self.cfg.models.live
+        if cfg.life.day_plans != self.cfg.life.day_plans:
+            self.configure_day_plans(cfg.life.day_plans)
         self.cfg = cfg
         self.engine.apply_config(cfg)
         return changed

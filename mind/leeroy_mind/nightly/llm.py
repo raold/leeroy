@@ -298,7 +298,7 @@ class Reasoner:
         return r.thinking + "\n" + r.text
 
     async def json(self, system: str, user: str, schema: dict, *, notes: str | None = None,
-                   temperature: float = 0.2) -> dict:
+                   temperature: float = 0.2, before_call=None) -> dict:
         """The answer pass: a JSON object that fits `schema`, from P1b's chat_json (one retry
         when the reply is not valid), with the reasoning pass's `notes` after the question,
         cut to their end when the call would not fit num_ctx (fit_notes). Two bad replies, or
@@ -313,10 +313,14 @@ class Reasoner:
             check_schema(schema, d)
             return d
 
+        async def chat(*args, **kwargs):
+            before_call()  # Runs immediately before each model request, including a JSON correction.
+            return await self._chat(*args, **kwargs)
+
         async with self._slots:
             try:
-                return await chat_json(SimpleNamespace(chat=self._chat), self.model, messages,
-                                       schema, preset, valid)
+                client = SimpleNamespace(chat=self._chat if before_call is None else chat)
+                return await chat_json(client, self.model, messages, schema, preset, valid)
             except GpuPaused:
                 raise
             except (JSONJobFailed, LLMError) as e:

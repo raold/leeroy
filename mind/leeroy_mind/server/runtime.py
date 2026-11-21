@@ -52,6 +52,7 @@ async def snapshot(app, now, *, include_seeds=False):
     photo_dial = app.cfg.talk.selfies if photos_on else 0
     groups_config = getattr(getattr(app,'groups',None),'config',None)
     decisions_on = getattr(app, 'decisions', None) is not None
+    day_plans = getattr(getattr(getattr(app, 'cfg', None), 'life', None), 'day_plans', False)
     intents_on = getattr(app, 'godmode', None) is not None
     # Imported here, on the loop: a first import inside the worker spent its CPU budget on
     # compiling modules (about 1 s of the 2 s at the first read after a start).
@@ -106,7 +107,7 @@ async def snapshot(app, now, *, include_seeds=False):
                                 culture_enabled=culture_on, culture_store=worker_store, ident=identity,
                                 culture_calendar=calendar_on, culture_loot=loot_on,
                                 decisions_enabled=decisions_on, intents_enabled=intents_on,
-                                culture_memes=memes_on)
+                                culture_memes=memes_on, **({'day_plans': True} if day_plans else {}))
                 seeds = fresh(conn, source, now=now)
                 if photos_on:
                     seeds += fresh(conn, photo_seeds(conn, now=now, local=local, dial=photo_dial), now=now)

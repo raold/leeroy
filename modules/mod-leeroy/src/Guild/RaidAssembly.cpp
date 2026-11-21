@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "RaidAssembly.h"
+#include "Realm/DayPlans.h"
 #include "HazardJob.h"
 #include "PlayStyle.h"
 #include "GuildPorts.h"
@@ -151,11 +152,13 @@ LeeroyCommandResult HandleClearLockout(json const& msg)
     auto const cmd = ParseClearLockout(msg, error);
     if (!cmd)
         return Fail(error);
+    Realm::DayOwnerCheck check(msg, cmd->guids, "raid");
+    if (!check.error.empty()) return Fail(check.error);
     for (uint32 low : cmd->guids)
     {
         if (!Owned(low))
             return Fail(NotCast(low));
-        if (Realm::RealmOwns(low)) return Fail("busy:realm_owner");
+        if (Realm::RealmOwns(low) && check.Token(low).empty()) return Fail("busy:realm_owner");
     }
 
     std::string inside;
@@ -170,6 +173,7 @@ LeeroyCommandResult HandleClearLockout(json const& msg)
             }
     if (!inside.empty())
         return Fail("in_instance:" + inside);
+    if (check.Checking()) return check.Accept();
 
     for (uint32 low : cmd->guids)
     {
@@ -193,14 +197,18 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
     auto const cmd = ParseFormRaid(msg, error);
     if (!cmd)
         return Fail(error);
+    auto requested = cmd->members;
+    requested.push_back(cmd->leaderGuid);
+    Realm::DayOwnerCheck check(msg, std::move(requested), "raid");
+    if (!check.error.empty()) return Fail(check.error);
     if (!Owned(cmd->leaderGuid))
         return Fail(NotCast(cmd->leaderGuid));
-    if (Realm::RealmOwns(cmd->leaderGuid)) return Fail("busy:realm_owner");
+    if (Realm::RealmOwns(cmd->leaderGuid) && check.Token(cmd->leaderGuid).empty()) return Fail("busy:realm_owner");
     for (uint32 low : cmd->members)
     {
         if (!IsCast(low))
             return Fail(NotCast(low));
-        if (Realm::RealmOwns(low)) return Fail("busy:realm_owner");
+        if (Realm::RealmOwns(low) && check.Token(low).empty()) return Fail("busy:realm_owner");
         // Removing a member can promote a leader or disband its old group.
         // Validate all affected old-group members before creating/changing any
         // destination group, including members omitted from this request.
@@ -233,6 +241,7 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
 #if !LEEROY_HAS_DUNGEON_CLEAR
     return Fail("driver_unavailable:no_dungeon_clear");
 #else
+    if (check.Checking()) return check.Accept();
     if (Realm::RealmOwns(cmd->leaderGuid) || GroupHasRealmOwner(group)) return Fail("busy:realm_owner");
     if (!group && !(group = LeaderGroup(leader)))
         return Fail("not_leader");
@@ -595,6 +604,8 @@ LeeroyCommandResult HandleRaidControl(json const& msg)
 
 void RegisterRaidAssemblyHandlers()
 {
+    Realm::RegisterDayOwnerCheck("clear_lockout", HandleClearLockout);
+    Realm::RegisterDayOwnerCheck("form_raid", HandleFormRaid);
     RegisterCommand("clear_lockout", HandleClearLockout);
     RegisterCommand("form_raid", HandleFormRaid);
     RegisterCommand("set_loot_master", HandleSetLootMaster);

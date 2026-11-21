@@ -4,11 +4,13 @@
 
 #include <cstdint>
 
+class Player;
 namespace Leeroy::Guild
 {
 // Leeroy.Strings.Enable: the owner's strings in game (string_do, pure policy LeeroyStrings.h); Leeroy.Invites.Enable:
 // his invitations in game (the same command marked "via": "invite", and go_to and fish). World thread.
 void ReloadStrings();
+bool HisFight(Player* human);
 // OnStartup: registers string_do.
 void RegisterStringsHandler();
 // Once a second: lifts come_to_me's and go_to's stay when it ends, follow's when the group does, ends a fishing when

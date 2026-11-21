@@ -20,6 +20,10 @@ from .protocol import GetRealmPvp, LeavePvp, Rearm, RealmActors
 log = logging.getLogger(__name__)
 
 
+class _DispatchDeferred(Exception):
+    """The writer was never entered. Keep this exact enrolled action queued."""
+
+
 class ActionRejected(ValueError):
     pass
 
@@ -50,6 +54,7 @@ class _Entry:
     context: ActionContext
     callback: object = None
     still_valid: object = None
+    ready_to_send: object = None
 
 
 def _live(c):
@@ -89,7 +94,7 @@ class ActionQueue:
         record = self.store.get(cmd.id)
         return record is not None and record.payload == c.payload
 
-    def _enroll(self, cmd, owner, on_done, *, probe=False, still_valid=None):
+    def _enroll(self, cmd, owner, on_done, *, probe=False, still_valid=None, ready_to_send=None):
         c = self._context(); classified = classify(cmd)
         if self.closed or not _live(c): raise ActionRejected("disabled")
         if self.off and not probe and classified.policy != "defaults": raise ActionRejected("realm_off")
@@ -104,7 +109,7 @@ class ActionQueue:
             raise ActionRejected("backoff")
         record = self.store.prepare(ActionSpec(cmd.id, None, "root", classified.policy, owner, rank,
                  classified.kind, classified.payload, classified.reserved_manifest, c.guild, c.human), now=now)
-        entry = _Entry(cmd, c, on_done, still_valid)
+        entry = _Entry(cmd, c, on_done, still_valid, ready_to_send)
         self._entries[cmd.id] = entry; self._pending[cmd.id] = entry
         self.wake()
         return record.command_id
@@ -138,7 +143,7 @@ class ActionQueue:
             named |= set(skipped_backoff(old, now))
         return named
 
-    def submit(self, cmd, *, owner, guids=(), on_done=None, freeing=False, still_valid=None):
+    def submit(self, cmd, *, owner, guids=(), on_done=None, freeing=False, still_valid=None, ready_to_send=None):
         classified = classify(cmd)  # Reject malformed business fields before journaling.
         supplied = members(guids, 0)
         if supplied and tuple(sorted(supplied)) != classified.reserved_manifest:
@@ -148,7 +153,7 @@ class ActionQueue:
         if on_done is not None and not callable(on_done): raise ValueError("invalid action callback")
         # freeing grants no scheduling or retained-ownership bypass.
         if still_valid is not None and not callable(still_valid): raise ValueError('invalid action predicate')
-        return self._enroll(cmd, owner, on_done, still_valid=still_valid)
+        return self._enroll(cmd, owner, on_done, still_valid=still_valid, ready_to_send=ready_to_send)
 
     def request_cleanup(self, origin_id):
         c = self._context()
@@ -221,6 +226,8 @@ class ActionQueue:
         """The synchronous, committing final transport barrier. Never await here."""
         entry = self._pending.get(cmd.id)
         if entry is None: raise ActionRejected("not_enrolled")
+        if entry.ready_to_send is not None and not entry.ready_to_send():
+            raise _DispatchDeferred()
         c, record = self._dispatch_entry(cmd, entry)
         if sum(r.transport_state == "inflight" for r in self.store.records()) >= 8: raise ActionRejected("transport_capacity")
         eligible = True
@@ -405,6 +412,7 @@ class ActionQueue:
         for command_id, entry in tuple(self._pending.items()):
             if available <= 0: break
             if command_id in self._started: continue
+            if entry.ready_to_send is not None and not entry.ready_to_send(): continue
             record = self.store.get(command_id)
             if self.off and (record.role == "cleanup" or record.role == "root" and record.policy != "defaults" and command_id not in self._probe_ids): continue
             if record.role == "query":
@@ -436,6 +444,8 @@ class ActionQueue:
             # The actual shielded transport may still be active. Only callbacks
             # or explicit startup recovery can change transport_state.
             raise
+        except _DispatchDeferred:
+            pass  # Enrollment and identity survive the temporary pre-write fence.
         except ActionRejected as exc:
             record = self.store.get(cmd.id)
             if record.state == "prepared": self._after(self.store.predispatch_failed(cmd.id, reason=str(exc), now=self.clock.now()))

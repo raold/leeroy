@@ -969,7 +969,8 @@ class TalkEngine(EmoteReactions):
         local = self.clock.local()
         topics = guild_topics.gather(self.store.conn, now=now, local=local,
                                      cast=self.personas.all(), human=hg,
-                                     item_name=self._item_name)
+                                     item_name=self._item_name, **({'day_plans': True} if
+                                         getattr(getattr(self.cfg, 'life', None), 'day_plans', False) else {}))
         night = night_of(local)
         if night not in self._guild_used:
             self._guild_used = {night: set()}
@@ -988,7 +989,7 @@ class TalkEngine(EmoteReactions):
                          PHASE_MODS[day_phase(local)].max_speakers, "guild")
         self.budget.begin(now)  # the social bursts wait for it, then rest a gap
         try:
-            await self._burst(plan, first=(speaker, topic.topic, f"burst:guild:{topic.subject}"))
+            await self._burst(plan, first=(speaker, topic))
         finally:
             self.budget.burst_done(self.clock.now())
         return mult
@@ -1099,10 +1100,10 @@ class TalkEngine(EmoteReactions):
         return f"{' '.join(title.split())} {when_words(at, self.clock.local())}"
 
     async def _burst(self, plan: BurstPlan,
-                     first: tuple[int, str, str] | None = None) -> None:
+                     first: tuple[int, guild_topics.GuildTopic] | None = None) -> None:
         """One OPEN, then CONTINUE turns answering the line before: plan.size lines or fewer
         from plan.max_speakers members or fewer. A dropped or silent turn ends it. `first`
-        (speaker, topic, why): who opens and what they bring up (_open_to_guild), never a bit
+        (speaker, topic): who opens and what they bring up (_open_to_guild), never a bit
         or a flirt in its place; else the opener is drawn."""
         now = self.clock.now()
         if first is None:
@@ -1116,7 +1117,8 @@ class TalkEngine(EmoteReactions):
                 return
             speaker, topic, why = drawn[0], "", "burst:weighted_draw"
         else:
-            speaker, topic, why = first
+            speaker, picked = first
+            topic, why = picked.topic, f"burst:guild:{picked.subject}"
         channel = plan.channel_hint or choose_channel(
             TurnKind.OPEN, speaker=speaker, world=self.world, raid=self.raid, now=now,
             rng=self.rng)
@@ -1131,6 +1133,10 @@ class TalkEngine(EmoteReactions):
                                            trigger=trigger, room=plan.size - lines, now=now,
                                            delay=self.rng.uniform(*delay), why=why,
                                            topic=topic if kind is TurnKind.OPEN else "")
+            if kind is TurnKind.OPEN and first and first[1].key.startswith("day:"):
+                from leeroy_mind.godmode.dayrun import seed_valid
+                meta.still_valid = lambda: self.cfg.life.day_plans and seed_valid(
+                    self.store.conn, first[1].key, self.clock.now())
             meta.typed_on = typed_on
             sent = await self._speak(turn, meta)
             typed_on = meta.typed_on

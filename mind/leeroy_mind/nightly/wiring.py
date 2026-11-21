@@ -64,6 +64,10 @@ def attach(app):
         # coherent with this admission instead of reloading a retired model afterward.
         if candidate.models.live != app.cfg.models.live:
             app._model_known = app._model_ready = False
+        if app.cfg.life.day_plans != candidate.life.day_plans:
+            app.configure_day_plans(candidate.life.day_plans)
+            # A later world-dial refresh reapplies the file config to the talk engine.
+            app.file_cfg = replace(app.file_cfg, life=replace(app.file_cfg.life, day_plans=candidate.life.day_plans))
         app.cfg = candidate
         app.engine.apply_config(candidate)
         scheduler.settings = updated
@@ -105,6 +109,20 @@ def attach(app):
     runner = NightRunner(STAGES, make_ctx)
     from leeroy_mind.bond.night import attach as attach_bond
     attach_bond(runner,settings)
+    from leeroy_mind.godmode.dayplan import attach as attach_day_plans
+    from leeroy_mind.realm.places import Places, places_path
+    configure_day_stage = attach_day_plans(runner, settings, lambda: Places.load(places_path(
+        getattr(getattr(getattr(app, "guild", None), "cfg", None), "worldserver_conf", None))))
+
+    def configure_day_plans(on):
+        nonlocal settings
+        settings = replace(settings, day_plans=on)
+        scheduler.settings = settings
+        configure_day_stage(on)
+        if (realm := getattr(app, "realm", None)) is not None:
+            realm.configure_day_plans(on)
+
+    app.configure_day_plans = configure_day_plans
     from leeroy_mind.memory.scopes import attach as attach_scopes
     attach_scopes(runner)  # always on, model-free: no scope wider than its evidence
     app.night_runner = runner

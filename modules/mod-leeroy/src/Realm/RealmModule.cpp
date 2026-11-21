@@ -1,5 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "RealmModule.h"
+#include "DayPlans.h"
+#include "Guild/GuildAdd.h"
 #include "LeeroyRealmFailure.h"
 #include "LeeroyRealmRelease.h"
 #include "RealmOwnership.h"
@@ -273,6 +275,7 @@ void RealmModule::Start()
 
 void RealmModule::Reload()
 {
+    InvalidateDayOwnerChecks(); // A waiting original request belongs to the configuration that admitted it.
     auto const& cfg = Config();
     bool const enabled = cfg.enable && cfg.realmEnable && cfg.guildId && cfg.humanGuid;
     bool const changed = On() != enabled || _state->guild != cfg.guildId || _state->human != cfg.humanGuid;
@@ -355,15 +358,20 @@ bool RealmModule::RegisterGuildFishing(Executor executor, Admission admission, C
     return true;
 }
 
-bool RealmModule::AcceptGuildFishing(std::string id, std::vector<std::uint32_t> guids, std::string& error)
+bool RealmModule::AcceptGuildFishing(std::string id, std::vector<std::uint32_t> guids, std::string& error,
+    std::string const& dayPermit)
 {
     if (guids.empty() || guids.size() > 40) { error = "bad field: guids"; return false; }
     Queued entry{std::move(id), "guild_fishing", std::move(guids), 0, nlohmann::json::object(), ActivityDomain::Guild};
+    if (!dayPermit.empty()) entry.payload["day_permit"] = dayPermit;
     return AcceptDomain(std::move(entry), error);
 }
 
-void RealmModule::PublishOutcome(Queued const& entry, RealmJob const& job)
+void RealmModule::PublishOutcome(Queued const& entry, RealmJob const& job, bool released)
 {
+    // Every caller publishes at its committed disposition (including configuration cleanup).
+    // An operator's separate Forget path never publishes a day-operation result.
+    DayFinished(entry, released, job.ok);
     if (entry.domain == ActivityDomain::Realm) { PublishJob(job); return; }
     // May be called while final native/lifecycle proof guards are held. Native
     // outcome callbacks run later without those locks, never in inverse order.
@@ -679,6 +687,7 @@ bool RealmModule::AcceptDomain(Queued entry, std::string& error)
     if (!_state->Enabled(entry.domain))
     { error = entry.domain == ActivityDomain::Guild ? "guild_off" : "realm_off"; return false; }
     if (!_state->started) { error = "realm_not_started"; return false; }
+    if (!(error = CheckDayStep(entry)).empty()) return false;
     if (entry.kind == "leave_pvp" && entry.payload.is_object() && entry.payload.contains("pvp_owner"))
     {
         auto const& token = entry.payload.at("pvp_owner");
@@ -755,10 +764,13 @@ bool RealmModule::AcceptDomain(Queued entry, std::string& error)
         error = "pin_rejected";
         return false;
     }
+    DayAdmitted(_state->reservations.at(id).admitted); // Record before a later world tick can execute it.
     if (!_state->queue.Push(std::move(entry)))
     {
+        auto admitted = _state->reservations.at(id).admitted;
         _state->Release(id);
         _state->ApplyPins();
+        DayFinished(admitted, true, false);
         error = "bad field: queued_operation";
         return false;
     }
@@ -873,6 +885,12 @@ void RealmModule::TickContinuations(TickBudget& budget)
         if (found == _state->reservations.end()) return;
         auto& reservation = found->second;
         if (owner.stage == PvpStage::Unknown || reservation.retained) return;
+        if (DayRevoking(reservation.admitted) && owner.domain == ActivityDomain::Guild
+            && owner.kind == PvpKind::Fishing && owner.stage != PvpStage::Cleaning)
+        {
+            _state->continuations.Advance(owner.token, owner.revision, PvpStage::Cleaning, "day_revoked");
+            return;
+        }
         auto unknown = [&](std::string reason)
         {
             reservation.retained = true;
@@ -955,7 +973,7 @@ void RealmModule::TickContinuations(TickBudget& budget)
             result.clean->quiescence.reset();
             PublishOutcome(admitted, {owner.domain == ActivityDomain::Guild ? owner.originId : owner.cleanupId,
                 owner.domain == ActivityDomain::Guild ? admitted.kind : "leave_pvp", true, "", 0,
-                owner.members.size(), owner.token});
+                owner.members.size(), owner.token}, true);
             _state->ApplyPins();
             return;
         }
@@ -969,6 +987,8 @@ void RealmModule::Tick(std::uint32_t diff)
     _state->DrainKills();
     ReconcileConfiguration();
     TickSocialSeats();
+    TickDayPlans();
+    Guild::TickGuildAddHandoff();
     if (!On() && !GuildOn())
     {
         TickBudget noMutations(1);
@@ -1063,10 +1083,17 @@ void RealmModule::Tick(std::uint32_t diff)
             else _state->Release(entry.id);
             PublishOutcome(entry, {entry.id, entry.kind, false, std::move(reason), guid, knownJoins,
                 "", noChange ? std::optional<bool>{false} : std::nullopt, SkippedMembers(entry), released,
-                readbackGuid, std::move(readbackCheck)});
+                readbackGuid, std::move(readbackCheck)}, !retain || emptyLeave);
             return true;
         };
         bool const pending = reservation.pending.contains(guid);
+        // Under the world-thread queue lockstep no executor can run after this refusal.
+        if (entry.payload.is_object() && entry.payload.contains("day_permit")
+            && !entry.payload.contains("step") && entry.cursor == 0 && entry.kind != "duel")
+        {
+            if (auto refusal = DayMutationRefusal(entry); !refusal.empty())
+                return finish(std::move(refusal), false, true, true);
+        }
         auto const lease = reservation.bodies.find(guid);
         // What a skip of this member needs besides its own step's proof: a kind whose members are
         // independent, the member's own reason, and nothing else in the job touching its body.
@@ -1100,7 +1127,7 @@ void RealmModule::Tick(std::uint32_t diff)
             auto const named = DoneJobGuid(reservation.admitted.guids.size(), guid);
             _state->Release(entry.id);
             PublishOutcome(entry, {entry.id, entry.kind, true, "", named, value, "",
-                std::nullopt, SkippedMembers(entry)});
+                std::nullopt, SkippedMembers(entry)}, true);
             return true;
         };
         // The last body step is already proved complete/skipped. Waiting for
@@ -1215,6 +1242,8 @@ void RealmModule::Tick(std::uint32_t diff)
             return finish("operation_transition_unknown", true);
         if (result.state == StepState::Unknown)
             return finish(result.reason.empty() ? "native_cleanup_unproved" : result.reason, true);
+        // A deferred first challenge has no native effect or scope to observe.
+        if (result.state == StepState::Deferred) return false;
         if (result.state == StepState::Pending)
         {
             reservation.pending[guid] = std::move(expectedScopes);
@@ -1291,6 +1320,7 @@ void RealmModule::ReconcileConfiguration()
         [&](Queued const& entry, std::string const&)
     {
         auto it = _state->reservations.find(entry.id);
+        bool released = false;
         RealmJob outcome{entry.id, entry.kind, false,
             entry.domain == ActivityDomain::Guild ? "guild_off" : "realm_off"};
         if (it != _state->reservations.end() && !it->second.continuation.empty())
@@ -1302,10 +1332,10 @@ void RealmModule::ReconcileConfiguration()
             outcome = CancelGuildJoinReservation(std::move(outcome),
                 !it->second.pending.empty() || it->second.retained,
                 it->second.guildJoinAttempts, it->second.guildJoins,
-                [&] { it->second.retained = true; }, [&] { _state->Release(entry.id); });
+                [&] { it->second.retained = true; }, [&] { _state->Release(entry.id); released = true; });
         else
             _state->Release(entry.id);
-        PublishOutcome(entry, outcome);
+        PublishOutcome(entry, outcome, released);
     });
     // Actor/guild declarations belong to the old enable/configured-identity
     // epoch. An enable or identity switch requires a fresh declaration.

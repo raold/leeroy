@@ -87,7 +87,9 @@ class FakePorts:
     def persona_state(self, guid):
         return self.states.get(guid, PersonaStateRow(guid))
 
-    async def send(self, cmd):
+    async def send(self, cmd, *, expected_epoch=None):
+        if expected_epoch is not None:
+            assert expected_epoch == self.app.realm._transport_epoch
         type_name = json.loads(encode_command(cmd, int(self.clock.now() * 1000)))["type"]
         self.sent.append(cmd)
         self._command_types[cmd.id] = type_name

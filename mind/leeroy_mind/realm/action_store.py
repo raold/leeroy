@@ -120,6 +120,10 @@ def leave_released_guids(r):
     return released_members(r.role, r.policy, r.kind, r.state, r.evidence, r.reserved_manifest)
 
 
+def _day_fishing(r):
+    return r.kind == "bot_do" and r.policy == "ordinary" and bool(json.loads(r.payload).get("day_permit"))
+
+
 def held_manifest(r):
     return tuple(g for g in r.reserved_manifest if g not in leave_released_guids(r))
 
@@ -398,7 +402,7 @@ class ActionStore:
         if type(ev) is not dict or document(ev, limit=32768) != r.evidence: raise ValueError("invalid action evidence")
         allowed = {"ack", "job", "bot", "enrollment_job", "origin_failure", "status", "binding", "query_id",
                    "last_query", "cleanup_id", "cleanup_ids", "cleanup_admitted", "canceled", "dispatch_revision", "conflict", "failed_at",
-                   "abandoned", "skipped_at", "restart_released", "restart_started_ms", "dispatch_started_ms"}
+                   "abandoned", "skipped_at", "restart_released", "restart_started_ms", "dispatch_started_ms", "day_release"}
         if not set(ev) <= allowed: raise ValueError("invalid action evidence keys")
         if legacy and not set(ev) <= {"ack", "conflict", "failed_at"}:
             raise ValueError("invalid historical announcement evidence")
@@ -439,6 +443,8 @@ class ActionStore:
             integer(ev["dispatch_started_ms"], 1, 0x7FFFFFFFFFFFFFFF)
             if r.dispatched is None or r.transport_state == "not_entered":
                 raise ValueError("invalid native dispatch identity")
+        if "day_release" in ev and not self._day_proof(r, ev):
+            raise ValueError("invalid day release proof")
         if "restart_released" in ev or "restart_started_ms" in ev:
             _now(ev.get("restart_released"))
             integer(ev.get("restart_started_ms"), 1, 0x7FFFFFFFFFFFFFFF)
@@ -462,7 +468,7 @@ class ActionStore:
         if r.policy == "wg" and "status" in ev:
             status_binding = {k: ev["status"][k] for k in ("origin_id", "pvp_owner", "kind", "guild", "human", "origin_epoch", "members")}
             if ev.get("binding") != status_binding: raise ValueError("invalid status binding")
-        if "bot" in ev and r.policy != "defaults": raise ValueError("wrong defaults policy")
+        if "bot" in ev and r.policy != "defaults" and not _day_fishing(r): raise ValueError("wrong bot policy")
         if any(k in ev for k in ("enrollment_job", "origin_failure", "binding")) and r.policy != "wg":
             raise ValueError("wrong continuation policy")
         if "status" in ev and r.policy not in {"wg", "query"}: raise ValueError("wrong status policy")
@@ -672,6 +678,12 @@ class ActionStore:
                 child_data = json.loads(r.evidence)
                 child_data["dispatch_revision"] = data["status"]["revision"]
                 r = replace(r, evidence=document(child_data, limit=32768))
+            if r.owner.startswith("day:") and (token := json.loads(r.payload).get("day_permit")):
+                marked = self.conn.execute("UPDATE day_step SET dispatched=1 WHERE id=? AND dispatched=0 AND plan IN "
+                    "(SELECT plan FROM day_permit WHERE token=? AND 'day:'||plan=? AND state='open')",
+                    (command_id, token, r.owner))
+                if marked.rowcount != 1:
+                    raise ValueError("day step not enrolled")
             if started_ms:
                 r = replace(r, evidence=document({**json.loads(r.evidence), "dispatch_started_ms": started_ms}, limit=32768))
             return self._save(replace(r, state="dispatched", transport_state="inflight", process_id=process_id,
@@ -704,13 +716,88 @@ class ActionStore:
         return replace(r, state="conflict", evidence=document(ev, limit=32768), result_ok=False, result_reason="conflict", updated=now)
 
     def _reduce(self, r, ev, now):
+        seal = ev.get("day_release")
+        if seal and not seal["admitted"] and (ev.get("ack", {}).get("ok") or "job" in ev or "bot" in ev):
+            return self._conflict(r, ev, now)
         reduced = self._settle(r, ev, now)
         # The operator's release stands against later native evidence, unless it contradicts itself.
         if "abandoned" in ev and reduced.state != "conflict":
             return replace(reduced, state="completed", result_ok=False, result_reason=ABANDONED)
         if "restart_released" in ev and reduced.state != "conflict":
             return replace(reduced, state="completed", result_ok=False, result_reason=RESTART_RELEASED)
+        if ("day_release" in ev and reduced.state not in {"conflict", "completed"}
+                and r.transport_state == "settled"):
+            return replace(reduced, state="completed", result_ok=False, result_reason="day_released")
         return reduced
+
+    def _day_proof(self, record, evidence):
+        """Match a sealed native permit to this exact journal row and original process."""
+        if record.role != "root" or record.policy != "ordinary":
+            return False
+        command = json.loads(record.payload)
+        permit = self.conn.execute(
+            "SELECT p.plan,p.begin_id,p.boot,p.serial,p.token,p.guild,p.human,p.release_ids,s.kind,s.member,p.process,p.epoch "
+            "FROM day_step s JOIN day_permit p ON p.plan=s.plan WHERE s.id=?",
+            (record.command_id,)).fetchone()
+        if not permit:
+            return False
+        plan, origin, boot, serial, token, guild, human, released, step, member, process, epoch = permit
+        participants = {g for (g,) in self.conn.execute("SELECT member FROM day_plan WHERE action_ref=?",
+                                                        (f"day:{plan}",))}
+        kind = {"move": "realm_move", "fishing": "bot_do", "duel": "duel", "status": "rpg_status"}.get(step)
+        return (released is not None and command.get("day_permit") == token and bool(token)
+                and record.owner == f"day:{plan}" and kind == record.kind
+                and member in record.reserved_manifest and set(record.reserved_manifest) <= participants
+                and (record.process_id, str(record.connection_epoch)) == (process, epoch)
+                and record.guild == guild and record.human == human and boot and evidence.get("dispatch_started_ms") == boot
+                and evidence.get("day_release") == {"origin": origin, "serial": serial,
+                    "admitted": record.command_id in json.loads(released)})
+
+    def day_previous_boot_resolved(self, permit, *, never_dispatched=False):
+        """Resolve the journal's exact old steps; an intent alone never crossed the writer barrier."""
+        plan = permit["plan"]
+        owner = f"day:{plan}"
+        steps = dict(self.conn.execute("SELECT id,dispatched FROM day_step WHERE plan=?", (plan,)))
+        records = self._records("owner=? OR command_id IN (SELECT id FROM day_step WHERE plan=?)", (owner, plan))
+        ids = {r.command_id for r in records}
+        if not ids <= steps.keys() or any(entered and (never_dispatched or ident not in ids)
+                                         for ident, entered in steps.items()):
+            return False
+        for r in records:
+            if (r.owner != owner or r.role != "root" or r.policy != "ordinary" or r.state not in TERMINAL
+                    or r.transport_state == "inflight" or r.guild != permit["guild"] or r.human != permit["human"]
+                    or json.loads(r.payload).get("day_permit") != permit["token"]):
+                return False
+            if r.result_reason == ABANDONED:
+                row = self.conn.execute("SELECT value FROM meta WHERE key=?", (ABANDON_RECEIPT + r.command_id,)).fetchone()
+                if not row:
+                    return False
+                receipt = json.loads(row[0])
+                if (receipt.get("seq") != r.seq or receipt.get("kind") != r.kind
+                        or receipt.get("members") != list(r.reserved_manifest)
+                        or receipt.get("at") != json.loads(r.evidence).get("abandoned")):
+                    return False
+        return True
+
+    def day_released(self, plan, now):
+        """Caller has atomically stored the closed seal. Preserve conflicts and in-flight writers."""
+        rows = self.conn.execute("SELECT s.id,p.begin_id,p.serial,p.release_ids FROM day_step s JOIN day_permit p "
+                                 "ON p.plan=s.plan WHERE p.plan=?", (plan,)).fetchall()
+        complete = True
+        for ident, origin, serial, released in rows:
+            record = self.get(ident)
+            if record is None or record.state == 'not_sent':
+                continue
+            evidence = json.loads(record.evidence)
+            if 'abandoned' in evidence:
+                continue
+            evidence["day_release"] = {"origin": origin, "serial": serial, "admitted": ident in json.loads(released)}
+            if not self._day_proof(record, evidence):
+                complete = False
+                continue
+            updated = self._save(self._reduce(record, evidence, now))
+            complete &= updated.state in TERMINAL
+        return complete
 
     def _settle(self, r, ev, now):
         r = replace(r, evidence=document(ev, limit=32768), updated=now)
@@ -726,6 +813,8 @@ class ActionStore:
             if positive: return self._conflict(r, ev, now)
             error = ack["error"]
             refused = (r.policy in {"ordinary", "wg"} and error in REFUSALS
+                       or json.loads(r.payload).get("day_permit") and error in {
+                           "day_off", "day_revoked", "day_scope"}
                        or r.policy == "ordinary" and r.kind == "leave_pvp" and leave_refusal_guids(error, r.reserved_manifest)
                        or r.kind == "guild_grow" and _grow_refusal(error, r.reserved_manifest)
                        or r.policy == "wg" and error in {"no_wintergrasp", "no_online_members"}
@@ -737,6 +826,16 @@ class ActionStore:
                 return result(False, error, "completed")  # the named members, for the recall to leave out
             return result(False, "refused" if refused else "unknown", "completed" if refused else "unknown")
         if r.policy == "ack" and ack: return result(True)
+        if _day_fishing(r) and "bot" in ev:
+            bot = ev["bot"]
+            succeeded = tuple(bot["guids"])
+            skipped = tuple(s["guid"] for s in bot["skipped"])
+            if (bot["state"] != "done" or bot["reason"] or set(succeeded) & set(skipped)
+                    or set(succeeded + skipped) != set(r.reserved_manifest)):
+                return result(False, "fishing_unproved", "unknown")
+            if ack or r.transport_state == "settled":
+                return result(bool(succeeded), "" if succeeded else "fishing_skipped")
+            return r
         if r.policy == "wg":
             if "origin_failure" in ev: return result(False, "origin_failed", "unknown")
             return r
@@ -799,7 +898,7 @@ class ActionStore:
             new = replace(old, transport_state="settled", send_error=safe_type, updated=now)
             if before_write and old.role == "root": new = replace(new, state="not_sent", result_ok=False, result_reason="not_sent")
             elif old.state not in TERMINAL and old.state != "conflict": new = replace(new, state="unknown", result_ok=False, result_reason="transport_unknown")
-            if "job" in ev or "bot" in ev:
+            if "job" in ev or "bot" in ev or "day_release" in ev and new.state != 'not_sent':
                 new = self._reduce(new, ev, now)
             return self._finish(old, new, now)
 
@@ -809,7 +908,7 @@ class ActionStore:
         now = _now(now); incoming = json.loads(document(_evidence(ev), limit=32768)); _realm_job(incoming, ev.id)
         with self.conn:
             old = self.get(ev.id)
-            if old is None or old.transport_state == "not_entered" or old.kind != ev.kind or old.policy in {"ack", "query", "defaults"}: return Transition(False)
+            if old is None or old.transport_state == "not_entered" or old.kind != ev.kind or old.policy in {"ack", "query", "defaults"} or _day_fishing(old): return Transition(False)
             # Only an ordinary leave or a rearm skips members, and only members of its own manifest.
             if ev.skipped and (old.policy != "ordinary" or old.kind not in SKIPPING_KINDS
                                or not set(ev.skipped) <= set(old.reserved_manifest)): return Transition(False)
@@ -845,7 +944,7 @@ class ActionStore:
         if type(ev.id) is not str: return Transition(False)
         with self.conn:
             old = self.get(ev.id)
-            if (old is None or old.role != "root" or old.policy != "defaults"
+            if (old is None or old.role != "root" or (old.policy != "defaults" and not _day_fishing(old))
                     or old.transport_state == "not_entered" or ev.kind != old.kind
                     or ev.training_run != json.loads(old.payload)["training_run"]):
                 return Transition(False)
@@ -1064,6 +1163,10 @@ class ActionStore:
 
     def _prune(self, keep=256, now=None):
         roots = tuple(r for r in self._records("role='root' AND state IN ('completed','not_sent')") if not _durable(r))
+        if any(r.owner.startswith("day:") and json.loads(r.payload).get("day_permit") for r in roots):
+            pending_days = {r[0] for r in self.conn.execute("SELECT s.id FROM day_step s JOIN day_permit p "
+                                                            "ON p.plan=s.plan WHERE p.state!='closed'")}
+            roots = tuple(r for r in roots if r.command_id not in pending_days)
         protected = {r.command_id for r in roots if r.result_ok is False and "failed_at" in json.loads(r.evidence)
                      and (now is None or now < json.loads(r.evidence)["failed_at"] + 600)
                      or leave_skipped_guids(r) and (now is None or skipped_backoff(r, now))}

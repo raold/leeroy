@@ -16,6 +16,8 @@ class Player;
 
 // World thread; returns the reply line (a pong, a cast or an ack).
 std::string LeeroyExecuteCommand(Leeroy::Command const& cmd);
+std::int64_t LeeroyWorldStartedMs();
+std::uint64_t LeeroyCommandSerial(); // Connection that supplied the currently executing command.
 
 // World thread. Queues CMSG_MESSAGECHAT on the human's own session, which handles it on its next update as a line he
 // typed, in his original team's language. text (and toName, for a whisper) go as given: the caller has sanitized and

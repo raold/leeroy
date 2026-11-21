@@ -895,3 +895,23 @@ def test_delayed_native_origin_keeps_reader_epoch_after_actual_writer_replacemen
             finally:
                 release.set()
     run(go())
+
+
+def test_owner_admission_check_cannot_execute_on_old_peer_or_follow_a_new_writer():
+    from leeroy_mind.guild.protocol import DayOwnerCheck, StringDo, register
+    register()
+    async def go():
+        async with session() as s:
+            epoch = s.client.transport_state.epoch
+            original = StringDo("owner-request", 101, "come_to_me", target_guid=1)
+            check = dataclasses.replace(original, id="check", day_check=DayOwnerCheck(original.id, ("begin",), 30000))
+            ack = await s.client.send(check, preserve_id=True, expected_epoch=epoch)
+            assert ack.id == check.id and not ack.ok and "unknown type" in ack.error
+            assert not any(c["type"] == "string_do" for c in s.bridge.commands)
+            await s.bridge.drop_client()
+            await s.wait_for(lambda: s.bridge.connections == 2 and s.client.greeted)
+            with pytest.raises(NotConnected, match="writer changed"):
+                await s.client.send(dataclasses.replace(original, day_prepared=check.id),
+                                    preserve_id=True, expected_epoch=epoch)
+            assert not any(c["type"] == "string_do" for c in s.bridge.commands)
+    run(go())

@@ -29,6 +29,7 @@ SWITCHES = (
     ('talk','lead','His "you lead" in game carried out','Leeroy.Lead.Enable = 1',True),
     ('life','availability','Availability (0-10; the world dial overrides it)','',NUMBER),
     ('life','state','Her feeling through the day',''),
+    ('life','day_plans','Member day plans','realm.enabled; Leeroy.DayPlans.Enable = 1'),
     ('signals','enabled','Signals',''), ('fingerprint','enabled','Typing fingerprint',''),
     ('callbacks','enabled','Memory callbacks',''), ('learn','enabled','Rewards',''),
     ('learn','bandit','Bandit credit','learn.enabled'), ('learn','coach','Talk coach','learn.enabled'),

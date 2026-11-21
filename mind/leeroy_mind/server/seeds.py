@@ -18,7 +18,7 @@ from leeroy_mind.wow import boss_name
 
 SEED_KINDS = ('raid_before', 'raid_after', 'loot', 'life', 'plan', 'calendar', 'birthday',
               'reset', 'weekend', 'rival', 'his_day', 'officer', 'purpose', 'photo', 'joke',
-              'wow_event', 'loot_close', 'loot_wish', 'intent', 'decision', 'his_loot', 'meme', 'meme_image', 'bank_request', 'restock')
+              'wow_event', 'loot_close', 'loot_wish', 'intent', 'decision', 'his_loot', 'meme', 'meme_image', 'bank_request', 'restock', 'day')
 # An intent (godmode.intents) is tried again half an hour after an opener that was dropped.
 # A decision's stage is argued once (its keys name the stage): never fresh again once used
 FRESH_S = {'purpose': 86400.0, 'plan': 7 * 86400.0, 'officer': 7 * 86400.0, 'loot_close': 7 * 86400.0,
@@ -30,7 +30,7 @@ USED_KEY = 'server:seed:{key}'
 # and life seeds were 88% of the openers). A kind missing here is its own subject.
 SUBJECTS = {'raid': ('raid_before', 'raid_after', 'reset', 'his_day'),
             'loot': ('loot', 'loot_close', 'loot_wish', 'his_loot'),
-            'life': ('life', 'weekend', 'photo'),
+            'life': ('life', 'weekend', 'photo', 'day'),
             'meme': ('joke', 'meme', 'meme_image'),
             'rival': ('rival',),
             'officer': ('officer', 'decision', 'bank_request', 'restock'),
@@ -100,7 +100,7 @@ class Seed:
     @property
     def openers(self) -> tuple[int, ...] | None:
         """Who already knows a subject before any of it is posted in the channel."""
-        if self.kind in ('life', 'photo', 'group_start', 'loot_wish', 'intent', 'bank_request', 'restock'):
+        if self.kind in ('life', 'photo', 'group_start', 'loot_wish', 'intent', 'bank_request', 'restock', 'day'):
             return self.about
         if self.kind == 'his_day':
             return self.witnesses
@@ -412,7 +412,7 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
            culture_enabled: bool = False, culture_store=None, ident=None,
            culture_calendar: bool = False, culture_loot: bool = False,
            intents_enabled: bool = False, decisions_enabled: bool = False,
-           culture_memes: bool = False) -> list[Seed]:
+           culture_memes: bool = False, day_plans: bool = False) -> list[Seed]:
     # human_name is deliberately not a fallback: the persisted character row is the
     # authority; an operator's real name must not become a seed.
     names = _names(conn, cast, human)
@@ -439,6 +439,9 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
             for kind, source in (('meme', culture.meme_seeds), ('meme_image', culture.meme_image_seeds)):
                 result += _read(kind, lambda source=source: source(culture_store, now=now, local=local,
                                                                    personas=cast, human=human, ident=ident))
+    if day_plans:
+        from leeroy_mind.godmode.dayrun import seeds
+        result += _read('day', lambda: seeds(conn, now, names))
     if intents_enabled:
         result += _read('intent', lambda: _intent(conn, c))
     if decisions_enabled:

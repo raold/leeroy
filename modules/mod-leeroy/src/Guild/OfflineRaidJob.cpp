@@ -1,6 +1,8 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "OfflineRaidJob.h"
+#include "Realm/DayPlans.h"
+#include "Realm/RealmPorts.h"
 #include "Strings.h"
 #include "BotCommands.h"
 #include "PlayStyle.h"
@@ -26,6 +28,8 @@
 #if LEEROY_HAS_DUNGEON_CLEAR
 #include "AiObjectContext.h"
 #include "Battlefield.h"
+#include "CharacterCache.h"
+#include "Config.h"
 #include "BattlefieldMgr.h"
 #include "DBCStores.h"
 #include "Corpse.h"
@@ -291,7 +295,7 @@ std::string InstanceConflict(OfflineRaidCmd const& cmd)
     return {};
 }
 
-std::string Unusable(Player* player)
+std::string Unusable(Player* player, std::string const& dayToken = {})
 {
     if (!player)
         return "offline";
@@ -306,11 +310,14 @@ std::string Unusable(Player* player)
     if (player->GetGroup() && (player->GetGroup()->isLFGGroup() || player->GetGroup()->isBGGroup()
         || player->GetGroup()->isBFGroup()))
         return "in_lfg";
-    if (player->IsBeingTeleported() || player->HasPendingBind())
+    bool dayMoving = !dayToken.empty() && Realm::DayMoving(dayToken, player);
+    if ((player->IsBeingTeleported() && !dayMoving) || player->HasPendingBind())
         return "teleporting";
-    if (player->GetMap()->IsDungeon())
+    auto map = player->FindMap();
+    if ((!map && !dayMoving) || (map && map->IsDungeon()))
         return "in_instance";
-    if (player->IsInCombat())
+    if (player->IsInCombat() && (dayToken.empty() || !Realm::DayDueling(dayToken,
+        Realm::RealmModule::Instance().Holder(player->GetGUID().GetCounter()), player)))
         return "in_combat";
     return {};
 }
@@ -1572,7 +1579,11 @@ LeeroyCommandResult HandleStartOfflineRaid(nlohmann::json const& message)
     auto const cmd = ParseOfflineRaid(message, error);
     if (!cmd)
         return Fail(error);
-    return StartRaidJob(message.at("id").get<std::string>(), *cmd, RaidJobMode::Offline);
+    auto manifest = cmd->members;
+    manifest.push_back(cmd->leaderGuid);
+    Realm::DayOwnerCheck check(message, std::move(manifest), "offline_raid");
+    if (!check.error.empty()) return Fail(check.error);
+    return StartRaidJob(message.at("id").get<std::string>(), *cmd, RaidJobMode::Offline, {}, &check);
 }
 
 LeeroyCommandResult HandleStopOfflineRaid(nlohmann::json const& message)
@@ -1595,7 +1606,7 @@ LeeroyCommandResult HandleStopOfflineRaid(nlohmann::json const& message)
 
 LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     [[maybe_unused]] OfflineRaidCmd const& command, [[maybe_unused]] RaidJobMode mode,
-    [[maybe_unused]] std::vector<uint32> const& bosses)
+    [[maybe_unused]] std::vector<uint32> const& bosses, [[maybe_unused]] Realm::DayOwnerCheck const* check)
 {
 #if !LEEROY_HAS_DUNGEON_CLEAR
     return Fail("driver_unavailable:no_dungeon_clear");
@@ -1622,7 +1633,8 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
         return Fail("human_online");
     for (uint32 low : Requested(*cmd))
     {
-        if (Realm::RealmOwns(low)) return Fail("busy:realm_owner:" + std::to_string(low));
+        if (Realm::RealmOwns(low) && (!check || check->Token(low).empty()))
+            return Fail("busy:realm_owner:" + std::to_string(low));
         if (auto* player = FindOnline(low); player && GroupHasRealmOwner(player->GetGroup()))
             return Fail("busy:realm_group:" + std::to_string(low));
         if (Training::DummyTrialOwns(low)) return Fail("busy:" + std::to_string(low));
@@ -1640,9 +1652,11 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     if (auto const conflict = InstanceConflict(*cmd); !conflict.empty())
         return Fail(conflict);
     Player* leader = FindOnline(cmd->leaderGuid);
+    auto dayToken = check ? check->Token(cmd->leaderGuid) : std::string{};
+    if (!leader && !dayToken.empty()) leader = ObjectAccessor::FindConnectedPlayer(Realm::PlayerGuid(cmd->leaderGuid));
     if (!leader || (!benchmark && !Controlled(leader)) || !PlayerbotAI::IsTank(leader, true))
         return Fail("leader_not_tank");
-    if (auto const reason = benchmark ? std::string{} : Unusable(leader); !reason.empty())
+    if (auto const reason = benchmark ? std::string{} : Unusable(leader, dayToken); !reason.empty())
         return Fail("leader_unavailable:" + reason);
     if (benchmark)
         for (uint32 low : Requested(*cmd))
@@ -1659,17 +1673,35 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
         return Fail("no_entrance");
 
     std::string why;
-    DcTestDriver::Readiness const readiness = DcTestDriver::Ensure(&why);
+    bool const preview = check && check->Checking();
+    bool const prepareDriver = preview && check->PreparingDriver();
+    if (preview)
+    {
+        // The pinned driver API exposes its Player only once initialized. Reject a configured
+        // owner/cast character by its cached identity before asking Ensure to log anyone in.
+        auto name = sConfigMgr->GetOption<std::string>("DungeonClear.TestRun.DriverCharacter", "Dcdriver", false);
+        if (name.empty()) return Fail("driver_unavailable");
+        auto configured = sCharacterCache->GetCharacterGuidByName(name);
+        if (configured)
+            if (auto conflict = OfflineDriverConflict(configured.GetCounter(), HumanGuid(), IsCast(configured.GetCounter()),
+                                                      Requested(*cmd)); !conflict.empty())
+                return Fail(conflict);
+    }
+    if (prepareDriver && !check->DriverPreparationCurrent()) return Fail("day_owner_expired");
+    bool const inspectOnly = preview && !prepareDriver;
+    auto const readiness = OfflineDriverReadiness(inspectOnly, DcTestDriver::Get, [&] { return DcTestDriver::Ensure(&why); });
     if (readiness == DcTestDriver::Readiness::PendingLogin)
-        return Fail("driver_pending");
+        return inspectOnly ? check->Accept(true) : Fail("driver_pending");
     if (readiness == DcTestDriver::Readiness::Unavailable)
-        return Fail("driver_unavailable:" + why);
+        return Fail(prepareDriver ? "driver_unavailable" : "driver_unavailable:" + why);
     Player* driver = DcTestDriver::Get();
-    if (!driver || driver->GetGUID().GetCounter() == HumanGuid() || IsCast(driver->GetGUID().GetCounter()))
-        return Fail("driver_unavailable:driver_not_separate");
-    for (uint32 low : Requested(*cmd))
-        if (low == driver->GetGUID().GetCounter()) return Fail("driver_unavailable:driver_is_member");
+    auto driverGuid = driver ? driver->GetGUID().GetCounter() : 0;
+    if (auto conflict = OfflineDriverConflict(driverGuid, HumanGuid(), driver && IsCast(driverGuid), Requested(*cmd));
+        !conflict.empty())
+        return Fail(conflict);
 
+    if (prepareDriver) return {true, {}}; // Only the dedicated driver is ready. A fresh check admits the raid.
+    if (preview) return check->Accept();
     auto job = std::make_unique<Job>();
     job->command = *cmd;
     job->mode = mode;
@@ -2040,6 +2072,12 @@ void SweepLeftoverGroups()
 
 void RegisterOfflineRaidHandler()
 {
+    Realm::RegisterDayOwnerCheck("start_offline_raid", HandleStartOfflineRaid);
+    RegisterCommand("day_prepare_offline_driver", [](nlohmann::json const& message) -> LeeroyCommandResult {
+        if (!message.contains("day_driver_ticket") || !message.contains("day_check") || message.contains("day_prepared"))
+            return Fail("day_owner_scope");
+        return HandleStartOfflineRaid(message);
+    });
     RegisterCommand("start_offline_raid", HandleStartOfflineRaid);
     RegisterCommand("offline_raid_stop", HandleStopOfflineRaid);
 }

@@ -63,6 +63,7 @@ struct Command
     std::string message;
     std::string extType;      // Extension only: the type name
     nlohmann::json raw;       // Extension only: the whole message
+    std::uint64_t connectionSerial = 0; // Set by PopCommands while it owns the inbox lock.
 };
 
 // id: the line's string "id" whenever the line is a JSON object that has one, even when it is rejected

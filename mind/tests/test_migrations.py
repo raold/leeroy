@@ -465,3 +465,18 @@ def test_migration_from_an_older_db(tmp_path, monkeypatch):
                          "VALUES ('officer-chat','q','[\"a\"]','[]',1,2,'open')")
     finally:
         conn.close()
+
+
+def test_day_plans_upgrade_preserves_populated_previous_release(tmp_path, monkeypatch):
+    path = tmp_path / "mind.db"
+    conn = db_before("day_plans", path, tmp_path, monkeypatch)
+    before = conn.execute("PRAGMA user_version").fetchone()[0]
+    conn.execute("INSERT INTO meta(key,value) VALUES('prior:row','preserved')")
+    conn.commit()
+    assert db_mod.migrate(conn) == latest_version()
+    assert before < migration_number("day_plans")
+    assert conn.execute("SELECT value FROM meta WHERE key='prior:row'").fetchone()[0] == "preserved"
+    assert conn.execute("SELECT count(*) FROM day_plan").fetchone()[0] == 0
+    assert db_mod.migrate(conn) == latest_version()
+    assert not conn.execute("PRAGMA foreign_key_check").fetchall()
+    conn.close()

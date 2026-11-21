@@ -72,7 +72,12 @@ def test_exact_registry_scope_and_lossless_payload_roundtrip(cmd, policy, scope)
 
 
 def test_registry_accounts_for_all_realm_types():
-    assert {type(c) for c, _, _ in CASES if type(c) is not BotDo} | {p.ArenaQueue, p.RealmForget} == set(p.COMMANDS.values())
+    assert {type(c) for c, _, _ in CASES if type(c) is not BotDo} | {
+        p.ArenaQueue, p.RealmForget, p.DayBegin, p.DayStatus, p.DayRevoke} == set(p.COMMANDS.values())
+    for cmd in (p.DayBegin('begin', (2,), 'inn', 'org_inn', 100), p.DayStatus('query', 'begin'),
+                p.DayRevoke('stop', 'begin', 'held', 'a' * 32, 1, 10)):
+        with pytest.raises(ValueError, match='outside the body queue'):
+            classify(cmd)
     with pytest.raises(ValueError, match="abandonment receipt"):
         classify(p.RealmForget("forget", "root"))
 

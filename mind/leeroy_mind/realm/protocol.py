@@ -126,6 +126,7 @@ class RealmMove:
     place: str
     slot: int = 0
     social: bool = field(default=False, metadata={"omit_default": True})
+    day_permit: str = field(default="", metadata={"omit_default": True})
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +160,7 @@ class RpgStatus:
     guid: int
     status: str
     quest_id: int = 0
+    day_permit: str = field(default="", metadata={"omit_default": True})
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +253,48 @@ class Duel:
     id: str
     guid: int
     target_guid: int
+    day_permit: str = field(default="", metadata={"omit_default": True})
+
+
+@dataclass(frozen=True, slots=True)
+class DayBegin:
+    id: str
+    members: tuple[int, ...]
+    activity: str
+    place: str
+    ends_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class DayRevoke:
+    id: str
+    origin_id: str
+    reason: str
+    permit: str
+    serial: int
+    started_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class DayStatus:
+    id: str
+    origin_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class DayState:
+    ts: int
+    origin_id: str
+    permit: str
+    serial: int
+    guild: int
+    human: int
+    members: tuple[int, ...]
+    state: str
+    reason: str
+    released: tuple[str, ...]
+    started_ms: int
+    succeeded: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -737,6 +781,9 @@ class RealmPvp:
 from leeroy_mind.world.protocol import WorldSay, GetWorldRoster, WorldRoster
 
 COMMANDS: dict[str, type] = {
+    "day_begin": DayBegin,
+    "day_revoke": DayRevoke,
+    "day_status": DayStatus,
     "realm_actors": RealmActors,
     "realm_say": RealmSay,
     "realm_emote": RealmEmote,
@@ -776,6 +823,7 @@ COMMANDS: dict[str, type] = {
     "realm_forget": RealmForget,
 }
 EVENTS: dict[str, type] = {
+    "day_state": DayState,
     "realm_job": RealmJob,
     "realm_visit_state": RealmVisitState,
     "channel_chat": ChannelChat,
@@ -796,7 +844,7 @@ EVENTS: dict[str, type] = {
     "world_roster": WorldRoster,
     "realm_forgotten": RealmForgotten,
 }
-NOISY = frozenset({"realm_job", "channel_chat", "game_event", "realm_visit_state"})
+NOISY = frozenset({"realm_job", "channel_chat", "game_event", "realm_visit_state", "day_state"})
 
 
 def register() -> None:

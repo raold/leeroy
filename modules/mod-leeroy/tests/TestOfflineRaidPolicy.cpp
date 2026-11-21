@@ -556,3 +556,28 @@ LEEROY_TEST(OfflineRaid_AnOutOfReachBossInProgressIsNeverClearedReachable)
     naxx[14] = 0;
     CHECK(ClearedReachable(naxx, {13, 14}));
 }
+
+LEEROY_TEST(OfflineDriverInspectNeverInitiatesLoginAndPreparationPreservesReadiness)
+{
+    enum class Readiness { Ready, PendingLogin, Unavailable };
+    bool online = false;
+    unsigned preparations = 0;
+    auto get = [&] { return online; };
+    auto ensure = [&] { ++preparations; return Readiness::PendingLogin; };
+    CHECK(OfflineDriverReadiness(true, get, ensure) == Readiness::PendingLogin);
+    CHECK(preparations == 0);
+    CHECK(OfflineDriverReadiness(false, get, ensure) == Readiness::PendingLogin);
+    CHECK(preparations == 1);
+    online = true;
+    CHECK(OfflineDriverReadiness(true, get, ensure) == Readiness::Ready);
+    CHECK(preparations == 1);
+    CHECK(OfflineDriverReadiness(false, get, [] { return Readiness::Unavailable; }) == Readiness::Unavailable);
+}
+
+LEEROY_TEST(OfflineDriverChecksAnExistingConfiguredBodyBeforeLogin)
+{
+    CHECK_EQ(OfflineDriverConflict(1, 1, false, {3,4}), "driver_unavailable:driver_not_separate");
+    CHECK_EQ(OfflineDriverConflict(2, 1, true, {3,4}), "driver_unavailable:driver_not_separate");
+    CHECK_EQ(OfflineDriverConflict(4, 1, false, {3,4}), "driver_unavailable:driver_is_member");
+    CHECK(OfflineDriverConflict(5, 1, false, {3,4}).empty());
+}

@@ -404,7 +404,7 @@ class LiveReview:
         planning = (not (e._coherent() and e._core_on()) or "raid" in raw or "officer" in raw or bool(
             _PLANNING.search(" ".join(h.text for h in history[-3:]))))
         context = CardContext(channel=raw, to_guid=to, readers=readers, purpose=purpose,
-            attendance=planning,
+            attendance=planning, day_plans=getattr(getattr(e.cfg, 'life', None), 'day_plans', False),
             thread=tuple(item(h) for h in history[-8:]), reply_to=parent, pins=pins,
             discord_events=tuple(events[-4:]), now=now,names=names,
             romance_activities=bond[0] and not is_group(raw), jealousy=0 if is_group(raw) else bond[1], server=observed.server,

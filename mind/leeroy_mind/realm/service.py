@@ -96,6 +96,7 @@ class Realm:
         self._process_id = uuid.uuid4().hex
         self._connected = False
         self._presence_known = False
+        self._hello = None
         self._rejections, self._rejections_at = Counter(), float("-inf")
         self._connection_epoch = 0
         self._transport_epoch = 0
@@ -249,10 +250,26 @@ class Realm:
         self._guild = ev.guild_id if valid else 0
         self._human = human if valid else 0
         self._presence_known = valid
+        self._hello = ev if valid else None
         self.queue.context_changed()
         if valid:
             self.queue.on_hello(ev)
             self.recall.on_hello(ev)
+
+    def configure_day_plans(self, enabled):
+        day = self.parts.get("day")
+        if day is None:
+            if not enabled and not self.app.store.conn.execute(
+                    "SELECT 1 FROM day_permit WHERE state!='closed' LIMIT 1").fetchone():
+                return
+            from leeroy_mind.godmode.dayrun import DayRun
+            day = DayRun(self, admission=enabled)
+            self.parts["day"] = day
+            self.add_part(day, event_types=("hello", "day_state", "group", "guild_group", "boss", "job"))
+            if self.action_context().presence_known:
+                day.adopt_hello(self._hello, self._transport_epoch)
+        else:
+            day.configure(enabled)
 
     def _register_event(self, name):
         if name not in self._handlers:
@@ -692,6 +709,8 @@ class Realm:
         if name in {"login", "logout"} and self.app.is_backlog(ev):
             return
         if not self.enabled or self._stopping:
+            if not self._stopping and name in {"hello", "day_state"} and (day := self.parts.get("day")):
+                await day.on_event(ev)
             return
         if name == "login" and ev.human and ev.guid == self._human and self._presence_known:
             self.recall.on_login(self.ports.now())
@@ -739,6 +758,8 @@ class Realm:
                 log.warning("realm_forget_failed: %s", type(error).__name__)
         self._flush_rejections()
         if not self.enabled or self._stopping:
+            if not self._stopping and (day := self.parts.get("day")):
+                await day.tick()
             return
         state = self.ports.raid_state()
         self.recall.on_raid_state(self._raid_state, state)
@@ -785,6 +806,8 @@ class Realm:
         await asyncio.shield(self._close_task)
 
     async def _drain(self):
+        if (day := self.parts.get("day")) is not None:
+            await day.shutdown()
         await self.forget.close()
         if self._children:
             await asyncio.gather(*tuple(self._children), return_exceptions=True)
@@ -945,6 +968,7 @@ def attach_realm(app) -> Realm:
     app.register_shutdown_receipt("realm_pvp", realm.on_realm_pvp)
     app.register_shutdown_drain(realm.close)
     build_parts(realm)
+    realm.configure_day_plans(getattr(getattr(getattr(app, 'cfg', None), 'life', None), 'day_plans', False))
     if (direct := realm.parts.get("direct")) is not None:
         # Like the recoveries in Realm.__init__: once, before anything can send.
         direct.recover(process_id=realm._process_id)

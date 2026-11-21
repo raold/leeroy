@@ -297,6 +297,12 @@ class ServerEngine:
                 and (godmode is None or not godmode.seed_valid(conversation.seed))):
             conversation.reason = conversation.reason or 'intent_settled'
             return False
+        if conversation.seed.kind == 'day' and not conversation.messages:
+            from leeroy_mind.godmode.dayrun import seed_valid
+            if (not self.app.cfg.life.day_plans or
+                    not seed_valid(self.app.store.conn, conversation.seed.key, self.app.clock.now())):
+                conversation.reason = 'day_ended'
+                return False
         if parent is not None:
             row = self.app.store.conn.execute('SELECT channel,deleted FROM discord_message WHERE id=?',
                                               (parent,)).fetchone()

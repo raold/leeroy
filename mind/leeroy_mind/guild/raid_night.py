@@ -13,7 +13,9 @@ import math
 from typing import Protocol
 from uuid import uuid4
 
+from leeroy_mind.bridge import NotConnected
 from leeroy_mind.clock import night_of
+from leeroy_mind.realm.actions import ActionRejected
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.wow import is_raid_fight
 
@@ -530,8 +532,36 @@ class RaidNight:
 
     async def _ack(self, command, epoch):
         self._check(epoch)
+        async def send_original(original, **guard):
+            if not isinstance(original, FormRaid):
+                return await self.ports.send(original, **guard)
+            # A sent FormRaid can create a group even when its acknowledgement is lost.
+            previous = self._forming_group
+            self._forming_group = True
+            with self.ports.conn:
+                _put(self.ports.conn, FORMED_GROUP_KEY, True)
+            try:
+                return await self.ports.send(original, **guard)
+            except NotConnected:
+                self._forming_group = previous
+                with self.ports.conn:
+                    _put(self.ports.conn, FORMED_GROUP_KEY, previous)
+                raise
+
         try:
-            ack = await self.ports.send(command)
+            runner = getattr(getattr(getattr(self.ports, "app", None), "realm", None), "parts", {}).get("day")
+            if runner is not None and isinstance(command, (ClearLockout, FormRaid)):
+                targets = set(command.guids if isinstance(command, ClearLockout) else (command.leader_guid, *command.members))
+                targets.discard(self.ports.human_guid)
+                def valid():
+                    self._check(epoch)
+                    return targets <= {c.guid for c in self._candidates() if c.available}
+                ack = await runner.handoff(command, targets, "raid", valid, send_original)
+            else:
+                ack = await send_original(command)
+        except ActionRejected:
+            self._check(epoch)
+            raise
         except Exception:
             self._check(epoch)
             raise _Failed(type(command).__name__ + " acknowledgement was unavailable") from None
@@ -579,7 +609,6 @@ class RaidNight:
         self._forming_members = frozenset()
         pick = self._pick
         raid = CATALOG[pick.raid_key]
-        formed = False
         try:
             candidates = self._candidates()
             size = pick.size or (25 if sum(c.available for c in candidates) >= 22 else 10)
@@ -613,13 +642,20 @@ class RaidNight:
                                                    self.rng.getrandbits(64))
             by_guid = {c.guid: c for c in candidates}
             clear = ClearLockout(uuid4().hex, raid.map_id, tuple([*members, self.ports.human_guid]))
-            ack = await self._ack(clear, epoch)
-            if ack is None or ack.id != clear.id:
-                raise _Failed("invalid lockout acknowledgement")
-            if ack.ok is not True:
-                if not ack.error.startswith("in_instance:"):
-                    raise _Failed("server rejected ClearLockout")
+            try:
+                ack = await self._ack(clear, epoch)
+            except ActionRejected as error:
+                refusal = str(error)
+                if not refusal.startswith("in_instance:"):
+                    raise
+            else:
+                if ack is None or ack.id != clear.id:
+                    raise _Failed("invalid lockout acknowledgement")
+                refusal = "" if ack.ok is True else (ack.error or "refused")
+            if refusal.startswith("in_instance:"):
                 await self._send(ClearLockout(uuid4().hex, raid.map_id, tuple(members)), epoch)
+            elif refusal:
+                raise _Failed("server rejected ClearLockout")
 
             # FormRaid reuses owned groups and does not remove unrequested cast.
             # Clear that group once so accepted requested GUIDs are the full raid.
@@ -633,11 +669,6 @@ class RaidNight:
                 assistants = tuple(g for g in members if by_guid[g].guild_role == "officer" or g in required)
                 command = FormRaid(uuid4().hex, self.ports.human_guid, tuple(members), pick.size,
                                    raid.map_id, leaders.tank_guid, assistants, heroic=pick.heroic)
-                # An accepted command can form a group even if its later job is malformed.
-                formed = True
-                self._forming_group = True
-                with self.ports.conn:
-                    _put(self.ports.conn, FORMED_GROUP_KEY, True)
                 result = await self._job(command, "form_raid", epoch)
                 accepted = set(result.guids)
                 if not required <= accepted:
@@ -682,11 +713,9 @@ class RaidNight:
                 self._lineup_formed(lineup)
         except (NoTankError, ValueError, _Failed) as error:
             self._check(epoch)
-            reason = str(error) if isinstance(error, _Failed) else "the available roster cannot fill this raid"
+            reason = str(error) if isinstance(error, (_Failed, ActionRejected)) else "the available roster cannot fill this raid"
             self._propose("pick_invalid", raid=raid.name, reason=reason)
             self._end("failed")
-            if formed:
-                self._disband = (self.ports.clock.now(), self._epoch)
 
     async def _begin(self, plan, epoch, on_time, late, *, instance_id=None, lead_is_human=None):
         """Every raid night's start: the record with its attendance and DKP, then assembly.
