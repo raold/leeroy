@@ -431,8 +431,9 @@ whisper or her Discord DM her day can call her away mid-conversation (spec secti
   margin. A channel answer that waited for her named return can still count as late there.
 - Brb/back lines never gain an emoticon, including with coherence off. Delayed server
   reactions recheck the live interruption before posting. Server presence shows her idle
-  while away; the console reads the server's expiring presence snapshot (at most three
-  minutes old), never the health history. A restart still forgets live interruptions.
+  while away; the console reads the life service's expiring presence snapshot (at most three
+  minutes old), never the health history. It refreshes on changes and each minute even
+  with the server engine disabled. A restart still forgets live interruptions.
 
 ## Her feeling right now (`life/state.py`, `life/statebook.py`)
 

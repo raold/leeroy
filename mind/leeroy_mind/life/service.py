@@ -37,6 +37,7 @@ written for health's owner-replies alone)."""
 from __future__ import annotations
 
 import logging
+import json
 import math
 import sqlite3
 from dataclasses import replace
@@ -98,6 +99,8 @@ class LifeService:
         self._away: dict[int, Away] = {}
         self._interrupted: dict[int, float] = {}
         self._stepping: set[int] = set()
+        self._presence_at: float | None = None
+        self._presence_members: tuple[int, ...] = ()
         self.configure(cfg)
 
     @property
@@ -664,6 +667,17 @@ class LifeService:
                 self._returns(now)
             except Exception as exc:
                 log_event("life_back_failed", level=logging.WARNING, reason=type(exc).__name__)
+        # This service ticks even when the optional server engine is disabled. Publish only
+        # active process state, so a restart never revives the health-only away history.
+        members = tuple(sorted(g for g, away in self._away.items()
+                               if self._availability > 0 and away.until > now))
+        if (self._presence_at is None or members != self._presence_members
+                or now - self._presence_at >= 60 or now < self._presence_at):
+            try:
+                self.store.set_meta(life_config.STEPPED_KEY, json.dumps({'guids': members, 'at': now}))
+                self._presence_at, self._presence_members = now, members
+            except sqlite3.Error as exc:
+                log.warning("life_meta_failed reason=%s", type(exc).__name__)
         if self.state is not None:
             try:
                 self.state.tick(now)

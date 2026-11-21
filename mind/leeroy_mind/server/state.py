@@ -6,10 +6,10 @@ import re
 
 from leeroy_mind.discord import layout
 from leeroy_mind.discord.channels import is_private
+from leeroy_mind.life.config import STEPPED_KEY
 from leeroy_mind.discord.presence import Presence, RNG_SEED, STATUS_SHARE, her_local, presence_of, status_text
 
 PLAY_KEY = 'server:playing'
-STEPPED_KEY = 'server:stepped-away'
 PLAY_STALE_S = 180
 
 
@@ -98,9 +98,6 @@ def pulled_into_play(app) -> frozenset[int]:
 def refresh_play(app, now: float) -> None:
     with app.store.transaction():
         app.store.set_meta(PLAY_KEY, json.dumps({'guids': sorted(pulled_into_play(app)), 'at': now}))
-        life = getattr(getattr(app, 'engine', None), 'life', None)
-        stepped = [g for g in app.world.discord_members() if life is not None and life.is_away(g)]
-        app.store.set_meta(STEPPED_KEY, json.dumps({'guids': sorted(stepped), 'at': now}))
 
 
 def read_play(conn, now: float, *, key=PLAY_KEY) -> frozenset[int]:
