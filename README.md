@@ -397,14 +397,25 @@ output in `patches/`:
 - **Hazard-aware follow spots** (playerbots): an inert hook another module can
   install so a bot's follow position, and its way out of a ground effect,
   avoid known hazards. mod-leeroy installs it for the player's group only.
+- **Raid vehicles** (playerbots, opt-in): `Playerbots.RaidVehicleSupport = 1`
+  adds Malygos phase-3 drake positioning, damage/healer assignments, real combo
+  points and Surge shields. The encounter summons and seats its own drakes;
+  bots never grant themselves a mount, kill or achievement. In Ulduar, after a
+  real player in the raid boards a siege vehicle, bots fill empty main drivers
+  before their group's spare gunner seats and drive into attack range. The
+  human's vehicle is never driven by a bot passenger. The switch defaults to
+  `0`; it needs a native rebuild and a `playerbots.conf` change to enable.
+  Malygos works without a human master; Flame Leviathan's existing offline
+  bypass is unchanged. See [vehicle validation](patches/mod-playerbots/VEHICLES.md)
+  before enabling it for a raid.
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.
 - **Trial of the Crusader** (mod-dungeon-clear): the tank runs the raid stage by
   stage from Barrett Ramsey's gossip, pulls the faction champions and the twins,
   and takes the bots down into Anub'arak's chamber when the floor breaks.
-- **Ulduar's Flame Leviathan** (mod-dungeon-clear): a siege-vehicle fight bots
-  cannot drive. He is never fought or credited; a raid of bots only is taken past
+- **Ulduar's Flame Leviathan** (mod-dungeon-clear): the offline siege-vehicle
+  bypass. He is never fought or credited there; a raid of bots only is taken past
   his gate by the Ulduar Teleporter's Colossal Forge destination, which the
   instance offers once he is dead, and every boss after him is fought for real.
   Razorscale is started at the Expedition Commander. Both raids are advertised

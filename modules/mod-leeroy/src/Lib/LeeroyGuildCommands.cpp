@@ -223,7 +223,22 @@ std::optional<GiveLootCmd> ParseGiveLoot(json const& j, std::string& error)
     f.Number("index", out.index, 0, 255);
     f.Number("item_id", out.itemId);
     f.Number("to_guid", out.toGuid);
+    f.Boolean("receipt", out.receipt);
     return f.Result(std::move(out));
+}
+
+std::optional<std::string> ParseLootReceipt(json const& j, std::string& error)
+{
+    if (!ParseGiveLoot(j, error)) return {};
+    Fields f(j, error);
+    std::string id;
+    f.String("give_id", id);
+    f.Require(!id.empty() && id.size() <= 128 && std::all_of(id.begin(), id.end(), [](unsigned char c)
+    {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+            || c == '-' || c == '_';
+    }), "give_id");
+    return f.Result(std::move(id));
 }
 
 std::optional<OfflineRaidCmd> ParseOfflineRaid(json const& j, std::string& error)

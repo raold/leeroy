@@ -1,0 +1,1113 @@
+From 847196fe3c91531600a37d1b1c4cba764c89a319 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 13:16:02 -0500
+Subject: [PATCH] Add opt-in Malygos and Flame Leviathan vehicle support
+
+---
+ conf/playerbots.conf.dist           |   4 +
+ src/Ai/Raid/EoE/EoEActions.cpp      |   5 +
+ src/Ai/Raid/EoE/EoEMultipliers.cpp  |   3 +
+ src/Ai/Raid/EoE/EoEStrategy.cpp     |   2 +
+ src/Ai/Raid/EoE/EoETriggerContext.h |   2 +
+ src/Ai/Raid/EoE/EoETriggers.cpp     |   3 +
+ src/Ai/Raid/EoE/EoETriggers.h       |   7 +
+ src/Ai/Raid/RaidVehicleActions.cpp  | 229 ++++++++++++++++++++++++++++
+ src/Ai/Raid/RaidVehicleActions.h    |  18 +++
+ src/Ai/Raid/RaidVehiclePolicy.h     | 149 ++++++++++++++++++
+ src/Ai/Raid/Uld/UldActions.cpp      | 167 +++++++++++++++-----
+ src/Ai/Raid/Uld/UldTriggers.cpp     |   5 +
+ src/Bot/PlayerbotAI.cpp             |   3 +-
+ src/PlayerbotAIConfig.cpp           |   1 +
+ src/PlayerbotAIConfig.h             |   1 +
+ tests/raid_vehicles_test.cpp        | 171 +++++++++++++++++++++
+ 16 files changed, 733 insertions(+), 37 deletions(-)
+ create mode 100644 src/Ai/Raid/RaidVehicleActions.cpp
+ create mode 100644 src/Ai/Raid/RaidVehicleActions.h
+ create mode 100644 src/Ai/Raid/RaidVehiclePolicy.h
+ create mode 100644 tests/raid_vehicles_test.cpp
+
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index 18c47d30..41196a64 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -490,6 +490,10 @@ Playerbots.ApplyInstanceStrategies = 1
+ # Requires ApplyInstanceStrategies (or the toc strategy added explicitly). Default: 0.
+ Playerbots.TwinValkyrInteractions = 0
+ 
++# Opt-in Malygos drake positioning/rotation and human-led Flame Leviathan vehicles.
++# Uses normal boarding and spell costs; never moves the human or skips a boss.
++Playerbots.RaidVehicleSupport = 0
++
+ # Enable auto avoid aoe strategy
+ # Default: 1 (enabled)
+ Playerbots.AutoAvoidAoe = 1
+diff --git a/src/Ai/Raid/EoE/EoEActions.cpp b/src/Ai/Raid/EoE/EoEActions.cpp
+index 8c606489..934cc5f8 100644
+--- a/src/Ai/Raid/EoE/EoEActions.cpp
++++ b/src/Ai/Raid/EoE/EoEActions.cpp
+@@ -7,6 +7,7 @@
+ #include "EoEActions.h"
+ #include "EoETriggers.h"
+ #include "Playerbots.h"
++#include "RaidVehicleActions.h"
+ 
+ bool MalygosPositionAction::Execute(Event /*event*/)
+ {
+@@ -237,6 +238,8 @@ bool EoEFlyDrakeAction::isPossible()
+ }
+ bool EoEFlyDrakeAction::Execute(Event /*event*/)
+ {
++    if (sPlayerbotAIConfig.RaidVehicleSupport)
++        return RaidVehicles::DriveDrake(botAI);
+     Player* master = botAI->GetMaster();
+     if (!master) { return false; }
+     Unit* masterVehicle = master->GetVehicleBase();
+@@ -287,6 +290,8 @@ bool EoEDrakeAttackAction::isPossible()
+ 
+ bool EoEDrakeAttackAction::Execute(Event /*event*/)
+ {
++    if (sPlayerbotAIConfig.RaidVehicleSupport)
++        return RaidVehicles::CastDrake(botAI);
+     vehicleBase = bot->GetVehicleBase();
+     if (!vehicleBase)
+     {
+diff --git a/src/Ai/Raid/EoE/EoEMultipliers.cpp b/src/Ai/Raid/EoE/EoEMultipliers.cpp
+index 993e4e91..69fc5a6e 100644
+--- a/src/Ai/Raid/EoE/EoEMultipliers.cpp
++++ b/src/Ai/Raid/EoE/EoEMultipliers.cpp
+@@ -18,9 +18,12 @@
+ #include "ReachTargetActions.h"
+ #include "ScriptedCreature.h"
+ #include "WarriorActions.h"
++#include "RaidVehicleActions.h"
+ 
+ float MalygosMultiplier::GetValue(Action* action)
+ {
++    if (RaidVehicles::MalygosDrake(botAI))
++        return dynamic_cast<EoEFlyDrakeAction*>(action) || dynamic_cast<EoEDrakeAttackAction*>(action) ? 1.0f : 0.0f;
+     Unit* boss = AI_VALUE2(Unit*, "find target", "malygos");
+ 
+     uint8 phase = MalygosTrigger::getPhase(bot, boss);
+diff --git a/src/Ai/Raid/EoE/EoEStrategy.cpp b/src/Ai/Raid/EoE/EoEStrategy.cpp
+index 7f0953f7..0d6f3d61 100644
+--- a/src/Ai/Raid/EoE/EoEStrategy.cpp
++++ b/src/Ai/Raid/EoE/EoEStrategy.cpp
+@@ -10,6 +10,8 @@
+ 
+ void RaidEoEStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+ {
++    triggers.push_back(new TriggerNode("malygos drake", { NextAction("eoe fly drake", ACTION_RAID + 3) }));
++    triggers.push_back(new TriggerNode("malygos drake", { NextAction("eoe drake attack", ACTION_RAID + 2) }));
+     triggers.push_back(new TriggerNode("malygos",
+         { NextAction("malygos position", ACTION_MOVE) }));
+     triggers.push_back(new TriggerNode("malygos",
+diff --git a/src/Ai/Raid/EoE/EoETriggerContext.h b/src/Ai/Raid/EoE/EoETriggerContext.h
+index 2899bae3..a4aa73b9 100644
+--- a/src/Ai/Raid/EoE/EoETriggerContext.h
++++ b/src/Ai/Raid/EoE/EoETriggerContext.h
+@@ -17,9 +17,11 @@ public:
+     {
+         creators["malygos"] = &RaidEoETriggerContext::malygos;
+         creators["power spark"] = &RaidEoETriggerContext::power_spark;
++        creators["malygos drake"] = &RaidEoETriggerContext::malygos_drake;
+     }
+ 
+ private:
++    static Trigger* malygos_drake(PlayerbotAI* botAI) { return new MalygosDrakeTrigger(botAI); }
+     static Trigger* power_spark(PlayerbotAI* botAI) { return new PowerSparkTrigger(botAI); }
+     static Trigger* malygos(PlayerbotAI* botAI) { return new MalygosTrigger(botAI); }
+ };
+diff --git a/src/Ai/Raid/EoE/EoETriggers.cpp b/src/Ai/Raid/EoE/EoETriggers.cpp
+index a7825045..6ba98543 100644
+--- a/src/Ai/Raid/EoE/EoETriggers.cpp
++++ b/src/Ai/Raid/EoE/EoETriggers.cpp
+@@ -6,6 +6,9 @@
+ 
+ #include "EoETriggers.h"
+ #include "SharedDefines.h"
++#include "RaidVehicleActions.h"
++
++bool MalygosDrakeTrigger::IsActive() { return RaidVehicles::MalygosDrake(botAI); }
+ 
+ uint8 MalygosTrigger::getPhase(Player* bot, Unit* boss)
+ {
+diff --git a/src/Ai/Raid/EoE/EoETriggers.h b/src/Ai/Raid/EoE/EoETriggers.h
+index 6bfec6b3..89d9bde1 100644
+--- a/src/Ai/Raid/EoE/EoETriggers.h
++++ b/src/Ai/Raid/EoE/EoETriggers.h
+@@ -61,4 +61,11 @@ public:
+     bool IsActive() override;
+ };
+ 
++class MalygosDrakeTrigger : public Trigger
++{
++public:
++    MalygosDrakeTrigger(PlayerbotAI* botAI) : Trigger(botAI, "malygos drake") {}
++    bool IsActive() override;
++};
++
+ #endif
+diff --git a/src/Ai/Raid/RaidVehicleActions.cpp b/src/Ai/Raid/RaidVehicleActions.cpp
+new file mode 100644
+index 00000000..baf18dbd
+--- /dev/null
++++ b/src/Ai/Raid/RaidVehicleActions.cpp
+@@ -0,0 +1,229 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#include "RaidVehicleActions.h"
++#include "RaidVehiclePolicy.h"
++#include "Creature.h"
++#include "CreatureAI.h"
++#include "Group.h"
++#include "InstanceScript.h"
++#include "MotionMaster.h"
++#include "Playerbots.h"
++#include "SpellAuraEffects.h"
++#include "Vehicle.h"
++
++#include <list>
++
++namespace RaidVehicles
++{
++namespace
++{
++bool BotReady(PlayerbotAI* ai, uint32 map)
++{
++    Player* bot = ai->GetBot();
++    return sPlayerbotAIConfig.RaidVehicleSupport && bot->IsInWorld() && bot->GetMapId() == map && bot->IsAlive() &&
++        !IsRealPlayer(bot) && !IsSelfBot(bot) && !bot->IsBeingTeleported() && bot->GetGroup() &&
++        bot->GetGroup()->isRaidGroup() && !ai->HasStrategy("stay", BOT_STATE_COMBAT) &&
++        !ai->HasStrategy("stay", BOT_STATE_NON_COMBAT) && !ai->HasStrategy("passive", BOT_STATE_COMBAT);
++}
++
++bool VehicleSpell(PlayerbotAI* ai, uint32 spell, Unit* target)
++{
++    Unit* vehicle = ai->GetBot()->GetVehicleBase();
++    if (!vehicle || !vehicle->IsAlive() || !vehicle->HasSpell(spell) || vehicle->HasUnitState(UNIT_STATE_CASTING) ||
++        !target || !target->IsInWorld() || !target->IsAlive() || target->GetMap() != vehicle->GetMap())
++        return false;
++    if (target != vehicle)
++        vehicle->SetFacingToObject(target);
++    if (!ai->CanCastVehicleSpell(spell, target) || !ai->CastVehicleSpell(spell, target))
++        return false;
++    // Spell::prepare validates the cast, but creature spells need their normal
++    // DBC/category recovery installed by the caller (as the vehicle opcode does).
++    vehicle->AddSpellCooldown(spell, 0, 0);
++    ai->SetNextCheckDelay(1000);
++    return true;
++}
++
++Creature* Malygos(PlayerbotAI* ai)
++{
++    InstanceScript* instance = ai->GetBot()->GetInstanceScript();
++    // DATA_MALYGOS = 0 in eye_of_eternity.h. Avoid a grid search for every
++    // multiplier evaluation, and keep the exact encounter's instance identity.
++    Creature* boss = instance ? instance->GetCreature(0) : nullptr;
++    return boss && boss->IsAlive() && boss->IsAIEnabled && boss->IsInCombat() ? boss : nullptr;
++}
++
++Point At(Unit const* unit) { return {unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ()}; }
++}
++
++bool MalygosDrake(PlayerbotAI* ai)
++{
++    if (!BotReady(ai, 616))
++        return false;
++    Player* bot = ai->GetBot();
++    Unit* base = bot->GetVehicleBase();
++    Vehicle* vehicle = bot->GetVehicle();
++    auto const* seat = vehicle ? vehicle->GetSeatForPassenger(bot) : nullptr;
++    return base && base->IsAlive() && base->GetEntry() == 30161 && seat && seat->CanControl() && Malygos(ai);
++}
++
++bool MoveDrake(PlayerbotAI* ai)
++{
++    if (!MalygosDrake(ai))
++        return false;
++    Player* bot = ai->GetBot();
++    Unit* drake = bot->GetVehicleBase();
++    Creature* boss = Malygos(ai);
++    if (!boss)
++        return false;
++    std::list<Creature*> nearby;
++    bot->GetCreatureListWithEntryInGrid(nearby, 30592, 200.0f);
++    std::vector<Point> fields;
++    for (Creature* field : nearby)
++        if (field && field->IsInWorld())
++            fields.push_back(At(field));
++    Point const centre = At(boss);
++    Point destination = centre;
++    bool found = false;
++    // Follow the human's drake when it is in a safe, castable part of the ring.
++    // Without a human master (offline raid), every bot computes the same anchor.
++    for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
++    {
++        Player* member = ref->GetSource();
++        if (!member || !member->IsInWorld() || member->GetMap() != bot->GetMap() || !IsRealPlayer(member))
++            continue;
++        Unit* anchor = member->GetVehicleBase();
++        if (anchor && anchor->IsAlive() && anchor->GetEntry() == 30161 && SafeDrakePoint(At(anchor), centre, fields))
++        {
++            destination = At(anchor);
++            found = true;
++            break;
++        }
++    }
++    for (unsigned i = 0; !found && i < 24; ++i)
++    {
++        float const angle = static_cast<float>(i) * 6.2831853f / 24.0f;
++        destination = {centre.x + 45.0f * std::cos(angle), centre.y + 45.0f * std::sin(angle), centre.z};
++        found = SafeDrakePoint(destination, centre, fields);
++    }
++    if (!found || drake->GetExactDist(destination.x, destination.y, destination.z) <= 3.0f)
++        return false;
++    float x = 0, y = 0, z = 0;
++    auto* motion = drake->GetMotionMaster();
++    if (drake->isMoving() && motion->GetDestination(x, y, z) &&
++        std::hypot(x - destination.x, y - destination.y) < 2.0f && std::abs(z - destination.z) < 2.0f)
++        return false;
++    drake->SetCanFly(true);
++    motion->MovePoint(0, destination.x, destination.y, destination.z, FORCED_MOVEMENT_RUN, 0.0f, 0.0f,
++                      false, true, MOTION_SLOT_ACTIVE, AnimTier::Fly);
++    drake->SendMovementFlagUpdate();
++    return true;
++}
++
++bool CastDrake(PlayerbotAI* ai)
++{
++    if (!MalygosDrake(ai))
++        return false;
++    Player* bot = ai->GetBot();
++    Unit* drake = bot->GetVehicleBase();
++    Creature* boss = Malygos(ai);
++    if (!boss || boss->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE))
++        return false;
++    std::vector<Rider> riders;
++    for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
++    {
++        Player* member = ref->GetSource();
++        if (!member || !member->IsInWorld() || !member->IsAlive() || member->GetMap() != bot->GetMap() ||
++            IsRealPlayer(member) || IsSelfBot(member))
++            continue;
++        PlayerbotAI* memberAI = GET_PLAYERBOT_AI(member);
++        if (!memberAI || !BotReady(memberAI, 616))
++            continue;
++        Unit* mount = member->GetVehicleBase();
++        if (mount && mount->IsAlive() && mount->GetEntry() == 30161)
++            riders.push_back({member->GetGUID().GetRawValue(), PlayerbotAI::IsHeal(member)});
++    }
++    DrakeFacts facts;
++    facts.healer = DrakeHealer(bot->GetGUID().GetRawValue(), riders);
++    // DATA_FIRST_SURGE_TARGET_GUID in boss_malygos.cpp: the actual three-second
++    // warning targets, including all three targets in 25-player mode.
++    for (int slot = 14; slot < 17; ++slot)
++        facts.surge = facts.surge || boss->AI()->GetGUID(slot) == drake->GetGUID();
++    facts.surgeActive = drake->HasAura(57407) || drake->HasAura(60936);
++    facts.surge = facts.surge || facts.surgeActive;
++    facts.shieldReady = !drake->HasSpellCooldown(57108);
++    facts.shielded = drake->HasAura(57108);
++    facts.energy = drake->GetPower(POWER_ENERGY);
++    facts.points = drake->GetComboPoints();
++    facts.targetPoints = drake->GetComboPoints(boss);
++    facts.selfPoints = drake->GetComboPoints(drake);
++    facts.health = static_cast<unsigned>(drake->GetHealthPct());
++    if (Aura* dot = boss->GetAura(56092, drake->GetGUID()))
++        facts.dotMs = dot->GetDuration();
++    if (Aura* hot = drake->GetAura(57090, drake->GetGUID()))
++        facts.hotMs = hot->GetDuration();
++    DrakeSpell const pick = NextDrakeSpell(facts);
++    if (pick == DrakeSpell::None)
++        return false;
++    Unit* target = DrakeTarget(pick, static_cast<Unit*>(boss), drake, drake->GetComboTarget());
++    return VehicleSpell(ai, static_cast<uint32>(pick), target);
++}
++
++bool DriveDrake(PlayerbotAI* ai)
++{
++    // Updating a moving human anchor and attacking share one high-priority
++    // action, so movement cannot consume every action tick and starve spells.
++    bool casted = false;
++    return VehicleTick([&] { return casted = CastDrake(ai); }, [&]
++    {
++        bool const moved = MoveDrake(ai);
++        if (moved && !casted)
++            VehicleSpell(ai, 57092, ai->GetBot()->GetVehicleBase());
++        return moved;
++    });
++}
++
++bool LeviathanRaid(PlayerbotAI* ai, bool boarding)
++{
++    if (!BotReady(ai, 603))
++        return false;
++    Player* bot = ai->GetBot();
++    InstanceScript* instance = bot->GetInstanceScript();
++    bool const encounterActive = instance && instance->GetBossState(0) == IN_PROGRESS; // BOSS_LEVIATHAN
++    for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
++    {
++        Player* member = ref->GetSource();
++        if (!member || !member->IsInWorld() || member->GetMap() != bot->GetMap() || !IsRealPlayer(member))
++            continue;
++        Unit* base = member->GetVehicleBase();
++        bool const riding = member->IsAlive() && base && base->IsAlive() && bot->GetExactDist(base) <= 300.0f &&
++            (base->GetEntry() == 33060 || base->GetEntry() == 33109 || base->GetEntry() == 33062 ||
++             base->GetEntry() == 33067 || base->GetEntry() == 33167);
++        // A dead human still in this raid/instance must not stop every driver
++        // mid-pull. The stricter "human boarded first" cue is for boarding only.
++        if (LeviathanPresence(boarding, true, riding, encounterActive))
++            return true;
++    }
++    return false;
++}
++
++int BoardingRank(PlayerbotAI* ai, Unit* base)
++{
++    if (!LeviathanRaid(ai, true) || !base || !base->IsInWorld() || !base->IsAlive() || base->GetMap() != ai->GetBot()->GetMap() ||
++        base->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE) || ai->GetBot()->GetExactDist(base) > 200.0f)
++        return -1;
++    Vehicle* kit = base->GetVehicleKit();
++    if (!kit)
++        return -1;
++    Unit* driver = kit->GetPassenger(0);
++    Player* player = driver ? driver->ToPlayer() : nullptr;
++    bool const groupDriver = player && player->GetGroup() == ai->GetBot()->GetGroup();
++    Unit* turret = kit->GetPassenger(base->GetEntry() == 33060 ? 7 : 1);
++    bool const gunnerFree = turret && turret->IsAlive() &&
++        turret->GetEntry() == (base->GetEntry() == 33060 ? 33067u : 33167u) &&
++        turret->GetVehicleKit() && !turret->GetVehicleKit()->GetPassenger(0);
++    return BoardingPriority(base->GetEntry(), !driver, groupDriver, gunnerFree, PlayerbotAI::IsMelee(ai->GetBot()));
++}
++}
+diff --git a/src/Ai/Raid/RaidVehicleActions.h b/src/Ai/Raid/RaidVehicleActions.h
+new file mode 100644
+index 00000000..f8371bb5
+--- /dev/null
++++ b/src/Ai/Raid/RaidVehicleActions.h
+@@ -0,0 +1,18 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#ifndef PLAYERBOTS_RAIDVEHICLEACTIONS_H
++#define PLAYERBOTS_RAIDVEHICLEACTIONS_H
++class PlayerbotAI;
++class Unit;
++namespace RaidVehicles
++{
++bool MalygosDrake(PlayerbotAI* ai);
++bool DriveDrake(PlayerbotAI* ai);
++bool CastDrake(PlayerbotAI* ai);
++bool LeviathanRaid(PlayerbotAI* ai, bool boarding = false);
++int BoardingRank(PlayerbotAI* ai, Unit* vehicle);
++}
++#endif
+diff --git a/src/Ai/Raid/RaidVehiclePolicy.h b/src/Ai/Raid/RaidVehiclePolicy.h
+new file mode 100644
+index 00000000..1ce15bab
+--- /dev/null
++++ b/src/Ai/Raid/RaidVehiclePolicy.h
+@@ -0,0 +1,149 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#ifndef PLAYERBOTS_RAIDVEHICLEPOLICY_H
++#define PLAYERBOTS_RAIDVEHICLEPOLICY_H
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <vector>
++
++namespace RaidVehicles
++{
++struct Rider
++{
++    std::uint64_t guid;
++    bool healer;
++};
++
++inline bool DrakeHealer(std::uint64_t guid, std::vector<Rider> riders)
++{
++    if (riders.size() < 2)
++        return false;
++    std::sort(riders.begin(), riders.end(), [](Rider const& a, Rider const& b)
++              { return a.healer != b.healer ? a.healer : a.guid < b.guid; });
++    std::size_t const healers = std::min(riders.size() - 1, (riders.size() + 4) / 5);
++    return std::any_of(riders.begin(), riders.begin() + healers,
++                       [guid](Rider const& rider) { return rider.guid == guid; });
++}
++
++enum class DrakeSpell : std::uint32_t
++{
++    None = 0,
++    Spike = 56091,
++    Engulf = 56092,
++    Revivify = 57090,
++    Burst = 57143,
++    Shield = 57108
++};
++
++struct DrakeFacts
++{
++    bool healer = false;
++    bool surge = false;
++    bool surgeActive = false;
++    bool shieldReady = false;
++    bool shielded = false;
++    unsigned energy = 0;
++    unsigned points = 0;
++    unsigned targetPoints = 0;
++    unsigned selfPoints = 0;
++    unsigned health = 100;
++    int dotMs = 0;
++    int hotMs = 0;
++};
++
++inline DrakeSpell NextDrakeSpell(DrakeFacts const& f)
++{
++    // The boss retains warning GUIDs until its next selection. Reserve points
++    // and energy for that target, but shield only the actual damage aura: a
++    // short shield on the warning can expire before the damage even starts.
++    if ((f.surge || f.surgeActive) && f.shieldReady && !f.shielded)
++    {
++        if (f.points && f.energy >= 25 && f.surgeActive)
++            return DrakeSpell::Shield;
++        if (f.points < 5 && f.energy >= 35)
++            return f.healer ? DrakeSpell::Revivify : DrakeSpell::Spike;
++        return DrakeSpell::None;
++    }
++    if (f.healer)
++    {
++        if (f.selfPoints >= 5 && (f.energy >= 75 || (f.health < 60 && f.energy >= 50)))
++            return DrakeSpell::Burst;
++        if (f.energy >= 10 && (f.selfPoints < 5 || f.hotMs <= 3000))
++            return DrakeSpell::Revivify;
++        return DrakeSpell::None;
++    }
++    if (f.targetPoints >= 2 && (f.energy >= 75 || (f.dotMs <= 4000 && f.energy >= 50)))
++        return DrakeSpell::Engulf;
++    if (f.energy >= 10 && (f.targetPoints < 2 || (f.targetPoints < 5 && f.energy >= 85)))
++        return DrakeSpell::Spike;
++    return DrakeSpell::None;
++}
++
++// Flame Shield (57108) applies its shield to the implicit caster, but its
++// second effect is dummy TARGET_UNIT_TARGET_ANY. Spell::CheckCast therefore
++// requires points on the explicit target: boss for damage, self for healing.
++template <typename UnitType>
++inline UnitType* DrakeTarget(DrakeSpell spell, UnitType* boss, UnitType* self, UnitType* combo)
++{
++    if (spell == DrakeSpell::Shield)
++        return combo;
++    if (spell == DrakeSpell::Spike || spell == DrakeSpell::Engulf)
++        return boss;
++    if (spell == DrakeSpell::Revivify || spell == DrakeSpell::Burst)
++        return self;
++    return nullptr;
++}
++
++// A continually moving anchor must not starve instant vehicle spells. Invoke
++// both callbacks every tick; do not use the short-circuit `cast() || move()`.
++template <typename Cast, typename Move>
++inline bool VehicleTick(Cast cast, Move move)
++{
++    bool const casted = cast();
++    bool const moved = move();
++    return casted || moved;
++}
++
++inline bool LeviathanPresence(bool boarding, bool humanPresent, bool humanRiding, bool encounterActive)
++{
++    return humanPresent && (humanRiding || (!boarding && encounterActive));
++}
++
++struct Point { float x, y, z; };
++
++inline bool SafeDrakePoint(Point const& point, Point const& boss, std::vector<Point> const& fields)
++{
++    float const distance = std::hypot(point.x - boss.x, point.y - boss.y);
++    if (!std::isfinite(distance) || !std::isfinite(point.z) || !std::isfinite(boss.z) || distance < 38.0f || distance > 55.0f ||
++        std::abs(point.z - boss.z) > 10.0f)
++        return false;
++    return std::none_of(fields.begin(), fields.end(), [&point](Point const& field)
++    {
++        return std::abs(point.z - field.z) < 20.0f && std::hypot(point.x - field.x, point.y - field.y) < 16.0f;
++    });
++}
++
++inline int BoardingPriority(std::uint32_t entry, bool emptyDriver, bool groupDriver, bool gunnerFree,
++                            bool melee)
++{
++    if (entry != 33060 && entry != 33109 && entry != 33062)
++        return -1;
++    if (emptyDriver)
++    {
++        if (entry == 33062)
++            return 4;
++        // Prefer roles, but never leave a main driver empty because the roster
++        // has no more melee or ranged characters.
++        return (entry == 33060) == melee ? 0 : 1;
++    }
++    if (groupDriver && gunnerFree && entry != 33062)
++        return 2;
++    return -1;
++}
++}
++#endif
+diff --git a/src/Ai/Raid/Uld/UldActions.cpp b/src/Ai/Raid/Uld/UldActions.cpp
+index 90f2be30..29ec319a 100644
+--- a/src/Ai/Raid/Uld/UldActions.cpp
++++ b/src/Ai/Raid/Uld/UldActions.cpp
+@@ -26,8 +26,28 @@
+ #include "UldScripts.h"
+ #include "Unit.h"
+ #include "Vehicle.h"
++#include "RaidVehicleActions.h"
++#include "RaidVehiclePolicy.h"
+ #include <cmath>
+ 
++namespace
++{
++bool CastLeviathanSpell(PlayerbotAI* ai, uint32 spell, Unit* target)
++{
++    if (sPlayerbotAIConfig.RaidVehicleSupport && target)
++    {
++        Vehicle* vehicle = ai->GetBot()->GetVehicle();
++        auto const* seat = vehicle ? vehicle->GetSeatForPassenger(ai->GetBot()) : nullptr;
++        // Face the actual spell target before the instant cast. Deferring the
++        // cast until the next tick can repeat forever while a driver is kiting.
++        // Execute's seat checks exclude passive passengers in a human's vehicle.
++        if (seat && (seat->CanControl() || (seat->m_flags & VEHICLE_SEAT_FLAG_ALLOW_TURNING)))
++            vehicle->GetBase()->SetFacingToObject(target);
++    }
++    return ai->CastVehicleSpell(spell, target);
++}
++}
++
+ const std::string ADD_STRATEGY_CHAR = "+";
+ const std::string REMOVE_STRATEGY_CHAR = "-";
+ 
+@@ -51,6 +71,9 @@ const Position yoggPortalLoc[] = {
+ 
+ bool FlameLeviathanVehicleAction::Execute(Event /*event*/)
+ {
++    bool const corrected = sPlayerbotAIConfig.RaidVehicleSupport;
++    if (corrected && !RaidVehicles::LeviathanRaid(botAI))
++        return false;
+     vehicleBase_ = bot->GetVehicleBase();
+     vehicle_ = bot->GetVehicle();
+     if (!vehicleBase_ || !vehicle_)
+@@ -76,28 +99,73 @@ bool FlameLeviathanVehicleAction::Execute(Event /*event*/)
+         if (!target || bot->GetExactDist(target) > bot->GetExactDist(unit))
+             target = unit;
+     }
+-    // Flame Leviathan is chasing me
+-    if (flame && flame->GetVictim() == vehicleBase_)
+-        if (MoveAvoidChasing(flame))
+-            return true;
+-
++    if (corrected && !flame)
++    {
++        Creature* boss = bot->FindNearestCreature(33113, 250.0f, true);
++        if (boss && boss->IsInCombat() && !boss->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE))
++            flame = boss;
++    }
+     uint32 entry = vehicleBase_->GetEntry();
+-    switch (entry)
+-    {
+-        case NPC_SALVAGED_DEMOLISHER:
+-            return DemolisherAction(flame ? flame : target);
+-        case NPC_SALVAGED_DEMOLISHER_TURRET:
+-            return DemolisherTurretAction(target ? target: flame);
+-        case NPC_SALVAGED_SIEGE_ENGINE:
+-            return SiegeEngineAction(flame ? flame : target);
+-        case NPC_SALVAGED_SIEGE_ENGINE_TURRET:
+-            return SiegeEngineTurretAction(target ? target: flame);
+-        case NPC_VEHICLE_CHOPPER:
+-            return ChopperAction(target ? target: flame);
+-        default:
+-            break;
++    Unit* destination = flame ? flame : target;
++    auto const* seat = vehicle_->GetSeatForPassenger(bot);
++    bool const mainDriver = (entry == NPC_SALVAGED_DEMOLISHER || entry == NPC_SALVAGED_SIEGE_ENGINE ||
++                             entry == NPC_VEHICLE_CHOPPER) && seat && seat->CanControl() &&
++                             vehicle_->GetPassenger(0) == bot;
++    if (corrected && !mainDriver)
++    {
++        // The only supported passenger is the gunner of a nested turret.
++        // Never let a passive seat cast/turn the human's main vehicle.
++        Unit* parent = vehicleBase_->GetVehicleBase();
++        Unit* driver = parent && parent->GetVehicleKit() ? parent->GetVehicleKit()->GetPassenger(0) : nullptr;
++        Player* player = driver ? driver->ToPlayer() : nullptr;
++        if ((entry != NPC_SALVAGED_DEMOLISHER_TURRET && entry != NPC_SALVAGED_SIEGE_ENGINE_TURRET) ||
++            vehicle_->GetPassenger(0) != bot || !player || player->GetGroup() != bot->GetGroup())
++            return false;
+     }
+-    return false;
++    auto cast = [&]() -> bool
++    {
++        switch (entry)
++        {
++            case NPC_SALVAGED_DEMOLISHER:
++                return DemolisherAction(flame ? flame : target);
++            case NPC_SALVAGED_DEMOLISHER_TURRET:
++                return DemolisherTurretAction(target ? target : flame);
++            case NPC_SALVAGED_SIEGE_ENGINE:
++                return SiegeEngineAction(flame ? flame : target);
++            case NPC_SALVAGED_SIEGE_ENGINE_TURRET:
++                return SiegeEngineTurretAction(target ? target : flame);
++            case NPC_VEHICLE_CHOPPER:
++                return ChopperAction(target ? target : flame);
++            default:
++                return false;
++        }
++    };
++    if (!corrected)
++    {
++        if (flame && flame->GetVictim() == vehicleBase_ && MoveAvoidChasing(flame))
++            return true;
++        return cast();
++    }
++    return RaidVehicles::VehicleTick(cast, [&]() -> bool
++    {
++        if (!mainDriver)
++            return false;
++        // Pursuit never interrupts the driver's instant weapons/interrupts.
++        if (flame && flame->GetVictim() == vehicleBase_)
++            return MoveAvoidChasing(flame);
++        if (!destination)
++            return false;
++        float const range = entry == NPC_SALVAGED_DEMOLISHER ? 45.0f : 8.0f;
++        float const distance = vehicleBase_->GetExactDist(destination);
++        if (distance > range + 8.0f || (entry == NPC_SALVAGED_DEMOLISHER && distance < 15.0f))
++        {
++            float const angle = destination->GetAngle(vehicleBase_);
++            return MoveTo(bot->GetMapId(), destination->GetPositionX() + std::cos(angle) * range,
++                          destination->GetPositionY() + std::sin(angle) * range, destination->GetPositionZ(),
++                          false, false, false, false, MovementPriority::MOVEMENT_COMBAT);
++        }
++        return false;
++    });
+ }
+ 
+ bool FlameLeviathanVehicleAction::MoveAvoidChasing(Unit* target)
+@@ -135,7 +203,7 @@ bool FlameLeviathanVehicleAction::DemolisherAction(Unit* target)
+     {
+         uint32 spellId = 62490;
+         if (botAI->CanCastVehicleSpell(spellId, target))
+-            if (botAI->CastVehicleSpell(spellId, target))
++            if (CastLeviathanSpell(botAI, spellId, target))
+             {
+                 vehicleBase_->AddSpellCooldown(spellId, 0, 1000);
+                 return true;
+@@ -143,7 +211,7 @@ bool FlameLeviathanVehicleAction::DemolisherAction(Unit* target)
+     }
+     uint32 spellId = 62306;
+     if (botAI->CanCastVehicleSpell(spellId, target))
+-        if (botAI->CastVehicleSpell(spellId, target))
++        if (CastLeviathanSpell(botAI, spellId, target))
+         {
+             vehicleBase_->AddSpellCooldown(spellId, 0, 1000);
+             return true;
+@@ -170,7 +238,7 @@ bool FlameLeviathanVehicleAction::DemolisherTurretAction(Unit* target)
+             {
+                 uint32 spellId = 62479;
+                 if (botAI->CanCastVehicleSpell(spellId, unit))
+-                    if (botAI->CastVehicleSpell(spellId, unit))
++                    if (CastLeviathanSpell(botAI, spellId, unit))
+                     {
+                         vehicleBase_->AddSpellCooldown(spellId, 0, 1000);
+                         return true;
+@@ -190,7 +258,7 @@ bool FlameLeviathanVehicleAction::DemolisherTurretAction(Unit* target)
+             {
+                 uint32 spellId = 64979;
+                 if (botAI->CanCastVehicleSpell(spellId, unit))
+-                    if (botAI->CastVehicleSpell(spellId, unit))
++                    if (CastLeviathanSpell(botAI, spellId, unit))
+                     {
+                         vehicleBase_->AddSpellCooldown(spellId, 0, 1000);
+                         return true;
+@@ -202,7 +270,7 @@ bool FlameLeviathanVehicleAction::DemolisherTurretAction(Unit* target)
+         return false;
+     uint32 spellId = 62634;
+     if (botAI->CanCastVehicleSpell(spellId, target))
+-        if (botAI->CastVehicleSpell(spellId, target))
++        if (CastLeviathanSpell(botAI, spellId, target))
+         {
+             vehicleBase_->AddSpellCooldown(spellId, 0, 1000);
+             return true;
+@@ -218,15 +286,16 @@ bool FlameLeviathanVehicleAction::SiegeEngineAction(Unit* target)
+     {
+         uint32 spellId = 62522;
+         if (botAI->CanCastVehicleSpell(spellId, target))
+-            if (botAI->CastVehicleSpell(spellId, target))
++            if (CastLeviathanSpell(botAI, spellId, target))
+             {
+                 vehicleBase_->AddSpellCooldown(spellId, 0, 10000);
+                 return true;
+             }
+     }
+     uint32 spellId = 62345;
+-    if (vehicleBase_->GetPower(POWER_ENERGY) >= 80 && botAI->CanCastVehicleSpell(spellId, target))
+-        if (botAI->CastVehicleSpell(spellId, target))
++    if (vehicleBase_->GetPower(POWER_ENERGY) >= (sPlayerbotAIConfig.RaidVehicleSupport ? 60 : 80) &&
++        botAI->CanCastVehicleSpell(spellId, target))
++        if (CastLeviathanSpell(botAI, spellId, target))
+         {
+             vehicleBase_->AddSpellCooldown(spellId, 0, 1000);
+             return true;
+@@ -240,7 +309,7 @@ bool FlameLeviathanVehicleAction::SiegeEngineTurretAction(Unit* target)
+         return false;
+     uint32 spellId = 62358;
+     if (botAI->CanCastVehicleSpell(spellId, target))
+-        if (botAI->CastVehicleSpell(spellId, target))
++        if (CastLeviathanSpell(botAI, spellId, target))
+         {
+             vehicleBase_->AddSpellCooldown(spellId, 0, 1000);
+             return true;
+@@ -254,14 +323,14 @@ bool FlameLeviathanVehicleAction::ChopperAction(Unit* target)
+         return false;
+     uint32 spellId = 62286;
+     if (botAI->CanCastVehicleSpell(spellId, target))
+-        if (botAI->CastVehicleSpell(spellId, target))
++        if (CastLeviathanSpell(botAI, spellId, target))
+         {
+             vehicleBase_->AddSpellCooldown(spellId, 0, 15000);
+             return true;
+         }
+     spellId = 62974;
+     if (botAI->CanCastVehicleSpell(spellId, target))
+-        if (botAI->CastVehicleSpell(spellId, target))
++        if (CastLeviathanSpell(botAI, spellId, target))
+         {
+             vehicleBase_->AddSpellCooldown(spellId, 0, 1000);
+             return true;
+@@ -271,10 +340,14 @@ bool FlameLeviathanVehicleAction::ChopperAction(Unit* target)
+ 
+ bool FlameLeviathanEnterVehicleAction::Execute(Event /*event*/)
+ {
++    bool const corrected = sPlayerbotAIConfig.RaidVehicleSupport;
++    if (corrected && !RaidVehicles::LeviathanRaid(botAI, true))
++        return false;
+     // do not switch vehicles yet
+     if (bot->GetVehicle())
+         return false;
+     Unit* vehicleToEnter = nullptr;
++    int bestRank = 100;
+     GuidVector npcs = AI_VALUE(GuidVector, "nearest vehicles far");
+     for (GuidVector::iterator i = npcs.begin(); i != npcs.end(); i++)
+     {
+@@ -282,14 +355,24 @@ bool FlameLeviathanEnterVehicleAction::Execute(Event /*event*/)
+         if (!vehicleBase)
+             continue;
+ 
+-        if (vehicleBase->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
++        // The outer vehicle can have no spare seats while its nested turret
++        // still has a free gunner. The value finds that turret; rank its parent.
++        if (corrected && (vehicleBase->GetEntry() == NPC_SALVAGED_SIEGE_ENGINE_TURRET ||
++                          vehicleBase->GetEntry() == NPC_SALVAGED_DEMOLISHER_TURRET))
++            vehicleBase = vehicleBase->GetVehicleBase();
++        if (!vehicleBase || vehicleBase->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
+             continue;
+ 
+-        if (!ShouldEnter(vehicleBase))
++        int const rank = corrected ? RaidVehicles::BoardingRank(botAI, vehicleBase) : 0;
++        if (corrected ? rank < 0 : !ShouldEnter(vehicleBase))
+             continue;
+ 
+-        if (!vehicleToEnter || bot->GetExactDist(vehicleToEnter) > bot->GetExactDist(vehicleBase))
++        if (!vehicleToEnter || rank < bestRank ||
++            (rank == bestRank && bot->GetExactDist(vehicleToEnter) > bot->GetExactDist(vehicleBase)))
++        {
+             vehicleToEnter = vehicleBase;
++            bestRank = rank;
++        }
+     }
+ 
+     if (!vehicleToEnter)
+@@ -303,6 +386,8 @@ bool FlameLeviathanEnterVehicleAction::Execute(Event /*event*/)
+ 
+ bool FlameLeviathanEnterVehicleAction::EnterVehicle(Unit* vehicleBase, bool moveIfFar)
+ {
++    if (sPlayerbotAIConfig.RaidVehicleSupport && RaidVehicles::BoardingRank(botAI, vehicleBase) < 0)
++        return false;
+     float dist = bot->GetDistance(vehicleBase);
+ 
+     if (dist > INTERACTION_DISTANCE && !moveIfFar)
+@@ -313,9 +398,19 @@ bool FlameLeviathanEnterVehicleAction::EnterVehicle(Unit* vehicleBase, bool move
+ 
+     botAI->RemoveShapeshift();
+     // Use HandleSpellClick instead of Unit::EnterVehicle to handle special vehicle script (ulduar)
+-    vehicleBase->HandleSpellClick(bot);
++    Unit* clickTarget = vehicleBase;
++    if (sPlayerbotAIConfig.RaidVehicleSupport && vehicleBase->GetVehicleKit()->GetPassenger(0))
++    {
++        // Same nested spell-click used by the core's demolisher ride script.
++        // The rank was rechecked above, including group driver and empty gunner.
++        clickTarget = vehicleBase->GetVehicleKit()->GetPassenger(
++            vehicleBase->GetEntry() == NPC_SALVAGED_SIEGE_ENGINE ? 7 : 1);
++        if (!clickTarget)
++            return false;
++    }
++    clickTarget->HandleSpellClick(bot);
+ 
+-    if (!bot->IsOnVehicle(vehicleBase))
++    if (!bot->IsOnVehicle(clickTarget))
+         return false;
+ 
+     // dismount because bots can enter vehicle on mount
+diff --git a/src/Ai/Raid/Uld/UldTriggers.cpp b/src/Ai/Raid/Uld/UldTriggers.cpp
+index 9980c152..63d6ce4b 100644
+--- a/src/Ai/Raid/Uld/UldTriggers.cpp
++++ b/src/Ai/Raid/Uld/UldTriggers.cpp
+@@ -18,6 +18,7 @@
+ #include "UldBossHelper.h"
+ #include "UldScripts.h"
+ #include "Vehicle.h"
++#include "RaidVehicleActions.h"
+ 
+ const std::vector<uint32> availableVehicles = {NPC_VEHICLE_CHOPPER, NPC_SALVAGED_DEMOLISHER,
+                                                NPC_SALVAGED_DEMOLISHER_TURRET, NPC_SALVAGED_SIEGE_ENGINE,
+@@ -45,6 +46,8 @@ const std::vector<uint32> illusionMobs =
+ 
+ bool FlameLeviathanOnVehicleTrigger::IsActive()
+ {
++    if (sPlayerbotAIConfig.RaidVehicleSupport && !RaidVehicles::LeviathanRaid(botAI))
++        return false;
+     Unit* vehicleBase = bot->GetVehicleBase();
+     Vehicle* vehicle = bot->GetVehicle();
+     if (!vehicleBase || !vehicle)
+@@ -61,6 +64,8 @@ bool FlameLeviathanOnVehicleTrigger::IsActive()
+ 
+ bool FlameLeviathanVehicleNearTrigger::IsActive()
+ {
++    if (sPlayerbotAIConfig.RaidVehicleSupport)
++        return !bot->GetVehicle() && RaidVehicles::LeviathanRaid(botAI, true);
+     if (bot->GetVehicle())
+         return false;
+ 
+diff --git a/src/Bot/PlayerbotAI.cpp b/src/Bot/PlayerbotAI.cpp
+index 222c425f..5bd3437f 100644
+--- a/src/Bot/PlayerbotAI.cpp
++++ b/src/Bot/PlayerbotAI.cpp
+@@ -4211,7 +4211,8 @@ bool PlayerbotAI::CanCastVehicleSpell(uint32 spellId, Unit* target)
+ 
+     if (spellInfo->Targets & TARGET_FLAG_DEST_LOCATION)
+         spell->m_targets.SetDst(dest);
+-    else if (spellTarget != vehicleBase)
++    else if (spellTarget != vehicleBase || (sPlayerbotAIConfig.RaidVehicleSupport && bot->GetMapId() == 616 &&
++             vehicleBase->GetEntry() == 30161))
+         spell->m_targets.SetUnitTarget(spellTarget);
+ 
+     SpellCastResult result = spell->CheckCast(true);
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index fa47b42e..91aa89ec 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -311,6 +311,7 @@ bool PlayerbotAIConfig::Initialize()
+ 
+     EnableICCBuffs = sConfigMgr->GetOption<bool>("Playerbots.EnableICCBuffs", true);
+     TwinValkyrInteractions = sConfigMgr->GetOption<bool>("Playerbots.TwinValkyrInteractions", false);
++    RaidVehicleSupport = sConfigMgr->GetOption<bool>("Playerbots.RaidVehicleSupport", false);
+ 
+     //////////////////////////// Professions
+     ClassMatchingProfessionChance =
+diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
+index 45ed9eaa..0ca1ae02 100644
+--- a/src/PlayerbotAIConfig.h
++++ b/src/PlayerbotAIConfig.h
+@@ -108,6 +108,7 @@ public:
+     bool DisabledWithoutRealPlayer;
+     bool EnableICCBuffs;
+     bool TwinValkyrInteractions;
++    bool RaidVehicleSupport;
+     bool AllowAccountBots, AllowGuildBots, AllowTrustedAccountBots;
+     bool RandomBotGuildNearby, RandomBotInvitePlayer, InviteChat;
+     uint32 GlobalCoolDown, ReactDelay, MaxWaitForMove, DisableMoveSplinePath, MaxMovementSearchTime, ExpireActionTime,
+diff --git a/tests/raid_vehicles_test.cpp b/tests/raid_vehicles_test.cpp
+new file mode 100644
+index 00000000..8f2b4829
+--- /dev/null
++++ b/tests/raid_vehicles_test.cpp
+@@ -0,0 +1,171 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#include "../src/Ai/Raid/RaidVehiclePolicy.h"
++#include <iostream>
++#include <limits>
++
++namespace
++{
++int checks = 0, failures = 0;
++void Check(bool value, int line)
++{
++    ++checks;
++    if (!value)
++    {
++        ++failures;
++        std::cerr << "Failed at line " << line << '\n';
++    }
++}
++}
++#define CHECK(expr) Check(static_cast<bool>(expr), __LINE__)
++
++int main()
++{
++    using namespace RaidVehicles;
++    CHECK(!DrakeHealer(101, {}));
++    CHECK(!DrakeHealer(101, {{101, true}}));
++    std::vector<Rider> riders = {{101, false}, {102, false}, {103, true}, {104, false}, {105, false}};
++    CHECK(DrakeHealer(103, riders));
++    CHECK(!DrakeHealer(101, riders));
++    std::reverse(riders.begin(), riders.end());
++    CHECK(DrakeHealer(103, riders));
++    for (unsigned size = 2; size <= 25; ++size)
++    {
++        riders.clear();
++        for (unsigned i = 0; i < size; ++i)
++            riders.push_back({101 + i, i % 5 == 3});
++        unsigned count = 0;
++        for (auto const& rider : riders)
++            count += DrakeHealer(rider.guid, riders) ? 1u : 0u;
++        CHECK(count == (size + 4) / 5);
++        CHECK(count < size);
++    }
++
++    DrakeFacts f;
++    f.energy = 100;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::Spike);
++    f.targetPoints = 2;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::Engulf);
++    f.energy = 74;
++    f.dotMs = 8000;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::None); // reserve energy instead of starving shield
++    f.dotMs = 3000;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::Engulf); // preserve the stacking DoT
++    f.energy = 49;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::None);
++    f.surge = f.shieldReady = true;
++    f.points = 2;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::Spike); // short shield would expire before damage
++    f.surgeActive = true;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::Shield);
++    f.energy = 24;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::None);
++    f.points = 0;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::None); // do not spend the shield reserve
++    f.energy = 35;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::Spike);
++    f.healer = true;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::Revivify);
++    f.energy = 9;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::None);
++    f.surgeActive = false;
++    f.points = 5;
++    f.energy = 25;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::None); // retained warning GUID must not spend a shield
++    f.surgeActive = true;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::Shield);
++    f.surgeActive = false;
++    f.surge = false;
++    f.energy = 50;
++    f.selfPoints = 5;
++    f.hotMs = 6000;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::None);
++    f.health = 50;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::Burst);
++    f.health = 100;
++    f.energy = 75;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::Burst);
++    f.selfPoints = 0;
++    f.targetPoints = 5;
++    CHECK(NextDrakeSpell(f) == DrakeSpell::Revivify); // points on boss cannot fund targeted heal
++
++    // Across every affordable energy/point boundary, never pick a spell whose
++    // base cost or combo-point requirement cannot be paid.
++    for (unsigned energy = 0; energy <= 100; ++energy)
++        for (unsigned points = 0; points <= 5; ++points)
++            for (bool heal : {false, true})
++                for (bool surge : {false, true})
++                    for (bool active : {false, true})
++                {
++                    DrakeFacts facts;
++                    facts.energy = energy;
++                    facts.points = facts.targetPoints = facts.selfPoints = points;
++                    facts.healer = heal;
++                    facts.surge = surge;
++                    facts.surgeActive = active;
++                    facts.shieldReady = true;
++                    auto spell = NextDrakeSpell(facts);
++                    CHECK(spell != DrakeSpell::Shield || (energy >= 25 && points > 0));
++                    CHECK(spell != DrakeSpell::Engulf || (energy >= 50 && points >= 2));
++                    CHECK(spell != DrakeSpell::Burst || (energy >= 50 && points >= 5));
++                    CHECK((spell != DrakeSpell::Spike && spell != DrakeSpell::Revivify) || energy >= 10);
++                }
++
++    int bossTarget = 1, selfTarget = 2;
++    for (bool healer : {false, true})
++    {
++        DrakeFacts shield;
++        shield.healer = healer;
++        shield.surgeActive = shield.shieldReady = true;
++        shield.energy = 25;
++        shield.points = 2;
++        int* combo = healer ? &selfTarget : &bossTarget;
++        DrakeSpell spell = NextDrakeSpell(shield);
++        CHECK(spell == DrakeSpell::Shield);
++        CHECK(DrakeTarget(spell, &bossTarget, &selfTarget, combo) == combo);
++        CHECK(DrakeTarget(spell, &bossTarget, &selfTarget, static_cast<int*>(nullptr)) == nullptr);
++        shield.points = 0;
++        CHECK(NextDrakeSpell(shield) == DrakeSpell::None);
++    }
++    CHECK(DrakeTarget(DrakeSpell::Spike, &bossTarget, &selfTarget, &selfTarget) == &bossTarget);
++    CHECK(DrakeTarget(DrakeSpell::Engulf, &bossTarget, &selfTarget, &selfTarget) == &bossTarget);
++    CHECK(DrakeTarget(DrakeSpell::Revivify, &bossTarget, &selfTarget, &bossTarget) == &selfTarget);
++    CHECK(DrakeTarget(DrakeSpell::Burst, &bossTarget, &selfTarget, &selfTarget) == &selfTarget);
++    CHECK(DrakeTarget(DrakeSpell::None, &bossTarget, &selfTarget, &bossTarget) == nullptr);
++
++    // A human orbiting every tick (or a pursued driver) cannot suppress weapon
++    // decisions, and a successful instant cast cannot suppress movement.
++    unsigned casts = 0, moves = 0;
++    for (unsigned tick = 0; tick < 60; ++tick)
++        CHECK(VehicleTick([&] { ++casts; return tick % 2 == 0; }, [&] { ++moves; return true; }));
++    CHECK(casts == 60 && moves == 60);
++    CHECK(!VehicleTick([] { return false; }, [] { return false; }));
++    CHECK(LeviathanPresence(true, true, true, false));
++    CHECK(!LeviathanPresence(true, true, false, true)); // owner must board before new seats fill
++    CHECK(LeviathanPresence(false, true, false, true)); // dead owner's raid keeps fighting
++    CHECK(!LeviathanPresence(false, false, false, true)); // bots-only bypass stays separate
++    CHECK(!LeviathanPresence(false, true, false, false)); // do not drive after a wipe
++
++    Point const boss{0, 0, 10};
++    CHECK(SafeDrakePoint({45, 0, 10}, boss, {}));
++    CHECK(!SafeDrakePoint({30, 0, 10}, boss, {}));
++    CHECK(!SafeDrakePoint({60, 0, 10}, boss, {}));
++    CHECK(!SafeDrakePoint({45, 0, 40}, boss, {}));
++    CHECK(!SafeDrakePoint({45, 0, 10}, boss, {{40, 0, 10}}));
++    CHECK(SafeDrakePoint({0, 45, 10}, boss, {{40, 0, 10}}));
++    CHECK(!SafeDrakePoint({std::numeric_limits<float>::quiet_NaN(), 0, 10}, boss, {}));
++    CHECK(!SafeDrakePoint({45, 0, 10}, {0, 0, std::numeric_limits<float>::quiet_NaN()}, {}));
++    CHECK(BoardingPriority(33060, true, false, false, true) == 0);
++    CHECK(BoardingPriority(33109, true, false, false, false) == 0);
++    CHECK(BoardingPriority(33109, true, false, false, true) < BoardingPriority(33060, false, true, true, true));
++    CHECK(BoardingPriority(33060, false, false, true, true) == -1); // foreign driver
++    CHECK(BoardingPriority(33060, false, true, false, true) == -1); // occupied turret
++    CHECK(BoardingPriority(33062, false, true, true, true) == -1); // useless chopper passenger
++    CHECK(BoardingPriority(33062, true, false, false, true) == 4);
++    CHECK(BoardingPriority(30161, true, false, false, true) == -1);
++    std::cout << checks << " checks, " << failures << " failures\n";
++    return failures ? 1 : 0;
++}
+-- 
+2.56.0.windows.2
+

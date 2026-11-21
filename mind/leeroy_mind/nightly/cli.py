@@ -307,9 +307,13 @@ async def _context(root, store, cfg, clock, night, *, make_llm, use_llm=True, li
 
             ctx.extract_thread = extract_thread
             ctx.asker = asker_factory if use_llm else None
+            from leeroy_mind.drama import config as drama_config
+            previous_romance = drama_config.pinned()
+            drama_config.pin(settings.member_romance)
             try:
                 yield ctx
             finally:
+                drama_config.pin(previous_romance)
                 # Keep the lock through exceptional and cancelled cleanup too.
                 closing_scheduler, scheduler = scheduler, None
                 try:
@@ -363,6 +367,8 @@ async def _run(root, store, cfg, clock, args, make_llm):
             attach_turing(runner, root)
             from leeroy_mind.drama.pulls import attach_night as attach_pulls
             attach_pulls(runner, ctx.settings)  # [drama] threads = "record"
+            from leeroy_mind.drama.couples import attach_night as attach_couples
+            attach_couples(runner, ctx.settings.member_romance)
             from leeroy_mind.memory.scopes import attach as attach_scopes
             attach_scopes(runner)
             await runner.run(night, ctx.window)

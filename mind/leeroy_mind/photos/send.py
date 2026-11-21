@@ -4,7 +4,6 @@ Reservations are loop-owned; durable spending belongs to the pipeline's message 
 No worker, model, GPU or file writer is started here.
 """
 import hashlib
-import math
 
 from leeroy_mind.discord.store import AttachmentIn
 from leeroy_mind.discord import layout
@@ -72,9 +71,7 @@ class PhotoSender:
         elif p is None or p.appearance is None or snaps.looks_hash(p.appearance) != snap.looks:
             why = 'looks_changed'
         elif (app.store.get_meta(f'selfies:variety-pick:{snap.guid}') == str(cur.pick)
-              or p.identity.age < ration.SEND_MIN_AGE
-              or type(snap.nsfw) not in (int, float) or not math.isfinite(snap.nsfw)
-              or snap.nsfw >= app.selfies.cfg.nsfw_max):
+              or p.identity.age < ration.SEND_MIN_AGE):
             why = 'flagged'
         else:
             try:

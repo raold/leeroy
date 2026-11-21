@@ -31,6 +31,7 @@ class DkpConfig:
 
 @dataclass(frozen=True)
 class GuildConfig:
+    loot_receipts: bool = False
     raid_call_delay_s: int = 60
     raid_call_jitter_s: int = 15
     pick_window_min: int = 10
@@ -134,6 +135,8 @@ def load_guild_config(path: Path) -> GuildConfig:
     defaults = GuildConfig()
     guild = _table(data, "guild", defaults)
     dkp = _table(data, "dkp", defaults.dkp)
+    if type(guild["loot_receipts"]) is not bool:
+        _bad("guild", "loot_receipts", "a boolean")
     for key in ("raid_call_delay_s", "raid_call_jitter_s", "ready_check_delay_s",
                 "dc_start_delay_s", "disband_after_logout_min", "offline_raids_per_day",
                 "offline_min_away_min"):

@@ -264,6 +264,37 @@ a fight nearby restarts that clock. Inside an instance it waits for a rez, as be
 playerbots never releases a bot there while he is on the map). Reloadable with `.reload config`.
 Logs carry guids, spell ids, counts and codes only. **Native rebuild required.**
 
+# The owner's own auras (`Leeroy.OwnerAuras`)
+
+A GM aura such as 6560 "LeCraft Test Spell" (infinite duration, dispel type Poison) does not
+stay on him: his healer bots' cleanses and poison totems take it as a poison, and it drops when
+he dies like any aura. `Leeroy.OwnerAuras` (a comma list of spell ids, default empty = off,
+`.reload config`) keeps the listed auras on the owner's character (`Leeroy.HumanGuid`) only
+(`Guild/OwnerAuras`, pure policy `Lib/LeeroyOwnerAuras`).
+
+- **When.** On the world tick about every 2 s, while he is in the world with a session, alive and
+  not a ghost, not teleporting, not on a taxi, not in a vehicle and not in a battleground or arena
+  (`OwnerAuraBlock`), each listed aura he lacks (any caster's counts) is put back with
+  `AddAura(spell, him)`. Combat does not matter.
+- **At once after a removal.** A `UnitScript` aura-remove hook (map threads) notes how a listed aura
+  came off him (`AuraRemoveMode`: enemy spell = `dispelled`, `death`, `expired`, `cancelled`, the
+  rest `unknown`) and wakes the next world tick; it never re-applies inside the removal (the core
+  is iterating his aura lists there). Passes stay at least 500 ms apart, so an aura that cannot
+  stay on is tried at most twice a second; a death waits until he is alive again.
+- **Checks.** The ids are read at each config load and checked against the spell store on the
+  next tick (at startup the config loads before the spells): an unknown id or one with no
+  unit aura effect is skipped with one `owner_aura_invalid spell= reason=unknown_spell|not_an_aura`
+  line, an entry that is not a positive number with `owner_aura_invalid entry= reason=not_a_spell_id`;
+  the ids in force are logged `owner_auras spells=6560`.
+- **Logs.** `owner_aura_reapplied spell= why=`, and `owner_aura_refused spell= why=` when
+  `AddAura` gave nothing (immunity, a spell that cannot apply to him), each at most once a minute
+  per spell.
+- **Limits.** Nobody else is ever touched, and his bots still cleanse it: the aura is put back after
+  each cleanse rather than shielded from it. `Leeroy.Enable = 0` stops it. Removing an id (then
+  `.reload config`) is the only way to keep its aura off: `.unaura` or a cancel is undone.
+
+**Native rebuild required.**
+
 # Gear-up and the one-time regear
 
 Playerbots' `autogear bis <ilvl>` destroys everything equipped and every weapon and armour
@@ -275,13 +306,16 @@ bags are full or nothing capped fits the slot. Incremental mode replaces an item
 scoring 1.2 times as much.
 
 **Ordinary gear-up** (role change, under level, below average, theorycrafter; native whose hello
-lists `regear`, `GearUpToCap`) never uses `autogear bis` and never destroys a bag item. It runs
-one capped incremental `AutoGear`, which fills empty slots and upgrades slots under the cap.
-- An item the bot had at or above the cap that the pass replaced (DKP loot) goes back into its
-  slot from the bags, enchants and gems intact. The capped item the pass made for that slot is
-  destroyed.
+lists `regear`, `GearUpToCap`) never uses `autogear bis`. Its capped incremental `AutoGear`
+fills empty slots and upgrades slots under the cap without destroying bag items. The separate
+under-level step still calls `Randomize(true)` first, whose inventory reset can clear bag items;
+that older behavior is outside the capped gear pass.
+- Items already at or above the cap are protected before selection, including their enchants
+  and gems. A two-handed main-hand candidate is refused while the offhand is protected, so the
+  offhand stays equipped even with full bags. Compatible one-handers and unrelated slots can
+  still upgrade. This needs playerbots patch `0015` and a native rebuild.
 - Anything this gear-up put on above the cap is stripped, and the slot is refilled from the capped
-  search (pure policy `GearUpSlotStep`).
+  search with the same original protections (pure policies `GearUpSlotStep`, `GearUpProtectedSlots`).
 - Nothing it equips is above its cap, and nothing the bot already holds at or above it is removed.
 - Log `gear_up_member guid= ilvl= avg= stripped= returned= empty= kept=`.
 
@@ -320,6 +354,8 @@ offline raid).
 - **Receipts.** Ordinary gear-ups take a floor of ilvl - 20 and no ceiling, since kept loot can lift
   the average. An older native keeps the old floors.
 - **Restarts.** A hello from a restarted worldserver releases any gear-up batch the old process held.
+- **Deadline.** A member still unavailable at the three-day deadline keeps its previous gear.
+  Ordinary gear-up will not lower it later; a new `regear_to` value is needed to retry the regear.
 - **Health.** The `regear` line shows members done of the total (a note), and FAILs a regear
   running over two days.
 - **Logs.** `regear_started`, `regear_batch`, `regear_member`, `regear_out_of_bounds`,
@@ -406,6 +442,20 @@ Restart recovery still retains a partial party whose identity cannot be proved: 
 group ID, leader and roster subset do not authorize disband. Live cancellation can instead restore
 each independently owned member through the existing handback path.
 
+Heroic receipt and Realm mail transactions require the updated core database handling from
+`c8bd1f28c20c72560fa5014eda3b0aa7c3d63dec` (`fix(Core/Database): Restart lost transactions`,
+upstream #28020). Check that this commit is an ancestor of the core revision used for the native
+build. The core retries connection losses before COMMIT, but treats a lost COMMIT acknowledgement
+as an unknown outcome. These module transactions must leave COMMIT to the core: a raw COMMIT
+inside the statement batch would look like a retryable query and could replay an already-committed
+character, inventory or mail snapshot.
+
+Independent persisted readback remains the proof of completion, including when the transaction
+callback reports failure. Realm mail accepts only the existing exact mail, attachment, source and
+money evidence; failed, absent or mismatched readback remains unknown without another transfer.
+This compatibility fix needs a native rebuild before enabling member heroics or Realm mail;
+it adds no migration or setting and does not enable either feature.
+
 # Ground hazards in the owner's group
 
 Stock playerbots adds its `avoid aoe` strategy to the combat engine only (`AutoAvoidAoe` with a game-client
@@ -438,7 +488,11 @@ training state or pending bot command leaves the body to its owner (nothing adde
   A fourth kind stock never sees: an add (a selectable, attackable unit) whose own periodic aura triggers an
   allow-listed damage spell (`HeldAuraHazard`; today the Living Inferno's Blazing Aura, 75886/75887, heroic 25-man
   Halion), that spell's radius plus the add's reach, up to 35 yards. A tank holds such an add in its fire, so its
-  zone concerns everyone but bots playerbots reads as tanks (`held`). Each zone keeps its object's phase mask and
+  zone concerns everyone but bots playerbots reads as tanks (`held`). A fifth: an allow-listed npc that goes off
+  when a player comes near (`ProximityHazardFor`, by creature entry, below), its trigger distance or its blast's
+  radius (this difficulty's version of the spell) when larger; nobody holds one, so tanks keep out too. Such npcs
+  walk, so each pass places the zone where the npc is and, while its spline runs, stretches it a second ahead
+  toward its next path point (`HazardLeadZone`: the circle round both). Each zone keeps its object's phase mask and
   a body meets only the zones of its own phases (Halion's two realms share the room; `HazardApplies`), where the
   scan used to keep only what the owner's phase saw. Map threads read that snapshot; its version changes only
   when the zones do, so answers are reused between passes.
@@ -458,7 +512,10 @@ training state or pending bot command leaves the body to its owner (nothing adde
   yards, so a bot just inside the near edge steps back and goes round, and one past the middle finishes the
   crossing. In combat, ties go toward him. An exit never loops with a lower-relevance mover (follow, or
   dungeon-clear's `.dc on` route at relevance 15-57) that walks the bot back into the same hazard: entries are
-  counted per hazard, and a hazard's third entry within 20 seconds yields it to the bot's own movers for 20
+  counted per hazard, into a hazard the bot did not stand in at its last answer (an exit planned again inside the
+  same hazards counts nothing; a bot walked from one overlapping hazard into the other counts each) and never into
+  a moving npc's zone, which walked onto the bot (`NoteHazardZoneEntry`; it is always stepped out of), and a
+  hazard's third entry within 20 seconds yields it to the bot's own movers for 20
   seconds; a bot standing only in yielded hazards is let through, overlapping ones included
   (`hazard_exit_yield guid= zones=`).
 - Logs once a minute while it acts: `hazards_minute aware= zones= spot_members= detour_members= exit_members=`.
@@ -485,6 +542,37 @@ tank. Halion's meteor crater (40029, 74713 -> 74712) and the flames its script s
 74718 -> 74717), Combustion (40001) and Consumption (40135) are unselectable trigger npcs within 15 yards and
 were measured already.
 
+**Npcs that go off when a player comes near (2026-11-21).** In Naxxramas the owner's bots walked straight into
+the Living Poison of the Construct Quarter's hall (`hazards_minute ... zones=0`): an unselectable npc with no
+aura, so none of the four kinds saw it. From the core's scripts, the live `Spell.dbc`/`SpellRadius.dbc` with the
+core's `SpellInfoCorrections` and the world database (`creature_template`, its addon auras and SmartAI rows):
+
+| Npc | Where | Script: what sets it off | Then | Zone |
+|---|---|---|---|---|
+| 16027 Living Poison | Naxx, Construct Quarter hall | `npc_living_poison`: `SelectNearestTarget(1.5)`, a player's centre within 1.5 yards; it walks one of three lanes (`LivingPoisonDataList`, one every 5 s each, 2.5 yards a second, gone after ~15 s) | Explode 28433, 5 yards (radius index 8), ~30k nature, and it dies | **1.5**: the trigger, not the blast: 5 yards round slimes 12.5 yards apart would shut every lane, and a bot that sets none off is caught in none of its own |
+| 34362 Proximity Mine | Ulduar, Mimiron phase 1 (ten from the Leviathan Mk II at a time) | `npc_ulduar_proximity_mine`: a player within 1.9 yards (`SelectTargetFromPlayerList`), checked every 500 ms; else it goes off after 35 s | Mine Explosion 66351 (63009 on 25-man), 3 yards (index 15) | **3**, the blast |
+| 33292 Ominous Cloud | Ulduar, Yogg-Saron phase 1 | `boss_yoggsaron_cloud`: drifts in circles round the room (`MoveCirclePath`); every 500 ms a player within 6 yards of its edge (`SelectNearbyTarget(6)`) | Summon Guardian of Yogg-Saron 63031 | **6 + its reach** |
+| 39137 Shadow Trap | ICC, the Lich King phase 1 | its periodic aura 73525 casts the searcher 74282 every 500 ms, 3 yards by the core's correction | 73529, 10 yards of damage (index 13) and a knockback (10 yards by correction) | **10**, the blast; playerbots' own Lich King strategy also keeps 12 yards |
+
+A replay of the hall from `LivingPoisonDataList` (`Hazard_AFollowerCrossesTheLivingPoisonLanesWithoutSettingOneOff`:
+a follower at run speed across all three lanes, 120 starts over every phase of the waves, the zones 500 ms old)
+reaches the far side every time and never comes within 3 yards of a slime; walking straight sets one off in 57.
+Its first run counted each re-planned exit as an entry (the job counted whenever its exit memo was not reusable),
+so a slime walking onto a bot yielded the bot to follow within a second; hence the per-hazard entry rule above. A slime that appears on a bot standing at its pipe (a lane's start)
+is not foreseen. While such an npc is within the scan the zones change every pass, so follow spots and detours are
+worked out again every 500 ms (as when an area appears or ends).
+
+Looked at and left out: Fallout Slime (16290, Grobbulus) and Sewage Slime (16375, Construct Quarter trash) carry
+Disease Cloud (28156 -> 28153, 15 yards) and Embalming Slime (16024) casts Embalming Cloud in combat, but each is
+an attackable add the raid kills inside its cloud; Mimiron's Bomb Bot (33836, SmartAI: explodes within 3 yards of
+its victim), Lady Deathwhisper's Vengeful Shade (38222: Vengeful Blast procs on its one fixated target),
+Putricide's Volatile Ooze and Gas Cloud and the Blood Princes' Kinetic Bomb chase or are struck by chosen players
+(playerbots' ICC strategies); the Twin Val'kyr's orbs (34628/34630: `SelectNearestPlayer(2.75)`) are collected by
+colour; Valithria's Dream Clouds (`SelectNearestPlayer(5)`) are flown through on purpose; Sapphiron's Blizzard
+(16474, `trigger_periodic`) drops 3-yard Chill areas the dynamic object kind already sees; Algalon's black holes
+are the mechanic responder's (`nearest` areas). The same search of the Northrend 5-man scripts and SmartAI rows
+found none (Xevozz's Ethereal Spheres empower him, not a player).
+
 Rotface's own playerbots strategy (`IccRotfaceMultiplier`) zeroes every `avoid aoe` action, this exit included,
 for a bot with Rotface on its threat list, so in that fight Ooze Flood mainly moves the follow spots of members
 not yet engaged. No dynamic object in those raids exceeds 15 yards in the DBC (the largest are 13: Rune of Death,
@@ -498,7 +586,9 @@ navmesh check refuses a waypoint it cannot reach straight, and then follow walks
 again at the exit until the yield lets it through); a navmesh path between two clear points can still bend into
 a hazard. `melee` and `queue` formations follow a unit, not a spot, so only the exit applies. Encounter
 multipliers that silence `avoid aoe` during a mechanic silence the exit too, and in combat a melee bot whose
-target stands in a hazard can step back in to reach it (after two exits the yield lets it stay). Logs carry
+target stands in a hazard can step back in to reach it (after two exits the yield lets it stay). A Living Poison
+the owner himself sets off still catches the bots within 5 yards of it, and a moving npc's zone is up to a pass
+(500 ms) old plus its one-second lead. Logs carry
 guids, counts and reason codes only. **Native rebuild required, with the playerbots patch applied first.**
 
 # Boss mechanics at cast start (the mechanic responder)

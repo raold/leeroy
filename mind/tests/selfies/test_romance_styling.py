@@ -76,7 +76,6 @@ def test_configuration_is_explicit_boolean_and_unknown_tables_do_not_enable(tmp_
     assert not load_selfie_config(path).romance_styling
     path.write_text('[selfies]\nromance_styling=true\n')
     assert load_selfie_config(path).romance_styling
-    assert load_selfie_config(path).nsfw_max == SelfieCfg().nsfw_max == .2
     path.write_text('[selfies]\nromance_styling=true\nunknown=true\n')
     assert not load_selfie_config(path).romance_styling
     path.write_text('[selfies]\nromance_styling="true"\n')

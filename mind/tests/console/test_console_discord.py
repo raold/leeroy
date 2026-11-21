@@ -114,6 +114,21 @@ def test_the_server_lists_categories_channels_dms_and_members_with_presence(data
     assert set(members[101]) == {"guid", "name", "class_key", "role", "presence"}
 
 
+def test_presence_shows_fresh_interruption_without_using_health_history(cast):
+    from leeroy_mind.console.discordview import _members
+    from leeroy_mind.server.state import STEPPED_KEY, PLAY_STALE_S
+    cast.set_meta('life:availability', '6')
+    cast.set_meta(STEPPED_KEY, json.dumps({'at': NOW, 'guids': [101]}))
+    now = datetime.fromtimestamp(NOW, EASTERN)
+    rows = {m['guid']: m for m in _members(cast.conn, now, 3, HUMAN, server=True)}
+    assert rows[101]['presence']['state'] == 'idle'
+    assert rows[101]['presence']['playing'] is False and rows[101]['status'] is None
+    cast.set_meta(STEPPED_KEY, json.dumps({'at': NOW - PLAY_STALE_S - 1, 'guids': [101]}))
+    before = _members(cast.conn, now, 3, HUMAN, server=True)
+    cast.set_meta('life:away:101', f'{NOW - 100},{NOW + 900}')
+    assert _members(cast.conn, now, 3, HUMAN, server=True) == before
+
+
 def test_presence_and_roles_follow_the_minds_rules(data, cast):
     """The mind's own function, seed and clock, and the trial rank [realm] names."""
     from leeroy_mind.discord import presence

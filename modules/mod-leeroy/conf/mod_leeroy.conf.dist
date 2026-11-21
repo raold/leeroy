@@ -59,6 +59,16 @@ Leeroy.CastDeathLoop.Enable = 0
 Leeroy.GroupRez.Enable = 1
 Leeroy.GroupRez.ReleaseSeconds = 60
 
+# Auras the owner's character (Leeroy.HumanGuid) keeps: a comma list of spell ids; empty is off. About every 2 s,
+# while he is in the world, alive (not a ghost), not on a taxi, not in a vehicle and not in a battleground or arena,
+# each listed aura he lacks is put back on him (AddAura, from himself): a GM aura his healers cleanse as a poison, or
+# that drops when he dies, comes back. One coming off him wakes the next world tick, so a cleanse is undone within
+# half a second; a death once he is alive again. Nobody else is touched. An id the spell store does not know, or one
+# that applies no aura, is skipped with one owner_aura_invalid line. Logs owner_aura_reapplied spell= why=
+# (dispelled, death, expired, cancelled, unknown) at most once a minute per spell. Reloadable with .reload config;
+# removing an id is the only way to keep its aura off. Example: Leeroy.OwnerAuras = "6560" (LeCraft Test Spell).
+Leeroy.OwnerAuras = ""
+
 # Ground hazards in the owner's group. Cast bots of his group with him as master get playerbots'
 # avoid aoe out of combat as well (stock adds it to the combat engine only); with the local playerbots
 # patch (PlayerbotHazardFilter) their follow spots also skip a hazard for the nearest safe spot, follow walks
@@ -131,6 +141,10 @@ Leeroy.CastArenaTeams.Leave = 1
 
 # Realm actors and cast protection stay off until separately accepted.
 Leeroy.Realm.Enable = 0
+
+# Durable give_loot reservations and inventory receipts. Also needs [guild] loot_receipts=true.
+# Status remains readable when disabled, to settle awards made before disabling.
+Leeroy.LootReceipts.Enable = 0
 Leeroy.DayPlans.Enable = 0
 Leeroy.CastGuard = 0
 # Bounded world-thread body steps per tick, clamped to 1-20.

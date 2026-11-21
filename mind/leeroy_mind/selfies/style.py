@@ -5,7 +5,7 @@ plain one, the rules as they were.
 
 The photo-kind pass (kind.py) chooses and screens a kind by it, the prompt (prompt.py) renders a
 kind the lust rules composed only while she still has it, and later photo kinds ask it too. The
-NSFW gate (`[selfies] nsfw_max`) is the same for both styles and for every image."""
+NSFW gate (selfie/leeroy_selfie/nsfw.py) is the same for both styles and for every image."""
 import re
 
 from ..personas.schema import Persona

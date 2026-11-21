@@ -77,7 +77,7 @@ def test_her_brb_takes_no_slip_and_no_emoticon(store, clock, tmp_path):
             p = member(r, emoticons=["<3"], emoticon_rate=1.0, typo_rate=0.15)
             brb = [s.line for s in r.engine._style(whisper(template="brb boss"), p, "brb boss",
                                                    close=False, plain=True)]
-            assert any("<3" in x for x in brb) is not coherence
+            assert all("<3" not in x for x in brb)
             # never a typo, whatever her typo rate (review of #370), over many seeds
             for _ in range(60):
                 again = [s.line for s in r.engine._style(whisper(template="gotta do a work thing"

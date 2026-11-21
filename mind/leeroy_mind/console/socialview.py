@@ -88,8 +88,10 @@ def social_view(conn, *, now: float) -> dict:
                           if "breakup" in have else [])]
 
     rumours = []
-    for r in q("SELECT id, root, about, canonical, created, last_told FROM rumor "
-               "WHERE status = 'live' ORDER BY last_told DESC, id DESC LIMIT ?", (RUMOURS_MAX,)):
+    for r in q("SELECT r.id, r.root, r.about, CASE WHEN r.root LIKE 'rule:breakup:%' "
+               "THEN r.canonical ELSE COALESCE(m.text, 'Original account unavailable.') END AS canonical, r.created, r.last_told "
+               "FROM rumor r LEFT JOIN memory m ON m.id=r.source "
+               "WHERE r.status = 'live' ORDER BY r.last_told DESC, r.id DESC LIMIT ?", (RUMOURS_MAX,)):
         side = {"spreader": [], "stifler": []}
         for s in q("SELECT guid, state FROM rumor_state WHERE rumor = ? ORDER BY guid", (r["id"],)):
             side[s["state"]].append(s["guid"])

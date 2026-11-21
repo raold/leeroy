@@ -134,6 +134,13 @@ Use the configured data directory for `mind.db`, `mind.toml` and `logs/mind.log`
 
 Ordinary browser reads time out after 30 seconds and actions after 120 seconds. An unanswered action may already have completed. Inspect its outcome before another attempt. Stale retained data shows its age. When the page returns to view it resynchronizes from a current snapshot. Ops caches health for up to a minute and budgets each panel separately. A slow source can be skipped while others answer. Private health detail belongs in the operator CLI.
 
+Face retries stop at their next timer when the page is hidden, Hide photos is on, or no
+attached face needs that member. Returning and drawing the face starts a fresh request.
+Permanent client errors are cached for five minutes; 408 and 429 remain retryable.
+Each pending image has one completion listener, so repeated feed redraws do not retain
+detached rows. Cache eviction takes one snapshot of attached photo URLs per pass and
+never revokes a photo still attached to the page.
+
 ## Troubleshooting
 
 | What you see | First check | Evidence of recovery |

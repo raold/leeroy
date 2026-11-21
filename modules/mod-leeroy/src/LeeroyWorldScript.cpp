@@ -159,6 +159,8 @@ public:
             Player* humanPlayer = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(human));
             bool const humanOnline = humanPlayer && humanPlayer->IsInWorld();
             auto features = LeeroyDcRaidFeatures();
+            features.emplace_back("loot_receipt_status_v1");
+            if (module.Config().lootReceipts) features.emplace_back("loot_receipts_v1");
 #if LEEROY_HAS_DUNGEON_CLEAR
             features.emplace_back("offline_raid_reserves");
             if (Leeroy::Guild::MemberDungeonEnabled()) features.emplace_back("member_dungeon_v1");

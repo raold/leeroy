@@ -328,7 +328,8 @@ LEEROY_TEST(MemberDungeonIoInsertWaitsForCommitAndFreshIndependentReadback)
     Row(receipt,receipt.data,1);CHECK(PollDungeonReceipt(receipt)==DungeonPersistence::Ready);
     CHECK_EQ(receipt.revision,1u);CHECK(!DungeonReceiptPending(receipt.id));
     CHECK_EQ(CharacterDatabase.transactions.size(),1u);
-    CHECK_EQ(CharacterDatabase.transactions.front()->transaction->statements.back(),"COMMIT");
+    auto const& statements=CharacterDatabase.transactions.front()->transaction->statements;
+    CHECK(std::find(statements.begin(),statements.end(),"COMMIT")==statements.end());
 }
 
 LEEROY_TEST(MemberDungeonIoLostReadbackRetainsOwnershipAndRetries)
@@ -388,7 +389,7 @@ LEEROY_TEST(MemberDungeonIoOfflineReturnQueuesGuardedFloatTolerantTransaction)
     CHECK(!RecoverBody(receipt,data["bodies"][0],nullptr,proof));
     CHECK_EQ(CharacterDatabase.transactions.size(),2u);
     auto const& statements=CharacterDatabase.transactions.back()->transaction->statements;
-    CHECK_EQ(statements.size(),3u);
+    CHECK_EQ(statements.size(),2u);
     CHECK(statements[0].find("ABS(position_x-(")!=std::string::npos);
     CHECK(statements[0].find("ABS(position_y-(")!=std::string::npos);
     CHECK(statements[0].find("ABS(position_z-(")!=std::string::npos);
@@ -471,6 +472,28 @@ LEEROY_TEST(MemberDungeonIoCommittedTerminalIsImmutableWhileHandbacksWait)
     CHECK(receipt.data.at("terminal")==data.at("terminal"));
     CHECK(!DungeonReturnsPersisted(receipt));
     CHECK(DungeonRecoveryConflicts({101},false));
+}
+
+LEEROY_TEST(MemberDungeonIoLostCommitAcknowledgementUsesHandbackReadbackWithoutReplayingSave)
+{
+    Fresh();auto data=Manifest();DungeonReceipt receipt{"test-start",15,data};Remember(receipt);
+    Player player;
+    CHECK(ObserveDungeonHandback(receipt,player));
+    CHECK_EQ(player.saves,1u);
+    auto committed=unverified.at(receipt.id).after;
+    auto const& statements=CharacterDatabase.transactions.back()->transaction->statements;
+    CHECK_EQ(statements.front(),"SAVE_CHARACTER");
+    CHECK_EQ(statements.size(),2u); // Character snapshot + receipt CAS; core owns COMMIT.
+    Commit(false); // The updated core reports a lost COMMIT acknowledgement as unknown.
+    CHECK(PollDungeonReceipt(receipt)==DungeonPersistence::Pending);
+    CHECK(DungeonRecoveryConflicts({101},false));
+    CHECK(ObserveDungeonHandback(receipt,player));
+    CHECK_EQ(player.saves,1u);CHECK_EQ(CharacterDatabase.transactions.size(),2u);
+    Row(receipt,committed,16);
+    CHECK(PollDungeonReceipt(receipt)==DungeonPersistence::Ready);
+    CHECK(DungeonHandbackRecorded(receipt.data,receipt.id,101));
+    CHECK(ObserveDungeonHandback(receipt,player));
+    CHECK_EQ(player.saves,1u);CHECK_EQ(CharacterDatabase.transactions.size(),2u);
 }
 
 LEEROY_TEST(MemberDungeonIoRestartDoesNotBorrowAPartialReusedGroupIdentity)

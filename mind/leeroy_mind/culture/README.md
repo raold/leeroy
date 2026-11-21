@@ -243,8 +243,8 @@ images are left for later.
   one a night, at most `memes_per_week` in seven days, spaced through the week, for a public
   joke with no meme in 30 days. The model writes only the caption (top and bottom, 60 characters
   each) and picks the picture: one of 20 fixed scenes of places and objects with no people, or the
-  butt's own situational photo already posted in a public channel (plain style, under the NSFW
-  limit, she 25 or older). "Posted publicly" is read from the photo's actual posting, never its
+  butt's own situational photo already posted in a public channel (plain style, she 25 or
+  older; the captioned meme goes through the NSFW gate again). "Posted publicly" is read from the photo's actual posting, never its
   flags: every message carrying it is hers, not deleted, in a layout channel that is not
   officers-only; a selfie-request photo posted only in #officer-chat, #applications or
   #bank-requests (or in a DM) never becomes a meme, and a planned meme whose photo stops

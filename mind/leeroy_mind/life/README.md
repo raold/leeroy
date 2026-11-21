@@ -422,11 +422,18 @@ whisper or her Discord DM her day can call her away mid-conversation (spec secti
   (a whisper only while he is in game), else nothing. Withheld (`_back_held`) if he writes first,
   she owes him an answer anywhere (its excuse says she was away: one excuse), or a quiet began.
   Logged `life_back: guid= said=0|1`.
-- **Health.** Each away is also in meta `life:away:<guid>` = `<since>,<until>` (unix seconds,
-  numbers only, overwritten by her next; `LifeService._mark`; dropped a day after it ended). The
+- **Health.** Recent aways are in meta `life:away:<guid>` = `<since>,<until>;...` (unix seconds,
+  numbers only; at most 64 intervals; `LifeService._mark`; each dropped a day after it ended).
+  The old single-interval value still reads. Early returns replace their own interval;
+  a later interruption never removes the earlier post's bound. Writing and pruning share one transaction. The
   mind never reads it back (a restart forgets every away); health's `owner-replies` bound for his
   DM or group-DM post made during an away is no sooner than her return plus 120 s, plus its
   margin. A channel answer that waited for her named return can still count as late there.
+- Brb/back lines never gain an emoticon, including with coherence off. Delayed server
+  reactions recheck the live interruption before posting. Server presence shows her idle
+  while away; the console reads the life service's expiring presence snapshot (at most three
+  minutes old), never the health history. It refreshes on changes and each minute even
+  with the server engine disabled. A restart still forgets live interruptions.
 
 ## Her feeling right now (`life/state.py`, `life/statebook.py`)
 

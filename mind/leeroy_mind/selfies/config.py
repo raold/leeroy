@@ -18,7 +18,6 @@ class SelfieCfg:
     enabled: bool = False
     python: Path | None = None  # the worker's interpreter; None: <checkout>/selfie/.venv's
     data: Path | None = None  # its models; None: LEEROY_SELFIE_DATA, else <checkout>/selfie-data
-    nsfw_max: float = 0.2  # an image scoring this or more is never written
     steps: int = 30
     guidance: float = 5.0  # the protocol's cfg; TOML defaults FLUX to native guidance 3.5
     size: int = 1024
@@ -83,7 +82,6 @@ _RULES = {
     "enabled": (_bool, "true or false"),
     "python": (_absolute, "an absolute path"),
     "data": (_absolute, "an absolute path"),
-    "nsfw_max": (_num(0.01, 0.9), "a number 0.01-0.9"),
     "steps": (_int(10, 60), "an integer 10-60"),
     "guidance": (_num(1, 12), "a number 1-12"),
     "size": (lambda v: type(v) is int and v in SIZES, "768, 896 or 1024"),
@@ -114,7 +112,10 @@ _RULES = {
              "an absolute path to a local .safetensors file"),
     "lora_scale": (_num(0, 2), "a number 0-2"),
 }
-_FLOATS = {"nsfw_max", "guidance", "min_free_gib", "identity_scale", "identity_min_free_gib",
+# The NSFW threshold lives only in the worker (selfie/leeroy_selfie/nsfw.py). An old mind.toml
+# that still sets it is told so and otherwise read as usual, never as an unknown key.
+_RETIRED = frozenset({"nsfw_max"})
+_FLOATS = {"guidance", "min_free_gib", "identity_scale", "identity_min_free_gib",
            "body_shot_share", "snap_body_share", "lora_scale"}
 _PATHS = {"python", "data", "lora"}
 
@@ -137,6 +138,10 @@ def load_selfie_config(path: Path) -> SelfieCfg:
         raise ConfigError("selfies: expected a table")
     values = {}
     for key, v in table.items():
+        if key in _RETIRED:
+            log.warning("%s: selfies.%s is ignored: the NSFW threshold is set in "
+                        "selfie/leeroy_selfie/nsfw.py", path, key)
+            continue
         rule = _RULES.get(key)
         if rule is None:
             log.warning("%s: unknown key selfies.%s", path, key)
@@ -149,7 +154,7 @@ def load_selfie_config(path: Path) -> SelfieCfg:
         raise ConfigError("selfies.lora: requires backend = flux1-dev")
     if "lora_scale" in values and values.get("lora") is None:
         raise ConfigError("selfies.lora_scale: requires selfies.lora")
-    if set(table) - _RULES.keys():
+    if set(table) - _RULES.keys() - _RETIRED:
         values["variety"] = False  # an invalid/unknown table never opts into new behaviour
         values["varied_sets"] = False
         values["romance_styling"] = False
@@ -191,7 +196,6 @@ def worker_command(cfg: SelfieCfg, *, identity: bool = False, embedding: bool = 
             *(["--backend", cfg.backend] if cfg.backend != "realvisxl" and not embedding else []),
             *(["--lora", str(cfg.lora), "--lora-scale", f"{cfg.lora_scale:g}"]
               if cfg.lora is not None and not embedding else []),
-            *(["--nsfw-max", f"{cfg.nsfw_max:g}"] if not embedding else []),
             "--data", str(worker_data(cfg)), "--min-free-gib", f"{free:g}"]
 
 

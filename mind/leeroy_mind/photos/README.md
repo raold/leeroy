@@ -177,8 +177,8 @@ and inspect the live model's GPU residency after handback.
 - Only one photo may be reserved at a time. Its caption, Discord attachment, chat line,
   sent receipt and budget spend commit together. A guard rejection, unsafe caption, failed
   delivery or cancelled turn releases the reservation without spending the photo ration.
-  Pick, looks, phase, expiry, current NSFW threshold, file and audience checks repeat before
-  delivery. No photo file is deleted.
+  Pick, looks, phase, expiry, file and audience checks repeat before delivery (the NSFW gate
+  ran when the photo was written). No photo file is deleted.
 - An answer owed to his DM (on time or on her own time) never dies with its photo: when its
   caption fails the screens or the photo goes stale before it is stored, the photo is released
   (or expired, when stale) and the answer is asked once more without it. An opener is

@@ -12,7 +12,7 @@ def request(tmp_path, **over):
     d = {"id": "r1", "op": "render", "phrases": [["a woman", 0], ["smiling", 3]],
          "negative": [["blurry", 1]], "seed": 7, "steps": 30, "cfg": 5, "size": 1024,
          "out": str(tmp_path / "a.jpg"), "thumb": str(tmp_path / "t.jpg"),
-         "thumb_size": 256, "nsfw_max": 0.2}
+         "thumb_size": 256}
     d.update(over)
     return json.dumps(d).encode()
 
@@ -20,33 +20,15 @@ def request(tmp_path, **over):
 def test_a_render_request_parses_in_its_one_strict_form(tmp_path):
     r = parse(request(tmp_path))
     assert r == Render("r1", (("a woman", 0), ("smiling", 3)), (("blurry", 1),), 7, 30, 5.0,
-                       1024, str(tmp_path / "a.jpg"), str(tmp_path / "t.jpg"), 256, 0.2)
+                       1024, str(tmp_path / "a.jpg"), str(tmp_path / "t.jpg"), 256)
     assert parse(b'{"id": "q", "op": "quit"}') == Quit("q")
 
-
-def test_omitted_render_cutoff_uses_worker_default_and_legacy_values_still_parse(tmp_path):
-    data = json.loads(request(tmp_path))
-    del data['nsfw_max']
-    line = json.dumps(data).encode()
-    assert parse(line).nsfw_max == 0.2
-    assert parse(line, nsfw_max=0.1).nsfw_max == 0.1
-    assert parse(request(tmp_path, nsfw_max=0.15), nsfw_max=0.1).nsfw_max == 0.15
-
-
-@pytest.mark.parametrize('bad', [None, True, '0.2', 0, 1, float('nan'), float('inf')])
-def test_an_invalid_explicit_or_default_cutoff_is_never_treated_as_omission(tmp_path, bad):
-    with pytest.raises(ValueError):
-        parse(request(tmp_path, nsfw_max=bad))
-    data = json.loads(request(tmp_path))
-    del data['nsfw_max']
-    with pytest.raises(ValueError):
-        parse(json.dumps(data).encode(), nsfw_max=bad)
 
 
 @pytest.mark.parametrize("over", [
     {"extra": 1}, {"seed": -1}, {"seed": 2**32}, {"seed": True}, {"steps": 9}, {"steps": 61},
     {"cfg": 12.5}, {"cfg": "5"}, {"size": 512}, {"size": 800}, {"thumb_size": 64},
-    {"nsfw_max": 0.95}, {"nsfw_max": 0}, {"id": ""}, {"id": "x" * 33}, {"id": 5},
+    {"nsfw_max": 0.2}, {"id": ""}, {"id": "x" * 33}, {"id": 5},
     {"out": "relative/a.jpg"}, {"thumb": "t.jpg"}, {"out": "/abs/a.png"},
     {"phrases": [["a", 10]]}, {"phrases": [["a"]]}, {"phrases": [[1, 0]]},
     {"phrases": "a"}, {"negative": [["", 0]]}, {"op": "other"},

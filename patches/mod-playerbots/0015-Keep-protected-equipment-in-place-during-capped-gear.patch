@@ -1,0 +1,284 @@
+From c4e2d2791e2e9680e344dbeba30734d9188efe02 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 14:59:52 -0500
+Subject: [PATCH] Keep protected equipment in place during capped gear passes
+
+---
+ .../Factory/PlayerbotEquipmentProtection.h    | 31 ++++++++++
+ src/Bot/Factory/PlayerbotFactory.cpp          | 50 +++++++++++++---
+ src/Bot/Factory/PlayerbotFactory.h            |  7 ++-
+ tests/equipment_protection_test.cpp           | 57 +++++++++++++++++++
+ 4 files changed, 134 insertions(+), 11 deletions(-)
+ create mode 100644 src/Bot/Factory/PlayerbotEquipmentProtection.h
+ create mode 100644 tests/equipment_protection_test.cpp
+
+diff --git a/src/Bot/Factory/PlayerbotEquipmentProtection.h b/src/Bot/Factory/PlayerbotEquipmentProtection.h
+new file mode 100644
+index 00000000..39e4ea2b
+--- /dev/null
++++ b/src/Bot/Factory/PlayerbotEquipmentProtection.h
+@@ -0,0 +1,31 @@
++/*
++ * This file is part of the Playerbots Project. See AUTHORS file for Copyright information.
++ * This program is free software licensed under GPL version 2.
++ * See LICENSE file for more information.
++ */
++#ifndef _PLAYERBOT_EQUIPMENT_PROTECTION_H
++#define _PLAYERBOT_EQUIPMENT_PROTECTION_H
++
++#include <cstdint>
++
++namespace playerbots::equipment
++{
++// EquipmentSlots, asserted against the core in PlayerbotFactory.cpp.
++inline constexpr std::uint8_t MainHand = 15;
++inline constexpr std::uint8_t OffHand = 16;
++
++inline constexpr bool Protected(std::uint32_t slots, std::uint8_t slot)
++{
++    return slot < 32 && (slots & (std::uint32_t(1) << slot)) != 0;
++}
++
++inline constexpr bool MayReplace(std::uint32_t slots, std::uint8_t slot, bool twoHanded)
++{
++    // Prevention matters with full bags: AutoUnequipOffhandIfNeed can mail the old offhand,
++    // after which the caller cannot find it by item GUID in the player's inventory.
++    return !Protected(slots, slot) &&
++           !(slot == MainHand && twoHanded && Protected(slots, OffHand));
++}
++}
++
++#endif
+diff --git a/src/Bot/Factory/PlayerbotFactory.cpp b/src/Bot/Factory/PlayerbotFactory.cpp
+index 59e40d23..634226c6 100644
+--- a/src/Bot/Factory/PlayerbotFactory.cpp
++++ b/src/Bot/Factory/PlayerbotFactory.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "PlayerbotFactory.h"
++#include "PlayerbotEquipmentProtection.h"
+ #include "PlayerbotsDatabase.h"
+ #include "AccountMgr.h"
+ #include "AiFactory.h"
+@@ -2340,8 +2341,12 @@ void Shuffle(std::vector<uint32>& items)
+ //     }
+ // }
+ 
+-void PlayerbotFactory::InitEquipment(bool incremental, bool second_chance)
++void PlayerbotFactory::InitEquipment(bool incremental, bool second_chance, uint32 protectedSlots)
+ {
++    static_assert(EQUIPMENT_SLOT_MAINHAND == playerbots::equipment::MainHand &&
++                  EQUIPMENT_SLOT_OFFHAND == playerbots::equipment::OffHand);
++    if (level < 5 && protectedSlots)
++        return; // The starting-outfit helper cannot restrict individual equipment slots.
+     if (level < 5)
+     {
+         // original items
+@@ -2420,7 +2425,8 @@ void PlayerbotFactory::InitEquipment(bool incremental, bool second_chance)
+ 
+     for (int32 slot : initSlotsOrder)
+     {
+-        if (slot == EQUIPMENT_SLOT_TABARD || slot == EQUIPMENT_SLOT_BODY)
++        if (playerbots::equipment::Protected(protectedSlots, slot) ||
++            slot == EQUIPMENT_SLOT_TABARD || slot == EQUIPMENT_SLOT_BODY)
+             continue;
+ 
+         if (level < 50 && (slot == EQUIPMENT_SLOT_TRINKET1 || slot == EQUIPMENT_SLOT_TRINKET2))
+@@ -2535,6 +2541,9 @@ void PlayerbotFactory::InitEquipment(bool incremental, bool second_chance)
+                             continue;
+ 
+                         ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
++                        if (!playerbots::equipment::MayReplace(protectedSlots, slot,
++                                proto && proto->InventoryType == INVTYPE_2HWEAPON))
++                            continue;
+                         // disable next expansion gear
+                         if (sPlayerbotAIConfig.LimitGearExpansion && bot->GetLevel() <= 60 && itemId >= 23728)
+                             continue;
+@@ -2598,6 +2607,9 @@ void PlayerbotFactory::InitEquipment(bool incremental, bool second_chance)
+             int32 newItemProp = ids[index].second;
+ 
+             ItemTemplate const* proto = sObjectMgr->GetItemTemplate(newItemId);
++            if (!playerbots::equipment::MayReplace(protectedSlots, slot,
++                    proto && proto->InventoryType == INVTYPE_2HWEAPON))
++                continue;
+ 
+             float cur_score = calculator.CalculateItem(newItemId, newItemProp, slot);
+ 
+@@ -2679,7 +2691,8 @@ void PlayerbotFactory::InitEquipment(bool incremental, bool second_chance)
+     {
+         for (int32 slot : initSlotsOrder)
+         {
+-            if (slot == EQUIPMENT_SLOT_TABARD || slot == EQUIPMENT_SLOT_BODY)
++            if (playerbots::equipment::Protected(protectedSlots, slot) ||
++                slot == EQUIPMENT_SLOT_TABARD || slot == EQUIPMENT_SLOT_BODY)
+                 continue;
+ 
+             if (level < 50 && (slot == EQUIPMENT_SLOT_TRINKET1 || slot == EQUIPMENT_SLOT_TRINKET2))
+@@ -2719,6 +2732,9 @@ void PlayerbotFactory::InitEquipment(bool incremental, bool second_chance)
+                 int32 newItemProp = ids[index].second;
+ 
+                 ItemTemplate const* proto = sObjectMgr->GetItemTemplate(newItemId);
++                if (!playerbots::equipment::MayReplace(protectedSlots, slot,
++                        proto && proto->InventoryType == INVTYPE_2HWEAPON))
++                    continue;
+ 
+                 float cur_score = calculator.CalculateItem(newItemId, newItemProp, slot);
+ 
+@@ -4080,18 +4096,18 @@ void PlayerbotFactory::DestroyEquippedGear(Player* bot)
+ }
+ 
+ void PlayerbotFactory::AutoGear(Player* bot, uint32 itemQuality, uint32 ilvl, bool incremental, bool secondChance,
+-                                bool applyFinishers)
++                                bool applyFinishers, uint32 protectedSlots)
+ {
+     uint32 gs = ilvl == 0 ? 0 : CalcMixedGearScore(ilvl, itemQuality);
+     PlayerbotFactory factory(bot, bot->GetLevel(), itemQuality, gs);
+-    factory.InitEquipment(incremental, secondChance);
++    factory.InitEquipment(incremental, secondChance, protectedSlots);
+ 
+     if (!applyFinishers)
+         return;
+ 
+     factory.InitAmmo();
+     if (bot->GetLevel() >= sPlayerbotAIConfig.MinEnchantingBotLevel)
+-        factory.ApplyEnchantAndGemsNew();
++        factory.ApplyEnchantAndGemsNew(true, protectedSlots);
+     bot->DurabilityRepairAll(false, 1.0f, false);
+ }
+ 
+@@ -5262,10 +5278,27 @@ void PlayerbotFactory::ApplyEnchantTemplate(uint8 spec)
+     // const SpellItemEnchantmentEntry* a = sSpellItemEnchantmentStore.LookupEntry(1);
+ }
+ 
+-void PlayerbotFactory::ApplyEnchantAndGemsNew(bool /*destroyOld*/)
++void PlayerbotFactory::ApplyEnchantAndGemsNew(bool /*destroyOld*/, uint32 protectedSlots)
+ {
+     std::vector<uint32> curCount = GetCurrentGemsCount();
+     uint8 jewelersCount = 0;
++    // Retained gems consume the JC limit before any replaceable slot is considered.
++    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
++    {
++        if (!playerbots::equipment::Protected(protectedSlots, slot))
++            continue;
++        Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
++        if (!item)
++            continue;
++        for (uint32 socket = SOCK_ENCHANTMENT_SLOT; socket < SOCK_ENCHANTMENT_SLOT + MAX_GEM_SOCKETS; ++socket)
++        {
++            SpellItemEnchantmentEntry const* enchant =
++                sSpellItemEnchantmentStore.LookupEntry(item->GetEnchantmentId(EnchantmentSlot(socket)));
++            ItemTemplate const* gem = enchant ? sObjectMgr->GetItemTemplate(enchant->GemID) : nullptr;
++            if (gem && gem->ItemLimitCategory == 2)
++                ++jewelersCount;
++        }
++    }
+     int requiredActive = 2;
+     std::vector<uint32> availableGems;
+     for (uint32 const& enchantGem : enchantGemIdCache)
+@@ -5305,7 +5338,8 @@ void PlayerbotFactory::ApplyEnchantAndGemsNew(bool /*destroyOld*/)
+     StatsWeightCalculator calculator(bot);
+     for (uint8 slot = 0; slot < EQUIPMENT_SLOT_END; ++slot)
+     {
+-        if (slot == EQUIPMENT_SLOT_TABARD || slot == EQUIPMENT_SLOT_BODY)
++        if (playerbots::equipment::Protected(protectedSlots, slot) ||
++            slot == EQUIPMENT_SLOT_TABARD || slot == EQUIPMENT_SLOT_BODY)
+             continue;
+         Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+         if (!item || !item->GetOwner())
+diff --git a/src/Bot/Factory/PlayerbotFactory.h b/src/Bot/Factory/PlayerbotFactory.h
+index 6c97ad0c..34f01518 100644
+--- a/src/Bot/Factory/PlayerbotFactory.h
++++ b/src/Bot/Factory/PlayerbotFactory.h
+@@ -77,13 +77,14 @@ public:
+                                              Trainer::Spell const* trainerSpell);
+     void InitClassSpells();
+     void InitSpecialSpells();
+-    void InitEquipment(bool incremental, bool second_chance = false);
++    // Opt-in equipment-slot bitmask: retained slots and conflicting two-handers are never selected.
++    void InitEquipment(bool incremental, bool second_chance = false, uint32 protectedSlots = 0);
+     void InitPet();
+     void InitAmmo();
+     static uint32 CalcMixedGearScore(uint32 gs, uint32 quality);
+     static void DestroyEquippedGear(Player* bot);
+     static void AutoGear(Player* bot, uint32 itemQuality, uint32 ilvl, bool incremental, bool secondChance = false,
+-                        bool applyFinishers = true);
++                        bool applyFinishers = true, uint32 protectedSlots = 0);
+     void InitPetTalents();
+     void CleanupConsumables();
+     void InitReagents();
+@@ -93,7 +94,7 @@ public:
+     void InitFood();
+     void InitMounts();
+     void InitBags(bool destroyOld = true);
+-    void ApplyEnchantAndGemsNew(bool destroyOld = true);
++    void ApplyEnchantAndGemsNew(bool destroyOld = true, uint32 protectedSlots = 0);
+     void InitInstanceQuests();
+     void UnbindInstance();
+     void InitKeyring();
+diff --git a/tests/equipment_protection_test.cpp b/tests/equipment_protection_test.cpp
+new file mode 100644
+index 00000000..922a95e0
+--- /dev/null
++++ b/tests/equipment_protection_test.cpp
+@@ -0,0 +1,57 @@
++/*
++ * This file is part of the Playerbots Project. See AUTHORS file for Copyright information.
++ * This program is free software licensed under GPL version 2.
++ * See LICENSE file for more information.
++ */
++#include <iostream>
++
++#include "../src/Bot/Factory/PlayerbotEquipmentProtection.h"
++
++namespace
++{
++int checks = 0;
++int failures = 0;
++void Check(bool success, int line)
++{
++    ++checks;
++    if (!success)
++    {
++        ++failures;
++        std::cerr << "Failed at line " << line << '\n';
++    }
++}
++}
++
++#define CHECK(expression) Check(static_cast<bool>(expression), __LINE__)
++
++int main()
++{
++    using namespace playerbots::equipment;
++    // With no mask the other callers keep their current equipment and finisher behavior.
++    for (std::uint8_t slot = 0; slot < 19; ++slot)
++    {
++        CHECK(!Protected(0, slot));
++        CHECK(MayReplace(0, slot, false));
++        CHECK(MayReplace(0, slot, true));
++        auto mask = std::uint32_t(1) << slot;
++        CHECK(Protected(mask, slot));
++        CHECK(!MayReplace(mask, slot, false));
++        CHECK(!MayReplace(mask, slot, true));
++    }
++
++    auto offhand = std::uint32_t(1) << OffHand;
++    CHECK(!MayReplace(offhand, MainHand, true)); // No inventory or mail recovery can be needed.
++    CHECK(MayReplace(offhand, MainHand, false)); // A compatible one-hander can still upgrade.
++    CHECK(!MayReplace(offhand, OffHand, false));
++    CHECK(MayReplace(offhand, 4, false)); // Unrelated equipment can still upgrade.
++    auto bothHands = offhand | (std::uint32_t(1) << MainHand);
++    CHECK(!MayReplace(bothHands, MainHand, false));
++    CHECK(!MayReplace(bothHands, MainHand, true));
++    CHECK(!MayReplace(bothHands, OffHand, false));
++    CHECK(Protected(0x80000000u, 31));
++    CHECK(!Protected(0xffffffffu, 32));
++    CHECK(!Protected(0xffffffffu, 255));
++
++    std::cout << checks << " equipment protection checks, " << failures << " failures\n";
++    return failures ? 1 : 0;
++}
+-- 
+2.56.0.windows.2
+

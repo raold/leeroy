@@ -19,8 +19,7 @@ def test_selfies_are_off_by_default_and_paths_follow_the_checkout(tmp_path, monk
     assert cfg == SelfieCfg() and cfg.enabled is False
     (tmp_path / "mind.toml").write_text("[talk]\nchattiness = 4\n")
     assert load_selfie_config(tmp_path / "mind.toml") == SelfieCfg()
-    assert (cfg.nsfw_max, cfg.steps, cfg.guidance, cfg.size, cfg.min_free_gib) == (
-        0.2, 30, 5.0, 1024, 11.5)
+    assert (cfg.steps, cfg.guidance, cfg.size, cfg.min_free_gib) == (30, 5.0, 1024, 11.5)
     assert worker_python(cfg) == (VENV / "Scripts" / "python.exe" if os.name == "nt"
                                   else VENV / "bin" / "python")
     assert worker_data(cfg) == CHECKOUT / "selfie-data"
@@ -34,17 +33,17 @@ def test_a_table_sets_every_key(tmp_path, monkeypatch):
     (tmp_path / "mind.toml").write_text(
         "[selfies]\nenabled = true\n"
         f'python = "{python.as_posix()}"\ndata = "{data.as_posix()}"\n'
-        "nsfw_max = 0.1\nsteps = 25\nguidance = 6\nsize = 896\nmin_free_gib = 12\n",
+        "steps = 25\nguidance = 6\nsize = 896\nmin_free_gib = 12\n",
         encoding="utf-8")
     cfg = load_selfie_config(tmp_path / "mind.toml")
-    assert cfg == SelfieCfg(enabled=True, python=python, data=data, nsfw_max=0.1, steps=25,
+    assert cfg == SelfieCfg(enabled=True, python=python, data=data, steps=25,
                             guidance=6.0, size=896, min_free_gib=12.0)
     assert type(cfg.guidance) is float and type(cfg.min_free_gib) is float
     assert worker_python(cfg) == python and worker_data(cfg) == data
 
 
 @pytest.mark.parametrize("line, key", [
-    ("nsfw_max = 2", "nsfw_max"), ("nsfw_max = 0", "nsfw_max"), ("steps = 9", "steps"),
+    ("steps = 9", "steps"),
     ("steps = 30.0", "steps"), ("guidance = 13", "guidance"), ("size = 1000", "size"),
     ("min_free_gib = 3", "min_free_gib"), ("min_free_gib = 24", "min_free_gib"),
     ("enabled = 1", "enabled"), ("python = 'python.exe'", "python"), ("data = ''", "data"),
@@ -67,6 +66,19 @@ def test_an_unknown_key_warns_and_a_bad_file_is_a_config_error(tmp_path, caplog)
         load_selfie_config(tmp_path / "mind.toml")
 
 
+def test_a_retired_threshold_warns_and_turns_nothing_off(tmp_path, caplog):
+    """The NSFW threshold lives only in the worker (selfie/leeroy_selfie/nsfw.py). An old
+    nsfw_max line, whatever its value, is ignored with a warning and is never read as an
+    unknown key, which would switch the table's newer features off."""
+    (tmp_path / "mind.toml").write_text(
+        '[selfies]\nenabled = true\nnsfw_max = 0.9\nvariety = true\nbackend = "flux1-dev"\n')
+    cfg = load_selfie_config(tmp_path / "mind.toml")
+    assert cfg.enabled and cfg.variety and cfg.backend == "flux1-dev"
+    assert not hasattr(cfg, "nsfw_max") and "selfies.nsfw_max is ignored" in caplog.text
+    (tmp_path / "mind.toml").write_text("[selfies]\nnsfw_max = 5\n")
+    assert load_selfie_config(tmp_path / "mind.toml") == SelfieCfg()
+
+
 def test_the_mind_config_leaves_the_selfies_table_alone(tmp_path, caplog):
     (tmp_path / "mind.toml").write_text("[selfies]\nenabled = true\n")
     load_config(tmp_path / "mind.toml")
@@ -79,18 +91,14 @@ def test_the_worker_command_runs_the_selfie_package_isolated(tmp_path):
     assert worker_command(SelfieCfg())[1:7] == ["-I", "-X", "utf8", "-m", "leeroy_selfie",
                                                 "worker"]
     assert cmd == [str(tmp_path / "python.exe"), "-I", "-X", "utf8", "-m", "leeroy_selfie",
-                   "worker", "--nsfw-max", "0.2", "--data", str(tmp_path / "sd"),
+                   "worker", "--data", str(tmp_path / "sd"),
                    "--min-free-gib", "12"]
     assert worker_command(SelfieCfg(min_free_gib=11.5))[-1] == "11.5"
 
 
-def test_screening_policy_is_supplied_once_at_worker_start():
-    cfg = SelfieCfg(nsfw_max=0.1)
-    for identity in (False, True):
-        command = worker_command(cfg, identity=identity)
-        assert command.count('--nsfw-max') == 1
-        assert command[command.index('--nsfw-max') + 1] == '0.1'
-    assert '--nsfw-max' not in worker_command(cfg, embedding=True)
+def test_no_worker_command_carries_a_threshold():
+    for kw in ({}, {"identity": True}, {"embedding": True}):
+        assert not any(part.startswith("--nsfw") for part in worker_command(SelfieCfg(), **kw))
 
 
 def test_the_worker_env_is_this_one_offline(tmp_path, monkeypatch):

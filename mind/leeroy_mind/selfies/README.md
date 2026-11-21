@@ -1,14 +1,13 @@
 # Private photo styling
 
-## Worker screening policy
+## The NSFW gate
 
-The mind passes the configured `[selfies] nsfw_max` once when starting an image worker.
-The setting is optional in TOML; screening is always active. Render and caption callers omit
-the cutoff and use that worker policy. Legacy explicit request values remain supported and
-validated. Result flags and real scores stay in the response and database, including retries,
-delivery checks and meme reuse. Before publishing, the mind still checks the returned score
-against its configuration even if the worker reports an image as unflagged. Missing or invalid
-result scores are never replaced with zero.
+The gate is one file in the worker, `selfie/leeroy_selfie/nsfw.py`: the classifier, the
+threshold (`LIMIT`, 0.9) and the decision. The worker never writes an image the gate flags.
+The mind has no threshold of its own: it reads the answer's `flagged` (slot.py retries the next
+seed, three in all) and stores the real score for the record. A photo on disk passed the gate
+to exist, so delivery, request stock and meme reuse do not score it again. `[selfies] nsfw_max`
+is retired: a mind.toml that still sets it logs a warning and is otherwise read as usual.
 Install the mind and worker changes together; no migration or native rebuild is needed.
 
 ## Beach and gym clothing coverage

@@ -7,10 +7,12 @@ from leeroy_selfie import models, paths
 from leeroy_selfie.__main__ import main
 
 
-@pytest.mark.parametrize('value', ['nan', 'inf', '0', '1', '-0.1'])
-def test_worker_rejects_invalid_startup_cutoff_before_loading(value):
+@pytest.mark.parametrize('command', ['worker', 'detail'])
+def test_no_command_takes_a_threshold_it_lives_in_nsfw_py(command, tmp_path):
+    args = ['--min-free-gib', '8'] if command == 'worker' else [
+        '--in', str(tmp_path / 'a.jpg'), '--out', str(tmp_path / 'b.jpg')]
     with pytest.raises(SystemExit) as error:
-        main(['worker', '--min-free-gib', '8', '--nsfw-max', value])
+        main([command, *args, '--nsfw-max', '0.5'])
     assert error.value.code == 2
 
 
@@ -129,7 +131,6 @@ def test_smoke_forwards_explicit_lora_without_adding_prompt_words(tmp_path, monk
     assert loads == [{'min_free_gib': 8.0, 'identity': False, 'backend': 'flux1-dev',
                       'lora': file, 'lora_scale': 0.8}]
     assert [list(p) for p in renderer.seen[0].phrases] == SMOKE_PHRASES
-    assert renderer.seen[0].nsfw_max == 0.2
 
 
 @pytest.mark.parametrize('args', [

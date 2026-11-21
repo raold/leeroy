@@ -8,7 +8,6 @@ from pathlib import PurePath
 from typing import Literal
 
 MAX_LINE = 65536
-DEFAULT_NSFW_MAX = 0.2
 MAX_PHRASES = 64
 MAX_PHRASE_CHARS = 500
 RENDER_KEYS = frozenset({"id", "op", "phrases", "negative", "seed", "steps", "cfg", "size",
@@ -78,7 +77,6 @@ class Render:
     out: str
     thumb: str
     thumb_size: int
-    nsfw_max: float
     identity: Identity | None = None
     shape: Literal["square", "portrait"] = "square"
     detail: Detail | None = None  # the detailer's pass over the rendered image (detail.py)
@@ -98,14 +96,13 @@ class Grid:
 @dataclass(frozen=True)
 class Caption:
     """A meme's classic caption over an existing JPEG (caption.py): `top` and `bottom`, either
-    may be empty but not both, drawn by Pillow and written to `out_path` unless the captioned
-    image scores nsfw_max or more. The text is drawn, never part of a diffusion prompt."""
+    may be empty but not both, drawn by Pillow and written to `out_path` unless the NSFW gate
+    flags the captioned image. The text is drawn, never part of a diffusion prompt."""
     id: str
     base_path: str
     top: str
     bottom: str
     out_path: str
-    nsfw_max: float
 
 
 @dataclass(frozen=True)
@@ -244,22 +241,16 @@ def _caption_line(d: dict, key: str) -> str:
     return v
 
 
-def screening_limit(value) -> float:
-    """One validated worker default; omission never disables image screening."""
-    return _num({"nsfw_max": value}, "nsfw_max", 0.01, 0.9)
-
-
-def _caption(d: dict, rid: str, nsfw_max: float) -> Caption:
-    if not CAPTION_KEYS <= set(d) or set(d) - CAPTION_KEYS - {"nsfw_max"}:
-        raise ValueError("caption keys are " + ", ".join(sorted(CAPTION_KEYS)) +
-                         " and optionally nsfw_max")
+def _caption(d: dict, rid: str) -> Caption:
+    if set(d) != CAPTION_KEYS:
+        raise ValueError("caption keys are " + ", ".join(sorted(CAPTION_KEYS)))
     top, bottom = _caption_line(d, "top"), _caption_line(d, "bottom")
     if not top and not bottom:
         raise ValueError("a caption needs a top or a bottom line")
     base, out = _jpg(d, "base_path"), _jpg(d, "out_path")
     if PurePath(base) == PurePath(out):
         raise ValueError("a caption never writes over its base")
-    return Caption(rid, base, top, bottom, out, screening_limit(d.get("nsfw_max", nsfw_max)))
+    return Caption(rid, base, top, bottom, out)
 
 
 def _critic(d: dict, rid: str) -> Critic:
@@ -272,8 +263,7 @@ def _critic(d: dict, rid: str) -> Critic:
     return Critic(rid, _jpg(d, "path"), identity.ref, identity.crop)
 
 
-def parse(line: bytes, *, nsfw_max: float = DEFAULT_NSFW_MAX
-          ) -> Render | Grid | Caption | Critic | Embed | Quit | Retry:
+def parse(line: bytes) -> Render | Grid | Caption | Critic | Embed | Quit | Retry:
     """A request line as a Render, a Grid, a Caption, a Critic, an Embed, a Quit or a Retry;
     ValueError for anything else (a line too long, not JSON, an unknown or missing key, a wrong
     type or range)."""
@@ -296,7 +286,7 @@ def parse(line: bytes, *, nsfw_max: float = DEFAULT_NSFW_MAX
     if d.get("op") == "grid":
         return _grid(d, rid)
     if d.get("op") == "caption":
-        return _caption(d, rid, nsfw_max)
+        return _caption(d, rid)
     if d.get("op") == "critic":
         return _critic(d, rid)
     if d.get("op") == "embed":
@@ -306,9 +296,9 @@ def parse(line: bytes, *, nsfw_max: float = DEFAULT_NSFW_MAX
     if d.get("op") != "render":
         raise ValueError("unknown op")
     extra = set(d) - RENDER_KEYS
-    if not RENDER_KEYS <= set(d) or extra - {"identity", "shape", "nsfw_max"} - DETAIL_KEYS:
+    if not RENDER_KEYS <= set(d) or extra - {"identity", "shape"} - DETAIL_KEYS:
         raise ValueError("render keys are not " + ", ".join(sorted(RENDER_KEYS)) +
-                         " and optionally identity, shape, nsfw_max, " + ", ".join(sorted(DETAIL_KEYS)))
+                         " and optionally identity, shape, " + ", ".join(sorted(DETAIL_KEYS)))
     size = _int(d, "size", 768, 1024)
     if size not in (768, 896, 1024):
         raise ValueError("size is not 768, 896 or 1024")
@@ -321,5 +311,4 @@ def parse(line: bytes, *, nsfw_max: float = DEFAULT_NSFW_MAX
     return Render(rid, _phrases(d, "phrases"), _phrases(d, "negative"),
                   _int(d, "seed", 0, 4294967295), _int(d, "steps", 10, 60),
                   _num(d, "cfg", 1.0, 12.0), size, _jpg(d, "out"), _jpg(d, "thumb"),
-                  _int(d, "thumb_size", 128, 1024), screening_limit(d.get("nsfw_max", nsfw_max)),
-                  identity, shape, _detail(d))
+                  _int(d, "thumb_size", 128, 1024), identity, shape, _detail(d))

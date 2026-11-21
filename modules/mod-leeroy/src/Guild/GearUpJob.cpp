@@ -182,13 +182,16 @@ CapOutcome RegearToCap(Player* bot, uint32 cap, std::array<RegearSlotItem, kRege
 }
 
 // An ordinary gear-up: one capped incremental pass, which fills empty slots and upgrades slots under the cap, never
-// autogear bis (which destroys everything) and never a destroyed bag item. What the pass replaced at or above the cap
-// goes back in its slot, enchants and all; what this gear-up put on above the cap comes off and the slot is refilled.
+// autogear bis (which destroys everything) and never a destroyed bag item. Existing at-or-above-cap equipment is
+// excluded before selection, including a two-hander that would evict a protected offhand into the bags or mail.
+// What this gear-up put on above the cap comes off and the slot is refilled with the same protections.
 CapOutcome GearUpToCap(Player* bot, uint32 cap, std::array<RegearSlotItem, kRegearSlots> const& before,
     std::array<ObjectGuid, kRegearSlots> const& beforeGuids)
 {
     CapOutcome out;
-    PlayerbotFactory::AutoGear(bot, ITEM_QUALITY_EPIC, cap, /*incremental*/ true);
+    uint32 const protectedSlots = GearUpProtectedSlots(before, cap);
+    PlayerbotFactory::AutoGear(bot, ITEM_QUALITY_EPIC, cap, /*incremental*/ true,
+        /*secondChance*/ false, /*applyFinishers*/ true, protectedSlots);
     auto const now = Equipped(bot);
     bool refill = false;
     for (uint8 slot = 0; slot < kRegearSlots; ++slot)
@@ -217,7 +220,8 @@ CapOutcome GearUpToCap(Player* bot, uint32 cap, std::array<RegearSlotItem, kRege
         }
     }
     if (refill)
-        PlayerbotFactory::AutoGear(bot, ITEM_QUALITY_EPIC, cap, /*incremental*/ true);
+        PlayerbotFactory::AutoGear(bot, ITEM_QUALITY_EPIC, cap, /*incremental*/ true,
+            /*secondChance*/ false, /*applyFinishers*/ true, protectedSlots);
     auto const after = Equipped(bot);
     for (uint8 slot = 0; slot < kRegearSlots; ++slot)
         if (slot != kRegearSlotBody && slot != kRegearSlotTabard && before[slot].entry && !after[slot].entry

@@ -222,7 +222,7 @@ def test_nsfw_refusal_uses_three_seeds_and_is_not_retried_all_day(app):
         await tick(app)
         assert len(w.requests) == 3
         assert len({r.seed for r in w.requests}) == 3
-        assert all(r.nsfw_max is None for r in w.requests)  # cutoff belongs to the worker start
+
         assert not ready_set(app.store, 101, 1) and not set_dir(app.data_dir, 101, 1).exists()
         await tick(app)
         assert len(w.requests) == 3

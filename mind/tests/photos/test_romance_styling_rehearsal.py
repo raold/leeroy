@@ -48,8 +48,7 @@ def test_styled_private_photo_renders_and_sends_one_consistent_recipe(tmp_path, 
             mirror = scene.get("words", {}).get("framing") == "mirror_selfie"
             base = SNAP_NEGATIVE_LUST_MIRROR if mirror else SNAP_NEGATIVE_LUST
             assert set(base) <= set(req.negative)
-            assert req.nsfw_max is None  # the worker start carries the policy
-            assert app.selfies.cfg.nsfw_max == .2
+            assert not hasattr(req, "nsfw_max")  # the threshold is the worker's alone
             assert req.identity is not None
             assert scene["recipe"] == (2 if from_words else 1)
             assert app.store.conn.execute('SELECT count(*) FROM discord_attachment').fetchone()[0] == 1

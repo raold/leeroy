@@ -100,7 +100,7 @@ def test_without_the_detailer_the_request_line_is_byte_for_byte_the_old_one(tmp_
         "id": "r0", "op": "render", "phrases": [[t, p] for t, p in req.phrases],
         "negative": [[t, p] for t, p in req.negative], "seed": req.seed, "steps": req.steps,
         "cfg": req.cfg, "size": req.size, "out": str(req.out), "thumb": str(req.thumb),
-        "thumb_size": req.thumb_size, "nsfw_max": req.nsfw_max}).encode("utf-8") + b"\n"
+        "thumb_size": req.thumb_size}).encode("utf-8") + b"\n"
     assert lines[0] == old
     assert lines[1] == old.replace(b'"id": "r0"', b'"id": "r1"')  # nothing asked: nothing sent
     assert got[0] == Rendered(False, 0.01, "p", 1, 0.01, 1.0, 1024, 1024)

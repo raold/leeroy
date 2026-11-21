@@ -3,31 +3,44 @@ selfie worker as a real subprocess speaking the caption protocol, no bridge, no 
 A public running joke gets a meme at night (planned by the reflection model's caption, rendered
 from a scene with no people, captioned by the worker); every server bot posts once from the
 guild's rows and the signup post takes the members' role reactions; the meme goes out in #memes
-as a member's message carrying it, through the real talk pipeline; no game command is sent and no
-file is deleted. The guard review is stubbed to send (the guards have their own tests). Every
-name here is invented."""
+as a member's message carrying it, through the real talk pipeline, and draws its reactions, each
+answering the meme post itself; no game command is sent and no file is deleted. The guard review
+is stubbed to send (the guards have their own tests). Every name here is invented."""
 import asyncio
+import itertools
 import json
+import random
+import time
 from dataclasses import replace
 from types import SimpleNamespace
+
+import pytest
 
 from conftest import TEST_CAST, run
 from nightly.conftest import FakeAdmin, generic, scripted
 from nightly.test_night_lexicon import term
 from culture.test_memes import recorded
+from photos.test_pipeline_photo import finish
 from selfies.fakes import CLOCK, fake_command, mind_app
 from leeroy_mind.culture import memes
 from leeroy_mind.culture.bots import BOTS, SINCE_KEY
 from leeroy_mind.discord.presence import Presence
 from leeroy_mind.guards.types import Verdict
 from leeroy_mind.selfies import config as selfies_config
-from leeroy_mind.server import engine as server_engine, rhythm, state
+from leeroy_mind.server import engine as server_engine, rhythm, runtime, state, topics
 from leeroy_mind.storage.rows import Relationship
 
 TOML = ("[server]\nenabled=true\n[guards]\nenabled=true\n[selfies]\nenabled=true\n"
         "[culture]\nenabled=true\nbots=true\nemoji=true\nmemes=true\nmemes_per_week=3\n")
 CAPTION = {"top": "when the floor inspector", "bottom": "finds the floor again", "picture": "tipped_chair"}
 LINE = "made this one on my lunch break"
+REACTIONS = 2
+QUIPS = ("the chair had it coming", "framing this one forever")
+
+
+class NoLateReply(random.Random):
+    def random(self):
+        return .5  # never under the engine's one-in-ten late reply
 
 
 def files(root):
@@ -64,7 +77,8 @@ def seed_rows(h):
     return ident
 
 
-def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch):
+@pytest.mark.parametrize("delayed_read", [False, True], ids=["normal", "delayed-runtime-read"])
+def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch, delayed_read):
     log = tmp_path / "worker.log"
     monkeypatch.setattr(selfies_config, "worker_command",
                         lambda cfg, identity=False, embedding=False: fake_command(tmp_path)[0])
@@ -122,23 +136,53 @@ def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch):
             app.server.lease._held = True
             app.engine._login_at = float("-inf")
             app.world.human_online = False
-            monkeypatch.setattr(rhythm, "length", lambda rng: 1)
+            # In #memes a conversation is the meme post and MEME_REPLIES reactions to it
+            # (server/README.md "Channel topics"), whatever rhythm.length draws: two here.
+            monkeypatch.setattr(topics, "MEME_REPLIES", (REACTIONS, REACTIONS))
+            # A reply may wait 10-40 minutes (one in ten); this rehearsal never draws one.
+            app.server.engine.rng = NoLateReply(7)
 
             def choose(seeds, **kw):
                 (seed,) = [s for s in seeds if s.kind == "meme_image"]
                 out["seed"] = seed
                 return seed, "memes"
             monkeypatch.setattr(rhythm, "choose_seed_and_channel", choose)
-            app.llm._script = lambda model, messages: (
-                json.dumps(generic(messages[-1]["content"])) if "matching this schema:" in messages[-1]["content"]
-                else LINE)
+            quips = itertools.cycle(QUIPS)
+
+            def script(model, messages):
+                if "matching this schema:" in messages[-1]["content"]:
+                    return json.dumps(generic(messages[-1]["content"]))
+                prompt = "\n".join(str(m.get("content", "")) for m in messages)
+                return next(quips) if server_engine.MEME_REPLY in prompt else LINE
+            app.llm._script = script
+            reads = []
+            if delayed_read:
+                original_to_thread = asyncio.to_thread
+
+                async def delayed_worker(fn, *args, **kwargs):
+                    if fn.__module__ != runtime.__name__:
+                        return await original_to_thread(fn, *args, **kwargs)
+
+                    def read():
+                        started = app.clock.now()
+                        time.sleep(.05)  # a scheduled real DB worker, not a fake-clock sleep
+                        value = fn(*args, **kwargs)
+                        reads.append((started, app.clock.now()))
+                        return value
+
+                    return await original_to_thread(read)
+
+                monkeypatch.setattr(asyncio, "to_thread", delayed_worker)
             await app.server.engine.tick(app.clock.now())
-            for _ in range(400):
-                if not app.server.engine.live():
-                    break
-                await asyncio.sleep(0.002)
-                await app.clock.advance(2, 2)
+            (conversation,) = app.server.engine._live.values()
+            assert conversation.maximum == 1 + REACTIONS
+            # The conversation reads real SQLite snapshots in asyncio.to_thread.
+            # Do not spend fake typing/deadline time while those workers await CPU.
+            await finish(app, conversation.task)
             assert not app.server.engine.live()
+            if delayed_read:
+                assert len(reads) >= 2  # seed selection and the conversation's own snapshot
+                assert all(started == ended for started, ended in reads), reads
             row = app.store.conn.execute(
                 "SELECT m.id,m.author,m.channel,m.text,a.kind,d.status FROM discord_message m "
                 "JOIN discord_attachment a ON a.message=m.id JOIN discord_meme d ON d.posted_message=m.id").fetchone()
@@ -147,6 +191,20 @@ def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch):
             assert row["author"] in TEST_CAST and row["author"] != 102
             # her line as delivered (her typing style may add a typo), recorded as her chat line
             assert row["text"] and row["text"] == recorded(app, row["id"])
+            # its reactions answer the meme post itself; its poster may answer a reaction, and
+            # nobody answers her own message
+            reactions = [dict(r) for r in app.store.conn.execute(
+                "SELECT id,author,reply_to,text FROM discord_message WHERE channel='memes' AND id<>? "
+                "ORDER BY id", (row["id"],))]
+            assert len(reactions) == REACTIONS, reactions
+            authors = {row["id"]: row["author"], **{r["id"]: r["author"] for r in reactions}}
+            assert reactions[0]["reply_to"] == row["id"], reactions
+            for r in reactions:
+                assert r["reply_to"] == row["id"] or (
+                    r["author"] == row["author"] and r["reply_to"] in authors), reactions
+                assert authors[r["reply_to"]] != r["author"], reactions
+                assert r["text"] == recorded(app, r["id"])
+            assert conversation.messages == [row["id"], *(r["id"] for r in reactions)]
             # spent once, on delivery: its joke's use and the butt's teasing allowance
             assert app.store.conn.execute("SELECT uses_total FROM lexicon WHERE id=?", (ident,)).fetchone()[0] == 1
             assert app.store.get_meta(f"server:seed:{out['seed'].key}") is not None
