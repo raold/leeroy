@@ -29,6 +29,7 @@
     <button id="notify" type="button" class="theme notify" aria-pressed="false">Notify: off</button>
     <button id="gpu" type="button" class="theme gpu" aria-disabled="true">Free GPU</button>
     <button id="render" type="button" class="theme render" aria-disabled="true">Render selfies</button>
+    <button id="help" type="button" class="theme" aria-label="Help for this tab" aria-haspopup="dialog">?</button>
   </div>
   <div id="gpu-banner" class="gpu-banner" role="status" hidden></div>
   <div id="s-lost" class="lost" role="status" hidden></div>
@@ -53,6 +54,13 @@
 </nav>
 <div id="toasts" role="status"></div>
 </header>
+<dialog id="help-dialog" aria-labelledby="help-title">
+  <div class="help-heading"><h2 id="help-title">Console guide</h2>
+    <button id="help-close" type="button" autofocus>Close</button></div>
+  <p id="help-about" class="hint"></p>
+  <div id="help-words" tabindex="0" aria-live="polite"></div>
+  <button id="help-full" type="button" hidden>Read the full guide</button>
+</dialog>
 <dialog id="render-confirm" aria-labelledby="render-confirm-title" aria-describedby="render-confirm-words">
   <h2 id="render-confirm-title">Render selfies now?</h2><div id="render-confirm-words"></div>
   <div class="acts"><button id="render-confirm-cancel" type="button" autofocus>Cancel</button>

@@ -182,7 +182,14 @@ def _result(row, encounters):
     wiped = [boss for boss, state, _ in encounters if state == "wiped"]
     wipes = max(row["wipes"], len(wiped))
     outcome = "Cleared" if row["terminal"] == "done" and kills == 4 else "Ran"
-    summary = f"{outcome} {NAME} heroic with {kills} boss kill{'s' if kills != 1 else ''} and {wipes} wipe{'s' if wipes != 1 else ''}"
+    counts = []
+    if kills:
+        counts.append(f"{kills} boss kill{'s' if kills != 1 else ''}")
+    if wipes:
+        counts.append(f"{wipes} wipe{'s' if wipes != 1 else ''}")
+    summary = f"{outcome} {NAME} heroic"
+    if counts:
+        summary += ". The evidence confirms at least " + " and at least ".join(counts)
     names = [BOSSES[b] for b in sorted(set(wiped))]
     return kills, wipes, summary + "." + (f" We wiped on {', '.join(names)}." if names else "")
 
@@ -221,9 +228,7 @@ def seeds(conn, now, guild, human):
             witnesses = tuple(guid for guid, known in personal.items() if known == result)
             if not witnesses:
                 # Individual encounter seeds below still have their own witnesses.
-                if not (r["kills"] or r["wipes"]):
-                    continue
-                result, witnesses = _result(r, ()), members
+                continue
             yield Seed(
                 "heroic:" + r["id"],
                 "heroic_result",

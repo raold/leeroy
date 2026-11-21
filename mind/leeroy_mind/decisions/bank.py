@@ -1,8 +1,10 @@
 """Members' item requests. Each handoff uses its own durable direct-ledger reference."""
 import asyncio
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation
 import json
 import logging
+import math
 from uuid import uuid4
 
 from leeroy_mind.clock import local_at
@@ -196,16 +198,65 @@ def ready(app):
     return bool(realm and Steps.ready(realm.action_context()) and not raid_holds(app, app.clock.now()))
 
 
+# realm_direct.value is decimal text, constrained by the direct-ledger schema.
+# Only the exact terminal job supplies native's first attachment item-instance GUID.
+_MAIL_PROOF = ("r.kind='mail_send' AND r.expects_job=1 AND r.dispatched_ms IS NOT NULL "
+               "AND r.state='acked' AND r.settled_ms IS NOT NULL "
+               "AND CAST(r.value AS INTEGER) BETWEEN 1 AND 4294967295")
+
+
+def _audit_object(raw):
+    """Only augment a historical object if Python can preserve all its fields and numbers."""
+    def unique_fields(pairs):
+        fields = dict(pairs)
+        if len(fields) != len(pairs):
+            raise ValueError("duplicate field")
+        return fields
+
+    def exact_number(token):
+        number = float(token)
+        if not math.isfinite(number) or Decimal(str(number)) != Decimal(token):
+            raise ValueError("lossy number")
+        return number
+
+    try:
+        effect = json.loads(raw or "{}", object_pairs_hook=unique_fields, parse_float=exact_number)
+    except (ValueError, InvalidOperation, RecursionError):
+        return None
+    return effect if isinstance(effect, dict) else None
+
+
+def _audit_refs(effect):
+    refs = effect.get("refs", []) if isinstance(effect, dict) else None
+    if isinstance(refs, list) and all(isinstance(item, str) for item in refs):
+        return refs
+    return None
+
+
+def _mail_effect(effect, ref, guid):
+    # Preserve conflicting or untyped historical evidence for inspection.
+    refs = _audit_refs(effect)
+    if refs is None:
+        return effect
+    for key in ("mail_id", "first_attachment_guid"):
+        if key in effect and (type(effect[key]) is not int or effect[key] != guid):
+            return effect
+    proved = dict(effect, first_attachment_guid=guid, refs=list(dict.fromkeys([*refs, ref])))
+    proved.pop("mail_id", None)
+    return proved
+
+
 def delivery(conn, row):
     """Operator-visible irreversible state at this instant, even before the next minute tick."""
     ident = row["id"]
     refs = (f"decision:{ident}:withdraw", f"decision:{ident}:mail")
     receipts = {r["ref"]: r for r in conn.execute(
-        "SELECT ref,state,value FROM realm_direct WHERE owner='decision' AND ref IN (?,?) ORDER BY rowid", refs)}
+        f"SELECT ref,state,value,({_MAIL_PROOF}) AS posted FROM realm_direct r WHERE owner='decision' AND "
+        "((ref=? AND kind='bank_withdraw') OR (ref=? AND kind='mail_send')) ORDER BY rowid", refs)}
     withdraw, mail = (receipts.get(ref) for ref in refs)
     if mail and mail["state"] in ("dispatched", "acked", "unknown"):
-        if mail["state"] == "acked" and mail["value"] is not None:
-            return True, f"Delivery confirmed by native mail #{mail['value']}. The posted mail cannot be recalled."
+        if mail["posted"]:
+            return True, "Delivery confirmed. The posted mail cannot be recalled."
         return True, "Mail already entered transport. Delivery is unconfirmed and may still complete."
     if withdraw and withdraw["state"] in ("dispatched", "acked", "unknown"):
         if withdraw["state"] == "acked" and withdraw["value"] is not None:
@@ -269,19 +320,25 @@ class BankRules:
             with store.transaction():
                 rid = BankLedger(store, app.clock).record("out", "request", req["guid"], req["item"], req["count"])
                 store.set_meta(f"decisions:bank:out:{ident}", str(rid))
-                effect = json.loads(row["effect_ref"] or "{}")
-                effect.update(refs=[f"decision:{ident}:withdraw"], realm_bank=rid)
-                store.conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (json.dumps(effect), ident))
+                effect = _audit_object(row["effect_ref"])
+                if effect is not None:
+                    refs = _audit_refs(effect)
+                    if refs is not None:
+                        effect["refs"] = list(dict.fromkeys([f"decision:{ident}:withdraw", *refs]))
+                    effect.setdefault("realm_bank", rid)
+                    ledger.reconcile_effect_ref(store, ident, effect)
 
         for result in store.conn.execute(
                 "SELECT d.id,d.effect_ref,r.ref,r.value FROM realm_direct r JOIN guild_decision d "
-                "ON r.ref='decision:'||d.id||':mail' WHERE d.kind='bank' AND r.owner='decision' AND r.kind='mail_send' "
-                "AND r.state='acked' AND r.value IS NOT NULL AND json_extract(d.effect_ref,'$.mail_id') IS NULL").fetchall():
+                "ON r.ref='decision:'||d.id||':mail' WHERE d.kind='bank' AND r.owner='decision' "
+                f"AND {_MAIL_PROOF} AND (json_type(d.effect_ref,'$.mail_id') IS NOT NULL "
+                "OR json_type(d.effect_ref,'$.first_attachment_guid') IS NULL "
+                "OR NOT EXISTS (SELECT 1 FROM json_each(d.effect_ref,'$.refs') WHERE value=r.ref))").fetchall():
             with store.transaction():
-                effect = json.loads(result["effect_ref"] or "{}")
-                effect["mail_id"] = int(result["value"])
-                effect["refs"] = list(dict.fromkeys([*effect.get("refs", []), result["ref"]]))
-                store.conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (json.dumps(effect), result["id"]))
+                effect = _audit_object(result["effect_ref"])
+                proved = _mail_effect(effect, result["ref"], int(result["value"]))
+                if proved != effect:
+                    ledger.reconcile_effect_ref(store, result["id"], proved)
 
     async def tick(self, app, now):
         self.reconcile(app)
@@ -329,8 +386,12 @@ class BankRules:
         step = next_step(row, withdrawal, mail)
         receipt = f"decisions:bank:out:{ident}"
         if step == "done":
-            ledger.take_effect(store, ident, effect_ref={"refs": refs, "realm_bank": int(store.get_meta(receipt)),
-                                                       "mail_id": mail[2]}, now=now)
+            posted = store.conn.execute(
+                f"SELECT 1 FROM realm_direct r WHERE owner='decision' AND ref=? AND {_MAIL_PROOF}",
+                (refs[1],)).fetchone()
+            if store.get_meta(receipt) and posted:
+                # Reconciliation owns the optional audit fields. Only the receipts decide completion.
+                ledger.take_effect(store, ident, now=now)
         elif step in ("unknown", "refused"):
             ledger.fail(store, ident, reason=step, now=now)
         elif step in ("withdraw", "mail"):

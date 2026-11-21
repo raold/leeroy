@@ -251,7 +251,10 @@ def test_decisions_rehearsal(setup, tmp_path, clock, monkeypatch):
             await tick("bank")
             read_again.assert_awaited()
         assert [c["type"] for c in bridge.commands if c["type"] in ("bank_withdraw","mail_send")] == ["bank_withdraw","mail_send"]
-        assert ledger.get(conn,int(requests[0].key.split(":")[1]))["status"] == "in_effect"
+        delivered = ledger.get(conn, int(requests[0].key.split(":")[1]))
+        assert delivered["status"] == "in_effect"
+        effect = json.loads(delivered["effect_ref"])
+        assert effect["first_attachment_guid"] == 77 and "mail_id" not in effect
         assert json.loads(ledger.get(conn,int(requests[1].key.split(":")[1]))["effect_ref"])["failed"] == "last_stack"
 
         # Two actual training pull receipts from the raid; the lead settles its one menu change.

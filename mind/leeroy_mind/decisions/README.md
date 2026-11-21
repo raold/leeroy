@@ -187,6 +187,8 @@ even if the owner overrules it before delivery. An unknown result stops the requ
 its daily allowance. Each unresolved request or stack keeps its own ref while independent work
 continues. A matching late native job can still confirm the original withdrawal or mail. The
 Decisions card and overrule response report which transfers entered transport and which completed.
+Successful posting proves delivery to the mailbox. The audit field `first_attachment_guid`
+identifies the first attachment. The native job supplies no mail header number or collection receipt.
 One available bank officer can publish an operational post in the private bank channel.
 
 The night stage after the snapshot plans the ISO week's top-ups in `decisions:restock:<week>`.

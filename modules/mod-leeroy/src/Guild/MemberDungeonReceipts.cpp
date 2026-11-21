@@ -228,7 +228,8 @@ std::string ReturnedCharacter(Json const& body, uint32 leader)
     return match;
 }
 
-bool RecordHandback(DungeonReceipt& receipt, uint32 guid, Player* player = nullptr, std::string const& offlineReturn = {})
+bool RecordHandback(DungeonReceipt& receipt, uint32 guid, Player* player = nullptr, std::string const& offlineReturn = {},
+    bool observedAtOrigin = false)
 {
     if (DungeonHandbackRecorded(receipt.data,receipt.id,guid)) return true;
     auto next = receipt.data;
@@ -239,7 +240,7 @@ bool RecordHandback(DungeonReceipt& receipt, uint32 guid, Player* player = nullp
     if (!player && offlineReturn.empty())
     {
         // The live observation may have arrived before its group removal reached the database.
-        if (body->at("returned")!=true || !CharacterDatabase.Query(match)) return false;
+        if ((!observedAtOrigin && body->at("returned")!=true) || !CharacterDatabase.Query(match)) return false;
     }
     (*body)["changed"] = true;
     (*body)["returned"] = true;
@@ -400,7 +401,8 @@ bool RecoverBody(DungeonReceipt& receipt, Json const& body, Group* group, bool& 
             player->GetPositionX(),player->GetPositionY(),player->GetPositionZ());
         if (place==DungeonLocation::Foreign) return false;
         if (group) return true;
-        if (changed && !authorized && body.at("returned")!=true) return false;
+        bool const firstIntent = !authorized && DungeonFirstGroupActor(data,guid);
+        if (changed && !authorized && body.at("returned")!=true && !firstIntent) return false;
         if (changed && authorized)
         {
             if (place==DungeonLocation::Copy)
@@ -416,6 +418,12 @@ bool RecoverBody(DungeonReceipt& receipt, Json const& body, Group* group, bool& 
         if (place!=DungeonLocation::Origin || player->GetDungeonDifficulty() != Difficulty(body.at("dungeon").get<uint32>()) ||
             player->GetRaidDifficulty() != Difficulty(body.at("raid").get<uint32>()) ||
             (guid == leader && player->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER) != leaderFlag)) return false;
+        if (firstIntent)
+        {
+            // The live postconditions above and the independent stored row must already agree.
+            // Compare again inside the receipt CAS without saving or changing the character.
+            return player->GetGUID().GetCounter()==guid && storedOrigin && RecordHandback(receipt,guid,nullptr,{},true);
+        }
         return changed ? RecordHandback(receipt,guid,player) : storedOrigin;
     }
     if (fields[8].Get<uint8>()) return false; // A session exists but cannot be inspected.

@@ -36,7 +36,7 @@ export class BoundedMap extends Map {
 
 // Only the stable outer shape: optional sources and old databases may legitimately have
 // empty arrays or null detail fields. A different JSON object must not erase a good tab.
-var VIEWS = { state: ["rooms", "array"], feed: ["lines", "array"], "feed/history": ["more", "boolean"],
+var VIEWS = { guide: ["guide", "string"], state: ["rooms", "array"], feed: ["lines", "array"], "feed/history": ["more", "boolean"],
   raid: ["mind", "object"],
   guild: ["roster", "array"], personas: ["members", "array"], persona: ["member", "object"],
   social: ["feuds", "array"], board: ["forum", "array"], calendar: ["upcoming", "array"],
@@ -54,6 +54,11 @@ export function validView(path, value) {
   var valid = rule[1] === "array" ? Array.isArray(field) && field.every(record) :
     rule[1] === "object" ? !!field && typeof field === "object" && !Array.isArray(field) : typeof field === rule[1];
   if (!valid) { return false; }
+  if (route === "guide") {
+    return value.guide.length > 0 && (value.version === null || typeof value.version === "string") &&
+      [value.source_commit, value.checkout_commit].every(id => id === null ||
+        (typeof id === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id)));
+  }
   if (route === 'lab') {
     return ['rewards','arms','lessons','weights'].every(k => record(value[k])) &&
       ['families','frozen_families'].every(k => Array.isArray(value[k])) &&

@@ -167,6 +167,7 @@ from typing import Callable
 from .. import clock as mind_clock, endpoint
 from ..discord import layout as discord_layout, store as discord_store
 from ..realm.config import ConfigError, RealmConfig, load_realm_config
+from .guide import checkout_commit, running_guide
 from . import opsview
 from . import playbookview
 from . import unreadview
@@ -423,6 +424,7 @@ class ConsoleApp:
         self._clock, self._monotonic = clock, monotonic
         self.origin = f"http://{HOST}:{settings.port}"
         page = resources.files(__package__).joinpath("page.html").read_bytes()
+        self._guide = running_guide()
         self._static = static_files()
         self.build = console_build(page, self._static)
         self._page = page.replace(BUILD_MARK, self.build.encode("ascii"))
@@ -983,6 +985,7 @@ class ConsoleApp:
             return self._static_response(req, req.path[len("/static/"):])
         routes = {("GET", "/api/state"): self._api_state,
                   ("GET", "/api/events"): self._api_events,
+                  ("GET", "/api/guide"): self._api_guide,
                   ("GET", "/api/health"): self._api_health,
                   ("GET", "/api/feed/history"): self._api_feed_history,
                   ("GET", "/api/raid"): self._api_raid,
@@ -1066,6 +1069,12 @@ class ConsoleApp:
 
     async def _api_state(self, req: Request):
         return json_response(200, await self.snapshot())
+
+    async def _api_guide(self, req: Request):
+        if self._guide["guide"] is None:
+            return text(503, "The packaged console guide could not be read.")
+        commit = await asyncio.to_thread(checkout_commit, self.s.root)
+        return json_response(200, {**self._guide, "checkout_commit": commit})
 
     async def _api_ops_action_status(self, req: Request):
         return json_response(200, self._ops_actions.view())

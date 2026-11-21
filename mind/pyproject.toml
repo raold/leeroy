@@ -24,7 +24,7 @@ include = ["leeroy_mind*"]
 "leeroy_mind.guards" = ["stock_phrases.txt"]
 "leeroy_mind.talk" = ["data/*.txt"]
 "leeroy_mind.lab" = ["battery/*.toml", "judge_weights.json"]
-"leeroy_mind.console" = ["page.html", "static/*.css", "static/*.js", "static/js/*.mjs",
+"leeroy_mind.console" = ["README.md", "RELEASE.md", "page.html", "static/*.css", "static/*.js", "static/js/*.mjs",
                          "static/js/comms/*.mjs", "static/fonts/*", "static/emoji/*"]
 
 [tool.pytest.ini_options]

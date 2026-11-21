@@ -65,6 +65,30 @@ LEEROY_TEST(MemberDungeonReceiptRequiresTheExactDurableRosterAndTypedState)
     CHECK(!ValidDungeonReceipt(accepted));
 }
 
+LEEROY_TEST(MemberDungeonRecognizesOnlyTheUntouchedFirstGroupActor)
+{
+    nlohmann::json body = {{"changed",false},{"moved",false},{"returned",false},{"abandoned",false}};
+    nlohmann::json data = {{"stage","grouping"},{"effect","create_group"},{"actor",101},{"leader",101},
+        {"group",0},{"instance",0},{"bodies",{body,body,body,body,body}}};
+    CHECK(DungeonFirstGroupActor(data,101));
+    CHECK(!DungeonBeforeMutation(data));
+    CHECK(!DungeonFirstGroupActor(data,102));
+    for (auto key : {"actor","leader","group","instance"})
+    {
+        auto other = data; other[key] = 47;
+        CHECK(!DungeonFirstGroupActor(other,101));
+    }
+    for (auto key : {"moved","changed","returned","abandoned"})
+    {
+        auto changed = data; changed["bodies"][4][key] = true;
+        CHECK(!DungeonFirstGroupActor(changed,101));
+    }
+    data["stage"] = "running";
+    CHECK(!DungeonFirstGroupActor(data,101));
+    data["stage"] = "grouping"; data["effect"] = "add_group";
+    CHECK(!DungeonFirstGroupActor(data,101));
+}
+
 LEEROY_TEST(MemberDungeonOwnerAdmissionExcludesOnlyItsRegisteredRun)
 {
     using namespace Leeroy::Training;
