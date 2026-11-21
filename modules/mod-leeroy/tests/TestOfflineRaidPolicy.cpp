@@ -64,7 +64,7 @@ LEEROY_TEST(OfflineRaid_ProgressFieldsAreAdditiveAndPreserveZeroAndFalse)
 namespace
 {
 OfflineRaidLimits const limits{6, 3, 180 * 60000, 8, 8};
-OfflineRaidState Base() { return {0, false, true, 10, 0, 0, 0, 12, true, 0, 0}; }
+OfflineRaidState Base() { return {0, false, true, 10, 0, 0, 0, 12, true, 0, 0, 0}; }
 }
 
 LEEROY_TEST(OfflineRaid_HumanOnlineBeatsEverything)
@@ -88,6 +88,7 @@ LEEROY_TEST(OfflineRaid_Order)
     state = Base();
     state.leaderPresent = false;
     state.membersPresent = 7;
+    state.shortMs = OfflineShortRosterStopMs;
     CHECK_EQ(Decide(state, limits).reason, "leader_lost");
     state.leaderPresent = true;
     state.wipes = 6;
@@ -242,10 +243,115 @@ LEEROY_TEST(OfflineRaid_RecallDoesNotWeakenMinimumRosterOrLeaderStops)
     state.membersPresent = 10; // An observed arrival restores roster strength.
     CHECK(Decide(state, limits).verdict == Verdict::Continue);
     state.membersPresent = 7;
+    state.shortMs = OfflineShortRosterStopMs;
     CHECK_EQ(Decide(state, limits).reason, "too_few");
     state.membersPresent = 10;
     state.leaderPresent = false;
     CHECK_EQ(Decide(state, limits).reason, "leader_lost");
+}
+
+LEEROY_TEST(OfflineRaid_AShortRosterOrAMissingLeaderStopsOnlyOnceItHasLasted)
+{
+    // One tick's reading is not a lost raid: 2026-11-14 and 11-16 each stopped too_few in the very second
+    // dungeon-clear teleported members to the tank.
+    auto state = Base();
+    state.membersPresent = 7;
+    state.shortMs = OfflineShortRosterStopMs - 1;
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    state.shortMs = OfflineShortRosterStopMs;
+    CHECK(Decide(state, limits).verdict == Verdict::Done);
+    CHECK_EQ(Decide(state, limits).reason, "too_few");
+    state = Base();
+    state.leaderPresent = false;
+    state.shortMs = OfflineShortRosterStopMs - 1;
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    state.shortMs = OfflineShortRosterStopMs;
+    CHECK_EQ(Decide(state, limits).reason, "leader_lost");
+    state.shortMs = std::numeric_limits<std::uint32_t>::max();
+    CHECK_EQ(Decide(state, limits).reason, "leader_lost");
+}
+
+LEEROY_TEST(OfflineRaid_AShortRosterWaitsWithoutRestartingOrClaimingAClear)
+{
+    // An unreadable leader reads as dungeon-clear off; within the hold that is neither a restart nor a clear.
+    auto state = Base();
+    state.leaderPresent = false;
+    state.shortMs = 1;
+    state.dcEnabled = false;
+    state.dcOffMs = 30000;
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    state.bossesDone = state.bossesTotal;
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    state.wipes = 6;
+    CHECK(Decide(state, limits).verdict == Verdict::Continue);
+    state.elapsedMs = limits.timeoutMs; // The timeout and his login never wait.
+    CHECK_EQ(Decide(state, limits).reason, "timeout");
+    state.humanOnline = true;
+    CHECK_EQ(Decide(state, limits).reason, "human_login");
+}
+
+namespace
+{
+RunBody InsideBody()
+{
+    RunBody body;
+    body.inJobGroup = body.inWorld = body.sameMap = body.sameCopy = true;
+    return body;
+}
+}
+
+LEEROY_TEST(OfflineRaid_ANearTeleportWithinTheCopyKeepsAMemberInside)
+{
+    auto body = InsideBody();
+    CHECK(InsideRunInstance(body));
+    body.teleportNear = true; // Stranded recovery, the raid-wipe regroup, the ToC floor drop, the Ulduar pass.
+    CHECK(InsideRunInstance(body));
+    body.worldport = true;    // A far teleport leaves the copy until it arrives.
+    CHECK(!InsideRunInstance(body));
+    body.teleportNear = false;
+    CHECK(!InsideRunInstance(body));
+}
+
+LEEROY_TEST(OfflineRaid_InsideNeedsTheJobsGroupTheWorldTheMapAndTheCopy)
+{
+    for (bool RunBody::*field : {&RunBody::inJobGroup, &RunBody::inWorld, &RunBody::sameMap, &RunBody::sameCopy})
+    {
+        auto body = InsideBody();
+        body.*field = false;
+        CHECK(!InsideRunInstance(body));
+        body.teleportNear = true;
+        CHECK(!InsideRunInstance(body));
+    }
+}
+
+LEEROY_TEST(OfflineRaid_AWholeRaidLyingDeadOutOfEveryFightRegroupsAfterTheHold)
+{
+    // 2026-11-15, ICC 10: all nine died at Lady Deathwhisper within 13 s; dungeon-clear stayed on with nobody
+    // alive to run its rez recovery, and the raid lay dead for 30 minutes.
+    FullWipeHold hold;
+    CHECK(!hold.Observe(9, 9, true, false, OfflineFullWipeMs - 1));
+    CHECK(hold.Observe(9, 9, true, false, 1));
+    CHECK(hold.Observe(9, 9, true, false, 1000)); // Until dungeon-clear is off.
+    CHECK(!hold.Observe(9, 9, false, false, 1000));
+    CHECK_EQ(hold.heldMs, 0u);
+    FullWipeHold saturated;
+    CHECK(saturated.Observe(1, 1, true, false, std::numeric_limits<std::uint32_t>::max()));
+    CHECK(saturated.Observe(1, 1, true, false, std::numeric_limits<std::uint32_t>::max()));
+}
+
+LEEROY_TEST(OfflineRaid_TheFullWipeClockRestartsWhileAnyoneLivesFightsOrDungeonClearIsOff)
+{
+    struct Reset { std::uint32_t inside, dead; bool dc; std::optional<bool> engaged; };
+    for (auto const& reset : {Reset{9, 8, true, false}, Reset{9, 9, true, true}, Reset{9, 9, true, std::nullopt},
+        Reset{9, 9, false, false}, Reset{0, 0, true, false}})
+    {
+        FullWipeHold hold;
+        CHECK(!hold.Observe(9, 9, true, false, OfflineFullWipeMs - 1));
+        CHECK(!hold.Observe(reset.inside, reset.dead, reset.dc, reset.engaged, 1000));
+        CHECK_EQ(hold.heldMs, 0u);
+        CHECK(!hold.Observe(9, 9, true, false, OfflineFullWipeMs - 1));
+        CHECK(hold.Observe(9, 9, true, false, 1));
+    }
 }
 
 namespace

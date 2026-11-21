@@ -159,10 +159,12 @@ Decision Decide(OfflineRaidState const& state, OfflineRaidLimits const& limits)
         return {Verdict::Done, "human_login"};
     if (state.elapsedMs >= limits.timeoutMs)
         return {Verdict::Done, "timeout"};
-    if (!state.leaderPresent)
-        return {Verdict::Done, "leader_lost"};
-    if (state.membersPresent < limits.minMembers)
-        return {Verdict::Done, "too_few"};
+    if (!state.leaderPresent || state.membersPresent < limits.minMembers)
+    {
+        if (state.shortMs < OfflineShortRosterStopMs)
+            return {Verdict::Continue, {}};
+        return {Verdict::Done, state.leaderPresent ? "too_few" : "leader_lost"};
+    }
     if (state.maxWipesOnOneBoss >= limits.maxWipesPerBoss)
         return {Verdict::Done, "boss_wipe_cap"};
     if (state.wipes >= limits.maxWipes)
@@ -173,6 +175,20 @@ Decision Decide(OfflineRaidState const& state, OfflineRaidLimits const& limits)
         return state.restarts >= limits.maxRestarts ? Decision{Verdict::Done, "dc_stalled"}
                                                     : Decision{Verdict::Restart, "dc_stopped"};
     return {Verdict::Continue, {}};
+}
+
+bool InsideRunInstance(RunBody const& body)
+{
+    // teleportNear is deliberately not read: a near teleport stays on the map and in the copy.
+    return body.inJobGroup && body.inWorld && !body.worldport && body.sameMap && body.sameCopy;
+}
+
+bool FullWipeHold::Observe(std::uint32_t inside, std::uint32_t deadInside, bool dcEnabled,
+    std::optional<bool> bossEngaged, std::uint32_t diffMs)
+{
+    bool const wiped = inside && deadInside >= inside && dcEnabled && bossEngaged == false;
+    heldMs = wiped ? AdvanceElapsed(heldMs, diffMs) : 0;
+    return wiped && heldMs >= OfflineFullWipeMs;
 }
 
 bool IsWipe(std::uint8_t oldState, std::uint8_t newState)

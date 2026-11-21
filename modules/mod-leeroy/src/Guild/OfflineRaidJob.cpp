@@ -174,6 +174,8 @@ struct Job
     std::vector<uint8> previousBossStates;
     std::vector<uint32> bossWipes;
     uint32 elapsed = 0, stageElapsed = 0, dcOff = 0, restarts = 0;
+    uint32 shortMs = 0, shortEvents = 0;
+    FullWipeHold fullWipe{};
     uint32 progressElapsed = 0;
     std::int64_t lastProgressTs = 0;
     DcPhase dcPhase = DcPhase::Unknown;
@@ -291,10 +293,31 @@ bool InJobGroup(Job const& job, Player* player)
     return Controlled(job, player) && player->GetGroup() && player->GetGroup()->GetGUID() == job.group;
 }
 
+RunBody ReadRunBody(Job const& job, Player* player, bool inJobGroup)
+{
+    RunBody body;
+    body.inJobGroup = inJobGroup;
+    if (!player) return body;
+    body.inWorld = player->IsInWorld();
+    body.teleportNear = player->IsBeingTeleportedNear();
+    body.worldport = player->IsBeingTeleportedFar();
+    body.sameMap = player->GetMapId() == job.command.mapId;
+    body.sameCopy = player->GetInstanceId() == job.event.instanceId;
+    return body;
+}
+
+// No teleport of any kind pending: ownership proofs, setup gates and body changes use this.
 bool Present(Job const& job, Player* player)
 {
     return InJobGroup(job, player) && player->IsInWorld() && !player->IsBeingTeleported()
         && player->GetMapId() == job.command.mapId && player->GetInstanceId() == job.event.instanceId;
+}
+
+// What the running raid's roster, leader and recall rules count: a member moving within the copy (a near
+// teleport) is still inside it (InsideRunInstance).
+bool Inside(Job const& job, Player* player)
+{
+    return InsideRunInstance(ReadRunBody(job, player, InJobGroup(job, player)));
 }
 
 std::string InstanceConflict(OfflineRaidCmd const& cmd)
@@ -398,6 +421,8 @@ void Enter(Job& job, Stage stage)
         // a restart must not report its pre-restart phase (usually off) or carry its hold.
         job.dcPhase = DcPhase::Unknown;
         job.dcHold = {};
+        job.shortMs = 0;
+        job.fullWipe = {};
     }
 }
 
@@ -468,9 +493,7 @@ void Progress(Job& job)
     {
         uint32 inside = 0;
         for (auto const& member : job.members)
-            if (auto* player = FindOnline(member.guid); player && player->IsInWorld()
-                && !player->IsBeingTeleported() && player->GetMapId() == job.command.mapId
-                && player->GetInstanceId() == job.event.instanceId) ++inside;
+            if (InsideRunInstance(ReadRunBody(job, FindOnline(member.guid), true))) ++inside;
         job.event.membersInInstance = inside;
         job.event.lastProgressTs = job.lastProgressTs;
         job.event.bossEngaged = BossEngaged(job);
@@ -1137,7 +1160,7 @@ void RecallStrays(Job& job, Player* leader, uint32 diff)
 void Running(Job& job, uint32 diff)
 {
     Player* leader = FindOnline(job.command.leaderGuid);
-    bool const leaderPresent = Present(job, leader) && OwnsGroup(job, FindGroup(job))
+    bool const leaderPresent = Inside(job, leader) && OwnsGroup(job, FindGroup(job))
         && leader->GetGroup()->GetLeaderGUID() == leader->GetGUID();
     if (leaderPresent && !ReadBosses(job, leader, false))
     {
@@ -1149,17 +1172,20 @@ void Running(Job& job, uint32 diff)
         Stop(job, "frontier");
         return; // TickOfflineRaid immediately enters teardown in this same post-map world tick.
     }
-    uint32 present = 0;
+    uint32 present = 0, deadInside = 0;
     for (Member const& member : job.members)
-        if (Present(job, FindOnline(member.guid)))
+        if (Player* player = FindOnline(member.guid); Inside(job, player))
+        {
             ++present;
+            if (!player->IsAlive()) ++deadInside;
+        }
     bool waitingForReturn = false;
     if (Dungeon(job) && leaderPresent && present < job.members.size())
     {
         for (auto const& m : job.members)
         {
             auto* player = FindOnline(m.guid);
-            if (Present(job,player)) continue;
+            if (Inside(job, player)) continue;
             if (!InJobGroup(job,player) || !AtOrigin(m,player) ||
                 m.recall.absentMs >= OfflineRecallGraceMs + OfflineRecallAttempts * OfflineRecallRetryMs)
             { Stop(job, "member_lost", true); return; }
@@ -1181,14 +1207,30 @@ void Running(Job& job, uint32 diff)
                     job.event.id, DcPhaseCode(phase), DcPhaseCode(job.dcPhase), job.dcPhaseChanges, job.event.kills);
             job.dcPhase = phase;
         }
-        held = job.dcHold.Observe(phase, BossEngaged(job), diff);
+        auto const engaged = BossEngaged(job);
+        held = job.dcHold.Observe(phase, engaged, diff);
+        // Nobody inside is alive to run dungeon-clear's rez recovery or wipe regroup: switch it off, and the
+        // dc_stopped restart below revives the raid at the entrance.
+        if (job.fullWipe.Observe(leaderPresent ? present : 0, deadInside, enabled, engaged, diff))
+        {
+            LOG_INFO("module.leeroy", "leeroy: raid {} full_wipe dead={} inside={} restarts={} kills={}",
+                job.event.id, deadInside, present, job.restarts, job.event.kills);
+            DcActionShared::DisableDungeonClear(GET_PLAYERBOT_AI(leader),
+                "Everyone is down: regrouping at the entrance.");
+            job.fullWipe = {};
+        }
     }
+    auto limits = job.limits;
+    if (waitingForReturn) limits.minMembers = present;
+    bool const shortNow = !leaderPresent || present < limits.minMembers;
+    if (shortNow && !job.shortMs && (++job.shortEvents <= 20 || job.shortEvents % 50 == 0))
+        LOG_INFO("module.leeroy", "leeroy: raid {} short leader_present={} present={} min={} members={}",
+            job.event.id, leaderPresent, present, limits.minMembers, job.members.size());
+    job.shortMs = shortNow ? std::max<uint32>(AdvanceElapsed(job.shortMs, diff), 1) : 0;
     uint32 const mostWipes = job.bossWipes.empty() ? 0 : *std::max_element(job.bossWipes.begin(), job.bossWipes.end());
     OfflineRaidState const state{job.elapsed, !Dungeon(job) && HumanConnected(job.human), leaderPresent, present, job.event.wipes,
         mostWipes, job.event.kills, static_cast<uint32>(job.previousBossStates.size()),
-        enabled, job.dcOff, job.restarts};
-    auto limits = job.limits;
-    if (waitingForReturn) limits.minMembers = present;
+        enabled, job.dcOff, job.restarts, job.shortMs};
     Decision const decision = Decide(state, limits);
     if (waitingForReturn && (decision.verdict == Verdict::Restart || decision.reason == "cleared"))
         RecallStrays(job,leader,diff);

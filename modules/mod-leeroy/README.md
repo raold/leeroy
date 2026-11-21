@@ -157,6 +157,28 @@ takes pinned cast members out of rated teams the owner does not captain
 (`cast_arena_team_left`); a cast captain of a bot team is kept (`cast_arena_team_kept`).
 Logs carry raid ids, guids, team ids and counts only. **Native rebuild required.**
 
+# Offline raid roster rules and full wipes
+
+A running offline raid counts a member as inside its copy while the body is in the job's group, in the world
+and on the run's map and copy; a near teleport (same map, same copy) keeps it inside and only a worldport takes
+it out until it arrives. Dungeon-clear moves members that way: its stranded recovery teleports strays to the
+tank, its raid-wipe regroup revives and teleports the whole raid to the entrance, and the Trial of the
+Crusader floor drop and Ulduar Leviathan pass move every member, the tank included. Each such tick used to
+stop the run `too_few` or `leader_lost` (2026-11-14, Naxx 10, three members; 2026-11-16, ICC 25, sixteen;
+2026-11-17, Naxx 10, the tank at the regroup). Setup gates, ownership proofs and cleanup still require no
+teleport at all.
+
+`leader_lost` and `too_few` now end a run only after the leader has been out, or the roster under the
+minimum, for 10 s without a break (`short leader_present= present= min= members=` logs each time it goes
+short, first 20 and every 50th); until then the run waits without restarting or claiming a clear. The
+timeout and his login never wait.
+
+When every member inside is dead, no boss is engaged and dungeon-clear is still on for 30 s, nobody is left to
+run its rez recovery or regroup (2026-11-15, ICC 10: all nine died at Lady Deathwhisper and lay there until the
+mind's 30-minute stall stop). The job switches dungeon-clear off (`full_wipe dead= inside= restarts= kills=`),
+and its existing `dc_stopped` restart revives the raid at the entrance 30 s later, within the run's restart and
+wipe limits. Benchmarks never take this full-wipe regroup. **Native rebuild required.**
+
 # Rezzes in the owner's group
 
 Stock playerbots leaves a member of a real player's group lying dead: it never releases
