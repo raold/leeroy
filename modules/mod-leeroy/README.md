@@ -188,20 +188,53 @@ his bots ride too, and a mounted player cannot cast, so nobody rezzes. The pinne
 revive-in-place timer skips every grouped bot.
 
 `Leeroy.GroupRez.Enable` (default 1) checks his group once a second (`GroupRezJob`, pure
-policy `LeeroyGroupRezPolicy`). For a member lying dead (not released, not in a
-battleground) while nobody in his group fights within 100 yards of the body, the nearest
-free rezzer bot of the group (alive, out of combat, not casting, not in a vehicle or on a
-taxi, no Realm or training owner) within 57 yards and in sight is used: within its spell's
-range it is put down from its mount or Flight Form (only within 3 yards of the ground), out of
-Shadowform, Ghost Wolf or a druid form, stopped and made to cast its highest-rank rez (`group_rez_cast`, refusals
-once per code as `group_rez_cast_refused`); farther out a mounted one is put down so
-playerbots walks it in (`group_rez_dismount`). His own body is offered a rez the same way.
+policy `LeeroyGroupRezPolicy`). A member lying dead (not released, not in a battleground)
+waits while someone of his group fights near the body: a member within 100 yards of it
+engaged with an enemy, or any member engaged with an enemy within 100 yards of it. Engaged
+means a combat reference to a living, non-evading unit within 80 yards of the member; the
+combat flag alone is not enough, since inside a dungeon the core never ends combat by distance
+(`Player::Update` does that outside one only), so a creature a wing away, or a reset
+encounter's trigger, can keep a member flagged for good.
+
+Otherwise the rezzers are his group's paladin, priest, shaman and druid bots (alive, knowing a
+rez) on the body's map within 100 yards of it. One that is casting, in a vehicle, on a taxi,
+teleporting, mounted in the air, owned by the Realm or training, walking in to another body or
+passed over after a refusal is busy. One still flagged in combat by nothing it is fighting has
+its combat references beyond 80 yards ended, as the core does outside dungeons
+(`CombatManager::EndCombatBeyondRange`, `group_rez_combat_cleared guid= refs= in_combat=`); one
+still in combat after that is not used. A rezzer needs the mana its rez costs now
+(`SpellInfo::CalcPowerCost`; 72% of base mana, more than a freshly rezzed healer has). Of the
+free rezzers with that mana, the one already walking in to the body keeps it, unless another is
+already within its spell's range and in sight: that one, the nearest, is put down from its mount
+or Flight Form (only within 3 yards of the ground), out of Shadowform, Ghost Wolf or a druid form,
+stopped and made to cast its highest-rank rez (`group_rez_cast`). With none in range and sight
+the nearest walks to the body (`group_rez_approach guid= body= yards=`, once per pair): a point
+move, with playerbots' AI held 1.5 s on each pass so its follow does not take it back, until it
+is in range and sight; a walk-in that has not got there within 25 s gives that rezzer up for the
+body for a minute. With no free rezzer that has the mana, the nearest short of it is asked to
+drink through playerbots' own `drink` action (its food cheat sits it down to regain mana; a
+mount or form is dropped first; `group_rez_drink guid= body= mana= cost= ok=`, once per pair),
+again after 25 s while still short, and is used once it has the mana. A refused cast passes that
+rezzer over for every body for 30 s (a global cooldown, a cast in progress or moving: 3 s);
+`group_rez_cast_refused guid= body= result=` is logged at most once a minute per rezzer and
+result code. His own body is offered a rez the same way.
+
+While a body gets no rez, `group_rez_blocked reason=<code> dead=<bodies> casters=<rezzers in
+his group>` is logged once a minute per reason (`fence=<codes>` too for `fenced`): `combat` (a
+fight near it), `fenced` (a Realm lease or training owns it), `awaiting_answer` (a rez landed
+and waits to be accepted), `self_res` (a soulstone or reincarnation to use), `no_caster` (no
+living rezzer on its map), `no_caster_in_range` (none within 100 yards), `all_oom` (every free
+one in reach is short of mana; they are asked to drink), `unreachable` (every free one in reach
+failed to walk in to range and sight), `caster_combat` (every one in reach is still in combat),
+`casters_busy` (every one in reach is busy). A rez being cast or the 3 s gap between casts on
+one body logs nothing.
+
 A bot outside a dungeon or raid that has lain dead through `Leeroy.GroupRez.ReleaseSeconds`
 (default 60, at most 600, 0 never) of quiet with no rez under way or waiting releases as
 playerbots' own auto-release does, and runs back from the graveyard (`group_rez_released`);
-fighting nearby restarts that clock. Inside an instance it waits for a rez, as before.
-Reloadable with `.reload config`. Logs carry guids, spell ids and result codes only.
-**Native rebuild required.**
+a fight nearby restarts that clock. Inside an instance it waits for a rez, as before (stock
+playerbots never releases a bot there while he is on the map). Reloadable with `.reload config`.
+Logs carry guids, spell ids, counts and codes only. **Native rebuild required.**
 
 # Gear-up and the one-time regear
 
