@@ -15,7 +15,7 @@ from leeroy_mind.protocol import Ack, Member
 from leeroy_mind.storage.rows import PersonaStateRow, Relationship
 from leeroy_mind.talk.turns import TurnKind
 
-from .protocol import Job, MemberDungeonStatus, StopMemberDungeon, StopOfflineRaid
+from .protocol import GiveLoot, Job, MemberDungeonStatus, StopMemberDungeon, StopOfflineRaid
 
 
 log = logging.getLogger(__name__)
@@ -222,8 +222,9 @@ class LivePorts:
     async def send(self, cmd, *, expected_epoch=None):
         if not self.enabled:
             raise TransportUnavailable("guild transport unavailable")
-        if not isinstance(cmd, (StopOfflineRaid, StopMemberDungeon, MemberDungeonStatus)):
-            # A stop's terminal rides the start command's id; a mailbox entry would never be drained.
+        if not isinstance(cmd, (StopOfflineRaid, StopMemberDungeon, MemberDungeonStatus, GiveLoot)):
+            # A stop's terminal rides the start command's id and a give has only its ack: a mailbox
+            # entry would never be drained (and would refuse a give sent again after NotConnected).
             self.jobs.expect(cmd.id)
         if expected_epoch is not None:
             return await self.app.bridge.send(cmd, preserve_id=True, expected_epoch=expected_epoch)

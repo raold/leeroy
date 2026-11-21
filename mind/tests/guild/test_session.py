@@ -834,3 +834,29 @@ async def test_a_tier_mark_draws_bids_from_its_classes_and_is_handed_out(setup):
     await session.tick()
     assert [c.item_id for c in ports.sent] == [52025] and ports.sent[0].to_guid == 106
     assert loot_states(ports) == ["charged"]
+
+
+@_run_async
+async def test_an_unsettled_award_holds_its_dkp_from_later_bids(setup):
+    ports, _, _, _ = setup
+    session = await opened(setup)
+    set_balance(ports, 105, 100)
+    set_balance(ports, 106, 40)
+    original = ports.send
+    async def timeout(command):
+        ports.sent.append(command)
+        raise AckTimeout("no ack")
+    ports.send = timeout
+    await session.on_loot_drop(drop(index=0))
+    await advance(ports, 20)
+    await session.tick()  # 105 wins at 80; unknown, held
+    ports.send = original
+    await session.on_loot_drop(drop(index=1))
+    await advance(ports, 20)
+    await session.tick()  # 105's 80 is held from the second drop's bids: 106 wins it
+    second = [c for c in ports.sent if c.index == 1]
+    assert len(second) == 1 and second[0].to_guid == 106 and items_charged(ports) == [(106, -40.0, 50001)]
+    await advance(ports, RETRY_AFTER_S)
+    await session.tick()  # the first drop's resend lands: 105 pays the 80 that was held
+    assert items_charged(ports) == [(106, -40.0, 50001), (105, -80.0, 50001)]
+    assert balances(ports.conn)[105] == 20 and balances(ports.conn)[106] == 0

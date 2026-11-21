@@ -6,7 +6,7 @@ from functools import partial
 import json
 from types import SimpleNamespace
 
-from leeroy_mind.bridge import Backoff, BridgeClient
+from leeroy_mind.bridge import Backoff, BridgeClient, NotConnected
 from leeroy_mind.guild.config import GuildConfig
 from leeroy_mind.guild.loot import RETRY_AFTER_S
 from leeroy_mind.guild.ports import JobWaiter, LivePorts
@@ -103,6 +103,52 @@ def test_an_unanswered_give_is_sent_again_under_a_new_identity_and_charged_once(
             assert _states(fake, session.raid_id) == ["charged"]
             charged = fake.conn.execute("SELECT guid,item_id FROM dkp_ledger WHERE reason='item'").fetchall()
             assert [tuple(row) for row in charged] == [(105, 50001)]
+        finally:
+            await client.close()
+            await asyncio.wait_for(task, 2.0)
+            await bridge.stop()
+    asyncio.run(go())
+
+
+def test_a_give_the_bridge_refused_before_writing_goes_again_under_the_same_rules(fake, clock):
+    """LivePorts.send, the real client and its identity rules: a give refused NotConnected (first
+    try, and a resend after an unanswered one) is sent again once the bridge is back."""
+    answered = []
+
+    def ack(cmd):
+        if cmd.get("type") != "give_loot":
+            return True, ""
+        answered.append(cmd["id"])
+        return None if len(answered) == 1 else (True, "")
+
+    async def go():
+        bridge = FakeBridge(human_guid=1, ack=ack)
+        client, task = await _wired(fake, bridge, ack_timeout=0.2)
+        down = ["down", None, "down", None]
+        real = client.send
+
+        async def flaky(cmd, **kw):
+            if cmd.__class__.__name__ == "GiveLoot" and down.pop(0) == "down":
+                raise NotConnected("bridge is not connected")
+            return await real(cmd, **kw)
+
+        client.send = flaky
+        try:
+            armory, plan = _setup(fake)
+            session = await RaidSession.open(fake, GuildConfig(), armory, plan)
+            assert session.bind_instance(77)
+            await session.on_loot_drop(LootDrop(0, 631, 77, 36597, (LootItem(50001, "Testblade", 4, 0),)))
+            await clock.advance(20, step=20)
+            await session.tick()  # refused before writing: pending again
+            assert _states(fake, session.raid_id) == ["pending"] and answered == []
+            await session.tick()  # the same identity goes out; no ack
+            assert _states(fake, session.raid_id) == ["uncertain"] and len(answered) == 1
+            await clock.advance(RETRY_AFTER_S, step=RETRY_AFTER_S)
+            await session.tick()  # the resend is refused before writing
+            assert _states(fake, session.raid_id) == ["uncertain"] and len(answered) == 1
+            await session.tick()  # and goes again: answered and charged
+            assert answered == [answered[0], answered[0] + "-r1"]
+            assert _states(fake, session.raid_id) == ["charged"]
         finally:
             await client.close()
             await asyncio.wait_for(task, 2.0)

@@ -231,6 +231,24 @@ class LootMaster:
             # His claim over a member who wanted it: she remembers losing it (decisions)
             await self.ports.loot_lost(result.runner_up, record["name"])
 
+    def _held(self) -> dict[int, float]:
+        """DKP this raid's unsettled hand-outs may still charge, by member: an acknowledged give
+        not charged yet, and a give of unknown outcome that will be sent again. Later bids leave
+        it aside, so one balance never pays for two drops."""
+        held = {}
+        for _, row in self._records():
+            if row.get("mode") == "loot_council":
+                continue  # a council charges nothing
+            if row.get("state") == "acknowledged":
+                pay = row.get("award")
+            elif row.get("state") in {"sending", "uncertain"} and row.get("attempt", 0) < MAX_ATTEMPT:
+                pay = row.get("intent")
+            else:
+                continue
+            if isinstance(pay, dict) and type(pay.get("guid")) is int and isinstance(pay.get("paid"), (int, float)):
+                held[pay["guid"]] = held.get(pay["guid"], 0) + pay["paid"]
+        return held
+
     def _here(self, record) -> bool:
         return (self.ctx.instance_id is not None and record["instance_id"] == self.ctx.instance_id
                 and record["map"] == self.ctx.map_id)
@@ -264,8 +282,10 @@ class LootMaster:
                 if not self._here(record):
                     continue
                 current_balances = balances(self.ports.conn)
+                held = self._held()
                 cast = self.ports.cast()
-                bidders = [Bidder(b["guid"], current_balances.get(b["guid"], 0), b["gain"], b["wanted"])
+                bidders = [Bidder(b["guid"], current_balances.get(b["guid"], 0) - held.get(b["guid"], 0),
+                                  b["gain"], b["wanted"])
                            for b in record["bidders"] if b["guid"] in cast and cast[b["guid"]].online]
                 if not record["known"]:
                     result = None
