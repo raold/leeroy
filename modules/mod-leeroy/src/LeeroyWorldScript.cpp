@@ -160,6 +160,7 @@ public:
             bool const humanOnline = humanPlayer && humanPlayer->IsInWorld();
             auto features = LeeroyDcRaidFeatures();
 #if LEEROY_HAS_DUNGEON_CLEAR
+            features.emplace_back("offline_raid_reserves");
             if (Leeroy::Guild::MemberDungeonEnabled()) features.emplace_back("member_dungeon_v1");
 #endif
             if (module.Config().dayPlans && module.Config().realmEnable)

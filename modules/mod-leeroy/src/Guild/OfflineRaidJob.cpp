@@ -363,6 +363,26 @@ std::string Unusable(Player* player, std::string const& dayToken = {})
 RecallPvp ReadRecallPvp(Player* player);
 bool AtOrigin(Member const& member, Player* player);
 
+// Reserves never preempt another activity or its group. Their original bodies are
+// captured at admission and checked again immediately before group creation.
+std::string ReserveRefusal(uint32 guid, Player* player, uint32 team)
+{
+    if (guid == HumanGuid() || !IsCast(guid)) return "not_cast";
+    if (Realm::RealmOwns(guid) || !Realm::DayForMember(guid).empty()
+        || Realm::HasPreparedOwner(guid) || GuildAddAwaiting(guid)
+        || (player && GroupHasRealmOwner(player->GetGroup()))) return "busy:realm_owner";
+    if (Training::DummyTrialOwns(guid) || Training::TrainingDcOwns(guid)
+        || Training::TrainingCleanupPending() || Training::HasTrainingJournal(guid)
+        || HasPendingBotCommands({guid}) || DungeonRecoveryConflicts({guid}, false)) return "busy:owner";
+    if (StringStayHeld(guid)) return "busy:string";
+    if (auto reason = Unusable(player); !reason.empty()) return reason;
+    if (player->GetGroup()) return "in_group";
+    if (player->GetTeamId() != team || player->GetLevel() < 80 || player->GetOriginalGroup()
+        || player->GetGroupInvite() || player->GetTradeData()) return "not_available";
+    if (RecallPvpBusy(ReadRecallPvp(player))) return "in_pvp";
+    return {};
+}
+
 std::string DungeonBodyRefusal(Player* bot, uint32 low, uint32 team, Realm::DayOwnerCheck const* check)
 {
     auto token = check ? check->Token(low) : std::string{};
@@ -665,6 +685,29 @@ void Grouping(Job& job)
                                player->GetRaidDifficulty()});
         job.members.back().originalLeaderFlag = player->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
         job.members.back().originalDungeonDifficulty = player->GetDungeonDifficulty();
+    }
+    if (job.mode == RaidJobMode::Offline)
+    {
+        auto reserves = AdmitOfflineReserves(job.command.size, job.command.minMembers, job.members.size(),
+            job.command.reserves, [&](uint32 low)
+            {
+                auto* player = FindOnline(low);
+                if (auto reason = ReserveRefusal(low, player, job.team); !reason.empty()) return reason;
+                return Controlled(job, player) ? std::string{} : std::string{"session_changed"};
+            });
+        for (auto const& [guid, reason] : reserves.skipped) job.event.skipped.emplace_back(guid, reason);
+        for (auto low : reserves.accepted)
+        {
+            auto* player = FindOnline(low); // World thread: no await or map tick since the proof above.
+            job.members.push_back({low, WorldLocation(player->GetMapId(), player->GetPosition()),
+                                   player->GetRaidDifficulty()});
+            job.members.back().originalLeaderFlag = player->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
+            job.members.back().originalDungeonDifficulty = player->GetDungeonDifficulty();
+            job.command.members.push_back(low); // Ordinary ownership, return and cleanup now own this body.
+        }
+        if (!reserves.accepted.empty())
+            LOG_INFO("module.leeroy", "leeroy: raid {} reserves={} members={} minimum={}", job.event.id,
+                reserves.accepted.size(), job.members.size(), job.command.minMembers);
     }
     if (!Contains(job, job.command.leaderGuid) || !Contains(job, job.command.lootMasterGuid)
         || job.members.size() < job.command.minMembers)
@@ -1899,6 +1942,7 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     auto const* cmd = &command;
     bool const benchmark = mode == RaidJobMode::Benchmark;
     bool const dungeon = mode == RaidJobMode::MemberDungeon;
+    if ((benchmark || dungeon) && !cmd->reserves.empty()) return Fail("bad field: reserves");
     if (!GuildEnabled())
         return Fail("disabled");
     if ((benchmark || dungeon) && (!HumanGuid() || !LeeroyModule::Instance().GuildId())) return Fail("identity_unavailable");
@@ -2006,6 +2050,9 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
     job->driverBody = Lease(driver);
     for (uint32 low : Requested(*cmd))
         if (auto* player = FindOnline(low)) job->bodies.emplace(low, Lease(player));
+    for (auto low : cmd->reserves)
+        if (auto* player = FindOnline(low); ReserveRefusal(low, player, job->team).empty())
+            job->bodies.emplace(low, Lease(player));
     job->limits = {cmd->maxWipes, cmd->maxWipesPerBoss, cmd->timeoutMin * 60000, cmd->minMembers, 8};
     job->event.id = id;
     job->event.kind = dungeon ? "member_dungeon" : benchmark ? "benchmark" : "offline_raid";
@@ -2170,7 +2217,10 @@ bool OfflineRaidOwns(uint32 guid)
     if (DungeonRecoveryConflicts({guid}, false)) return true;
 #if LEEROY_HAS_DUNGEON_CLEAR
     return active && (active->command.leaderGuid == guid
-        || std::find(active->command.members.begin(), active->command.members.end(), guid) != active->command.members.end());
+        || std::find(active->command.members.begin(), active->command.members.end(), guid) != active->command.members.end()
+        || (active->stage == Stage::Grouping && active->bodies.contains(guid)
+            && std::find(active->command.reserves.begin(), active->command.reserves.end(), guid)
+                != active->command.reserves.end()));
 #else
     return false;
 #endif

@@ -19,6 +19,7 @@ def test_guild_config_defaults_and_absent_sections(tmp_path):
     # The owner's 2026-11-14 decision: gear-up keeps the cast at 245 so ICC drops are upgrades; no regear unless set.
     assert (GuildConfig().gear_up_ilvl, GuildConfig().gear_up_below_avg_ilvl) == (245, 232)
     assert GuildConfig().regear_to == 0
+    assert GuildConfig().offline_reserves == 0
     assert GuildConfig().offline_rotation == ("icc25", "icc10", "naxx10")
     assert GuildConfig().ranks == {"officer": 1, "raider": 2, "social": 3}
     assert DkpConfig().prices == {"weapon_2h": 80, "weapon_1h": 50, "trinket": 50,
@@ -34,6 +35,7 @@ friends_add = 1.0
 friends_remove = 0.0
 theorycrafter_ilvl = 0
 regear_to = 245
+offline_reserves = 2
 late_summon_s = [0, 600]
 ranks = {raider = 4}
 worldserver_conf = "synthetic/server.conf"
@@ -49,6 +51,7 @@ prices = {other = 20}
     assert cfg.worldserver_conf.name == "server.conf" and cfg.mysql_exe.name == "mysql.exe"
     assert cfg.dkp.attendance == 5. and cfg.dkp.kill == 12
     assert cfg.regear_to == 245 and cfg.gear_up_ilvl == 245
+    assert cfg.offline_reserves == 2
 
 
 @pytest.mark.parametrize(("setting", "value"), [
@@ -69,6 +72,8 @@ prices = {other = 20}
     ("offline_timeout_min", "361"), ("level_to", "81"), ("ranks", "{officer=0}"),
     ("offline_stall_minutes", "0"), ("offline_stall_minutes", "9"), ("offline_stall_minutes", "361"),
     ("offline_stall_minutes", "true"), ("offline_stall_minutes", "1.5"),
+    ("offline_reserves", "-1"), ("offline_reserves", "3"), ("offline_reserves", "true"),
+    ("offline_reserves", "1.5"), ("offline_reserves", '"2"'),
     ("ranks", "{raider=true}"), ("ranks", "{social=10}"), ("ranks", "{typo=3}"),
     ("raid_call_delay_s", "-1"), ("assemble_timeout_min", "0"),
     ("worldserver_conf", '""'), ("mysql_exe", "false"), ("unknown", "1"),
