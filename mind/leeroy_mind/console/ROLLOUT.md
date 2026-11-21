@@ -13,14 +13,23 @@ Follow [RELEASE.md](RELEASE.md) for deployment. The release must include the ban
 day-plan and heroic implementations plus the guide's recovery corrections (#398,
 #399, #401 and #402), the #411 per-kind decision switches, their native build and
 migrations through 0065. Member heroics additionally require the
-[#401 receipt follow-up, #415](https://github.com/raold/leeroy/pull/415) to be
+[#401 receipt follow-up, #415](https://github.com/raold/leeroy/pull/415) and
+[core-owned receipt transactions, #421](https://github.com/raold/leeroy/pull/421) to be
 reviewed, merged **and included in the installed native build**:
 tolerant offline handback, retryable receipt loading and asynchronous receipt
-checkpoints. A PR that is only open or merged is insufficient. Record the
+checkpoints with the core retaining ownership of each submitted transaction.
+#421 also corrects bank-mail transaction ownership and is a prerequisite for the
+bank stage. A PR that is only open or merged is insufficient. Record the
 installed commit, native binary/build identity, mind and console process starts,
 schema version, data directory, fresh bridge boot identity and capabilities. Use
 the installed checkout's CLI and existing operator connection; do not point a
 development checkout at live data or create a second bridge client.
+
+If a fine-tune or other owner-reserved job holds the GPU window, keep this
+rollout **NOT RUN** until that reservation ends. Day-plan generation needs the
+reflection model; a dormant database or an edited switch cannot stand in for
+its end-to-end exercise. Do not resume the owner's GPU pause or start a model
+to obtain a canary during that reservation.
 
 Preserve a private configuration backup and the release recovery instructions.
 Record existing values before changing them; do not replace unrelated settings.
@@ -107,8 +116,8 @@ See [Day plans](../godmode/README.md).
 
 ## 2. Member heroics
 
-Do not start this stage until the installed native build includes the reviewed
-#401 receipt follow-up described above. Inspect the Characters-database load and
+Do not start this stage until the installed native build includes both #415 and
+#421 described above. Inspect the Characters-database load and
 checkpoint results: a transient first load must recover, world updates must stay
 responsive while writes complete, and an offline member's handback must have a
 confirmed stored result. Never interrupt the production database to test this;
