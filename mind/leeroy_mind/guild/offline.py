@@ -763,8 +763,6 @@ class OfflineRaids:
             return
         if busy:
             log.info("offline_raid_planned excluded=%d in_dungeon=%d", len(busy & excluded), len(busy - excluded))
-        reserves = (plan.bench[:self.cfg.offline_reserves]
-                    if "offline_raid_reserves" in self._features else [])
         now = self.ports.clock.now()
         self._progress = None
         self._owned = dict(id=uuid4().hex, day=self._day(), phase="acquiring", plan=asdict(plan),
@@ -772,8 +770,6 @@ class OfflineRaids:
                            cancelled=False, cancel_at=None, accepted=None, instance=None,
                            raid_id=None, started=False, running_seen=False, attended=False,
                            terminal=None, end_notified=False)
-        if reserves:
-            self._owned["reserves"] = reserves
         self._save()
         try:
             self._lease = True
@@ -797,6 +793,16 @@ class OfflineRaids:
                 self._save()
                 await self._release()
                 return
+            # Acquisition can wait: renew bench availability/capability before sending its manifest.
+            reserves = []
+            if self.cfg.offline_reserves and "offline_raid_reserves" in self._features:
+                cast = self.ports.cast()
+                busy = set().union(*self._busy())
+                available = {c.guid for c in candidates_from(cast, {g: self.ports.persona(g) for g in cast},
+                                                             {}, {}, set(self.ports.away()) | busy) if c.available}
+                reserves = [g for g in plan.bench if g in available][:self.cfg.offline_reserves]
+                if reserves:
+                    self._owned["reserves"] = reserves
             self._owned["day"] = self._day()  # Acquisition may have crossed midnight in an overnight window.
             self._owned["sent_at"] = self.ports.clock.now()
             self._owned["deadline"] = self.ports.clock.now() + self.cfg.offline_timeout_min * 60
@@ -825,13 +831,14 @@ class OfflineRaids:
             else:
                 from leeroy_mind.realm.actions import ActionRejected
                 def valid():
-                    members = set(plan.members)
+                    members = set(plan.members) | set(reserves)
                     cast = self.ports.cast()
                     available = {c.guid: c for c in candidates_from(cast, {g: self.ports.persona(g) for g in cast},
                                                                     {}, {}, self.ports.away()) if c.available}
                     return (self._owned and self._owned["id"] == command.id and not self._owned["cancelled"]
                             and self._owned["day"] == self._day() and self._owned["phase"] == "acquiring"
                             and self._due(admitted=True) and runnable(raid.key, self._features)
+                            and (not reserves or "offline_raid_reserves" in self._features)
                             and members <= available.keys() and available[plan.tank_guid].dc_tank
                             and not any(members & b for b in self._busy())
                             and self.ports.clock.now() < self._owned["deadline"])

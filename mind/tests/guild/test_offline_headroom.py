@@ -2,6 +2,7 @@
 from dataclasses import replace
 import json
 import random
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,6 +45,55 @@ async def test_reserve_candidates_keep_owner_saves_absence_and_busy_exclusions(s
     command = ports.sent[-1]
     assert len(command.reserves) == 2
     assert not {1, 103, 105, 106, 107} & {command.leader_guid, *command.members, *command.reserves}
+
+
+@pytest.mark.parametrize("change", ["away", "excluded", "unsupported"])
+@_run_async
+async def test_reserves_are_rechecked_after_acquisition_wait(setup, change):
+    ports, _, controller = setup
+    enable(controller)
+    original = ports.acquire_gpu
+    changed = []
+
+    async def acquire(holder):
+        changed.extend(controller._owned["plan"]["bench"][:2])
+        if change == "away":
+            ports.away_set.update(changed)
+        elif change == "excluded":
+            controller._update_day(excluded=changed)
+        else:
+            controller._features = frozenset()
+        return await original(holder)
+
+    ports.acquire_gpu = acquire
+    await start(setup)
+    command = ports.sent[-1]
+    assert not set(changed) & set(command.reserves)
+    assert len(command.reserves) == (0 if change == "unsupported" else 2)
+    assert controller._owned.get("reserves", []) == list(command.reserves)
+
+
+@pytest.mark.parametrize("change", ["away", "unsupported"])
+@_run_async
+async def test_day_handoff_rechecks_the_reserve_manifest_without_preempting_reserves(setup, change):
+    from leeroy_mind.realm.actions import ActionRejected
+    ports, _, controller = setup
+    enable(controller)
+    checked = []
+
+    async def handoff(command, members, kind, valid, send):
+        assert kind == "offline_raid" and valid()
+        assert set(command.reserves).isdisjoint(members)  # only planned members may yield day permits
+        if change == "away":
+            ports.away_set.add(command.reserves[0])
+        else:
+            controller._features = frozenset()
+        checked.append(not valid())
+        raise ActionRejected("day_check_unknown")
+
+    ports.app = SimpleNamespace(realm=SimpleNamespace(parts={"day": SimpleNamespace(handoff=handoff)}))
+    await controller.tick()
+    assert checked == [True] and not ports.sent
 
 
 @pytest.mark.parametrize(("size", "losses"), [(10, 2), (25, 5)])
