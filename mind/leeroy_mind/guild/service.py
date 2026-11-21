@@ -149,6 +149,8 @@ class GuildLife:
                 self.maintenance.members = {}
                 self.roster = self._roster()
             if name == "hello":
+                # First: the runner's raids must be known before any offline tick can plan one.
+                await self.offline.on_hello(ev)
                 self._connected = True
                 self.ports.enabled = True
                 self._snapshot_at = float("-inf")
