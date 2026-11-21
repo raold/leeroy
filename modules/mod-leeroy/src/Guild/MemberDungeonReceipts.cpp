@@ -117,9 +117,9 @@ void PollIo()
 void QueueWrite(std::string const& id, CharacterDatabaseTransaction transaction)
 {
     auto state = std::make_shared<WriteState>();
-    // The core's implicit COMMIT does not report its own result. Even this
-    // acknowledged COMMIT is followed by an independent persisted readback.
-    transaction->Append("COMMIT");
+    // The core distinguishes a lost query (safe to retry) from a lost COMMIT
+    // (outcome unknown). A raw COMMIT here would enter its query-retry path and
+    // could replay a character snapshot. Exact readback remains the proof.
     auto callback = std::make_unique<TransactionCallback>(CharacterDatabase.AsyncCommitTransaction(transaction));
     callback->AfterComplete([state](bool committed) { state->committed = committed; });
     writes.emplace(id,WriteOperation{std::move(state),std::move(callback)});
