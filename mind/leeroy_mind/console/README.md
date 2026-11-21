@@ -1,6 +1,6 @@
 # Guild console guide
 
-Open your private keyed bookmark. Comms opens first. Tonight is the first tab in the strip. Choose **?** on any tab for that tab's guide, the console version and the local checkout commit. An installed package can report its version even when its source commit is unavailable. About labels the managed installation separately when it differs.
+Open your private keyed bookmark. Comms opens first. Tonight is the first tab in the strip. Choose **?** on any tab for that tab's guide, the console version and the local checkout commit. Help keeps the running console’s startup guide, version and source commit. About checks the managed checkout’s current commit each time. If it advances while the console stays open, restart the console and verify the running identity. An installed package can report its version even when its source commit is unavailable.
 
 ## Opening the console on a phone
 

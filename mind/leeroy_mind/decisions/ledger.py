@@ -155,6 +155,15 @@ def settle(store, id, *, settled_by: int, poll: int | None = None, message: int 
     log.info('decision_settled id=%d kind=%s by=%d poll=%d', id, row['kind'], settled_by, poll or row['poll'] or 0)
 
 
+def reconcile_effect_ref(store, id, effect_ref):
+    """Attach display metadata only if it still fits. The owning receipt records the actual transfer."""
+    try:
+        text = _json(effect_ref)
+    except DecisionError:
+        return
+    store.conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (text, id))
+
+
 def take_effect(store, id, *, effect_ref: dict, now) -> None:
     """settled -> in_effect, with what changed in game (direct-ledger refs, ledger ids, receipt
     keys). The decision it replaces (in effect on the same kind and subject) is superseded in the

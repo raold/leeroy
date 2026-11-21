@@ -211,7 +211,7 @@ def effects(row) -> list[str]:
     if 'failed' in ref:
         out.append('failed: ' + _word(ref['failed']))
     for key, value in sorted(ref.items()):
-        if key in ('talk_only', 'failed') or (row['kind'] == 'bank' and key == 'mail_id'):
+        if key in ('talk_only', 'failed') or (row['kind'] == 'bank' and key in ('mail_id', 'first_attachment_guid')):
             continue
         label = EFFECT_LABELS.get(key, key.replace('_', ' '))
         if isinstance(value, (list, tuple)):

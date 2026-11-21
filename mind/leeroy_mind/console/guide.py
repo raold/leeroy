@@ -26,7 +26,8 @@ def checkout_commit(root: Path) -> str | None:
     return None
 
 
-def guide_view(managed_root: Path) -> dict:
+def running_guide() -> dict:
+    """Capture these once alongside the page/assets. A surviving process can outlive its checkout."""
     package = resources.files(__package__)
     project = Path(__file__).resolve().parents[2]
     source_root = project.parent if project.name == "mind" and (project / "pyproject.toml").is_file() else None
@@ -39,6 +40,8 @@ def guide_view(managed_root: Path) -> dict:
     except (OSError, ValueError, KeyError, metadata.PackageNotFoundError):
         version = None
     source = checkout_commit(source_root) if source_root else None
-    managed = source if source_root == managed_root.resolve() else checkout_commit(managed_root)
-    return {"guide": package.joinpath("README.md").read_text("utf-8"), "version": version,
-            "source_commit": source, "checkout_commit": managed}
+    try:
+        text = package.joinpath("README.md").read_text("utf-8")
+    except (OSError, UnicodeError):
+        text = None
+    return {"guide": text, "version": version, "source_commit": source}

@@ -269,6 +269,8 @@ def test_overrule_reports_wire_stage_and_late_delivery_once(store, clock):
             assert before["action"]["permanent"] and word in before["action"]["confirm"]
         result = asyncio.run(service.handle({"action":"overrule","id":ident}))
         assert word in result["message"]
+        if phase == "confirmed":
+            assert "77" not in before["action"]["confirm"] and "77" not in result["message"]
         if phase == "flight":
             ctx = replace(ctx, process_id="new")
             direct = DirectLedger(store,process_id="new",clock=clock)
@@ -315,7 +317,7 @@ def test_repair_bank_attachment_only_from_matching_terminal_job(store, clock):
             words["mail_id"] = str(attachment)
         if case == "bad_refs":
             words["refs"] = "unknown"
-        if case == "conflict":
+        if case in ("conflict", "absent"):
             words["first_attachment_guid"] = 78
         ledger.overrule(store, ident, now=clock.now())
         conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (json.dumps(words), ident))
@@ -333,9 +335,17 @@ def test_repair_bank_attachment_only_from_matching_terminal_job(store, clock):
                                      "kind": ("kind", "bank_withdraw"), "zero": ("value", "0")}[case]
                     conn.execute(f"UPDATE realm_direct SET {column}=? WHERE command_id=?", (value, cmd.id))
         before = list(conn.execute("SELECT * FROM realm_direct ORDER BY rowid"))
-        card = decisions_view(conn, now=clock.now(), enabled=False)["decisions"][0]
-        assert all("mail id" not in line.lower() and "native mail #" not in line for line in card["changed"])
+        def check_card():
+            for enabled in (False, True):
+                card = decisions_view(conn, now=clock.now(), enabled=enabled)["decisions"][0]
+                lines = " ".join(card["changed"]).lower()
+                assert "mail id" not in lines and "native mail #" not in lines
+                assert "first attachment guid" not in lines and "78" not in lines
+                verified = case in {"match", "different", "untyped", "conflict", "bad_refs"}
+                assert ("delivery confirmed" in lines) == verified
+        check_card()
         rules.reconcile(app)
+        check_card()
         updated = ledger.get(conn, ident)
         effect = json.loads(updated["effect_ref"])
         if case == "match":
@@ -347,6 +357,51 @@ def test_repair_bank_attachment_only_from_matching_terminal_job(store, clock):
         assert conn.total_changes == changes
         assert updated["status"] == "overruled" and updated["effect"] is None
         assert list(conn.execute("SELECT * FROM realm_direct ORDER BY rowid")) == before
+
+
+def test_late_withdrawal_records_debit_with_opaque_effect_metadata(store, clock):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from leeroy_mind.realm.actions import ActionContext
+    from leeroy_mind.realm.direct import DirectLedger
+
+    ctx = ActionContext(True, True, True, 1, "bank", 1, 8, 1)
+    direct = DirectLedger(store, process_id="bank", clock=clock)
+    app = SimpleNamespace(store=store, clock=clock)
+    rules = bank.bank_rules()
+    cases = [{"refs": "unknown"}, {"refs": None}, {"refs": [{"old": 1}]},
+             ["legacy"], {"old": "x" * 3980}, {"refs": ["receipt-from-earlier"]}]
+    for number, historical in enumerate(cases, 1):
+        # A different recipient, item and subject follow the opaque historical requests.
+        recipient, item = (103, 34753) if number == len(cases) else (102, 46377)
+        ident = ledger.propose(store, kind="bank", subject=f"bank:{recipient}:{number}",
+                               value=request(guid=recipient, item=item), positions=[], now=clock.now())
+        ledger.settle(store, ident, settled_by=101, now=clock.now())
+        conn = store.conn
+        ref = f"decision:{ident}:withdraw"
+        cmd = protocol.BankWithdraw(uuid4().hex, 101, item, 20, 0, recipient)
+        assert direct.prepare(cmd, owner="decision", ref=ref, context=ctx, expects_job=True)
+        direct.before_send(cmd, context=ctx)
+        ledger.overrule(store, ident, now=clock.now())
+        conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (json.dumps(historical), ident))
+        assert direct.on_job(protocol.RealmJob(0, cmd.id, "bank_withdraw", "done", "", 101, 20))
+        rules.reconcile(app)
+        changes = conn.total_changes
+        rules.reconcile(app)
+        assert conn.total_changes == changes
+        assert conn.execute("SELECT count(*) FROM realm_bank WHERE reason='request'").fetchone()[0] == number
+        assert conn.execute("SELECT count(*) FROM realm_direct").fetchone()[0] == number
+        debit = int(store.get_meta(f"decisions:bank:out:{ident}"))
+        updated = ledger.get(conn, ident)
+        assert updated["status"] == "overruled"
+        effect = json.loads(updated["effect_ref"])
+        if number == len(cases):
+            assert effect == {"refs": [ref, "receipt-from-earlier"], "realm_bank": debit}
+        elif isinstance(historical, dict) and "refs" in historical:
+            assert effect["refs"] == historical["refs"] and effect["realm_bank"] == debit
+        else:
+            assert effect == historical
 
 
 def test_unposted_bank_requests_expire_without_another_candidate(store, clock, guild):

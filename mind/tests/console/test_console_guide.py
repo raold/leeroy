@@ -6,7 +6,7 @@ import re
 import subprocess
 
 from console.rig import http, make_app
-from leeroy_mind.console.guide import checkout_commit, guide_view
+from leeroy_mind.console.guide import checkout_commit, running_guide
 
 
 def test_guide_covers_each_tab_and_local_links():
@@ -53,16 +53,64 @@ def test_about_reads_exact_local_worktree_without_remotes(tmp_path):
     git("worktree", "add", "-q", "--detach", str(linked), sha)
     assert checkout_commit(repo) == checkout_commit(linked) == sha
     assert checkout_commit(marker.parent) is None
-    view = guide_view(linked)
-    assert view["checkout_commit"] == sha and view["source_commit"] != sha
+    view = running_guide()
+    assert view["source_commit"] != sha
     assert view["version"] and view["guide"].startswith("# Guild console guide")
+
+
+def test_running_identity_and_guide_survive_checkout_update(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from leeroy_mind.console import guide
+
+    repo = tmp_path / "checkout"
+    package = repo / "mind/leeroy_mind/console"
+    package.mkdir(parents=True)
+    (package / "app.py").touch()
+    data = repo / "fixture-data"
+    data.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+
+    def release(version):
+        (package / "README.md").write_text("# Guide " + version, encoding="utf-8")
+        (repo / "mind/pyproject.toml").write_text(f'[project]\nversion = "{version}"\n', encoding="utf-8")
+        git("add", "mind")
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "-c", "commit.gpgSign=false", "commit", "-qm", "Fixture " + version)
+        return git("rev-parse", "HEAD")
+
+    git("init", "-q")
+    first = release("1.0")
+    monkeypatch.setattr(guide, "__file__", str(package / "guide.py"))
+    monkeypatch.setattr(guide, "resources", SimpleNamespace(files=lambda _: package))
+
+    async def run():
+        app = make_app(data)
+        await app.start()
+        try:
+            first_read = (await http(app, "GET", "/api/guide")).json()
+            assert first_read == {"version": "1.0", "guide": "# Guide 1.0",
+                                  "source_commit": first, "checkout_commit": first}
+            next_sha = release("2.0")
+            assert (await http(app, "GET", "/api/guide")).json() == dict(first_read, checkout_commit=next_sha)
+            fresh = make_app(data)
+            await fresh.start()
+            try:
+                assert (await http(fresh, "GET", "/api/guide")).json() == {
+                    "version": "2.0", "guide": "# Guide 2.0", "source_commit": next_sha, "checkout_commit": next_sha}
+            finally:
+                await fresh.close()
+        finally:
+            await app.close()
+    asyncio.run(run())
 
 
 def test_about_without_git_or_checkout(tmp_path, monkeypatch):
     assert checkout_commit(tmp_path) is None
     monkeypatch.setenv("PATH", "")
-    view = guide_view(tmp_path)
-    assert view["source_commit"] is view["checkout_commit"] is None
+    view = running_guide()
+    assert view["source_commit"] is None
     assert view["version"] and "## Comms" in view["guide"]
 
 
