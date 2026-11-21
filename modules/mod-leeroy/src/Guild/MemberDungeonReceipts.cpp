@@ -4,6 +4,8 @@
 #include "MemberDungeonJob.h"
 #include "DatabaseEnv.h"
 #include "QueryResult.h"
+#include "QueryCallback.h"
+#include "Transaction.h"
 #include "GroupMgr.h"
 #include "Realm.h"
 #include "World.h"
@@ -20,6 +22,7 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <memory>
 
 namespace Leeroy::Guild
 {
@@ -38,6 +41,102 @@ std::map<std::string,Unreadable> unreadable;
 bool loaded = false, exists = false;
 uint32 retry = 0;
 
+// Only these callbacks touch database futures. They are polled on the world
+// thread; the database pool executes the SQL and callbacks retain no game objects.
+struct ReadState
+{
+    bool ready = false;
+    bool consumed = false;
+    QueryResult result;
+    int64 finished = 0;
+};
+struct ReadOperation
+{
+    std::shared_ptr<ReadState> state;
+    std::unique_ptr<QueryCallback> callback;
+};
+struct WriteState { std::optional<bool> committed; };
+struct WriteOperation
+{
+    std::shared_ptr<WriteState> state;
+    std::unique_ptr<TransactionCallback> callback;
+    bool readbackStarted = false;
+};
+std::map<std::string,ReadOperation> reads;
+std::map<std::string,WriteOperation> writes;
+constexpr std::size_t MaxReads = 256;
+
+QueryResult Read(std::string const& sql, int64 lifetime = 1000)
+{
+    auto found = reads.find(sql);
+    if (found != reads.end() && found->second.state->consumed &&
+        NowUnixMs()-found->second.state->finished >= (found->second.state->result ? lifetime : 1000))
+    {
+        reads.erase(found);
+        found = reads.end();
+    }
+    if (found == reads.end())
+    {
+        if (reads.size() >= MaxReads) return {};
+        auto state = std::make_shared<ReadState>();
+        auto query = std::make_unique<QueryCallback>(CharacterDatabase.AsyncQuery(sql));
+        query->WithCallback([state](QueryResult result)
+        {
+            state->result = std::move(result);
+            state->finished = NowUnixMs();
+            state->ready = true;
+        });
+        found = reads.emplace(sql,ReadOperation{std::move(state),std::move(query)}).first;
+    }
+    auto& operation = found->second;
+    if (!operation.state->ready) operation.callback->InvokeIfReady();
+    if (operation.state->ready && !operation.state->consumed)
+    {
+        operation.state->consumed = true;
+        operation.state->finished = NowUnixMs();
+    }
+    return operation.state->ready ? operation.state->result : QueryResult{};
+}
+
+void PollIo()
+{
+    for (auto& [sql,read] : reads)
+        if (!read.state->ready) read.callback->InvokeIfReady();
+    for (auto& [id,write] : writes)
+        if (!write.state->committed.has_value()) write.callback->InvokeIfReady();
+    std::erase_if(reads,[](auto const& item)
+    {
+        return item.second.state->ready && NowUnixMs()-item.second.state->finished >= 60000;
+    });
+}
+
+void QueueWrite(std::string const& id, CharacterDatabaseTransaction transaction)
+{
+    auto state = std::make_shared<WriteState>();
+    // The core's implicit COMMIT does not report its own result. Even this
+    // acknowledged COMMIT is followed by an independent persisted readback.
+    transaction->Append("COMMIT");
+    auto callback = std::make_unique<TransactionCallback>(CharacterDatabase.AsyncCommitTransaction(transaction));
+    callback->AfterComplete([state](bool committed) { state->committed = committed; });
+    writes.emplace(id,WriteOperation{std::move(state),std::move(callback)});
+}
+
+std::string LookupSql(std::string const& id);
+
+bool WriteFinished(std::string const& id)
+{
+    auto found = writes.find(id);
+    if (found == writes.end()) return true;
+    if (!found->second.state->committed.has_value()) found->second.callback->InvokeIfReady();
+    if (found->second.state->committed.has_value() && !found->second.readbackStarted)
+    {
+        // A status read submitted before COMMIT must not verify this write.
+        reads.erase(LookupSql(id));
+        found->second.readbackStarted = true;
+    }
+    return found->second.state->committed.has_value();
+}
+
 std::string Hex(std::string const& value)
 {
     constexpr char digits[] = "0123456789abcdef";
@@ -50,22 +149,24 @@ std::string Hex(std::string const& value)
 bool Load()
 {
     if (loaded) return true;
-    auto probe = CharacterDatabase.Query("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() "
-        "AND table_name='leeroy_member_dungeon_receipt'");
+    auto probe = Read("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() "
+        "AND table_name='leeroy_member_dungeon_receipt'",60000);
     if (!probe) return false;
     exists = probe->Fetch()[0].Get<uint64>() != 0;
     if (exists)
     {
-        auto count = CharacterDatabase.Query("SELECT COUNT(*) FROM leeroy_member_dungeon_receipt WHERE realm={} AND settled=0", ::realm.Id.Realm);
+        auto count = Read(Acore::StringFormat("SELECT COUNT(*) FROM leeroy_member_dungeon_receipt WHERE realm={} AND settled=0", ::realm.Id.Realm),60000);
         if (!count) return false;
         auto expected = count->Fetch()[0].Get<uint64>();
         if (expected > 128) return false;
         std::map<std::string,DungeonReceipt> restored;
         if (expected)
         {
-            auto rows = CharacterDatabase.Query("SELECT start_id,revision,payload,CAST(COALESCE(active_slot,0) AS UNSIGNED) FROM leeroy_member_dungeon_receipt "
+            auto sql = Acore::StringFormat("SELECT start_id,revision,payload,CAST(COALESCE(active_slot,0) AS UNSIGNED) FROM leeroy_member_dungeon_receipt "
                 "WHERE realm={} AND settled=0 LIMIT 129", ::realm.Id.Realm);
+            auto rows = Read(sql,60000);
             if (!rows) return false;
+            reads.erase(sql); // This is the only multirow cursor; consume it once.
             do
             {
                 auto* fields = rows->Fetch();
@@ -82,24 +183,37 @@ bool Load()
                 restored.emplace(id,DungeonReceipt{id, fields[1].Get<uint64>(), std::move(data)});
             } while (rows->NextRow());
         }
-        if (restored.size()+unreadable.size() != expected) return false;
+        if (restored.size()+unreadable.size() != expected)
+        {
+            // A partial read cannot admit new jobs, but already discovered owners
+            // must not disappear while the complete snapshot is retried.
+            outstanding.insert(restored.begin(),restored.end());
+            return false;
+        }
         outstanding = std::move(restored);
     }
     return loaded = true;
 }
 
+std::string LookupSql(std::string const& id)
+{
+    // A left join distinguishes a successful absent-row read from a failed query.
+    return Acore::StringFormat("SELECT n.total,r.revision,r.payload,CAST(COALESCE(r.active_slot,0) AS UNSIGNED),r.settled "
+        "FROM (SELECT COUNT(*) AS total FROM leeroy_member_dungeon_receipt WHERE realm={} AND start_id=UNHEX('{}')) n "
+        "LEFT JOIN leeroy_member_dungeon_receipt r ON r.realm={} AND r.start_id=UNHEX('{}')",
+        ::realm.Id.Realm,Hex(id),::realm.Id.Realm,Hex(id));
+}
+
 std::optional<DungeonReceipt> Lookup(std::string const& id)
 {
     if (!exists || !DungeonReceiptIdValid(id) || unreadable.contains(id)) return std::nullopt;
-    auto row = CharacterDatabase.Query("SELECT revision,payload,CAST(COALESCE(active_slot,0) AS UNSIGNED),settled "
-        "FROM leeroy_member_dungeon_receipt WHERE realm={} AND start_id=UNHEX('{}')",
-        ::realm.Id.Realm, Hex(id));
-    if (!row) return std::nullopt;
-    auto raw = row->Fetch()[1].Get<std::string>();
+    auto row = Read(LookupSql(id),5000);
+    if (!row || row->Fetch()[0].Get<uint64>() != 1) return std::nullopt;
+    auto raw = row->Fetch()[2].Get<std::string>();
     auto data = raw.size()<=32768 ? Json::parse(raw,nullptr,false) : Json{};
-    auto revision = row->Fetch()[0].Get<uint64>();
-    auto slot = row->Fetch()[2].Get<uint64>();
-    if (!DungeonStoredEvidence(id,revision,slot,row->Fetch()[3].Get<uint8>(),data))
+    auto revision = row->Fetch()[1].Get<uint64>();
+    auto slot = row->Fetch()[3].Get<uint64>();
+    if (!DungeonStoredEvidence(id,revision,slot,row->Fetch()[4].Get<uint8>(),data))
     {
         if (unreadable.emplace(id,Unreadable{slot!=0,DungeonKnownRoster(data)}).second)
             LOG_ERROR("module.leeroy","leeroy: member_dungeon lookup contradictory receipt; ownership retained");
@@ -119,6 +233,7 @@ void Remember(DungeonReceipt const& row)
 
 DungeonWriteRead Verify(DungeonReceipt& receipt)
 {
+    if (!WriteFinished(receipt.id)) return DungeonWriteRead::Unavailable;
     auto intent = unverified.find(receipt.id);
     auto row = Lookup(receipt.id);
     auto result = intent->second.Observe(row ? row->revision : 0,row ? &row->data : nullptr);
@@ -127,6 +242,7 @@ DungeonWriteRead Verify(DungeonReceipt& receipt)
         receipt = std::move(*row);
         Remember(receipt);
         unverified.erase(intent);
+        writes.erase(receipt.id);
     }
     return result;
 }
@@ -141,21 +257,20 @@ bool BeginDungeonReceipt(DungeonReceipt& receipt, std::string const& id, uint32 
     std::vector<uint32> const& roster)
 {
     if (!MemberDungeonEnabled() || !DungeonReceiptIdValid(id) || !Load() || outstanding.size() >= 128) return false;
-    if (!exists)
-    {
-        CharacterDatabase.DirectExecute(CreateStore);
-        if (!CharacterDatabase.Query("SELECT COUNT(*) FROM leeroy_member_dungeon_receipt")) return false;
-        exists = true;
-    }
+    if (!exists) return false;
     Json data = {{"version",1},{"guild",guild},{"human",human},{"leader",leader},{"roster",roster},
         {"map",602},{"difficulty",1},{"stage","accepted"},{"slot",true},{"settled",false},{"bodies",Json::array()},
         {"terminal",nullptr},{"instance",0},{"group",0},{"handbacks",Json::object()},{"issued_ms",NowUnixMs()}};
-    if (!DungeonStoredEvidence(id,1,1,0,data) || Lookup(id) || unreadable.contains(id) || unverified.contains(id)) return false;
+    if (!DungeonStoredEvidence(id,1,1,0,data) || outstanding.contains(id) || unreadable.contains(id) || unverified.contains(id)) return false;
     receipt.id = id;
+    receipt.data = data;
     unverified.emplace(id,DungeonWriteProof{0,Json{},data});
-    CharacterDatabase.DirectExecute("INSERT INTO leeroy_member_dungeon_receipt(realm,start_id,revision,active_slot,settled,payload) "
+    reads.erase(LookupSql(id));
+    auto transaction = CharacterDatabase.BeginTransaction();
+    transaction->Append("INSERT INTO leeroy_member_dungeon_receipt(realm,start_id,revision,active_slot,settled,payload) "
         "VALUES({},UNHEX('{}'),1,1,0,UNHEX('{}'))", ::realm.Id.Realm, Hex(id), Hex(data.dump()));
-    return Verify(receipt)==DungeonWriteRead::Committed;
+    QueueWrite(id,transaction);
+    return true; // Accepted for persistence only; the runner waits before any body mutation.
 }
 
 namespace
@@ -173,6 +288,7 @@ bool WriteReceipt(DungeonReceipt& receipt, Json const& next, std::int64_t now, u
     auto payload = next.dump();
     if (payload.size()>32768 || !DungeonWriteAllowed(receipt.id,receipt.revision,receipt.data,next,now,handbackGuid)) return false;
     unverified.emplace(receipt.id,DungeonWriteProof{receipt.revision,receipt.data,next});
+    reads.erase(LookupSql(receipt.id));
     execute(Acore::StringFormat("UPDATE leeroy_member_dungeon_receipt SET revision=revision+1,active_slot={},settled={},payload=UNHEX('{}') "
         "WHERE realm={} AND start_id=UNHEX('{}') AND revision={}", next.at("slot").get<bool>() ? "1" : "NULL",
         unsigned(next.at("settled").get<bool>()), Hex(payload), ::realm.Id.Realm, Hex(receipt.id), receipt.revision));
@@ -182,12 +298,44 @@ bool WriteReceipt(DungeonReceipt& receipt, Json const& next, std::int64_t now, u
 
 bool SaveDungeonReceipt(DungeonReceipt& receipt, Json const& next, std::int64_t now)
 {
-    return WriteReceipt(receipt,next,now,0,[](std::string const& sql) { CharacterDatabase.DirectExecute(sql); });
+    return WriteReceipt(receipt,next,now,0,[&](std::string const& sql)
+    {
+        auto transaction = CharacterDatabase.BeginTransaction();
+        transaction->Append(sql);
+        QueueWrite(receipt.id,transaction);
+    });
+}
+
+bool DungeonReceiptPending(std::string const& id) { return unverified.contains(id); }
+
+DungeonPersistence PollDungeonReceipt(DungeonReceipt& receipt)
+{
+    if (!unverified.contains(receipt.id)) return receipt.revision ? DungeonPersistence::Ready : DungeonPersistence::Failed;
+    auto const state = Verify(receipt);
+    if (state == DungeonWriteRead::Committed || state == DungeonWriteRead::Previous) return DungeonPersistence::Ready;
+    if (!receipt.revision && state == DungeonWriteRead::Conflict)
+    {
+        if (auto previous = Lookup(receipt.id)) Remember(*previous);
+        unverified.erase(receipt.id);
+        writes.erase(receipt.id);
+        return DungeonPersistence::Failed;
+    }
+    if (state == DungeonWriteRead::Conflict || unreadable.contains(receipt.id)) return DungeonPersistence::Failed;
+    if (!receipt.revision && WriteFinished(receipt.id))
+        if (auto row = Read(LookupSql(receipt.id),5000); row && !row->Fetch()[0].Get<uint64>())
+        {
+            unverified.erase(receipt.id);
+            writes.erase(receipt.id);
+            return DungeonPersistence::Failed;
+        }
+    return DungeonPersistence::Pending;
 }
 
 bool DungeonRecoveryConflicts(std::vector<uint32> const& guids, bool requiresSlot)
 {
-    if (!loaded) return true;
+    // Unknown storage refuses a new heroic slot. It does not claim unrelated
+    // bodies; every known unreadable, unverified or outstanding receipt still fences its roster.
+    if (!loaded && requiresSlot) return true;
     for (auto const& [id,bad] : unreadable)
     {
         if (requiresSlot && bad.slot) return true;
@@ -240,7 +388,7 @@ bool RecordHandback(DungeonReceipt& receipt, uint32 guid, Player* player = nullp
     if (!player && offlineReturn.empty())
     {
         // The live observation may have arrived before its group removal reached the database.
-        if ((!observedAtOrigin && body->at("returned")!=true) || !CharacterDatabase.Query(match)) return false;
+        if (!observedAtOrigin && body->at("returned")!=true) return false;
     }
     (*body)["changed"] = true;
     (*body)["returned"] = true;
@@ -248,16 +396,15 @@ bool RecordHandback(DungeonReceipt& receipt, uint32 guid, Player* player = nullp
     return WriteReceipt(receipt,next,NowUnixMs(),guid,[&](std::string cas)
     {
         cas += " AND EXISTS (" + match + ")";
-        if (!player && offlineReturn.empty()) { CharacterDatabase.DirectExecute(cas); return; }
         auto trans = CharacterDatabase.BeginTransaction();
         if (player) player->SaveToDB(trans,false,false);
-        else
+        else if (!offlineReturn.empty())
         {
             trans->Append(offlineReturn);
             cas += " AND ROW_COUNT()=1"; // An offline return must have changed this exact, groupless character.
         }
         trans->Append(cas);
-        CharacterDatabase.DirectCommitTransaction(trans);
+        QueueWrite(receipt.id,trans);
     });
 }
 }
@@ -313,8 +460,7 @@ LeeroyCommandResult PublishDungeonReceipt(std::string const& id)
     {
         if (unreadable.contains(id)) return {false,"dungeon_receipt_unproven"};
         if (!exists) return {false,"unknown_dungeon"};
-        auto count = CharacterDatabase.Query("SELECT COUNT(*) FROM leeroy_member_dungeon_receipt WHERE realm={} AND start_id=UNHEX('{}')",
-            ::realm.Id.Realm, Hex(id));
+        auto count = Read(LookupSql(id),5000);
         return {false,count && !count->Fetch()[0].Get<uint64>() ? "unknown_dungeon" : "dungeon_receipt_unproven"};
     }
     auto const& data = row->data;
@@ -363,9 +509,9 @@ bool RecoverBody(DungeonReceipt& receipt, Json const& body, Group* group, bool& 
         !Realm::IsConfiguredGuildMember(guid) || !MapMgr::IsValidMapCoord(map,x,y,z,orientation) ||
         Realm::RealmOwns(guid) || Training::DummyTrialOwns(guid) || Training::HasTrainingJournal(guid) ||
         Training::TrainingDcOwns(guid) || Training::TrainingCleanupPending() || HasPendingBotCommands({guid})) return false;
-    auto snapshot = CharacterDatabase.Query("SELECT c.map,c.instance_id,c.position_x,c.position_y,c.position_z,"
+    auto snapshot = Read(Acore::StringFormat("SELECT c.map,c.instance_id,c.position_x,c.position_y,c.position_z,"
         "c.instance_mode_mask,c.playerFlags,COALESCE(gm.guid,0),c.online FROM characters c "
-        "LEFT JOIN group_member gm ON gm.memberGuid=c.guid WHERE c.guid={}", guid);
+        "LEFT JOIN group_member gm ON gm.memberGuid=c.guid WHERE c.guid={}", guid));
     if (!snapshot) return false;
     auto* fields = snapshot->Fetch();
     auto durableGroup = fields[7].Get<uint32>();
@@ -434,8 +580,9 @@ bool RecoverBody(DungeonReceipt& receipt, Json const& body, Group* group, bool& 
     // The character and proof commit together only for a scoped, observed state that needs a real change.
     auto restore = Acore::StringFormat("UPDATE characters SET map={},instance_id=0,position_x={},position_y={},"
             "position_z={},orientation={},instance_mode_mask={},playerFlags=(playerFlags & ~{}) | {} "
-            "WHERE guid={} AND online=0 AND map={} AND instance_id={} AND position_x={} AND position_y={} "
-            "AND position_z={} AND NOT EXISTS (SELECT 1 FROM group_member WHERE memberGuid={})",
+            "WHERE guid={} AND online=0 AND map={} AND instance_id={} AND ABS(position_x-({}))<=0.01 "
+            "AND ABS(position_y-({}))<=0.01 AND ABS(position_z-({}))<=0.01 "
+            "AND NOT EXISTS (SELECT 1 FROM group_member WHERE memberGuid={})",
             map,x,y,z,orientation,mask,guid==leader?uint32(PLAYER_FLAGS_GROUP_LEADER):0u,
             guid==leader && leaderFlag?uint32(PLAYER_FLAGS_GROUP_LEADER):0u,guid,fields[0].Get<uint32>(),
             fields[1].Get<uint32>(),fields[2].Get<float>(),fields[3].Get<float>(),fields[4].Get<float>(),guid);
@@ -526,12 +673,30 @@ void RecoverDungeonReceipt(DungeonReceipt& receipt)
 
 void TickDungeonRecovery(uint32 diff)
 {
+    PollIo();
     if (retry > diff) { retry -= diff; return; }
     retry = 5000;
     if (!Load()) return;
+    if (!exists && MemberDungeonEnabled())
+    {
+        constexpr char const* key = "create_store";
+        if (!writes.contains(key))
+        {
+            auto transaction = CharacterDatabase.BeginTransaction();
+            transaction->Append(CreateStore);
+            QueueWrite(key,transaction);
+        }
+        else if (WriteFinished(key))
+        {
+            if (Read("SELECT COUNT(*) FROM leeroy_member_dungeon_receipt",5000)) exists = true;
+            if (exists || !*writes.at(key).state->committed) writes.erase(key);
+        }
+        return;
+    }
     // A failed first readback never started the runner. Discover its exact committed insertion or prove absence.
     std::vector<std::string> starts;
-    for (auto const& [id,write] : unverified) if (!write.revision) starts.push_back(id);
+    for (auto const& [id,write] : unverified)
+        if (!write.revision && MemberDungeonFor(write.after.at("leader").get<uint32>())!=id) starts.push_back(id);
     for (auto const& id : starts)
     {
         DungeonReceipt receipt{id,0,Json{}};
@@ -539,17 +704,27 @@ void TickDungeonRecovery(uint32 diff)
         if (state==DungeonWriteRead::Committed) continue;
         if (state==DungeonWriteRead::Conflict)
         {
-            if (auto existing=Lookup(id)) { Remember(*existing); unverified.erase(id); }
+            if (auto existing=Lookup(id)) { Remember(*existing); unverified.erase(id); writes.erase(id); }
             continue;
         }
-        auto count = CharacterDatabase.Query("SELECT COUNT(*) FROM leeroy_member_dungeon_receipt WHERE realm={} AND start_id=UNHEX('{}')",
-            ::realm.Id.Realm,Hex(id));
-        if (count && !count->Fetch()[0].Get<uint64>()) unverified.erase(id);
+        auto count = WriteFinished(id) ? Read(LookupSql(id),5000) : QueryResult{};
+        if (count && !count->Fetch()[0].Get<uint64>()) { unverified.erase(id); writes.erase(id); }
     }
-    // Reconcile copies of the receipts: a successful save may erase the entry.
-    auto pending = outstanding;
-    for (auto& [id, row] : pending)
+    // Round-robin a bounded number of receipts; failed reads must not let the
+    // first few recovery rows monopolize every database worker on each pass.
+    static std::string cursor;
+    std::vector<DungeonReceipt> pending;
+    auto next = outstanding.upper_bound(cursor);
+    for (std::size_t count = 0; count < std::min<std::size_t>(4,outstanding.size()); ++count)
     {
+        if (next == outstanding.end()) next = outstanding.begin();
+        pending.push_back(next->second);
+        cursor = next->first;
+        ++next;
+    }
+    for (auto& row : pending)
+    {
+        auto const id = row.id;
         if (unreadable.contains(id)) continue;
         try
         {

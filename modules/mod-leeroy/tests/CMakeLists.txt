@@ -12,7 +12,28 @@ file(GLOB LEEROY_LIB_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../s
 
 add_executable(leeroy_tests ${LEEROY_TEST_SOURCES} ${LEEROY_LIB_SOURCES})
 
+# Compile the real receipt adapter against delayed database/game boundary fakes.
+# Only its AzerothCore includes are replaced; changes to the implementation must
+# exercise these tests, and synchronous database calls cannot compile in the fake.
+foreach(part h cpp)
+    set(receipt_source "${CMAKE_CURRENT_SOURCE_DIR}/../src/Guild/MemberDungeonReceipts.${part}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${receipt_source}")
+    file(READ "${receipt_source}" receipt_text)
+    string(FIND "${receipt_text}" "namespace Leeroy::Guild" receipt_begin)
+    string(SUBSTRING "${receipt_text}" ${receipt_begin} -1 receipt_body)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/MemberDungeonReceipts.${part}.inc" "${receipt_body}")
+endforeach()
+set(raid_source "${CMAKE_CURRENT_SOURCE_DIR}/../src/Guild/OfflineRaidJob.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${raid_source}")
+file(READ "${raid_source}" raid_text)
+string(FIND "${raid_text}" "bool Checkpoint(Job& job" checkpoint_begin)
+string(FIND "${raid_text}" "void SetupFailure(Job& job" checkpoint_end)
+math(EXPR checkpoint_size "${checkpoint_end}-${checkpoint_begin}")
+string(SUBSTRING "${raid_text}" ${checkpoint_begin} ${checkpoint_size} checkpoint_body)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/MemberDungeonCheckpoint.inc" "${checkpoint_body}")
+
 target_include_directories(leeroy_tests PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/Lib"
     "${CMAKE_CURRENT_SOURCE_DIR}/../deps")
 

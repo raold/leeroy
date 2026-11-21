@@ -188,6 +188,8 @@ struct Job
     bool failedReported = false, heldNoted = false;
     uint32 failedAt = 0;
     DungeonReceipt receipt;
+    bool groupCheckpointed = false;
+    std::size_t nextGroupMember = 1;
     std::optional<JobEvent> pendingTerminal;
     DungeonReturnProof dungeonReturn;
     bool waitOverrideInstalled = false, previousWaitOverride = false, previousWaitValue = false;
@@ -462,7 +464,7 @@ bool Checkpoint(Job& job, std::string const& effect, uint32 actor = 0)
             {"changed",m.changed},{"moved",m.moved},{"returned",m.handbackProved},{"abandoned",m.abandoned}});
     if (effect == "disband") AuthorizeDungeonReturn(data);
     if (SaveDungeonReceipt(job.receipt, data)) return true;
-    Stop(job, "receipt_unavailable", true);
+    if (!DungeonReceiptPending(job.receipt.id)) Stop(job, "receipt_unavailable", true);
     return false;
 }
 
@@ -601,7 +603,7 @@ void Grouping(Job& job)
         return;
     }
 
-    if (Dungeon(job))
+    if (Dungeon(job) && !job.group)
         if (auto why = CheckDungeonParty(job.command, job.team, nullptr); !why.empty())
         {
             SetupFailure(job, why);
@@ -640,31 +642,34 @@ void Grouping(Job& job)
     }
 
     // Complete the usable-roster preflight before removing anyone from an existing group.
-    for (uint32 low : Requested(job.command))
+    if (!Dungeon(job) || job.members.empty())
     {
-        Player* player = FindOnline(low);
-        if (Training::DummyTrialOwns(low) || (Benchmark(job)
-            && (!Controlled(job, player) || !Training::RivalAvailable(player, 80, true)
-                || !Training::RivalBindingsSafe(player, job.command.mapId)
-                || player->GetTeamId() != job.team)))
+        for (uint32 low : Requested(job.command))
         {
-            SetupFailure(job, "not_available:" + std::to_string(low));
-            return;
+            Player* player = FindOnline(low);
+            if (Training::DummyTrialOwns(low) || (Benchmark(job)
+                && (!Controlled(job, player) || !Training::RivalAvailable(player, 80, true)
+                    || !Training::RivalBindingsSafe(player, job.command.mapId)
+                    || player->GetTeamId() != job.team)))
+            {
+                SetupFailure(job, "not_available:" + std::to_string(low));
+                return;
+            }
+            if (auto const reason = Benchmark(job) ? std::string{} : Unusable(player); !reason.empty())
+            {
+                job.event.skipped.emplace_back(low, reason);
+                continue;
+            }
+            if (!Controlled(job, player))
+            {
+                job.event.skipped.emplace_back(low, "session_changed");
+                continue;
+            }
+            job.members.push_back({low, WorldLocation(player->GetMapId(), player->GetPosition()),
+                                   player->GetRaidDifficulty()});
+            job.members.back().originalLeaderFlag = player->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
+            job.members.back().originalDungeonDifficulty = player->GetDungeonDifficulty();
         }
-        if (auto const reason = Benchmark(job) ? std::string{} : Unusable(player); !reason.empty())
-        {
-            job.event.skipped.emplace_back(low, reason);
-            continue;
-        }
-        if (!Controlled(job, player))
-        {
-            job.event.skipped.emplace_back(low, "session_changed");
-            continue;
-        }
-        job.members.push_back({low, WorldLocation(player->GetMapId(), player->GetPosition()),
-                               player->GetRaidDifficulty()});
-        job.members.back().originalLeaderFlag = player->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
-        job.members.back().originalDungeonDifficulty = player->GetDungeonDifficulty();
     }
     if (!Contains(job, job.command.leaderGuid) || !Contains(job, job.command.lootMasterGuid)
         || job.members.size() < job.command.minMembers)
@@ -681,23 +686,39 @@ void Grouping(Job& job)
         SetupFailure(job, "busy:realm_owner");
         return;
     }
-    if (!Checkpoint(job, "create_group", job.command.leaderGuid)) return;
-    job.members.front().changed = true;
-    if (leader->GetGroup())
-        leader->RemoveFromGroup();
-    auto created = std::make_unique<Group>();
-    if (!created->Create(leader))
+    Group* group = FindGroup(job);
+    if (!job.group)
     {
-        SetupFailure(job, "create_failed");
+        if (!Checkpoint(job, "create_group", job.command.leaderGuid)) return;
+        job.members.front().changed = true;
+        if (leader->GetGroup())
+            leader->RemoveFromGroup();
+        auto created = std::make_unique<Group>();
+        if (!created->Create(leader))
+        {
+            SetupFailure(job, "create_failed");
+            return;
+        }
+        group = created.release();
+        sGroupMgr->AddGroup(group);
+        job.group = group->GetGUID();
+    }
+    else if (!OwnsGroup(job,group,false) || group->GetLeaderGUID()!=Guid(job.command.leaderGuid) ||
+        group->GetMembersCount()!=job.nextGroupMember ||
+        std::any_of(job.members.begin(),job.members.end(),[&](Member const& member)
+            { return member.changed && !CanProjectDungeonBody(job.event.id,member.guid); }))
+    {
+        SetupFailure(job,"group_changed");
         return;
     }
-    Group* group = created.release();
-    sGroupMgr->AddGroup(group);
-    job.group = group->GetGUID();
-    if (!Checkpoint(job, "group_created")) return;
+    if (!job.groupCheckpointed)
+    {
+        if (!Checkpoint(job, "group_created")) return;
+        job.groupCheckpointed = true;
+    }
     if (Dungeon(job)) group->SetDungeonDifficulty(job.difficulty);
     else group->ConvertToRaid();
-    for (std::size_t index = 1; index < job.members.size(); ++index)
+    for (std::size_t index = job.nextGroupMember; index < job.members.size(); ++index)
     {
         Member& member = job.members[index];
         Player* player = FindOnline(member.guid);
@@ -720,6 +741,7 @@ void Grouping(Job& job)
             SetupFailure(job, "add_failed:" + std::to_string(member.guid));
             return;
         }
+        job.nextGroupMember = index + 1;
     }
     if (!Checkpoint(job, "group_formed")) return;
     if (!Dungeon(job))
@@ -2034,6 +2056,26 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
     job.elapsed = AdvanceElapsed(job.elapsed, diffMs);
     job.stageElapsed = AdvanceElapsed(job.stageElapsed, diffMs);
     job.progressElapsed = AdvanceElapsed(job.progressElapsed, diffMs);
+    if (Dungeon(job))
+    {
+        auto const persistence = PollDungeonReceipt(job.receipt);
+        if (persistence == DungeonPersistence::Pending) return;
+        if (persistence == DungeonPersistence::Failed)
+        {
+            if (!job.receipt.revision)
+            {
+                // No body operation was admitted before the first persisted row.
+                auto event = job.event;
+                event.state = "failed";
+                event.reason = "dungeon_receipt_unavailable";
+                active.reset();
+                if (!PublishDungeonReceipt(event.id).ok) PublishJob(event);
+                return;
+            }
+            Stop(job,"receipt_unavailable",true);
+            return;
+        }
+    }
     ReassertMasters(job); // Before any stage reads ownership, teardown included.
     if (job.stage != Stage::TearingDown)
     {
