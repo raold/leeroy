@@ -8,6 +8,7 @@
 #include "TopUpJob.h"
 #include "DeathLoopJob.h"
 #include "GroupRezJob.h"
+#include "OwnerAuras.h"
 #include "HazardJob.h"
 #include "MechanicJob.h"
 #include "BotCommands.h"
@@ -34,6 +35,7 @@ public:
         Leeroy::PlayStyle::Reload();
         Leeroy::Guild::ReloadDeathLoop();
         Leeroy::Guild::ReloadGroupRez();
+        Leeroy::Guild::ReloadOwnerAuras();
         Leeroy::Guild::ReloadHazards();
         Leeroy::Guild::ReloadMechanics();
         Leeroy::Guild::ReloadStrings();
@@ -72,6 +74,7 @@ public:
         Leeroy::Guild::TickTopUp(diff);
         Leeroy::Guild::TickDeathLoop(diff);
         Leeroy::Guild::TickGroupRez(diff);
+        Leeroy::Guild::TickOwnerAuras(diff);
         Leeroy::Guild::TickHazards(diff);
         Leeroy::Guild::TickMechanics(diff);
         Leeroy::Guild::TickDungeonRecovery(diff);
@@ -134,4 +137,5 @@ void AddSC_leeroy_guild_life()
     new LeeroyGuildPlayerScript();
     Leeroy::Guild::AddGuildAddScripts();
     Leeroy::Guild::AddMechanicScripts();
+    Leeroy::Guild::AddOwnerAuraScripts();
 }

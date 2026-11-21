@@ -264,6 +264,37 @@ a fight nearby restarts that clock. Inside an instance it waits for a rez, as be
 playerbots never releases a bot there while he is on the map). Reloadable with `.reload config`.
 Logs carry guids, spell ids, counts and codes only. **Native rebuild required.**
 
+# The owner's own auras (`Leeroy.OwnerAuras`)
+
+A GM aura such as 6560 "LeCraft Test Spell" (infinite duration, dispel type Poison) does not
+stay on him: his healer bots' cleanses and poison totems take it as a poison, and it drops when
+he dies like any aura. `Leeroy.OwnerAuras` (a comma list of spell ids, default empty = off,
+`.reload config`) keeps the listed auras on the owner's character (`Leeroy.HumanGuid`) only
+(`Guild/OwnerAuras`, pure policy `Lib/LeeroyOwnerAuras`).
+
+- **When.** On the world tick about every 2 s, while he is in the world with a session, alive and
+  not a ghost, not teleporting, not on a taxi, not in a vehicle and not in a battleground or arena
+  (`OwnerAuraBlock`), each listed aura he lacks (any caster's counts) is put back with
+  `AddAura(spell, him)`. Combat does not matter.
+- **At once after a removal.** A `UnitScript` aura-remove hook (map threads) notes how a listed aura
+  came off him (`AuraRemoveMode`: enemy spell = `dispelled`, `death`, `expired`, `cancelled`, the
+  rest `unknown`) and wakes the next world tick; it never re-applies inside the removal (the core
+  is iterating his aura lists there). Passes stay at least 500 ms apart, so an aura that cannot
+  stay on is tried at most twice a second; a death waits until he is alive again.
+- **Checks.** The ids are read at each config load and checked against the spell store on the
+  next tick (at startup the config loads before the spells): an unknown id or one with no
+  unit aura effect is skipped with one `owner_aura_invalid spell= reason=unknown_spell|not_an_aura`
+  line, an entry that is not a positive number with `owner_aura_invalid entry= reason=not_a_spell_id`;
+  the ids in force are logged `owner_auras spells=6560`.
+- **Logs.** `owner_aura_reapplied spell= why=`, and `owner_aura_refused spell= why=` when
+  `AddAura` gave nothing (immunity, a spell that cannot apply to him), each at most once a minute
+  per spell.
+- **Limits.** Nobody else is ever touched, and his bots still cleanse it: the aura is put back after
+  each cleanse rather than shielded from it. `Leeroy.Enable = 0` stops it. Removing an id (then
+  `.reload config`) is the only way to keep its aura off: `.unaura` or a cancel is undone.
+
+**Native rebuild required.**
+
 # Gear-up and the one-time regear
 
 Playerbots' `autogear bis <ilvl>` destroys everything equipped and every weapon and armour
