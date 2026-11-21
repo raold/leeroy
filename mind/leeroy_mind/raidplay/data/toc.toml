@@ -427,7 +427,9 @@ name = "Light and Dark Essence"
 kind = "positional"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [65686, 65684], "25" = [67222, 67176], "10h" = [67223, 67177], "25h" = [67224, 67178] }
-handled_by = "none"
+handled_by = "partial"
+playerbots = ["toc twin essence"]
+handled_note = "the local playerbots patch handles essence gossip when Playerbots.TwinValkyrInteractions is on; it defaults off"
 explain = "Each player takes one essence and attacks the twin of the other colour (Light essence hits Eydis, Dark essence hits Fjola); the essence also makes matching orbs and vortexes safe."
 check = "none"
 
@@ -452,7 +454,9 @@ name = "Light and Dark Vortex"
 kind = "positional"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = { "10" = [66046, 66058], "25" = [67206, 67182], "10h" = [67207, 67183], "25h" = [67208, 67184] }
-handled_by = "none"
+handled_by = "partial"
+playerbots = ["toc twin essence"]
+handled_note = "the opt-in toc twin essence action swaps to the vortex colour through its cast and five-second pulse aura"
 first = 45
 explain = "Every 45 s one twin casts a special; on a vortex everyone with the other essence switches to the vortex colour before it lands."
 check = "none"
@@ -489,7 +493,9 @@ kind = "positional"
 roles = ["healer", "melee", "ranged"]
 spells = { "10" = [65950, 66001], "25" = [67296, 67281], "10h" = [67297, 67282], "25h" = [67298, 67283] }
 only = ["10h", "25h"]
-handled_by = "none"
+handled_by = "partial"
+playerbots = ["toc twin essence"]
+handled_note = "the opt-in toc twin essence action swaps to remove the touch; a simultaneous vortex takes priority"
 first = 15
 explain = "On heroic a touch of the other colour hurts its target and everyone holding the opposite essence until the target swaps essence to match it."
 check = "none"
