@@ -282,10 +282,71 @@ def test_overrule_reports_wire_stage_and_late_delivery_once(store, clock):
         if phase != "new":
             assert effect["realm_bank"]
         if phase in ("flight","confirmed"):
-            assert effect["mail_id"] == 77
+            card = decisions_view(store.conn, now=clock.now(), enabled=True)["decisions"][0]
+            assert any("Delivery confirmed" in line and "77" not in line for line in card["changed"])
+            assert effect["first_attachment_guid"] == 77 and "mail_id" not in effect
         elif phase == "bags":
             assert effect["refs"] == [f"decision:{ident}:withdraw"]
     assert store.conn.execute("SELECT count(*) FROM realm_bank WHERE reason='request'").fetchone()[0] == 3
+
+
+def test_repair_bank_attachment_only_from_matching_terminal_job(store, clock):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from leeroy_mind.console.decisionsview import decisions_view
+    from leeroy_mind.protocol import Ack
+    from leeroy_mind.realm.actions import ActionContext
+    from leeroy_mind.realm.direct import DirectLedger
+
+    ctx = ActionContext(True, True, True, 1, "test", 1, 8, 1)
+    direct = DirectLedger(store, process_id="test", clock=clock)
+    app = SimpleNamespace(store=store, clock=clock)
+    rules = bank.bank_rules()
+    conn = store.conn
+    attachment, unrelated_header = 77, 508
+    for case in ["match", "different", "untyped", "conflict", "bad_refs", "absent", "ack", "owner", "ref", "kind", "zero"]:
+        row = settled(store, clock)
+        ident = row["id"]
+        ref = f"decision:{ident}:mail"
+        words = {"mail_id": unrelated_header if case == "different" else attachment, "refs": ["earlier"],
+                 "realm_bank": 923}
+        if case == "untyped":
+            words["mail_id"] = str(attachment)
+        if case == "bad_refs":
+            words["refs"] = "unknown"
+        if case == "conflict":
+            words["first_attachment_guid"] = 78
+        ledger.overrule(store, ident, now=clock.now())
+        conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (json.dumps(words), ident))
+        if case != "absent":
+            cmd = protocol.MailSend(uuid4().hex, 101, "Guild bank request",
+                                    items=(protocol.MailItem(46377, 20, "bags"),), to_guid=102)
+            assert direct.prepare(cmd, owner="decision", ref=ref, context=ctx, expects_job=True)
+            direct.before_send(cmd, context=ctx)
+            if case == "ack":
+                direct.on_ack(cmd, Ack(0, cmd.id, True, ""))
+            else:
+                assert direct.on_job(protocol.RealmJob(0, cmd.id, "mail_send", "done", "", 101, attachment))
+                if case in ("owner", "ref", "kind", "zero"):
+                    column, value = {"owner": ("owner", "mail"), "ref": ("ref", ref + ":other"),
+                                     "kind": ("kind", "bank_withdraw"), "zero": ("value", "0")}[case]
+                    conn.execute(f"UPDATE realm_direct SET {column}=? WHERE command_id=?", (value, cmd.id))
+        before = list(conn.execute("SELECT * FROM realm_direct ORDER BY rowid"))
+        card = decisions_view(conn, now=clock.now(), enabled=False)["decisions"][0]
+        assert all("mail id" not in line.lower() and "native mail #" not in line for line in card["changed"])
+        rules.reconcile(app)
+        updated = ledger.get(conn, ident)
+        effect = json.loads(updated["effect_ref"])
+        if case == "match":
+            assert effect == {"realm_bank": 923, "refs": ["earlier", ref], "first_attachment_guid": attachment}
+        else:
+            assert effect == words
+        changes = conn.total_changes
+        rules.reconcile(app)
+        assert conn.total_changes == changes
+        assert updated["status"] == "overruled" and updated["effect"] is None
+        assert list(conn.execute("SELECT * FROM realm_direct ORDER BY rowid")) == before
 
 
 def test_unposted_bank_requests_expire_without_another_candidate(store, clock, guild):

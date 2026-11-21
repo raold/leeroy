@@ -56,6 +56,7 @@ struct DungeonWriteProof
     nlohmann::json before, after;
     DungeonWriteRead Observe(std::uint64_t seenRevision, nlohmann::json const* seen) const;
 };
+bool DungeonFirstGroupActor(nlohmann::json const& data, std::uint32_t guid);
 bool DungeonBeforeMutation(nlohmann::json const& data);
 bool DungeonHandbackRecorded(nlohmann::json const& data, std::string const& start, std::uint32_t guid);
 void ProjectDungeonAddBody(GuildAddBody& body, bool exactOwner);

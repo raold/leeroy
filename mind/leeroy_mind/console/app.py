@@ -167,6 +167,7 @@ from typing import Callable
 from .. import clock as mind_clock, endpoint
 from ..discord import layout as discord_layout, store as discord_store
 from ..realm.config import ConfigError, RealmConfig, load_realm_config
+from .guide import guide_view
 from . import opsview
 from . import playbookview
 from . import unreadview
@@ -983,6 +984,7 @@ class ConsoleApp:
             return self._static_response(req, req.path[len("/static/"):])
         routes = {("GET", "/api/state"): self._api_state,
                   ("GET", "/api/events"): self._api_events,
+                  ("GET", "/api/guide"): self._api_guide,
                   ("GET", "/api/health"): self._api_health,
                   ("GET", "/api/feed/history"): self._api_feed_history,
                   ("GET", "/api/raid"): self._api_raid,
@@ -1066,6 +1068,9 @@ class ConsoleApp:
 
     async def _api_state(self, req: Request):
         return json_response(200, await self.snapshot())
+
+    async def _api_guide(self, req: Request):
+        return json_response(200, await asyncio.to_thread(guide_view, self.s.root))
 
     async def _api_ops_action_status(self, req: Request):
         return json_response(200, self._ops_actions.view())

@@ -2,7 +2,7 @@
 CREATE TABLE decision_job_proof (
   command_id TEXT PRIMARY KEY REFERENCES realm_direct(command_id) ON DELETE CASCADE,
   actor INTEGER NOT NULL CHECK(actor BETWEEN 1 AND 4294967295),
-  expected_count INTEGER CHECK(expected_count > 0),  -- NULL means a generated positive mail id
+  expected_count INTEGER CHECK(expected_count > 0),  -- NULL means the first attachment item GUID on confirmed mail
   recovered_reason TEXT
 );
 

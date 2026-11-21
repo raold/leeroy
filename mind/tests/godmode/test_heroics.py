@@ -266,7 +266,7 @@ def test_witnessed_wipe_survives_restart_before_next_heartbeat(tmp_path, store, 
             if m["owner"] in witnesses:
                 assert "1 wipe" in m["text"] and "Loken" in m["text"]
             else:
-                assert "1 boss kill and 0 wipes" in m["text"] and "Loken" not in m["text"]
+                assert "1 boss kill" in m["text"] and "wipe" not in m["text"] and "Loken" not in m["text"]
         (event,) = store.conn.execute("SELECT guid,payload FROM game_event WHERE type='member_dungeon'")
         payload = json.loads(event["payload"])
         assert (payload["start"], payload["instance"], payload["kills"], payload["wipes"]) == (rig.ident, 47, prior_kills, 1)
@@ -276,6 +276,54 @@ def test_witnessed_wipe_survives_restart_before_next_heartbeat(tmp_path, store, 
         assert set(facts["heroic:" + rig.ident].witnesses) == set(witnesses)
         assert "heroic:" + neighbor not in facts
         assert not any(":1:killed:" in key for key in facts)
+
+    asyncio.run(go())
+
+
+def test_split_encounter_witnesses_do_not_claim_whole_run_counts(tmp_path, store, clock):
+    import asyncio
+    import json
+    from leeroy_mind.protocol import Boss
+
+    async def go():
+        members = (101, 102, 103, 104, 105)
+        rig = Rig(tmp_path, store, clock)
+        await rig.connect()
+        group = dict(propose(store), members=list(members), leader=101)
+        start = rig.ident = heroics.offer(store, group, day="split", now=clock.now(), guild=3, human=1)
+        store.conn.execute("UPDATE member_heroic SET phase='running',instance=47,sent=? WHERE id=?",
+                           (clock.now(), start))
+        for boss, witnesses in [(0, members[:2]), (2, members[2:4])]:
+            await clock.advance(1, 1)
+            wipe = Boss(int(clock.now()*1000), 602, 47, boss, heroics.BOSSES[boss], "wiped", witnesses)
+            await rig.app.event(wipe)
+            await rig.app.event(wipe)
+        terminal = replace(rig.event("failed", reason="cleanup_failed:world_restart", instance_id=47,
+                                     kills=1, map_id=602, revision=12, returned=False), guids=members)
+        await rig.app.event(terminal)
+        await rig.app.event(terminal)
+        await rig.app.event(replace(terminal, wipes=2, revision=13, returned=True))
+        assert not rig.h.row(start)["returned"]
+        await rig.app.event(replace(terminal, revision=14, returned=True))
+        row = rig.h.row(start)
+        assert (row["kills"], row["wipes"], row["returned"]) == (1, 0, 1)
+        (event,) = store.conn.execute("SELECT payload FROM game_event WHERE type='member_dungeon'")
+        payload = json.loads(event[0])
+        assert (payload["start"], payload["instance"], payload["wipes"], payload["witnesses"]) == (start, 47, 2, [])
+        facts = list(heroics.seeds(store.conn, clock.now(), 3, 1))
+        assert {s.key for s in facts if s.key == "heroic:" + start} == set()
+        assert len(facts) == 2
+        memories = dict(store.conn.execute("SELECT owner,text FROM memory WHERE key=?", ("heroic:" + start,)))
+        assert set(memories) == set(members)
+        for boss, witnesses in [(0, members[:2]), (2, members[2:4])]:
+            (seed,) = [s for s in facts if heroics.BOSSES[boss] in s.fact]
+            assert tuple(seed.witnesses) == witnesses and tuple(seed.about) == witnesses
+            for member, words in memories.items():
+                assert (heroics.BOSSES[boss] in words) == (member in witnesses)
+                assert "1 boss kill" in words and "0 wipes" not in words
+                if member in witnesses:
+                    assert "at least" in words and "1 wipe" in words
+        assert "wipe" not in memories[105]
 
     asyncio.run(go())
 

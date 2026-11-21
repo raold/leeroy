@@ -945,3 +945,14 @@ td > div.who { color: var(--ink); font-weight: 600; }
     padding: 2px 6px; background: var(--surface); border-radius: 6px; }
   .line-feedback:has(.feedback-reasons[open]) .feedback-status { display: none; }
 }
+
+#help-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 32px);
+  box-sizing: border-box; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius);
+  color: var(--ink); background: var(--surface); }
+#help-dialog::backdrop { background: #0009; }
+.help-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.help-heading h2 { margin: 0; }
+#help, #help-close, #help-full { min-width: 44px; min-height: 44px; }
+#help-about { overflow-wrap: anywhere; }
+#help-words { max-height: 52dvh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+#help-full { margin-top: 12px; }

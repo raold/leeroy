@@ -223,6 +223,20 @@ bool DungeonBeforeMutation(nlohmann::json const& data)
         (stage == "accepted" || (stage == "grouping" && data.value("effect",std::string{}) == "observe"));
 }
 
+bool DungeonFirstGroupActor(Json const& data, std::uint32_t guid)
+{
+    // The first group intent precedes every world mutation. Only its actor needs an
+    // affirmative handback. Recognizing this checkpoint grants no disband or move authority.
+    auto const& bodies = data.at("bodies");
+    return data.at("stage")=="grouping" && data.value("effect",std::string{})=="create_group" &&
+        data.value("actor",0u)==guid && data.at("leader")==guid && data.at("group")==0 &&
+        data.at("instance")==0 && bodies.size()==5 &&
+        std::all_of(bodies.begin(),bodies.end(),[](auto const& b) {
+            return b.at("changed")==false && b.at("moved")==false &&
+                b.at("returned")==false && b.at("abandoned")==false;
+        });
+}
+
 bool DungeonHandbackRecorded(Json const& data, std::string const& start, std::uint32_t guid)
 {
     auto proofs = data.find("handbacks");
