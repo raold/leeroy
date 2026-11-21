@@ -2104,8 +2104,7 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
     job.elapsed = AdvanceElapsed(job.elapsed, diffMs);
     job.stageElapsed = AdvanceElapsed(job.stageElapsed, diffMs);
     job.progressElapsed = AdvanceElapsed(job.progressElapsed, diffMs);
-    if (Dungeon(job) && !AwaitDungeonPersistence(job)) return;
-    ReassertMasters(job); // Before any stage reads ownership, teardown included.
+    if (!Dungeon(job)) ReassertMasters(job);
     if (job.stage != Stage::TearingDown)
     {
         auto reason = OfflineRaidStopReason(!Dungeon(job) && (HumanConnected(job.human) || HumanConnected(HumanGuid())),
@@ -2138,6 +2137,16 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
                 }
         if (!reason.empty())
             Stop(job, reason, reason == "instance_strategies_off" || reason == "reward_scope_unproven");
+    }
+    if (Dungeon(job))
+    {
+        auto const ready = AwaitDungeonPersistence(job);
+        if (!active) return; // Failed initial admission destroyed job; no body operation was admitted.
+        // Stopping an independently owned DC run is a safety action, not a new
+        // group/return mutation. Database availability must never keep it fighting.
+        if (job.stage == Stage::TearingDown) DisableOwnedRun(job);
+        if (!ready) return;
+        ReassertMasters(job); // Group changes and handbacks still require persisted proof.
     }
     if (!job.announced) Progress(job);
     bool const alreadyTearingDown = job.stage == Stage::TearingDown;

@@ -737,6 +737,11 @@ void TickDungeonRecovery(uint32 diff)
             if (unverified.contains(id))
             {
                 auto read = Verify(row);
+                // Verification can erase the settled row from outstanding. This
+                // pass owns a copy and publishes its persisted terminal/return
+                // before skipping it, including writes queued on an earlier pass.
+                if (read==DungeonWriteRead::Committed && row.data.at("terminal").is_object())
+                    PublishDungeonReceipt(id);
                 if ((read!=DungeonWriteRead::Committed && read!=DungeonWriteRead::Previous) || row.data.at("settled")==true) continue;
             }
             RecoverDungeonReceipt(row);

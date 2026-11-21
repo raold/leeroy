@@ -141,7 +141,19 @@ struct Group
     auto GetMembersCount()const{return slots.size();} void Disband(){disbanded=true;}
 };
 class Player;
-struct PlayerbotAI { Player* master=nullptr; Player* GetMaster(){return master;} };
+struct PlayerbotAI
+{
+    Player* master=nullptr; Player* GetMaster(){return master;}
+    struct Run {bool enabled=true;} run;
+    unsigned disabled=0;
+    template<class E> void DoSpecificAction(char const*,E const&,bool){}
+};
+struct Event {Event(char const*,char const*,Player*){}};
+struct DcRun {static auto& Of(PlayerbotAI* ai){return ai->run;}};
+struct DcActionShared
+{
+    static void DisableDungeonClear(PlayerbotAI* ai,char const*){ai->run.enabled=false;++ai->disabled;}
+};
 struct ReceiptSession {bool IsLoggingOut(){return false;}};
 class Player
 {
@@ -199,9 +211,12 @@ struct LeeroyModule
             lines.push_back(std::move(line));return true;
         }
     } replies;
+    std::vector<Json> events;
     static auto& Instance(){static LeeroyModule value;return value;}
     auto& Bridge(){return replies;}
-    uint32 GuildId(){return 21;} void Publish(Json const&,bool){}
+    uint32 GuildId(){return 21;}
+    void Publish(Json const& event,bool)
+        { events.push_back(event.is_string()?Json::parse(event.get<std::string>()):event); }
 };
 Json EncodeEvent(int64,Json const& event){return event;}
 namespace Leeroy::Training
@@ -243,6 +258,7 @@ void Fresh(bool ready=true)
     CharacterDatabase.queries.clear();CharacterDatabase.transactions.clear();
     receiptConnected.clear();receiptGroups.active=nullptr;receiptLive.clear();receiptEnabled=true;
     LeeroyModule::Instance().replies={};
+    LeeroyModule::Instance().events.clear();
 }
 void Answer(QueryResult result)
 {
@@ -503,6 +519,7 @@ struct Job
     uint32 elapsed=0,stageElapsed=0,progressElapsed=0,mutations=0,teardownVisits=0;
     uint64 rewardToken=0,trainingToken=0;
     bool trainingSealed=false,announced=false,pinsInstalled=false;
+    bool dcIssued=false,ownsGroup=true,present=true;
     std::string terminalReason,terminalState;
     std::vector<uint32> bosses;
     struct {uint32 timeoutMs=1800000;} limits;
@@ -532,9 +549,13 @@ using Leeroy::EncodeAck;
 uint32 AdvanceElapsed(uint32 elapsed,uint32 diff){return elapsed+diff;}
 ObjectGuid Guid(uint32 guid){return {guid};}
 void ReassertMasters(Job&){}
-bool HumanConnected(uint32){return false;}bool GuildEnabled(){return true;}bool KeepCast(){return true;}
+bool humanOnline=false,guildEnabled=true,keepCast=true;
+bool HumanConnected(uint32){return humanOnline;}bool GuildEnabled(){return guildEnabled;}bool KeepCast(){return keepCast;}
 Player* Driver(Job&){static Player player;return &player;}
-bool Present(Job const&,Player*){return false;}
+bool Present(Job const& job,Player* player){return job.present&&player;}
+bool OwnsGroup(Job const& job,Group* group){return job.ownsGroup&&group;}
+Group* FindGroup(Job const&){return receiptGroups.active;}
+#include "MemberDungeonDisable.inc"
 std::vector<uint32> Requested(OfflineRaidCmd const& command)
 {
     auto members=command.members;members.insert(members.begin(),command.leaderGuid);return members;
@@ -586,6 +607,7 @@ auto& Handlers()
 Leeroy::Command StartCommand()
 {
     Fresh();ReceiptRunnerTest::active.reset();
+    ReceiptRunnerTest::humanOnline=false;ReceiptRunnerTest::guildEnabled=true;ReceiptRunnerTest::keepCast=true;
     Handlers()["start_member_dungeon"]=[](Json const& message)->LeeroyCommandResult
     {
         using namespace ReceiptRunnerTest;
@@ -699,4 +721,117 @@ LEEROY_TEST(MemberDungeonIoTimeoutBeforeReadbackNeverStartsWorldMutation)
     CHECK_EQ(job.mutations,0u);CHECK_EQ(job.teardownVisits,1u);
     CHECK(job.stage==ReceiptRunnerTest::Stage::TearingDown);CHECK_EQ(job.terminalReason,"timeout");
     ReceiptRunnerTest::active.reset();
+}
+
+LEEROY_TEST(MemberDungeonIoStoppedRunningJobDisablesOwnedRunWhileReadbackKeepsFailing)
+{
+    Fresh();auto data=Manifest();data["stage"]="running";
+    using namespace ReceiptRunnerTest;
+    active=std::make_unique<Job>();auto& job=*active;
+    job.receipt={"test-start",15,data};Remember(job.receipt);
+    job.stage=Stage::Running;job.command.leaderGuid=101;job.event.id="test-start";
+    job.dcIssued=true;humanOnline=false;guildEnabled=keepCast=true;
+    Group group;receiptGroups.active=&group;Player leader;receiptConnected[101]=&leader;
+    auto next=data;next["kills"]=1;
+    CHECK(!SaveDungeonReceipt(job.receipt,next));
+    Stop(job,"stopped");TickOfflineRaid(1);
+    CHECK(!job.dcIssued);CHECK(!leader.ai.run.enabled);CHECK_EQ(leader.ai.disabled,1u);
+    CHECK_EQ(job.mutations,0u);CHECK_EQ(job.teardownVisits,0u);
+    Commit();TickOfflineRaid(1);Answer({});TickOfflineRaid(1);
+    CHECK_EQ(job.teardownVisits,0u);CHECK_EQ(leader.ai.disabled,1u);
+    receiptClock+=1001;TickOfflineRaid(1);Row(job.receipt,next,16);TickOfflineRaid(1);
+    CHECK_EQ(job.terminalReason,"stopped");CHECK(job.stage==Stage::TearingDown);
+    CHECK_EQ(job.mutations,0u);CHECK_EQ(job.teardownVisits,1u);
+    CHECK_EQ(job.receipt.data.at("stage"),"running"); // Old persisted progress cannot overwrite the newer stop intent.
+    active.reset();
+}
+
+LEEROY_TEST(MemberDungeonIoAutomaticStopsRemainLiveDuringRunningCheckpointWait)
+{
+    using namespace ReceiptRunnerTest;
+    for(auto const* reason:{"timeout","disabled","guild_off","keep_cast_off"})
+    {
+        Fresh();auto data=Manifest();data["stage"]="running";
+        active=std::make_unique<Job>();auto& job=*active;
+        job.receipt={"test-start",15,data};Remember(job.receipt);
+        job.stage=Stage::Running;job.command.leaderGuid=101;job.event.id="test-start";job.dcIssued=true;
+        humanOnline=false;
+        guildEnabled=std::string(reason)!="guild_off";keepCast=std::string(reason)!="keep_cast_off";
+        receiptEnabled=std::string(reason)!="disabled";
+        if(std::string(reason)=="timeout")job.limits.timeoutMs=1;
+        Group group;receiptGroups.active=&group;Player leader;receiptConnected[101]=&leader;
+        auto next=data;next["kills"]=1;CHECK(!SaveDungeonReceipt(job.receipt,next));
+        TickOfflineRaid(2);
+        CHECK(job.stage==Stage::TearingDown);CHECK(!job.dcIssued);CHECK_EQ(leader.ai.disabled,1u);
+        CHECK_EQ(job.mutations,0u);CHECK_EQ(job.teardownVisits,0u);
+        CHECK(DungeonReceiptPending(job.receipt.id));
+        active.reset();
+    }
+    humanOnline=false;guildEnabled=keepCast=true;
+}
+
+LEEROY_TEST(MemberDungeonIoPendingStopDoesNotDisableAnUnownedRun)
+{
+    Fresh();auto data=Manifest();data["stage"]="running";
+    using namespace ReceiptRunnerTest;
+    active=std::make_unique<Job>();auto& job=*active;
+    job.receipt={"test-start",15,data};Remember(job.receipt);job.stage=Stage::Running;
+    job.command.leaderGuid=101;job.event.id="test-start";job.dcIssued=true;job.ownsGroup=false;
+    humanOnline=false;guildEnabled=keepCast=true;
+    Group group;receiptGroups.active=&group;Player leader;receiptConnected[101]=&leader;
+    auto next=data;next["kills"]=1;CHECK(!SaveDungeonReceipt(job.receipt,next));
+    Stop(job,"stopped");TickOfflineRaid(1);
+    CHECK(job.dcIssued);CHECK(leader.ai.run.enabled);CHECK_EQ(leader.ai.disabled,0u);
+    CHECK_EQ(job.mutations,0u);CHECK_EQ(job.teardownVisits,0u);
+    active.reset();
+}
+
+LEEROY_TEST(MemberDungeonIoOwnerLoginAloneKeepsAcceptedHeroicButRequestedPreemptionStopsIt)
+{
+    Fresh();auto data=Manifest();data["stage"]="running";
+    using namespace ReceiptRunnerTest;
+    active=std::make_unique<Job>();auto& job=*active;
+    job.receipt={"test-start",15,data};Remember(job.receipt);job.stage=Stage::Running;
+    job.command.leaderGuid=101;job.event.id="test-start";job.dcIssued=true;
+    humanOnline=true;guildEnabled=keepCast=true;
+    Group group;receiptGroups.active=&group;Player leader;receiptConnected[101]=&leader;
+    auto next=data;next["kills"]=1;CHECK(!SaveDungeonReceipt(job.receipt,next));
+    TickOfflineRaid(1);
+    CHECK(job.stage==Stage::Running);CHECK(job.dcIssued);CHECK_EQ(leader.ai.disabled,0u);
+    CHECK_EQ(job.mutations,0u);CHECK_EQ(job.teardownVisits,0u);
+    Stop(job,"preempted");TickOfflineRaid(1);
+    CHECK(job.stage==Stage::TearingDown);CHECK(!job.dcIssued);CHECK_EQ(leader.ai.disabled,1u);
+    CHECK_EQ(job.terminalReason,"preempted");CHECK(DungeonReceiptPending(job.receipt.id));
+    CHECK_EQ(job.teardownVisits,0u);active.reset();humanOnline=false;
+}
+
+LEEROY_TEST(MemberDungeonIoRecoveryPublishesSettledTerminalAfterDelayedVerification)
+{
+    Fresh();auto data=Accepted().data;data["recovery_ms"]=receiptClock;
+    DungeonReceipt receipt{"test-start",15,data};Remember(receipt);
+    TickDungeonRecovery(5000);
+    CHECK(LeeroyModule::Instance().events.empty());
+    auto next=unverified.at(receipt.id).after;
+    CHECK(next.at("settled")==true);CHECK(next.at("terminal").is_object());
+    Commit();TickDungeonRecovery(5000);Row(receipt,next,16);TickDungeonRecovery(5000);
+    CHECK(!outstanding.contains(receipt.id));
+    auto const& events=LeeroyModule::Instance().events;
+    CHECK_EQ(events.size(),1u);CHECK(events.at(0).at("returned")==true);
+    CHECK_EQ(events.at(0).at("revision"),16);CHECK_EQ(events.at(0).at("id"),receipt.id);
+    TickDungeonRecovery(5000);CHECK_EQ(events.size(),1u);
+}
+
+LEEROY_TEST(MemberDungeonIoRecoveryPublishesUnsettledFailureAfterDelayedVerification)
+{
+    Fresh();auto data=Manifest();data["recovery_ms"]=receiptClock-OfflineCleanupFailMs-1;
+    DungeonReceipt receipt{"test-start",15,data};Remember(receipt);
+    TickDungeonRecovery(5000);CHECK(LeeroyModule::Instance().events.empty());
+    auto next=unverified.at(receipt.id).after;
+    CHECK(next.at("settled")==false);CHECK(next.at("terminal").is_object());
+    Commit();TickDungeonRecovery(5000);Row(receipt,next,16);TickDungeonRecovery(5000);
+    CHECK(outstanding.contains(receipt.id));
+    auto const& events=LeeroyModule::Instance().events;
+    CHECK_EQ(events.size(),1u);CHECK(events.at(0).at("returned")==false);
+    CHECK_EQ(events.at(0).at("reason"),"cleanup_failed:world_restart");
+    CHECK_EQ(events.at(0).at("revision"),16);
 }

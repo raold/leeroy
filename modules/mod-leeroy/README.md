@@ -364,6 +364,11 @@ consume the prepared owner token twice. Deferred replies keep their originating 
 serial; a disconnect before admission leaves untouched bodies for normal exact-ID reconciliation.
 Database waits still count toward job/setup deadlines: a late verified start may immediately enter
 teardown rather than begin grouping after its deadline.
+Cancellation, admitted owner requests, deadlines and configuration shutdown remain live during pending receipt
+I/O. They stop an independently proved DungeonClear run immediately; group changes and returns
+still wait for persistence. Recovery publishes terminal and return transitions after asynchronous
+verification, including the settled receipt's final event before dropping it from recovery.
+Logging in alone still leaves an accepted member heroic active.
 
 An unavailable initial store read refuses new heroic admission and retries. It does not claim the
 entire cast: known outstanding, unreadable or unverified receipts still fence their own rosters
