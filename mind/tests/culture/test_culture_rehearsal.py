@@ -3,11 +3,13 @@ selfie worker as a real subprocess speaking the caption protocol, no bridge, no 
 A public running joke gets a meme at night (planned by the reflection model's caption, rendered
 from a scene with no people, captioned by the worker); every server bot posts once from the
 guild's rows and the signup post takes the members' role reactions; the meme goes out in #memes
-as a member's message carrying it, through the real talk pipeline; no game command is sent and no
-file is deleted. The guard review is stubbed to send (the guards have their own tests). Every
-name here is invented."""
+as a member's message carrying it, through the real talk pipeline, and draws its reactions, each
+answering the meme post itself; no game command is sent and no file is deleted. The guard review
+is stubbed to send (the guards have their own tests). Every name here is invented."""
 import asyncio
+import itertools
 import json
+import random
 import time
 from dataclasses import replace
 from types import SimpleNamespace
@@ -32,6 +34,13 @@ TOML = ("[server]\nenabled=true\n[guards]\nenabled=true\n[selfies]\nenabled=true
         "[culture]\nenabled=true\nbots=true\nemoji=true\nmemes=true\nmemes_per_week=3\n")
 CAPTION = {"top": "when the floor inspector", "bottom": "finds the floor again", "picture": "tipped_chair"}
 LINE = "made this one on my lunch break"
+REACTIONS = 2
+QUIPS = ("the chair had it coming", "framing this one forever")
+
+
+class NoLateReply(random.Random):
+    def random(self):
+        return .5  # never under the engine's one-in-ten late reply
 
 
 def files(root):
@@ -127,19 +136,25 @@ def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch, delayed_read):
             app.server.lease._held = True
             app.engine._login_at = float("-inf")
             app.world.human_online = False
-            monkeypatch.setattr(rhythm, "length", lambda rng: 1)
-            # Topical memes override rhythm.length with their reply count. This
-            # rehearsal proves the opener, not replies with random 10–40 minute gaps.
-            monkeypatch.setattr(topics, "MEME_REPLIES", (0, 0))
+            # In #memes a conversation is the meme post and MEME_REPLIES reactions to it
+            # (server/README.md "Channel topics"), whatever rhythm.length draws: two here.
+            monkeypatch.setattr(topics, "MEME_REPLIES", (REACTIONS, REACTIONS))
+            # A reply may wait 10-40 minutes (one in ten); this rehearsal never draws one.
+            app.server.engine.rng = NoLateReply(7)
 
             def choose(seeds, **kw):
                 (seed,) = [s for s in seeds if s.kind == "meme_image"]
                 out["seed"] = seed
                 return seed, "memes"
             monkeypatch.setattr(rhythm, "choose_seed_and_channel", choose)
-            app.llm._script = lambda model, messages: (
-                json.dumps(generic(messages[-1]["content"])) if "matching this schema:" in messages[-1]["content"]
-                else LINE)
+            quips = itertools.cycle(QUIPS)
+
+            def script(model, messages):
+                if "matching this schema:" in messages[-1]["content"]:
+                    return json.dumps(generic(messages[-1]["content"]))
+                prompt = "\n".join(str(m.get("content", "")) for m in messages)
+                return next(quips) if server_engine.MEME_REPLY in prompt else LINE
+            app.llm._script = script
             reads = []
             if delayed_read:
                 original_to_thread = asyncio.to_thread
@@ -160,7 +175,7 @@ def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch, delayed_read):
                 monkeypatch.setattr(asyncio, "to_thread", delayed_worker)
             await app.server.engine.tick(app.clock.now())
             (conversation,) = app.server.engine._live.values()
-            assert conversation.maximum == 1
+            assert conversation.maximum == 1 + REACTIONS
             # The conversation reads real SQLite snapshots in asyncio.to_thread.
             # Do not spend fake typing/deadline time while those workers await CPU.
             await finish(app, conversation.task)
@@ -176,6 +191,20 @@ def test_culture_part_c_rehearsal(h, tmp_path, monkeypatch, delayed_read):
             assert row["author"] in TEST_CAST and row["author"] != 102
             # her line as delivered (her typing style may add a typo), recorded as her chat line
             assert row["text"] and row["text"] == recorded(app, row["id"])
+            # its reactions answer the meme post itself; its poster may answer a reaction, and
+            # nobody answers her own message
+            reactions = [dict(r) for r in app.store.conn.execute(
+                "SELECT id,author,reply_to,text FROM discord_message WHERE channel='memes' AND id<>? "
+                "ORDER BY id", (row["id"],))]
+            assert len(reactions) == REACTIONS, reactions
+            authors = {row["id"]: row["author"], **{r["id"]: r["author"] for r in reactions}}
+            assert reactions[0]["reply_to"] == row["id"], reactions
+            for r in reactions:
+                assert r["reply_to"] == row["id"] or (
+                    r["author"] == row["author"] and r["reply_to"] in authors), reactions
+                assert authors[r["reply_to"]] != r["author"], reactions
+                assert r["text"] == recorded(app, r["id"])
+            assert conversation.messages == [row["id"], *(r["id"] for r in reactions)]
             # spent once, on delivery: its joke's use and the butt's teasing allowance
             assert app.store.conn.execute("SELECT uses_total FROM lexicon WHERE id=?", (ident,)).fetchone()[0] == 1
             assert app.store.get_meta(f"server:seed:{out['seed'].key}") is not None
