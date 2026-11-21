@@ -28,6 +28,8 @@
 #if LEEROY_HAS_DUNGEON_CLEAR
 #include "AiObjectContext.h"
 #include "Battlefield.h"
+#include "CharacterCache.h"
+#include "Config.h"
 #include "BattlefieldMgr.h"
 #include "DBCStores.h"
 #include "Corpse.h"
@@ -1672,18 +1674,33 @@ LeeroyCommandResult StartRaidJob([[maybe_unused]] std::string const& id,
 
     std::string why;
     bool const preview = check && check->Checking();
-    if (preview && !DcTestDriver::Get()) return Fail("driver_pending");
-    auto const readiness = preview ? DcTestDriver::Readiness::Ready : DcTestDriver::Ensure(&why);
+    bool const prepareDriver = preview && check->PreparingDriver();
+    if (preview)
+    {
+        // The pinned driver API exposes its Player only once initialized. Reject a configured
+        // owner/cast character by its cached identity before asking Ensure to log anyone in.
+        auto name = sConfigMgr->GetOption<std::string>("DungeonClear.TestRun.DriverCharacter", "Dcdriver", false);
+        if (name.empty()) return Fail("driver_unavailable");
+        auto configured = sCharacterCache->GetCharacterGuidByName(name);
+        if (configured)
+            if (auto conflict = OfflineDriverConflict(configured.GetCounter(), HumanGuid(), IsCast(configured.GetCounter()),
+                                                      Requested(*cmd)); !conflict.empty())
+                return Fail(conflict);
+    }
+    if (prepareDriver && !check->DriverPreparationCurrent()) return Fail("day_owner_expired");
+    bool const inspectOnly = preview && !prepareDriver;
+    auto const readiness = OfflineDriverReadiness(inspectOnly, DcTestDriver::Get, [&] { return DcTestDriver::Ensure(&why); });
     if (readiness == DcTestDriver::Readiness::PendingLogin)
-        return Fail("driver_pending");
+        return inspectOnly ? check->Accept(true) : Fail("driver_pending");
     if (readiness == DcTestDriver::Readiness::Unavailable)
-        return Fail("driver_unavailable:" + why);
+        return Fail(prepareDriver ? "driver_unavailable" : "driver_unavailable:" + why);
     Player* driver = DcTestDriver::Get();
-    if (!driver || driver->GetGUID().GetCounter() == HumanGuid() || IsCast(driver->GetGUID().GetCounter()))
-        return Fail("driver_unavailable:driver_not_separate");
-    for (uint32 low : Requested(*cmd))
-        if (low == driver->GetGUID().GetCounter()) return Fail("driver_unavailable:driver_is_member");
+    auto driverGuid = driver ? driver->GetGUID().GetCounter() : 0;
+    if (auto conflict = OfflineDriverConflict(driverGuid, HumanGuid(), driver && IsCast(driverGuid), Requested(*cmd));
+        !conflict.empty())
+        return Fail(conflict);
 
+    if (prepareDriver) return {true, {}}; // Only the dedicated driver is ready. A fresh check admits the raid.
     if (preview) return check->Accept();
     auto job = std::make_unique<Job>();
     job->command = *cmd;
@@ -2056,6 +2073,11 @@ void SweepLeftoverGroups()
 void RegisterOfflineRaidHandler()
 {
     Realm::RegisterDayOwnerCheck("start_offline_raid", HandleStartOfflineRaid);
+    RegisterCommand("day_prepare_offline_driver", [](nlohmann::json const& message) -> LeeroyCommandResult {
+        if (!message.contains("day_driver_ticket") || !message.contains("day_check") || message.contains("day_prepared"))
+            return Fail("day_owner_scope");
+        return HandleStartOfflineRaid(message);
+    });
     RegisterCommand("start_offline_raid", HandleStartOfflineRaid);
     RegisterCommand("offline_raid_stop", HandleStopOfflineRaid);
 }

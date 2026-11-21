@@ -13,12 +13,14 @@ public:
     DayOwnerCheck(nlohmann::json const& message, std::vector<std::uint32_t> members, std::string reason);
     bool Checking() const { return checking; }
     std::string Token(std::uint32_t guid) const;
-    LeeroyCommandResult Accept() const;
+    bool DriverPreparationCurrent() const;
+    bool PreparingDriver() const { return preparingDriver; }
+    LeeroyCommandResult Accept(bool coldDriver = false) const;
     std::string error;
 private:
-    bool checking = false;
+    bool checking = false, preparingDriver = false;
     std::int64_t expires = 0;
-    nlohmann::json original;
+    nlohmann::json original, binding;
     std::string checkId, why;
     std::vector<std::uint32_t> targets;
     std::set<std::string> tokens;

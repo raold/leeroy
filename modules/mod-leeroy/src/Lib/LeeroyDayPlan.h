@@ -110,6 +110,12 @@ inline bool DayRequestMatches(nlohmann::json const& original, nlohmann::json con
 {
     return !consumed && serial == currentSerial && now < deadline && original == candidate;
 }
+// A cold-driver ticket can only authorize the same check binding and exact permit set.
+inline bool DayDriverTicketMatches(nlohmann::json const& issued, nlohmann::json const& presented,
+                                   std::set<std::string> const& issuedTokens, std::set<std::string> const& tokens)
+{
+    return !issued.is_null() && issued == presented && issuedTokens == tokens;
+}
 enum class DayHandoff { Waiting, Ready, Unresolved };
 inline DayHandoff GuildAddDayProgress(std::vector<DayPermit const*> const& permits, std::int64_t now,
                                       std::int64_t deadline)

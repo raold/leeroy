@@ -104,14 +104,17 @@ class Godmode:
         self._busy.add(ident)
         wire = uuid.uuid4().hex
         try:
-            self.jobs.expect(wire)
+            async def send_original(original, **guard):
+                self.jobs.expect(wire)
+                return await bridge.send(original, preserve_id=True, **guard)
+
             cmd = StringDo(id=wire, guid=row["member"], kind=row["kind"],
                            target_guid=app.human_guid or 0, emote=row["args"].get("emote", ""))
             job = None
             try:
                 runner = getattr(getattr(app, "realm", None), "parts", {}).get("day")
                 if runner is None:
-                    ack = await bridge.send(cmd, preserve_id=True)
+                    ack = await send_original(cmd)
                 else:
                     def valid():
                         current = I.get(store.conn, ident)
@@ -119,10 +122,9 @@ class Godmode:
                                 and bridge.connected and app.human_guid == cmd.target_guid
                                 and (raid is None or str(raid.phase(app.clock.now())) not in RAID_QUIET)
                                 and I.fit(store.conn, current, app.personas, now=app.clock.now())[0])
-                    ack = await runner.handoff(cmd, (cmd.guid,), "string", valid,
-                                               lambda original, **guard: bridge.send(original, preserve_id=True, **guard))
+                    ack = await runner.handoff(cmd, (cmd.guid,), "string", valid, send_original)
             except ActionRejected as exc:
-                status, reason = "not_taken", str(exc)
+                status, reason = "not_taken", native_code(str(exc))
             except NotConnected:
                 status, reason = "not_taken", "no_link"  # nothing left the mind
             except BridgeError:

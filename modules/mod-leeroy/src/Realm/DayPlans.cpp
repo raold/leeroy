@@ -24,6 +24,7 @@ struct PreparedOwner
     std::set<std::uint32_t> group;
     std::set<std::string> tokens;
     bool consumed;
+    Json driverBinding; // Non-null tickets permit only one dedicated-driver preparation, never body ownership.
     std::map<std::uint32_t, std::pair<std::optional<BodyIdentity>, std::uint64_t>> bodies;
 };
 std::map<std::string, PreparedOwner> prepared;
@@ -38,7 +39,7 @@ std::set<std::uint32_t> OwnerGroup(std::optional<BodyIdentity> const& owner)
 bool OwnerWaiting(std::uint32_t guid)
 {
     return std::any_of(prepared.begin(), prepared.end(), [&](auto const& it) {
-        return !it.second.consumed && NowUnixMs() < it.second.expires && it.second.bodies.contains(guid);
+        return it.second.driverBinding.is_null() && !it.second.consumed && NowUnixMs() < it.second.expires && it.second.bodies.contains(guid);
     });
 }
 
@@ -167,6 +168,9 @@ LeeroyCommandResult Begin(Json const& message)
 
 DayOwnerCheck::DayOwnerCheck(Json const& message, std::vector<std::uint32_t> members, std::string reason)
 {
+    if ((!message.contains("day_check") && message.contains("day_driver_ticket")) ||
+        (message.contains("day_check") && message.contains("day_prepared")))
+    { error = "day_owner_scope"; return; }
     if (!message.contains("day_check") && !message.contains("day_prepared"))
         return;
     if (!CommandCurrent()) { error = "day_owner_session"; return; }
@@ -174,27 +178,32 @@ DayOwnerCheck::DayOwnerCheck(Json const& message, std::vector<std::uint32_t> mem
     original.erase("ts");
     targets = std::move(members);
     why = std::move(reason);
-    auto& module = RealmModule::Instance();
-    if (message.contains("day_prepared"))
-    {
-        auto found = prepared.find(message.value("day_prepared", std::string{}));
-        original.erase("day_prepared");
-        if (found == prepared.end()) { error = "day_owner_expired"; return; }
-        auto& saved = found->second;
+    auto currentRequest = [&](PreparedOwner const& saved) {
+        auto& module = RealmModule::Instance();
         auto owner = Identity(HumanGuid(), true);
         if (!DayRequestMatches(saved.original, original, saved.serial, LeeroyCommandSerial(), saved.expires,
                                NowUnixMs(), saved.consumed) || saved.epoch != module.Epoch() ||
             saved.guild != GuildId() || saved.human != HumanGuid() ||
             saved.humanGeneration != module.BodyGeneration(HumanGuid()) ||
             saved.owner != owner || OwnerGroup(owner) != saved.group)
-        { error = "day_owner_changed"; return; }
+            return false;
         for (auto const& [guid, body] : saved.bodies)
         {
             auto current = Identity(guid, true);
             if (module.BodyGeneration(guid) != body.second || current.has_value() != body.first.has_value() ||
                 (current && !SameLife(*current, *body.first)))
-            { error = "day_owner_changed"; return; }
+                return false;
         }
+        return true;
+    };
+    if (message.contains("day_prepared"))
+    {
+        auto found = prepared.find(message.value("day_prepared", std::string{}));
+        original.erase("day_prepared");
+        if (found == prepared.end()) { error = "day_owner_expired"; return; }
+        auto& saved = found->second;
+        if (!saved.driverBinding.is_null() || !currentRequest(saved))
+        { error = "day_owner_changed"; return; }
         if (DayGuildAddProgress(saved.tokens, saved.expires) != DayHandoff::Ready)
         { error = "day_cleanup_unresolved"; return; }
         saved.consumed = true; // Keep the check ID fenced through its original deadline.
@@ -203,12 +212,15 @@ DayOwnerCheck::DayOwnerCheck(Json const& message, std::vector<std::uint32_t> mem
     checking = true;
     auto wire = message.at("type").get<std::string>();
     constexpr std::string_view prefix = "day_check_";
-    if (!wire.starts_with(prefix)) { error = "day_owner_scope"; return; }
-    original["type"] = wire.substr(prefix.size());
+    preparingDriver = wire == "day_prepare_offline_driver";
+    if (preparingDriver != message.contains("day_driver_ticket") || (!preparingDriver && !wire.starts_with(prefix)))
+    { error = "day_owner_scope"; return; }
+    original["type"] = preparingDriver ? "start_offline_raid" : wire.substr(prefix.size());
+    original.erase("day_driver_ticket");
     auto const& check = message.at("day_check");
     if (!check.is_object() || !check.contains("request_id") || !check["request_id"].is_string() ||
         !check.contains("origins") || !check["origins"].is_array() || check["origins"].empty() ||
-        check["origins"].size() > 40 || prepared.size() >= 40)
+        check["origins"].size() > 40 || (!preparingDriver && prepared.size() >= 40))
     { error = "day_owner_scope"; return; }
     expires = check.value("expires_ms", std::int64_t{});
     auto now = NowUnixMs();
@@ -236,6 +248,17 @@ DayOwnerCheck::DayOwnerCheck(Json const& message, std::vector<std::uint32_t> mem
         if (OwnerWaiting(guid) || (!current.empty() && !tokens.contains(current)))
         { error = "day_owner_scope"; return; }
     }
+    binding = check;
+    if (preparingDriver)
+    {
+        auto found = prepared.find(message.value("day_driver_ticket", std::string{}));
+        if (found == prepared.end() || !DayDriverTicketMatches(found->second.driverBinding, binding,
+                                                             found->second.tokens, tokens) ||
+            !currentRequest(found->second))
+        { error = "day_owner_changed"; return; }
+        expires = found->second.expires;
+        found->second.consumed = true;
+    }
 }
 std::string DayOwnerCheck::Token(std::uint32_t guid) const
 {
@@ -245,17 +268,26 @@ std::string DayOwnerCheck::Token(std::uint32_t guid) const
                 return token;
     return {};
 }
-LeeroyCommandResult DayOwnerCheck::Accept() const
+bool DayOwnerCheck::DriverPreparationCurrent() const
 {
-    if (!checking || !error.empty() || !CommandCurrent() || NowUnixMs() >= expires)
+    return preparingDriver && error.empty() && CommandCurrent() && NowUnixMs() < expires;
+}
+LeeroyCommandResult DayOwnerCheck::Accept(bool coldDriver) const
+{
+    if (!checking || preparingDriver || !error.empty() || !CommandCurrent() || NowUnixMs() >= expires)
         return {false, "day_owner_expired"};
+    if (coldDriver && std::any_of(prepared.begin(), prepared.end(), [&](auto const& item) {
+            return !item.second.driverBinding.is_null() && item.second.original.at("id") == original.at("id");
+        }))
+        return {false, "day_owner_scope"};
     auto& module = RealmModule::Instance();
     auto owner = Identity(HumanGuid(), true);
     PreparedOwner request{original, LeeroyCommandSerial(), module.Epoch(), module.BodyGeneration(HumanGuid()), GuildId(), HumanGuid(),
-                          expires, owner, OwnerGroup(owner), tokens, false, {}};
+                          expires, owner, OwnerGroup(owner), tokens, false, coldDriver ? binding : Json(nullptr), {}};
     for (auto guid : targets)
         request.bodies.emplace(guid, std::pair{Identity(guid, true), module.BodyGeneration(guid)});
     if (!prepared.emplace(checkId, std::move(request)).second) return {false, "day_owner_scope"};
+    if (coldDriver) return {false, "day_driver_required"};
     for (auto const& token : tokens)
         RevokeDay(token, why); // Same world-thread turn as the original typed request's complete admission.
     return {true, {}};

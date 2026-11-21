@@ -7,8 +7,9 @@ import json
 import re
 from uuid import uuid4
 
+from leeroy_mind.bridge import BridgeError, NotConnected
 from leeroy_mind.bodies import BodyEvidenceUnavailable
-from leeroy_mind.guild.protocol import BotDo, DayOwnerCheck
+from leeroy_mind.guild.protocol import BotDo, DayOwnerCheck, StartOfflineRaid
 from leeroy_mind.nightly.attraction import reflection_row
 from leeroy_mind.protocol import Hello
 from leeroy_mind.realm.actions import ActionRejected
@@ -17,6 +18,7 @@ from leeroy_mind.realm.protocol import DayBegin, DayRevoke, DayState, DayStatus,
 from leeroy_mind.server.state import pulled_into_play, tie_kind
 from .dayplan import holidays, slots_for
 
+HANDOFF_SECONDS = 30
 AWAY_MAX = 20
 FEATURE = "day_plan_handoff_v1"
 STATUS = {"city": "wander npc", "inn": "rest", "holiday": "wander npc",
@@ -30,6 +32,16 @@ REASONS = {"his_group": "you joined his group", "raid": "raid night took priorit
            "held": "you were needed elsewhere", "combat": "the fight took priority"}
 NATIVE_REASONS = set(REASONS) | {'ended', 'context_changed', 'action_unproved', 'action_refused',
                                   'admission_refused', 'holiday_ended', 'changed_tie'}
+
+
+def check_refusal(error):
+    """Reduce a native diagnostic to a code before it reaches any owner controller."""
+    error = (error or "").strip()
+    if error.startswith("unknown type"):
+        return "unsupported"
+    if error.startswith("bad field"):
+        return "invalid"
+    return error if re.fullmatch(r"[a-z_]{1,40}(?::(?:[a-z_]{1,40}|[0-9]{1,10})){0,2}", error) else "refused"
 
 
 def disposition(record):
@@ -173,14 +185,18 @@ class DayRun:
         if plan in sending:
             return
         sending.add(plan)
+        writer_epoch = self.epoch
         async def send():
-            ack = await self.app.bridge.send(command, preserve_id=True)
+            ack = await self.app.bridge.send(command, preserve_id=True, expected_epoch=writer_epoch)
+            if ack is None or ack.id != command.id:
+                return  # Only this control's reply can establish a definite refusal.
             if isinstance(command, DayBegin) and not ack.ok:
                 self.close(plan, "skipped", "admission_refused")
                 definite = ack.error in {'day_off', 'day_scope', 'day_capacity'} or ack.error.startswith('busy:')
                 with self.store.transaction():
                     self.conn.execute("UPDATE day_permit SET state=? WHERE plan=? AND token IS NULL",
                                       ('closed' if definite else 'unresolved', plan))
+                self.changed()
             elif isinstance(command, DayStatus) and not ack.ok and ack.error == 'day_unknown':
                 self.close(plan, "skipped", "action_unproved")
                 with self.store.transaction():
@@ -375,8 +391,11 @@ class DayRun:
         def valid():
             return (self.context_valid() and self.app.clock.now() < row["ends"] and
                     self.permit(plan)["state"] == "open" and not self.reason(rows))
+        def ready():
+            return not any(r["member"] in self.owners for r in rows) and self.permit(plan)["state"] != "verifying"
+
         try:
-            self.realm.queue.submit(cmd, owner=f"day:{plan}", still_valid=valid)
+            self.realm.queue.submit(cmd, owner=f"day:{plan}", still_valid=valid, ready_to_send=ready)
         except (ActionRejected, ActionCapacity, ActionUnavailable, ValueError):
             self.close(plan, "skipped", "admission_refused")
 
@@ -444,6 +463,8 @@ class DayRun:
                 cmd = (self.revoke_command(self.permit(plan))
                        if state == "revoking" and permit["token"] else DayStatus(uuid4().hex, permit["begin_id"]))
                 self.send_control(permit,cmd)
+            return
+        if any(r['member'] in self.owners for r in rows):
             return
         if permit['phase'] == 'activity' or not self.context_valid():
             return
@@ -535,37 +556,100 @@ class DayRun:
             with self.store.transaction():
                 self.conn.execute("INSERT INTO day_handoff VALUES(?,?,?,?,?,?,?,?,'waiting')",
                     (request_id, reason, manifest, context.process_id, str(context.connection_epoch),
-                     context.guild, context.human, self.app.clock.now() + 30))
+                     context.guild, context.human, self.app.clock.now() + HANDOFF_SECONDS))
             loop = asyncio.get_running_loop()
-            deadline = loop.time() + 30
-            origins = tuple(self.permit(plan)["begin_id"] for (plan,) in blocks)
-            binding = DayOwnerCheck(request_id, origins, int((self.app.clock.now() + 30) * 1000))
-            check = replace(command, id=uuid4().hex, day_check=binding)
+            deadline = loop.time() + HANDOFF_SECONDS
+            expires = self.app.clock.now() + HANDOFF_SECONDS
             writer_epoch = self.epoch
-            ack = await self.app.bridge.send(check, preserve_id=True, expected_epoch=writer_epoch)
-            if not ack or ack.id != check.id or not ack.ok:
-                raise ActionRejected(ack.error if ack and ack.id == check.id else "day_admission_unproved")
-            for (plan,) in blocks:
-                self.close(plan, "preempted", reason, notify=False)
-            command = replace(command, day_prepared=check.id)
-            while True:
-                active = [p for (plan,) in blocks if (p := self.permit(plan))["state"] != "closed"]
-                if not active:
-                    break
-                if (self.realm.action_context() != context or not valid() or loop.time() >= deadline
-                        or any(p["state"] == "unresolved" and p["release_ids"] is None for p in active)):
-                    raise ActionRejected("day_cleanup_unresolved")
+
+            def current():
+                return (loop.time() < deadline and self.app.clock.now() < expires and
+                        self.realm.action_context() == context and self.epoch == writer_epoch and valid())
+
+            async def wait_for_evidence():
                 try:
                     await asyncio.wait_for(self.wakeup.wait(), min(1, deadline - loop.time()))
                 except TimeoutError:
                     pass
-            if loop.time() >= deadline or self.realm.action_context() != context or not valid():
+
+            async def control(check):
+                if not current():
+                    raise ActionRejected("day_takeover_expired")
+                def verify_permits():
+                    if not getattr(check, "day_driver_ticket", ""):
+                        with self.store.transaction():
+                            self.conn.executemany("UPDATE day_permit SET state='verifying' WHERE plan=? AND state='open'",
+                                                  blocks)
+
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        ack = await self.app.bridge.send(check, preserve_id=True, expected_epoch=writer_epoch)
+                except NotConnected:
+                    raise ActionRejected("no_link") from None
+                except asyncio.CancelledError:
+                    verify_permits()
+                    raise
+                except (BridgeError, TimeoutError, OSError):
+                    ack = None
+                if ack is None or ack.id != check.id:
+                    # The admission check could have revoked its permits. No original write was entered.
+                    verify_permits()
+                    raise ActionRejected("day_check_unknown")
+                return "" if ack.ok else check_refusal(ack.error)
+
+            # The opening row is committed before its spawned DayBegin reaches the writer. Only
+            # an authenticated DayState can introduce its origin to an owner check. A definite
+            # refusal closes the row, so it needs no native handoff at all.
+            while True:
+                if not current():
+                    raise ActionRejected("day_takeover_expired")
+                active = [p for (plan,) in blocks if (p := self.permit(plan))["state"] != "closed"]
+                missing = [p for p in active if not p["token"]]
+                if not missing:
+                    break
+                if any(p["state"] == "unresolved" for p in missing):
+                    raise ActionRejected("day_cleanup_unresolved")
+                for p in missing:
+                    self.advance(p, self.app.clock.now())
+                await wait_for_evidence()
+
+            if active:
+                origins = tuple(p["begin_id"] for p in active)
+                binding = DayOwnerCheck(request_id, origins, int(expires * 1000))
+                check = replace(command, id=uuid4().hex, day_check=binding)
+                refusal = await control(check)
+                if refusal == "day_driver_required" and isinstance(command, StartOfflineRaid):
+                    preparation = replace(check, id=uuid4().hex, day_driver_ticket=check.id)
+                    refusal = await control(preparation)
+                    if not refusal:
+                        check = replace(check, id=uuid4().hex)
+                        refusal = await control(check)
+                if refusal:
+                    raise ActionRejected(refusal)
+                for p in active:
+                    self.close(p["plan"], "preempted", reason, notify=False)
+                command = replace(command, day_prepared=check.id)
+            while True:
+                active = [p for (plan,) in blocks if (p := self.permit(plan))["state"] != "closed"]
+                if not active:
+                    break
+                if (not current() or any(p["state"] == "unresolved" and p["release_ids"] is None for p in active)):
+                    raise ActionRejected("day_cleanup_unresolved")
+                await wait_for_evidence()
+            if not current():
                 raise ActionRejected("day_takeover_expired")
             with self.store.transaction():
                 self.conn.execute("UPDATE day_handoff SET state='sent' WHERE request_id=?", (request_id,))
-            return await send(command, expected_epoch=writer_epoch)
+            try:
+                return await send(command, expected_epoch=writer_epoch)
+            except NotConnected:
+                # BridgeClient checks the pinned writer immediately before write().
+                with self.store.transaction():
+                    self.conn.execute("UPDATE day_handoff SET state='expired' WHERE request_id=?", (request_id,))
+                raise ActionRejected("no_link") from None
         finally:
             with self.store.transaction():
                 self.conn.execute("UPDATE day_handoff SET state='expired' WHERE request_id=? AND state='waiting'", (request_id,))
             for g in targets:
                 self.owners.pop(g,None)
+            self.realm.queue.wake()

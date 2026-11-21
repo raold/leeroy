@@ -752,7 +752,6 @@ class OfflineRaids:
                 self._save()
                 await self._release()
                 return
-            self._owned["phase"] = "awaiting_ack"
             self._owned["day"] = self._day()  # Acquisition may have crossed midnight in an overnight window.
             self._owned["sent_at"] = self.ports.clock.now()
             self._owned["deadline"] = self.ports.clock.now() + self.cfg.offline_timeout_min * 60
@@ -769,10 +768,15 @@ class OfflineRaids:
                                        max_wipes_per_boss=self.cfg.offline_max_wipes_per_boss,
                                        timeout_min=self.cfg.offline_timeout_min, min_members=plan.size * 4 // 5)
             runner = getattr(getattr(getattr(self.ports, "app", None), "realm", None), "parts", {}).get("day")
+            async def send_original(original, **guard):
+                self._owned["phase"] = "awaiting_ack"
+                self._save()
+                return await self.ports.send(original, **guard)
+
+            admission_refusal = ""
             if runner is None:
-                ack = await self.ports.send(command)
+                ack = await send_original(command)
             else:
-                from leeroy_mind.protocol import Ack
                 from leeroy_mind.realm.actions import ActionRejected
                 def valid():
                     members = set(plan.members)
@@ -780,25 +784,28 @@ class OfflineRaids:
                     available = {c.guid: c for c in candidates_from(cast, {g: self.ports.persona(g) for g in cast},
                                                                     {}, {}, self.ports.away()) if c.available}
                     return (self._owned and self._owned["id"] == command.id and not self._owned["cancelled"]
-                            and self._owned["day"] == self._day() and self._owned["phase"] == "awaiting_ack"
+                            and self._owned["day"] == self._day() and self._owned["phase"] == "acquiring"
                             and self._due(admitted=True) and runnable(raid.key, self._features)
                             and members <= available.keys() and available[plan.tank_guid].dc_tank
                             and not any(members & b for b in self._busy())
                             and self.ports.clock.now() < self._owned["deadline"])
                 try:
-                    ack = await runner.handoff(command, plan.members, "offline_raid", valid, self.ports.send)
+                    ack = await runner.handoff(command, plan.members, "offline_raid", valid, send_original)
                 except ActionRejected as exc:
-                    ack = Ack(0, command.id, False, str(exc))
-            if ack is None or ack.id != command.id:
+                    admission_refusal = str(exc)
+                    ack = None
+            if not admission_refusal and (ack is None or ack.id != command.id):
                 self._owned["phase"] = "uncertain"
                 self._owned["cancelled"] = True
                 self._update_day(blocked=True)
                 await self._release()
-            elif ack.ok is not True:
+            elif admission_refusal or ack.ok is not True:
                 self._owned["phase"] = "rejected"
-                refused = str(ack.error or "")[:REASON_LIMIT]
-                member = None if self._owned["cancelled"] else refused_member(str(ack.error or ""), plan)
-                delay = None if self._owned["cancelled"] else retry_after(str(ack.error or ""))
+                refused = (admission_refusal or str(ack.error or ""))[:REASON_LIMIT]
+                member = None if self._owned["cancelled"] else refused_member(refused, plan)
+                delay = None if self._owned["cancelled"] else retry_after(refused)
+                if not self._owned["cancelled"] and admission_refusal in {"day_check_unknown", "no_link"}:
+                    delay = RETRY_S  # Only the control was uncertain; the next scheduled request gets a fresh ID.
                 if member is not None and delay is None:
                     delay = RETRY_S  # not_cast: the stale member leaves the plan, nothing else waits.
                 log.info("offline_raid_refused error=%s retry=%s excluded=%s", refused, delay is not None,

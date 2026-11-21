@@ -205,3 +205,26 @@ LEEROY_TEST(DayPreparedOwnerBindsOriginalTypeArgumentsSerialAndDeadline)
     replacement.x += 4.f;
     CHECK(!p.LocationMatches(replacement));
 }
+
+LEEROY_TEST(DayOfflineDriverTicketPreservesTheOriginalManifestConnectionAndDeadline)
+{
+    nlohmann::json binding{{"request_id","original"},{"expires_ms",200},{"origins",{"begin"}}};
+    std::set<std::string> tokens{"permit"};
+    CHECK(DayDriverTicketMatches(binding, binding, tokens, tokens));
+    CHECK(!DayDriverTicketMatches(nullptr, binding, tokens, tokens));
+    CHECK(!DayDriverTicketMatches(binding, binding, tokens, {"new-permit"}));
+    for (auto const& patch : {nlohmann::json{{"request_id","replacement"}}, nlohmann::json{{"expires_ms",201}},
+                              nlohmann::json{{"origins",{"other"}}}})
+    {
+        auto changed = binding;
+        changed.update(patch);
+        CHECK(!DayDriverTicketMatches(binding, changed, tokens, tokens));
+    }
+    nlohmann::json raid{{"id","original"},{"members",{101,102}},{"map_id",533}};
+    CHECK(!DayRequestMatches(raid, raid, 1, 2, 200, 190, false));
+    CHECK(!DayRequestMatches(raid, raid, 1, 1, 200, 200, false));
+    CHECK(!DayRequestMatches(raid, raid, 1, 1, 200, 190, true));
+    auto changed = raid;
+    changed["members"] = {101,103};
+    CHECK(!DayRequestMatches(raid, changed, 1, 1, 200, 190, false));
+}

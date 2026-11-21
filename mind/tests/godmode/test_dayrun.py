@@ -203,7 +203,7 @@ def test_his_pull_preempts_the_block(tmp_path, store, clock, higher):
 
 
 @pytest.mark.parametrize("accepted", [True, False])
-def test_real_string_handoff_validates_before_revoking_then_uses_original_job(tmp_path, store, clock, accepted):
+def test_real_string_handoff_validates_before_revoking_then_uses_original_job(tmp_path, store, clock, accepted, caplog):
     import asyncio
     from leeroy_mind.godmode import intents
     from leeroy_mind.godmode.service import Godmode
@@ -225,13 +225,17 @@ def test_real_string_handoff_validates_before_revoking_then_uses_original_job(tm
         assert rig.day.permit(1)["state"] == "open"
         app.world.human_online = True
         original_bridge_send = app.send
-        for native_error in ("off", "in_instance"):
+        for native_error, code in (("off", "strings_off"), ("in_instance", "in_instance"),
+                                   ("unknown type: day_check_string_do", "unsupported"),
+                                   ("bad field: guid", "invalid"), ("body details in diagnostic", "refused")):
             async def refuse(cmd, **kwargs):
                 if isinstance(cmd, StringDo) and cmd.day_check:
                     return Ack(0, cmd.id, False, native_error)
                 return await original_bridge_send(cmd, **kwargs)
             app.send = refuse
-            assert (await service.pull(intent()))["reason"] == native_error
+            ident = intent()
+            assert (await service.pull(ident))["reason"] == intents.get(store.conn, ident)["reason"] == code
+            assert "body details in diagnostic" not in caplog.text
             assert rig.day.permit(1)["state"] == "open"
         async def send(cmd, *, preserve_id, expected_epoch=None):
             assert expected_epoch in (None, rig.day.epoch)
@@ -519,4 +523,170 @@ def test_explicit_operator_release_reconciles_a_dispatched_unknown_on_the_new_bo
         assert rig.day.permit(1)["state"] == "closed"
         assert not journal.holds() and not store.conn.execute("SELECT 1 FROM memory").fetchone()
         await rig.realm.close()
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("begin_outcome", ["open", "ack_lost", "refused", "deadline", "reconnect"])
+def test_opening_owner_waits_for_native_origin_before_any_check_or_original(tmp_path, store, clock, begin_outcome):
+    import asyncio
+    from leeroy_mind.bridge import AckTimeout
+    from leeroy_mind.protocol import Ack
+    from leeroy_mind.realm.actions import ActionRejected
+
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        await rig.connect()
+        rig.plan()
+        entered, answer = asyncio.Event(), asyncio.Event()
+        sent = []
+        async def bridge(cmd, **guard):
+            sent.append(cmd)
+            if isinstance(cmd, dayrun.DayBegin):
+                entered.set()
+                await answer.wait()
+                if begin_outcome == "refused":
+                    return Ack(0, cmd.id, False, "day_scope")
+                if begin_outcome == "ack_lost":
+                    raise AckTimeout("begin")
+            return Ack(0, cmd.id, True, "")
+        rig.app.send = bridge
+        await rig.day.tick()
+        cmd = StringDo("original", 101, "come_to_me")
+        # Enter handoff before the spawned DayBegin has executed its writer callback.
+        async def events():
+            await entered.wait()
+            assert len(sent) == 1
+            assert not store.conn.execute("SELECT 1 FROM day_step").fetchone()
+            answer.set()
+            if begin_outcome == "deadline":
+                await clock.advance(31)
+                rig.day.changed()
+            elif begin_outcome == "reconnect":
+                await rig.app.connection(False)
+                await rig.connect()
+                rig.day.changed()
+            elif begin_outcome != "refused":
+                for _ in range(4):
+                    await asyncio.sleep(0)
+                assert not any(isinstance(c, StringDo) for c in sent)
+                await rig.app.event(rig.receipt())
+                await rig.day.tick()
+                assert not store.conn.execute("SELECT 1 FROM day_step").fetchone()
+                while not any(isinstance(c, StringDo) for c in sent):
+                    await asyncio.sleep(0)
+                await rig.app.event(rig.receipt("closed", "string"))
+        responses = asyncio.create_task(events())
+        try:
+            async with asyncio.timeout(2):
+                if begin_outcome in {"deadline", "reconnect"}:
+                    with pytest.raises(ActionRejected, match="expired"):
+                        await rig.day.handoff(cmd, (101,), "string", lambda: True, bridge)
+                else:
+                    assert (await rig.day.handoff(cmd, (101,), "string", lambda: True, bridge)).ok
+                await responses
+        finally:
+            answer.set()
+            responses.cancel()
+            await asyncio.gather(responses, return_exceptions=True)
+            await rig.realm.close()
+        owner_writes = [c for c in sent if isinstance(c, StringDo)]
+        if begin_outcome in {"open", "ack_lost"}:
+            first, last = owner_writes
+            assert first.day_check.request_id == last.id == cmd.id and last.day_prepared == first.id
+        elif begin_outcome == "refused":
+            assert owner_writes == [cmd]
+        else:
+            assert not owner_writes
+        assert not any(isinstance(c, (RealmMove, RpgStatus, Duel, BotDo)) for c in sent)
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("lost", ["check", "original"])
+def test_string_only_enters_late_mailbox_for_an_original_write(tmp_path, store, clock, lost):
+    import asyncio
+    from leeroy_mind.bridge import AckTimeout
+    from leeroy_mind.godmode import intents
+    from leeroy_mind.godmode.service import Godmode
+    from leeroy_mind.protocol import Ack
+
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        move = await rig.begin()
+        app = rig.app
+        app.connected = app.world.human_online = True
+        app.personas = rig.people
+        app.store.set_meta("human_guid", "1")
+        service = Godmode(app, None)
+        ident = intents.create(store, member=101, kind="come_to_me", args={}, human=None, now=clock.now())
+        writes = []
+        previous = app.send
+        async def send(cmd, **guard):
+            if not isinstance(cmd, StringDo):
+                return await previous(cmd, **guard)
+            writes.append(cmd)
+            if not cmd.day_check or lost == "check":
+                raise AckTimeout("no acknowledgement")
+            await app.event(rig.receipt("closed", "string", released=(move.id,), succeeded=()))
+            return Ack(0, cmd.id, True, "")
+        app.send = send
+        reply = await service.pull(ident)
+        if lost == "check":
+            assert (reply["state"], reply["reason"]) == ("not_taken", "day_check_unknown")
+            assert len(writes) == 1 and not service._inflight
+            assert rig.day.permit(1)["state"] == "verifying" and rig.realm.action_store.holds()
+            await rig.tick()
+            assert any(isinstance(c, dayrun.DayStatus) for c in app.sent)
+            await app.event(rig.receipt("closed", "string", released=(move.id,), succeeded=()))
+            assert not rig.realm.action_store.holds() and len(writes) == 1
+        else:
+            assert (reply["state"], reply["reason"]) == ("pending", "unknown")
+            assert len(writes) == 2 and set(service._inflight) == {writes[-1].id}
+        await rig.realm.close()
+    asyncio.run(go())
+
+
+def test_queued_day_step_pauses_at_writer_during_owner_check_and_survives_a_refusal(tmp_path, store, clock):
+    import asyncio
+    from leeroy_mind.protocol import Ack
+    from leeroy_mind.realm.actions import ActionRejected
+
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        await rig.connect()
+        rig.plan()
+        await rig.tick()
+        await rig.app.event(rig.receipt())
+        await rig.day.tick()  # Enroll the move; select it for dispatch before the owner arrives.
+        rig.realm.queue.tick()
+        ident, = store.conn.execute("SELECT id FROM day_step").fetchone()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        previous = rig.app.send
+        async def send(cmd, **kw):
+            if isinstance(cmd, StringDo):
+                entered.set()
+                await release.wait()
+                return Ack(0, cmd.id, False, "off")
+            return await previous(cmd, **kw)
+        rig.app.send = send
+        async def confirm():
+            await entered.wait()
+            for _ in range(8):
+                await rig.tick()
+            assert not any(isinstance(c, RealmMove) for c in rig.app.sent)
+            assert rig.realm.action_store.get(ident).state == "prepared"
+            release.set()
+        guard = asyncio.create_task(confirm())
+        try:
+            async with asyncio.timeout(2):
+                with pytest.raises(ActionRejected, match="off"):
+                    await rig.day.handoff(StringDo("original", 101, "come_to_me"), [101], "string", lambda: True, send)
+                await guard
+            await rig.tick()
+            assert [c.id for c in rig.app.sent if isinstance(c, RealmMove)] == [ident]
+        finally:
+            release.set()
+            guard.cancel()
+            await asyncio.gather(guard, return_exceptions=True)
+            await rig.realm.close()
     asyncio.run(go())

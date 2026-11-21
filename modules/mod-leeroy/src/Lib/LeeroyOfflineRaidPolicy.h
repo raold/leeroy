@@ -4,6 +4,7 @@
 
 #include "LeeroyRealmCleanup.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -12,6 +13,24 @@
 
 namespace Leeroy::Guild
 {
+// Checking an overlapping day permit may inspect the driver. Only a separately authorized
+// preparation or the ordinary start may initiate its bounded provisioning/login.
+template <class Get, class Ensure>
+auto OfflineDriverReadiness(bool inspectOnly, Get get, Ensure ensure)
+{
+    using Readiness = decltype(ensure());
+    if (inspectOnly) return get() ? Readiness::Ready : Readiness::PendingLogin;
+    return ensure();
+}
+
+inline std::string OfflineDriverConflict(std::uint32_t driver, std::uint32_t human, bool cast,
+                                         std::vector<std::uint32_t> const& members)
+{
+    if (!driver || driver == human || cast) return "driver_unavailable:driver_not_separate";
+    if (std::find(members.begin(), members.end(), driver) != members.end()) return "driver_unavailable:driver_is_member";
+    return {};
+}
+
 struct OfflineRaidLimits
 {
     std::uint32_t maxWipes, maxWipesPerBoss, timeoutMs, minMembers, maxRestarts;
