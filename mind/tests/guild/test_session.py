@@ -815,3 +815,22 @@ async def test_a_give_left_sending_by_an_earlier_process_is_resent_once(setup):
     restored = LootMaster(ports, cfg, armory, session.ctx)
     await restored.tick()
     assert [c.id[-3:] for c in ports.sent][1:] == ["-r1"] and items_charged(ports) == [(105, -80.0, 50001)]
+
+
+@_run_async
+async def test_a_tier_mark_draws_bids_from_its_classes_and_is_handed_out(setup):
+    ports, cfg, armory, _ = setup
+    mark = ItemInfo(52025, "Vanquisher's Mark of Sanctification", 4, 80, 0, 15, 0, 1192, frozenset())
+    armory._items[52025] = mark
+    session = await opened(setup)
+    set_balance(ports, 106, 100)
+    await session.on_loot_drop(LootDrop(0, 631, 77, 36597, (LootItem(52025, mark.name, 4, 0),)))
+    (value,), = ports.conn.execute("SELECT value FROM meta WHERE key GLOB 'guild:loot:*'").fetchall()
+    record = json.loads(value)
+    bidding = {b["guid"] for b in record["bidders"] if b["gain"]}
+    assert bidding == {103, 104, 106}  # the mages and the death knight; no warrior, priest or hunter
+    assert record["price"] == item_price(mark, cfg.dkp.prices)
+    await advance(ports, 20)
+    await session.tick()
+    assert [c.item_id for c in ports.sent] == [52025] and ports.sent[0].to_guid == 106
+    assert loot_states(ports) == ["charged"]
