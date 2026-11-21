@@ -94,23 +94,56 @@ run; expect 0
 [ "$(head "$module")" = "$after" ] || fail "outside-only change rewrote module"; ok
 [ "$(revision | cut -d' ' -f1)" = "$(head "$up")" ] || fail "source checkpoint did not advance"; ok
 
-# Local branch merges retain their topology and both sides' changes.
+# Interrupted checkpoint: upstream advances x=1 -> x=2 -> x=3 while metadata still
+# records x=1. The applied x=2 commit is upstream history, never a local patch.
+old_revision=$(revision)
+printf 'int x = 2;\n' > "$up/$prefix/src/x.cpp"; g "$up" commit -qam x-two
+run; expect 0
+[ "$(cat "$module/src/x.cpp")" = 'int x = 2;' ] || fail "intermediate upstream change missing"; ok
+intermediate=$(head "$module")
+g "$module" config --local leeroy.subtreeRevision "$old_revision"
+printf 'int x = 3;\n' > "$up/$prefix/src/x.cpp"; g "$up" commit -qam x-three
+run --dry-run; expect 0; has 'subtree: 1 upstream commits, 1 local commits'
+[ "$(head "$module")" = "$intermediate" ] && [ "$(revision)" = "$old_revision" ] \
+    || fail "intermediate-base dry-run changed checkpoint"; ok
+run; expect 0
+[ "$(cat "$module/src/x.cpp")" = 'int x = 3;' ] && [ -f "$module/local.txt" ] \
+    || fail "recovery lost upstream or local content"; ok
+base=$(revision | cut -d' ' -f2)
+[ "$(g "$module" rev-list --count "$base..HEAD")" = 1 ] \
+    || fail "recovery replayed upstream commits as local edits"; ok
+
+# Recreating merge topology can silently drop merge-only edits. Refuse both dry
+# and real updates without changing the local merge, its files or metadata.
+linear_head=$(head "$module")
+linear_revision=$(revision)
 g "$module" checkout -qb local-side
 printf 'side\n' > "$module/side.txt"; g "$module" add -A; g "$module" commit -qm side
 g "$module" checkout -q local-work
 printf 'top\n' > "$module/top.txt"; g "$module" add -A; g "$module" commit -qm top
 g "$module" merge --no-ff -qm merge-side local-side
+printf 'merge-only\n' > "$module/merge-fix.txt"
+g "$module" add merge-fix.txt; g "$module" commit --amend --no-edit -q
+merged_head=$(head "$module")
+merged_tree=$(g "$module" rev-parse 'HEAD^{tree}')
 printf 'int z = 3;\n' > "$up/$prefix/src/z.cpp"; g "$up" add -A; g "$up" commit -qm z
+run --dry-run; expect 1; has 'local subtree merges require manual updating'
+run; expect 1; has 'local subtree merges require manual updating'
+[ "$(head "$module")" = "$merged_head" ] && [ "$(g "$module" rev-parse 'HEAD^{tree}')" = "$merged_tree" ] \
+    && [ "$(revision)" = "$linear_revision" ] || fail "merge refusal changed checkpoint"; ok
+[ "$(cat "$module/merge-fix.txt")" = merge-only ] && [ -f "$module/side.txt" ] && [ -f "$module/top.txt" ] \
+    || fail "merge refusal lost local content"; ok
+[ -z "$(g "$module" status --porcelain)" ] || fail "merge refusal left dirty files"; ok
+clean_temp
+# Return this synthetic fixture to its saved linear branch for later scenarios.
+g "$module" reset --hard --quiet "$linear_head"
 run; expect 0
-base=$(revision | cut -d' ' -f2)
-[ "$(g "$module" rev-list --count --merges "$base..HEAD")" = 1 ] || fail "local merge was flattened"; ok
-[ -f "$module/side.txt" ] && [ -f "$module/top.txt" ] && [ -f "$module/src/z.cpp" ] \
-    || fail "merged edits or upstream change missing"; ok
+[ -f "$module/src/z.cpp" ] || fail "linear update did not proceed"; ok
 
 # Conflicts abort back to the exact local HEAD; metadata and rollback evidence remain useful.
-printf 'int x = 3;\n' > "$module/src/x.cpp"; g "$module" commit -qam local-x
+printf 'int x = 30;\n' > "$module/src/x.cpp"; g "$module" commit -qam local-x
 before=$(head "$module"); before_revision=$(revision)
-printf 'int x = 4;\n' > "$up/$prefix/src/x.cpp"; g "$up" commit -qam upstream-x
+printf 'int x = 40;\n' > "$up/$prefix/src/x.cpp"; g "$up" commit -qam upstream-x
 run; expect 1; has 'subtree conflict; original checkout restored'
 [ "$(head "$module")" = "$before" ] && [ "$(revision)" = "$before_revision" ] || fail "failed rebase changed checkpoint"; ok
 [ -z "$(g "$module" status --porcelain)" ] || fail "failed rebase left dirty files"; ok

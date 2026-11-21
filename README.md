@@ -453,8 +453,11 @@ Modules converted with `--subdir` now record their prefix, upstream branch and
 source/split revisions in local Git configuration (`leeroy.subtreePrefix`,
 `leeroy.subtreeUpstream`, `leeroy.subtreeRevision`). `ac-update.sh` fetches the
 upstream, splits that folder in a temporary checkout and rebases only the local
-module edits, preserving local merge commits. The upstream's client files never
-enter the module directory.
+module edits. Local merge commits require manual updating: recreating a merge
+can discard edits made only in that merge. The upstream's client files never
+enter the module directory. After an interrupted metadata write, the updater
+recovers the applied split from the shared ancestry even if upstream has advanced
+again, so it does not replay upstream commits as local edits.
 `--dry-run` fetches and computes the split without changing the module HEAD or
 revision metadata. Conflicting local edits abort back to the original HEAD;
 rewritten upstream history, a removed source folder and incomplete metadata

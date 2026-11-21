@@ -64,21 +64,28 @@ for r in "${REPOS[@]}"; do
             || die "$name: subtree split failed; module checkout unchanged"
         git -C "$r" merge-base --is-ancestor "$AC_SUBTREE_BASE" "$target" \
             || die "$name: new split does not extend the recorded base; review manually"
-        ahead=$(git -C "$r" rev-list --count "$AC_SUBTREE_BASE..HEAD")
-        behind=$(git -C "$r" rev-list --count "$AC_SUBTREE_BASE..$target")
         # The checkout can advance before the metadata write fails or the process
-        # stops. Recognize the actual new base on retry; do not replay its commits
-        # as though they were local patches.
-        if git -C "$r" merge-base --is-ancestor "$target" HEAD; then
-            behind=0
-            ahead=$(git -C "$r" rev-list --count "$target..HEAD")
-        fi
+        # stops. Upstream may advance again before retry: recover the intermediate
+        # applied split, not just the special case where the latest target is in HEAD.
+        applied=$(git -C "$r" merge-base --all HEAD "$target") \
+            || die "$name: cannot recover the applied subtree base; review manually"
+        [[ "$applied" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] \
+            || die "$name: ambiguous subtree ancestry; review manually"
+        git -C "$r" merge-base --is-ancestor "$AC_SUBTREE_BASE" "$applied" \
+            || die "$name: recovered split predates the recorded base; review manually"
+        # Recreating a merge preserves topology but can discard edits made only
+        # in the merge commit. Never rewrite a local merge automatically.
+        local_merges=$(git -C "$r" rev-list --count --merges "$applied..HEAD")
+        [ "$local_merges" -eq 0 ] \
+            || die "$name: local subtree merges require manual updating; checkout unchanged"
+        ahead=$(git -C "$r" rev-list --count "$applied..HEAD")
+        behind=$(git -C "$r" rev-list --count "$applied..$target")
         printf '    %-28s subtree: %s upstream commits, %s local commits\n' "$name" "$behind" "$ahead"
         if [ "$behind" -gt 0 ]; then
             changed=1
             if [ "$DRY" -eq 0 ]; then
                 if [ "$ahead" -gt 0 ]; then
-                    git -C "$r" rebase --quiet --rebase-merges --onto "$target" "$AC_SUBTREE_BASE" \
+                    git -C "$r" rebase --quiet --onto "$target" "$applied" \
                         || { git -C "$r" rebase --abort; die "$name: subtree conflict; original checkout restored. Rebase manually."; }
                 else
                     git -C "$r" merge --ff-only --quiet "$target" || die "$name: subtree fast-forward failed"
