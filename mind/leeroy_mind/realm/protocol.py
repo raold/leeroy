@@ -336,6 +336,7 @@ class MailSend:
     items: tuple[MailItem, ...] = ()
     money: int = 0
     delay_s: int = 600
+    to_guid: int | None = field(default=None, metadata={"omit_none": True})
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,6 +370,7 @@ class BankWithdraw:
     item_id: int
     count: int
     tab: int
+    requester: int | None = field(default=None, metadata={"omit_none": True})
 
 
 @dataclass(frozen=True, slots=True)

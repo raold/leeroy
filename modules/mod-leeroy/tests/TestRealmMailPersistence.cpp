@@ -47,3 +47,9 @@ LEEROY_TEST(RealmMailPersistence_EmptyMoneyMailStillNeedsExactIdAndNoAttachments
     rows[0].item = Items().front(); CHECK(!ProvePersistedMail(header,26000,{},rows));
     rows[0].item.reset(); rows[0].linkReceiver = 11002; CHECK(!ProvePersistedMail(header,26000,{},rows));
 }
+
+LEEROY_TEST(RealmMailPersistence_MemberDeliveryRejectsHumanMailReceipt)
+{
+    auto target = Header(); target.receiver = 102;
+    CHECK(!ProvePersistedMail(target,26000,Items(),Rows()));
+}

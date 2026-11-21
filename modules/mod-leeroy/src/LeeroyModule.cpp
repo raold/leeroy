@@ -44,6 +44,7 @@ void LeeroyModule::LoadConfig(bool /*reload*/)
     cfg.keepCast = sConfigMgr->GetOption<bool>("Leeroy.KeepCast", true);
     cfg.bringCastOnline = sConfigMgr->GetOption<bool>("Leeroy.BringCastOnline", true);
     cfg.excludeFromOllamaChat = sConfigMgr->GetOption<bool>("Leeroy.ExcludeFromOllamaChat", true);
+    cfg.bankMailEnable = sConfigMgr->GetOption<bool>("Leeroy.Decisions.BankMail.Enable", false);
     cfg.realmEnable = sConfigMgr->GetOption<bool>("Leeroy.Realm.Enable", false);
     cfg.worldEnable = sConfigMgr->GetOption<bool>("Leeroy.World.Enable", false);
     cfg.playStyleEnable = sConfigMgr->GetOption<bool>("Leeroy.PlayStyle.Enable", false);

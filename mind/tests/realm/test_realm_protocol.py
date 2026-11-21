@@ -33,11 +33,11 @@ COMMAND_FIELDS = {
     "calendar_post": "id creator_guid title description event_type at dungeon_id guild_event invite_human",
     "calendar_signup": "id event_id guid status",
     "calendar_update": "id event_id title description at",
-    "mail_send": "id from_guid subject body items money delay_s",
+    "mail_send": "id from_guid subject body items money delay_s to_guid",
     "bank_tab_buy": "id officer_guid tab name icon",
     "bank_money": "id amount",
     "bank_deposit": "id guid item_id count tab",
-    "bank_withdraw": "id guid item_id count tab",
+    "bank_withdraw": "id guid item_id count tab requester",
     "bank_stock": "id officer_guid tab item_id count",
     "grant_achievement": "id guid achievement_id",
     "guild_rename": "id guild_id name",
@@ -130,7 +130,7 @@ def test_commands_round_trip_native_fixtures_with_ordered_wire_keys():
         encoded = json.loads(line)
         expected_fields = COMMAND_FIELDS[msg["type"]].split()
         omitted = {f.name for f in dataclasses.fields(cmd)
-                   if f.metadata.get('omit_default') and getattr(cmd,f.name) == f.default}
+                   if (f.metadata.get('omit_default') or f.metadata.get('omit_none')) and getattr(cmd,f.name) == f.default}
         expected_fields = [name for name in expected_fields if name not in omitted]
         if msg["type"] == "arena_team":
             expected_fields = (["id", "action", "captain_guid", "arena_type", "name"]

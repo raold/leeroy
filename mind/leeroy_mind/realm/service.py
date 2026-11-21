@@ -812,6 +812,12 @@ class Realm:
         if direct is not None and direct.owns_command(cmd):
             if (bond := self.parts.get('bond')) is not None:
                 bond.before_send(cmd)
+            decisions = getattr(self.app, "decisions", None)
+            if decisions is not None:
+                bank = decisions.rules_for("bank")
+                check = getattr(bank, "checks", {}).get(cmd.id)
+                if check is not None and not check():
+                    raise RealmDisabled("decision_changed")
             # Its own committing barrier, last, so nothing refuses the command after it.
             direct.before_send(cmd, context=self.action_context())
             return

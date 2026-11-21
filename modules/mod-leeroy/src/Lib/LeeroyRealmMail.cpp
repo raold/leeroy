@@ -7,6 +7,16 @@
 
 namespace Leeroy::Realm
 {
+std::uint32_t MailReceiverGuid(MailSendCmd const& command, std::uint32_t human, bool enabled, bool officer, bool member)
+{
+    if (!command.toGuid) return human;
+    if (!enabled || !human || !officer || !member || command.fromGuid == human || command.toGuid == human
+        || command.fromGuid == command.toGuid || command.money || command.items.empty()
+        || !std::all_of(command.items.begin(),command.items.end(),[](auto const& item) { return item.from == "bags"; }))
+        return 0;
+    return command.toGuid;
+}
+
 std::optional<MailPlan> PlanMail(MailSendCmd const& command, std::vector<ItemRule> const& rules,
     std::vector<MailTemplateFacts> const& templates, std::vector<MailBagFacts> const& bags, std::string& error)
 {

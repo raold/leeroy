@@ -350,6 +350,12 @@ std::optional<MailSendCmd> ParseMailSend(json const& j, std::string& error)
             }
         }
     f.Number("money", out.money, 0, 1000000, true); f.Number("delay_s", out.delayS, 0, 3600, true);
+    if (f.Find("to_guid"))
+    {
+        f.Number("to_guid", out.toGuid);
+        f.Require(out.toGuid != out.fromGuid && !out.money && !out.items.empty()
+            && std::all_of(out.items.begin(), out.items.end(), [](auto const& item) { return item.from == "bags"; }), "to_guid");
+    }
     return f.Result(std::move(out));
 }
 std::optional<BankTabBuyCmd> ParseBankTabBuy(json const& j, std::string& error)
@@ -368,7 +374,7 @@ std::optional<BankDepositCmd> ParseBankDeposit(json const& j, std::string& error
 }
 std::optional<BankWithdrawCmd> ParseBankWithdraw(json const& j, std::string& error)
 {
-    Fields f(j, error); BankWithdrawCmd out; f.Number("guid", out.guid); f.Number("item_id", out.itemId);
+    Fields f(j, error); BankWithdrawCmd out; f.Number("requester", out.requester, 1, kU32Max, true); f.Number("guid", out.guid); f.Number("item_id", out.itemId);
     f.Number("count", out.count, 1, kMaxItemCount); f.Number("tab", out.tab, 0, 5); return f.Result(std::move(out));
 }
 std::optional<BankStockCmd> ParseBankStock(json const& j, std::string& error)

@@ -17,6 +17,8 @@ Leeroy.PlayStyle.Enable = 0
 # The roster lives in memory until its raid night ends (at most 12 h); the mind sends it again on hello.
 # Reloadable with .reload config.
 Leeroy.GuildAdd.FollowRoster = 0
+# Permit guild bank deliveries to cast members through mail_send.
+Leeroy.Decisions.BankMail.Enable = 0
 
 # The raid lead (mind [raidlead]): his orders to his own group's bots (bot_do "order", Bloodlust included)
 # and the raid icon of the member he names to lead on his target (raid_lead). No assistant flag is set.

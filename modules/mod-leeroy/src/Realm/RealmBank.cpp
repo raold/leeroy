@@ -313,6 +313,20 @@ RealmStep MoveItems(Queued& entry, std::uint32_t guid)
     auto expected = LoadSource(sources.at(index));
     auto const* source = BankSlot(before.items, expected.position);
     auto const remaining = sources.at(index).at(9).get<std::uint32_t>();
+    if (auto requester = entry.payload.value("requester", 0u))
+    {
+        if (!Config().bankMailEnable || requester == HumanGuid() || requester == guid || !IsCast(requester)
+            || !guild->GetMember(PlayerGuid(requester)) || !Eligible(guid, entry.id, true).empty())
+            return Failure(entry, "not_member");
+        // Native walks the sources in slot order. Leave at least one untouched item stack.
+        bool spare = std::any_of(before.items.slots.begin(), before.items.slots.end(), [&](auto const& slot)
+        {
+            return slot.position.bank && slot.position.container == tab && slot.item.entry == itemId
+                && std::none_of(sources.begin(), sources.end(), [&](auto const& saved)
+                    { return LoadSource(saved).position == slot.position; });
+        });
+        if (!spare) return Failure(entry, "last_stack");
+    }
     if (!source || source->item != expected.item || !remaining || remaining > source->item.count)
         return Failure(entry, "bank_source_changed");
     if (source->item.property && remaining < source->item.count)
@@ -592,7 +606,8 @@ void RegisterRealmBankHandlers()
     QueueHandler("bank_deposit", ParseBankDeposit, [](BankDepositCmd const& command, Queued& entry)
     { entry.guids = {command.guid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}}; }, MoveItems);
     QueueHandler("bank_withdraw", ParseBankWithdraw, [](BankWithdrawCmd const& command, Queued& entry)
-    { entry.guids = {command.guid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}}; }, MoveItems);
+    { entry.guids = {command.guid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}};
+      if (command.requester) entry.payload["requester"] = command.requester; }, MoveItems);
     QueueHandler("bank_stock", ParseBankStock, [](BankStockCmd const& command, Queued& entry)
     { entry.guids = {command.officerGuid}; entry.payload = {{"item_id", command.itemId}, {"count", command.count}, {"tab", command.tab}}; }, Stock);
 }

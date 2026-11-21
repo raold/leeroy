@@ -43,7 +43,7 @@ from .protocol import RealmJob
 
 log = logging.getLogger(__name__)
 
-OWNERS = frozenset({"actors", "speech", "step", "canon", "calendar", "mail"})
+OWNERS = frozenset({"actors", "speech", "step", "canon", "calendar", "mail", "decision"})
 # Body moves stay on the action queue; announcements and re-admissions have their own ledgers.
 NOT_DIRECT = frozenset({"realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join", "arena_team",
                         "arena_queue", "duel", "bot_do", "announce", "get_realm_pvp", "guild_readmit"})
@@ -265,7 +265,9 @@ class DirectLedger:
             if ev.state == "done" and type(ev.value) is int and 0 <= ev.value <= _U64:
                 self._move(row, "acked", value=str(ev.value))
             else:
-                state = "unknown" if type(ev.reason) is str and ev.reason in NATIVE_UNKNOWN else "refused"
+                uncertain = (type(ev.reason) is str and ev.reason in NATIVE_UNKNOWN
+                             or row["owner"] == "decision" and ev.changed is not False)
+                state = "unknown" if uncertain else "refused"
                 self._move(row, state, reason=_reason(ev.reason, "job_failed"))
         return True
 

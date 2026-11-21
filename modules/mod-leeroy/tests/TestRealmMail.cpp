@@ -112,3 +112,17 @@ LEEROY_TEST(RealmMail_EmptyAndMoneyOnlyMailRequireExactNativeHeader)
     CHECK(ProveMailStage(stage,command,{}, {},11002,910,2000));
     stage.headers.push_back(stage.headers[0]); CHECK(!ProveMailStage(stage,command,{}, {},11002,910,2000));
 }
+
+LEEROY_TEST(RealmMail_MemberBankMailRequiresOfficerMemberAndBagsOnly)
+{
+    MailSendCmd cmd; cmd.fromGuid = 101; cmd.toGuid = 102; cmd.items = {{46377,20,"bags"}};
+    CHECK_EQ(MailReceiverGuid(cmd,1,true,true,true),102u);
+    CHECK_EQ(MailReceiverGuid(cmd,1,false,true,true),0u);
+    CHECK_EQ(MailReceiverGuid(cmd,1,true,false,true),0u);
+    CHECK_EQ(MailReceiverGuid(cmd,1,true,true,false),0u);
+    CHECK_EQ(MailReceiverGuid(cmd,102,true,true,true),0u);
+    cmd.toGuid = 101; CHECK_EQ(MailReceiverGuid(cmd,1,true,true,true),0u);
+    cmd.toGuid = 102; cmd.money = 1; CHECK_EQ(MailReceiverGuid(cmd,1,true,true,true),0u);
+    cmd.money = 0; cmd.items.front().from = "new"; CHECK_EQ(MailReceiverGuid(cmd,1,true,true,true),0u);
+    cmd.toGuid = 0; CHECK_EQ(MailReceiverGuid(cmd,1,false,false,false),1u);
+}

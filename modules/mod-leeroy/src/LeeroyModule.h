@@ -21,6 +21,7 @@ struct LeeroyConfig
     bool bringCastOnline = true;
     bool excludeFromOllamaChat = true;
     bool realmEnable = false;
+    bool bankMailEnable = false;
     bool worldEnable = false;
     bool playStyleEnable = false;
     bool raidLeadEnable = false;
