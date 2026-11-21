@@ -118,3 +118,62 @@ dummy-trial bot's solo party before the teleport to Orgrimmar, and the core disb
 its bot lands on another map, so every trial it accepted failed `ownership_changed` and blocked the lab
 (2026-11-10..14). Against such a native the lab claims nothing, sends nothing and logs
 `training_lab_native_unsupported` once; its reason reads `native_dummy_unsupported`.
+
+## Raid debrief
+
+`python -m leeroy_mind training debrief --data-dir <mind-data>` prints a JSON
+report for the latest completed `guild_raid` (the current raid if none has
+completed). `--raid ID` selects an exact saved raid, including an open one;
+an unknown ID never falls back to another run. The console's **Ops → Raid
+debrief** uses the same report, cached for a minute. Boss sections expand with
+the keyboard or mouse; older runs remain available through the command.
+
+The command opens `mind.db` with `mode=ro` and `query_only`. It can run while
+the mind holds its lock. It does not migrate, rescore, collect new telemetry,
+change feature switches or connect to a service. Native logs default to the
+data directory's sibling `build/bin/RelWithDebInfo`; `--native-log-dir PATH`
+selects another retained log directory. Native timestamps use the server
+host's local zone. Use `--log-timezone America/New_York` when reading copied
+logs on a different host. Ambiguous DST seconds are rejected and reported.
+Mind JSON timestamps must include an offset.
+
+Evidence is deliberately separated:
+
+- Exact `tg_pull.raid_id` records supply boss attempts, incomplete/aborted
+  recordings, per-member spell hits, deaths, checker failures and missing
+  check coverage. Damage is the training hurt report's **requested damage**,
+  not actual health lost. Hits alone cannot prove someone stood in a hazard.
+- `mechanic_response` supplies completed responder activations and bots issued
+  movement. The report requires a matching map, instance, playbook mechanic
+  and a unique pull containing the entire logged second. Boundary/overlap
+  ambiguity remains unassigned. Repeated activations count move
+  **participations**, not distinct members or successful arrivals. Periodic
+  empty activations can be suppressed by native logging.
+- Every retained `group_rez_blocked` reason/fence combination is counted,
+  including comma-separated fences. These logs are rate-limited and lack
+  boss/group identity. They and hazard observations stay in an **unassigned**
+  section for the raid's time window; other groups may be represented there.
+  Hazard maxima are reported samples, not distinct bots or actual damage.
+- Offline `short`, `full_wipe`, stopping and terminal records require an
+  explicit raid-to-native-command binding from the owned receipt or the
+  locally produced `guild_offline_raid` result event. Discord events cannot
+  bind a job. Mind stop/outcome records use their explicit raid ID. Bound
+  result events and terminal logs may arrive up to an hour after the saved
+  session close; that grace never extends the unassigned hazard/rez window.
+
+RS, Ulduar, EoE and Big Bang use the playbook responder IDs. Twin essence
+clicks, Valithria healing/portal actions and successful group resurrection do
+not currently emit direct success telemetry: the report says **unverified**,
+even if a boss died. Unpulled bosses are also shown as unverified. No empty
+log section or incomplete recording is a pass.
+
+Reads are bounded: 256 pulls, 10,000 rows per evidence table, 20,000 member
+spell entries, 64 log files, 32 MiB and 12,000 log events; long/partial lines
+are skipped. Offline timelines and unassigned responder rows show at most
+256 records. Every reached cap is labelled. Paths cannot traverse links or
+junctions, active logs open with rename/delete sharing, and file identity is
+checked after opening. Output contains selected IDs, codes, counts and static
+playbook labels, never raw logs/chat/payloads. The CLI has an eight-second
+query/read budget and Ops four seconds with one worker at a time. Retention
+gaps and suppressed records cannot be disproved, so log counts are always
+lower bounds. A read-only report requires no migration or native rebuild.
