@@ -12,8 +12,9 @@ logs alone is not evidence that a feature works in the live realm.
 Follow [RELEASE.md](RELEASE.md) for deployment. The release must include the bank,
 day-plan and heroic implementations plus the guide's recovery corrections (#398,
 #399, #401 and #402), the #411 per-kind decision switches, their native build and
-migrations through 0065. Member heroics additionally require the #401 receipt
-follow-up to be reviewed, merged **and included in the installed native build**:
+migrations through 0065. Member heroics additionally require the
+[#401 receipt follow-up, #415](https://github.com/raold/leeroy/pull/415) to be
+reviewed, merged **and included in the installed native build**:
 tolerant offline handback, retryable receipt loading and asynchronous receipt
 checkpoints. A PR that is only open or merged is insufficient. Record the
 installed commit, native binary/build identity, mind and console process starts,
