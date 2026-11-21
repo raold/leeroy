@@ -1,5 +1,6 @@
 """One image slot, shared by the night's stages (the profile photos' candidates, a situational
-photo, a guild-photo tile): up to `tries` seeds, a flagged image replaced by the next seed's,
+photo, a guild-photo tile): up to `tries` seeds, an image the worker's NSFW gate flagged
+(selfie/leeroy_selfie/nsfw.py: the only place the threshold lives) replaced by the next seed's,
 and one oom answered by making room and repeating that attempt. Logs carry the request id and
 scores, never a prompt."""
 from contextlib import suppress
@@ -15,17 +16,15 @@ TRIES = 3  # seeds a slot, before a flagged slot refuses its set
 
 
 class SetRefused(Exception):
-    """Every seed of one slot was flagged by the NSFW check: the set stays queued."""
+    """Every seed of one slot was flagged by the NSFW gate: the set stays queued."""
 
 
 async def render_slot(worker, request: Callable[[int], RenderRequest], *,
                       rid: Callable[[int], str], make_room: Callable[[], Awaitable[None]],
-                      tries: int = TRIES, nsfw_max: float | None = None) -> tuple[Rendered, int]:
+                      tries: int = TRIES) -> tuple[Rendered, int]:
     """(the rendered answer, the attempts used). `request(attempt)` and `rid(attempt)` build
-    attempt n's request and id (attempt counts from 0). An answer flagged, or scoring its
-    cutoff or more, is never kept (its files are removed) and the next attempt runs. The optional
-    local cutoff keeps the caller's score check without sending it on each wire request; a legacy
-    request can still supply its explicit cutoff. `tries` refusals raise SetRefused.
+    attempt n's request and id (attempt counts from 0). A flagged answer is never kept (any file
+    is removed) and the next attempt runs; `tries` flagged answers raise SetRefused.
     The first WorkerError("oom") awaits make_room() and
     repeats that attempt once; a second propagates, as does any other WorkerError."""
     roomed = False
@@ -40,8 +39,7 @@ async def render_slot(worker, request: Callable[[int], RenderRequest], *,
             roomed = True
             await make_room()
             got = await worker.render(req, rid=name)
-        limit = req.nsfw_max if req.nsfw_max is not None else nsfw_max
-        if not got.flagged and (limit is None or got.nsfw < limit):
+        if not got.flagged:
             return got, attempt + 1
         for path in (req.out, req.thumb):  # never kept, whatever a worker wrote
             with suppress(FileNotFoundError):

@@ -16,7 +16,7 @@ from fakes import JPEG, FakeImage, OutOfMemoryError, make_renderer, make_torch, 
 def request(tmp_path, **over):
     d = dict(id="r", phrases=(("a woman", 0), ("smiling", 3)), negative=(("blurry", 1),),
              seed=42, steps=20, cfg=6.0, size=896, out=str(tmp_path / "o.jpg"),
-             thumb=str(tmp_path / "t.jpg"), thumb_size=200, nsfw_max=0.2)
+             thumb=str(tmp_path / "t.jpg"), thumb_size=200)
     d.update(over)
     return Render(**d)
 
@@ -61,11 +61,11 @@ def test_the_thumbnail_is_a_lanczos_square_of_the_requested_size(tmp_path, monke
     assert thumbs[0].saved == [(str(tmp_path / "t.jpg.tmp"), "JPEG", 85)]
 
 
-@pytest.mark.parametrize("score,flagged", [(0.19, False), (0.2, True), (0.5, True)])
+@pytest.mark.parametrize("score,flagged", [(0.89, False), (0.9, True), (0.99, True)])
 def test_flagged_at_or_over_the_threshold_writes_neither_file(tmp_path, monkeypatch,
                                                               score, flagged):
     stub_pil(monkeypatch)
-    answer = make_renderer(make_torch(nsfw=score)).render(request(tmp_path, nsfw_max=0.2))
+    answer = make_renderer(make_torch(nsfw=score)).render(request(tmp_path))
     assert answer["flagged"] is flagged
     assert (tmp_path / "o.jpg").exists() is (not flagged)
     assert (tmp_path / "t.jpg").exists() is (not flagged)
@@ -167,7 +167,7 @@ def test_load_builds_the_pinned_pipeline_and_reports_ready_info(tmp_path, monkey
     r = render.load(tmp_path, min_free_gib=8)
     assert {k: v for k, v in r.info.items() if not k.endswith("_ms")} == {
         "device": "cuda", "free_gib": 13.1, "versions": {"torch": "9.9", "diffusers": "0.1"}}
-    assert r.nsfw_index == 1
+    assert r.gate.index == 1
     assert ("sched", {"use_karras_sigmas": True}) in log
     pipe_kw = next(v for k, v in log if k == "pipe")
     assert pipe_kw == {"torch_dtype": "fp16", "variant": "fp16", "use_safetensors": True,
@@ -338,7 +338,7 @@ def portrait(ref, *, out, scale=0.6, crop=(0.0, 0.0, 1.0, 1.0), **over):
     out = Path(out)
     d = dict(id="p", phrases=(("a woman", 0), ("at a cafe", 3)), negative=(("blurry", 1),),
              seed=9, steps=30, cfg=5.0, size=1024, out=str(out),
-             thumb=str(out.with_name(out.stem + ".thumb.jpg")), thumb_size=384, nsfw_max=0.2,
+             thumb=str(out.with_name(out.stem + ".thumb.jpg")), thumb_size=384,
              identity=Identity(str(ref), crop, scale), shape="portrait")
     d.update(over)
     return Render(**d)
@@ -488,7 +488,7 @@ def test_an_out_of_memory_encoding_the_reference_answers_oom_and_caches_nothing(
 
 def test_a_flagged_identity_render_writes_nothing(tmp_path, monkeypatch, ref):
     stub_pil(monkeypatch)
-    r = make_renderer(make_torch(nsfw=0.5), identity=True)
+    r = make_renderer(make_torch(nsfw=0.95), identity=True)
     answer = r.render(portrait(ref, out=tmp_path / "a.jpg"))
     assert answer["flagged"] is True and (answer["width"], answer["height"]) == (832, 1216)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["ref.jpg"]
