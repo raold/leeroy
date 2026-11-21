@@ -34,6 +34,8 @@ jobs:
         run: bash scripts/tests/ac-soap.sh
       - name: native log pruning self-test (temporary files only)
         run: bash scripts/tests/ac-prune-native-logs.sh
+      - name: zip module to git self-test (temporary repositories only)
+        run: bash scripts/tests/ac-module-to-git.sh
 
   secrets:
     runs-on: ubuntu-latest
