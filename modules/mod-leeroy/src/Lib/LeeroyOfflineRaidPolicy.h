@@ -230,6 +230,13 @@ SlotRelease DecideSlotRelease(bool benchmark, bool failedReported, std::uint32_t
 // before the running-only policy can meaningfully count members or inspect encounter state.
 std::string OfflineRaidStopReason(bool humanOnline, bool moduleEnabled, bool keepCast,
     bool driverPresent, std::uint32_t elapsedMs, std::uint32_t timeoutMs, bool instanceStrategies = true);
+// Progression determines whether the raid is finished. It can include a DC
+// pass, whereas the reported kills below include only earned encounters.
+inline std::uint32_t CompletedRaidSlots(std::vector<std::uint8_t> const& states)
+{
+    return static_cast<std::uint32_t>(std::count(states.begin(), states.end(), 3));
+}
+
 // Gunship's DC pass sets the progression slot, never its encounter-credit bit.
 inline bool EarnedRaidKill(std::uint32_t map, std::uint32_t boss, std::uint8_t state,
     std::uint32_t completedMask)
