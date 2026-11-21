@@ -33,7 +33,7 @@ struct AreaName
 constexpr AreaName kAreas[] = {
     {"dest", MechanicArea::Dest}, {"caster", MechanicArea::Caster}, {"line", MechanicArea::Line},
     {"cone", MechanicArea::Cone}, {"group", MechanicArea::Group}, {"target", MechanicArea::Target},
-    {"ring", MechanicArea::Ring},
+    {"ring", MechanicArea::Ring}, {"nearest", MechanicArea::Nearest},
 };
 
 struct RoleName
@@ -52,13 +52,13 @@ bool AreaFits(MechanicKind kind, MechanicArea area)
     {
         case MechanicKind::AvoidGround:
             return area == MechanicArea::Dest || area == MechanicArea::Caster || area == MechanicArea::Line
-                || area == MechanicArea::Ring;
+                || area == MechanicArea::Ring || area == MechanicArea::Nearest;
         case MechanicKind::MoveOutCone:
             return area == MechanicArea::Cone;
         case MechanicKind::Spread:
             return area == MechanicArea::Group;
         case MechanicKind::Stack:
-            return area == MechanicArea::Dest;
+            return area == MechanicArea::Dest || area == MechanicArea::Nearest;
         case MechanicKind::RunOutDebuff:
             return area == MechanicArea::Target;
         case MechanicKind::Los:
@@ -338,6 +338,20 @@ std::optional<MechanicTable> ParseRaidMechanics(nlohmann::json const& message, s
                 return bad("landing");
             rule.landing = landing->get<bool>();
         }
+        if (auto entries = item.find("entries"); entries != item.end())
+        {
+            if (!entries->is_array() || entries->size() > kMechanicMaxEntries)
+                return bad("entries");
+            for (auto const& entry : *entries)
+            {
+                auto const creature = Whole(entry, 10000000);
+                if (!creature || *creature == 0)
+                    return bad("entries");
+                rule.entries.push_back(static_cast<std::uint32_t>(*creature));
+            }
+        }
+        if ((rule.area == MechanicArea::Nearest) == rule.entries.empty() || (rule.landing && rule.entries.size()))
+            return bad("entries");
         if (!NumbersFit(rule))
             return bad(rule.kind == MechanicKind::MoveOutCone && rule.angle <= 0 ? "angle"
                 : (rule.area == MechanicArea::Line || rule.area == MechanicArea::Ring) && rule.range <= 0 ? "range"
@@ -488,6 +502,12 @@ std::optional<MechanicShape> MechanicLeaveArea(MechanicRule const& rule, Mechani
             shape.origin = casterNow;
             shape.radius = rule.radius;
             return shape;
+        case MechanicArea::Nearest:
+            if (!cast.nearest)
+                return std::nullopt;
+            shape.origin = *cast.nearest;
+            shape.radius = rule.radius;
+            return shape;
         case MechanicArea::Line:
             shape.type = MechanicShapeType::Band;
             shape.origin = cast.caster;
@@ -527,7 +547,13 @@ std::optional<MechanicDuty> MechanicDutyFor(MechanicRule const& rule, MechanicCa
             duty.bodies = rule.kind == MechanicKind::Spread ? 2 : 1;
             return duty;
         case MechanicKind::Stack:
-            duty.gather = targetNow ? targetNow : cast.target ? cast.target : cast.dest;
+            if (rule.area == MechanicArea::Nearest)
+            {
+                duty.gather = cast.nearest;
+                duty.reachYards = kMechanicNearestYards;
+            }
+            else
+                duty.gather = targetNow ? targetNow : cast.target ? cast.target : cast.dest;
             if (!duty.gather)
                 return std::nullopt;
             duty.gatherRadius = rule.radius;
@@ -541,7 +567,31 @@ std::optional<MechanicDuty> MechanicDutyFor(MechanicRule const& rule, MechanicCa
 
 bool MechanicDutyReaches(MechanicDuty const& duty, HazardPoint at)
 {
-    return !duty.gather || (SameFloor(at, *duty.gather) && Distance2d(at, *duty.gather) <= kMechanicGatherReachYards);
+    return !duty.gather || (SameFloor(at, *duty.gather) && Distance2d(at, *duty.gather) <= duty.reachYards);
+}
+
+bool MechanicBindsAcrossPhases(MechanicRule const& rule)
+{
+    return rule.area == MechanicArea::Nearest;
+}
+
+std::optional<HazardPoint> MechanicNearestAnchor(std::vector<MechanicAnchor> const& anchors,
+    std::vector<std::uint32_t> const& entries, HazardPoint at)
+{
+    std::optional<HazardPoint> best;
+    float bestDistance = kMechanicNearestYards;
+    for (MechanicAnchor const& anchor : anchors)
+    {
+        if (std::find(entries.begin(), entries.end(), anchor.entry) == entries.end() || !SameFloor(at, anchor.at))
+            continue;
+        float const distance = Distance2d(at, anchor.at);
+        if (distance <= bestDistance)
+        {
+            bestDistance = distance;
+            best = anchor.at;
+        }
+    }
+    return best;
 }
 
 bool MechanicKept(HazardPoint at, std::vector<MechanicDuty> const& duties, std::vector<HazardPoint> const& others,

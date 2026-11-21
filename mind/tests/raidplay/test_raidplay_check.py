@@ -135,7 +135,7 @@ def test_cli_show_and_check(capsys, tmp_path):
     assert raidplay_main(["show", "631", "11", "--json"]) == 0
     shown = json.loads(capsys.readouterr().out)
     assert shown[0]["name"] == "Sindragosa" and shown[0]["call"].startswith("sindragosa:")
-    assert raidplay_main(["show", "603"]) == 1
+    assert raidplay_main(["show", "615"]) == 1    # the Obsidian Sanctum is not covered
     assert raidplay_main(["show", "naxx", "--difficulty", "3"]) == 1
     capsys.readouterr()
     assert raidplay_main(["check", "--no-book", "--data-dir", str(tmp_path)]) == 0
@@ -159,8 +159,8 @@ def test_the_console_panel_serves_the_playbooks(tmp_path):
     from console.rig import http, make_app, running
     from leeroy_mind.console.playbookview import playbook_view
     view = playbook_view()
-    assert view["totals"]["raids"] == 4 and view["totals"]["bosses"] == 37
-    assert [r["key"] for r in view["raids"]] == ["naxx", "icc", "toc", "rs"]
+    assert view["totals"]["raids"] == 6 and view["totals"]["bosses"] == 52
+    assert [r["key"] for r in view["raids"]] == ["naxx", "uld", "eoe", "icc", "toc", "rs"]
     first = view["raids"][0]["bosses"][0]["mechanics"][0]
     assert set(first) == {"id", "name", "kind", "roles", "phase", "only", "handled_by", "handled_note",
                           "check", "explain"}

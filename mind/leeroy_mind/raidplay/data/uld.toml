@@ -1,0 +1,3494 @@
+# Ulduar playbooks. Spell ids, timers and phases come from this server's boss scripts (script_dir), Spell.dbc,
+# the world database's spelldifficulty_dbc (Ulduar's client SpellDifficulty rows are empty, so the 25-man ids come
+# from there) and the core's SpellInfoCorrections; the explanations are our own words. Ulduar has no heroic
+# difficulty: each hard mode is a boss phase "hard_mode" named after what starts it. Stock playerbots has an
+# Ulduar strategy (playerbots_dir) up to Yogg-Saron and nothing for Algalon; several of its actions are cheats
+# (teleports, aura removal, killing adds) with the raid cheat on, said beside each mechanic it touches.
+map = 603
+key = "uld"
+difficulties = ["10", "25"]
+script_dir = "src/server/scripts/Northrend/Ulduar/Ulduar"
+playerbots_dir = "src/Ai/Raid/Uld"
+
+# Ulduar (603) bosses 0-2: Flame Leviathan, Ignis the Furnace Master, Razorscale. Spell ids, timers and
+# phases come from this server's scripts (boss_flame_leviathan.cpp, boss_ignis.cpp, boss_razorscale.cpp),
+# Spell.dbc, spell_cone, spelldifficulty_dbc and SpellInfoCorrections; the explanations are our own words.
+# Stock playerbots' "ulduar" strategy (src/Ai/Raid/Uld) has vehicle play for the Leviathan, a handful of
+# Razorscale actions and, for Ignis and Razorscale, only a paladin's Fire Resistance Aura (legitimate class
+# play, no cheat: BossFireResistanceAction adds the paladin's own aura strategy and casts it).
+
+[[boss]]
+index = 0
+name = "Flame Leviathan"
+slug = "leviathan"
+creatures = [33113, 34003]
+script = "boss_flame_leviathan.cpp"
+melee_behind = false
+no_behind_since = 2
+call = "leviathan: kite when pursued, shut him down, keep pyrite up"
+lust = false
+phase = [
+  { id = "main", name = "Vehicle battle" },
+  { id = "hard_mode", name = "Hard mode (towers left standing)" },
+]
+# A vehicle fight: the raid drives Salvaged Siege Engines, Demolishers and Choppers, and players thrown onto
+# his back sit in his seats (33114), immune to Flame Vents (63847), Missile Barrage, Battering Ram, Hodir's
+# Fury and Mimiron's Inferno (the seat's PassengerBoarded). The script has no berserk, and Bloodlust does
+# nothing for vehicle abilities. The native responder skips bots on vehicles, so every movement mechanic here
+# has area = "none". Stock boards bots only when their master already sits in a vehicle ("flame leviathan
+# vehicle near"): melee take siege engines, everyone else demolishers, then the spare seats and choppers.
+# Left out: Missile Barrage (62400, every 4 s on every vehicle; nothing the raid does answers it), the
+# defense turrets' Searing Flame (62402) on the riders, and Napalm Shell (63666/65026: declared, never cast).
+
+[[boss.mechanic]]
+id = "uld.leviathan.pursued"
+name = "Pursued"
+kind = "kite"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62374, 62376]
+handled_by = "partial"
+playerbots = ["flame leviathan vehicle"]
+handled_note = "a bot driving the chased vehicle runs it from corner to corner away from him; bots board vehicles only once their real-player master sits in one"
+explain = "He fixes on one siege engine or demolisher at a time and rams it when he catches it; its driver keeps it running away from him while everyone else keeps hitting him."
+check = "none"
+every = 31
+# Pursued (62374) picks a player-driven siege engine or demolisher in the Formation Grounds, resets his
+# threat and chases it with 10 million threat; it is recast every 31 s and at once when his victim dies.
+# Within 15 yards of his victim each swing is a Battering Ram (62376: knockback, +50% damage taken for
+# 20 s, stacking). Gathering Speed (62375, every 15 s, 20 stacks) makes him ever faster until a shutdown.
+
+[[boss.mechanic]]
+id = "uld.leviathan.flame_vents"
+name = "Flame Vents"
+kind = "interrupt"
+roles = ["melee"]
+spells = [62396]
+hits = [63847]
+handled_by = "partial"
+playerbots = ["flame leviathan vehicle"]
+handled_note = "a bot driving a siege engine fires Electroshock while he channels; it interrupts him only from within 25 yards in front of the engine"
+explain = "Every twenty seconds he channels Flame Vents, burning every vehicle for ten seconds; a siege engine's Electroshock stops it."
+check = "none"
+duration = 10
+first = 20
+every = 20
+# 62396 is a 10 s channel that triggers 63847 every second (15000 fire to every enemy within 500 yards);
+# the core adds the interrupt flag to the channel (SpellInfoCorrections) so Electroshock (62522, a 104
+# degree cone 25 yards long) can break it. He is not immune to interrupts (creature_immunities -287).
+
+[[boss.mechanic]]
+id = "uld.leviathan.systems_shutdown"
+name = "Overload Circuit and Systems Shutdown"
+kind = "use_object"
+roles = ["melee", "ranged"]
+spells = [62399, 62475]
+handled_by = "none"
+explain = "Demolishers catapult players onto his back to destroy his defense turrets; losing two, four on 25-man, shuts him down for twenty seconds, wiping his speed while he takes 50% more damage."
+check = "none"
+duration = 20
+# A rider who kills a Leviathan Defense Turret (33142) makes that seat's device cast Overload Circuit
+# (62399) on him; at 2 (10-man) or 4 (25-man) he casts Systems Shutdown (62475): stunned, +50% damage
+# taken, Gathering Speed and the circuits removed, riders ejected 3 s later, turrets back when it ends.
+# Stock never throws a passenger (no Throw Passenger, 62324) and skips the defense turrets as targets.
+
+[[boss.mechanic]]
+id = "uld.leviathan.pyrite"
+name = "Liquid Pyrite"
+kind = "use_object"
+roles = ["ranged"]
+spells = [62494]
+adds = [33214, 33189]
+handled_by = "partial"
+playerbots = ["flame leviathan vehicle"]
+handled_note = "bot demolisher gunners shoot Mechanolifts and grab the crates for fuel and bot drivers hurl pyrite barrels at him; only in vehicles bots boarded"
+explain = "Demolisher gunners shoot down the Mechanolifts and grab the pyrite they drop to fuel their demolisher, and its driver keeps hurling pyrite barrels so he stays burning."
+check = "none"
+# A shot-down Mechanolift (33214) drops a Pyrite Safety Container that lands as Liquid Pyrite (33189, aura
+# 62494). Stock's demolisher turret grabs crates within 49 yards at 25 energy or less (Grab Crate, 62479)
+# and fires Anti-Air Rockets (64979) while 10 or fewer crates are about; the driver hurls Pyrite Barrels
+# (62490) whenever Blue Pyrite (68605) is missing or running out, else boulders.
+
+[[boss.mechanic]]
+id = "uld.leviathan.hodirs_fury"
+name = "Hodir's Fury"
+kind = "avoid_ground"
+phase = "hard_mode"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62533]
+hits = [62297]
+handled_by = "none"
+explain = "In hard mode frost reticles follow vehicles and stop on one; five seconds later ice crashes down there, crushing and freezing everything within ten yards, so drive off."
+check = "none"
+radius = 10
+# Tower of Frost left standing: two reticles (33108) follow a random target that is not a rider on him,
+# stop on reaching it, and 5 s later Hodir's Fury (62533) lands 62297 there (10 yards, damage and a 60 s
+# stun). Vehicles only: the responder skips bots on vehicles, and nothing lingers for the hazard scan.
+area = "none"
+
+[[boss.mechanic]]
+id = "uld.leviathan.mimirons_inferno"
+name = "Mimiron's Inferno"
+kind = "avoid_ground"
+phase = "hard_mode"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62909]
+hits = [62910]
+handled_by = "none"
+explain = "In hard mode a yellow reticle wanders the field and fire rains on it every two seconds, leaving burning ground for half a minute; keep vehicles off its trail."
+check = "none"
+radius = 9
+duration = 30
+# Tower of Flames left standing: the reticle (33369) walks its path and every 2 s an inferno above it casts
+# 62909, landing 62910 (9 yards, damage plus a 30 s persistent area aura, a damaging dynamic object of 9
+# yards). Vehicles only, so the responder leaves it.
+area = "none"
+
+[[boss.mechanic]]
+id = "uld.leviathan.thorims_hammer"
+name = "Thorim's Hammer"
+kind = "avoid_ground"
+phase = "hard_mode"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62911]
+hits = [62912]
+handled_by = "none"
+explain = "In hard mode blue beams mark spots across the field and a hammer strikes each five to twenty seconds later, deadly within seven yards and weaker farther out; steer clear of the beams."
+check = "none"
+radius = 7
+# Tower of Storms left standing: every one to two minutes eight reticles (33364) appear at random spots,
+# each struck 5-20 s later (62911 -> 62912). Full damage within 7 yards; beyond it the script divides the
+# damage by (distance - 6). Vehicles only, so the responder leaves it.
+area = "none"
+
+[[boss.mechanic]]
+id = "uld.leviathan.freyas_ward"
+name = "Freya's Ward"
+kind = "switch_adds"
+phase = "hard_mode"
+roles = ["melee", "ranged"]
+spells = [62906]
+hits = [62907]
+adds = [33387, 34277, 34275, 34276]
+handled_by = "partial"
+playerbots = ["flame leviathan vehicle"]
+handled_note = "bot gunners and chopper drivers shoot the nearest add attacking them; drivers of siege engines and demolishers stay on him"
+explain = "In hard mode green beams at four fixed spots strike every half minute and spawn Writhing Lashers and Wards of Life; keep clear of the beams and shoot the adds down."
+check = "none"
+every = 29
+# Tower of Life left standing: four wards (33367) cast 62906 at their targets every 29 s, landing 62907
+# (9 yards) with a Ward of Life (34275) and Writhing Lashers (33387, via 62947). The adds never attack
+# riders on him.
+
+[[boss]]
+index = 1
+name = "Ignis the Furnace Master"
+slug = "ignis"
+creatures = [33118, 33190]
+script = "boss_ignis.cpp"
+call = "ignis: melt constructs, cool them in water, dodge scorch"
+phase = [{ id = "main", name = "Main fight" }]
+# No timed berserk: he goes berserk when he activates his twentieth construct (counted in the script), so
+# there is no enrage field. Each Slag Pot pushes all his timers back 6 s, so his other casts come about a
+# quarter later than the scheduled timers below. He evades if pulled out of his hall.
+
+[[boss.mechanic]]
+id = "uld.ignis.scorch"
+name = "Scorch"
+kind = "move_out_cone"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [62546], "25" = [63474] }
+hits = { "10" = [62553], "25" = [63473] }
+handled_by = "partial"
+playerbots = ["tank face", "behind"]
+handled_note = "stock tanks turn him away from the group's side and melee damage dealers stand behind him; nothing moves healers or ranged out of his front"
+explain = "He roots himself and breathes Scorch at his tank for three seconds, a cone thirty yards long; nobody but the tank stands in front of him."
+check = "uld.ignis.check_avoid"
+radius = 30
+angle = 60
+duration = 3
+first = 10
+every = 20
+# 62546 (25-man 63474) is an instant 3 s aura that triggers the cone (62553 / 63473, spell_cone 60, 30
+# yards) every half second. He is rooted and cannot turn for those 3 s, so the cone at the cast holds
+# until it ends. Answered at the cast for healers and ranged; tanks and stock's melee are left alone.
+respond_roles = ["healer", "ranged"]
+
+[[boss.mechanic]]
+id = "uld.ignis.scorched_ground"
+name = "Scorched ground"
+kind = "avoid_ground"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [62548], "25" = [63476] }
+hits = { "10" = [62549], "25" = [63475] }
+handled_by = "partial"
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out after the fire burns, and only for bots with a real-player master (off in all-bot raids)"
+explain = "Each Scorch away from the water leaves a patch of fire twenty yards in front of him that burns for thirty seconds; stay out of it unless you are dragging constructs through it."
+check = "uld.ignis.check_avoid"
+radius = 13
+duration = 30
+area = "caster"
+# At Scorch's last tick he summons Scorched Ground (33123) 20 yards ahead of him for 30 s, unless water is
+# within 25 yards; it casts 62548 (25-man 63476) on itself, burning players within 13 yards every second
+# (62549 / 63475) and heating active constructs within 10 yards (Heat, 62343). An unselectable hostile
+# trigger npc with a periodic aura, so the hazard scan and stock avoid aoe already see it; stock avoid aoe
+# would pull a tank out of it too, which works against heating the constructs. Answered at the patch's
+# own cast, round the patch, for everyone but tanks.
+respond_roles = ["healer", "melee", "ranged"]
+
+[[boss.mechanic]]
+id = "uld.ignis.flame_jets"
+name = "Flame Jets"
+kind = "raid_cooldowns"
+roles = ["healer", "ranged"]
+spells = { "10" = [62680], "25" = [63472] }
+handled_by = "partial"
+playerbots = ["ignis fire resistance action"]
+handled_note = "stock only has a paladin switch to Fire Resistance Aura for the fight; nobody stops casting before the jets land"
+explain = "Flame Jets burns and knocks up the whole raid and locks out any spell being cast; casters stop casting as his cast ends and healers heal through the burn."
+check = "none"
+cast = 2.7
+duration = 6
+first = 32
+every = 25
+# 62680 (25-man 63472): a 2.7 s cast hitting every enemy, a 6 s burn, and a forced 62681 on each target
+# that interrupts its cast (school lockout) and knocks it up. He is immune to interrupts (creature
+# immunities -361), so it cannot be kicked.
+
+[[boss.mechanic]]
+id = "uld.ignis.slag_pot"
+name = "Slag Pot"
+kind = "heal_target"
+roles = ["healer"]
+spells = { "10" = [62707, 62717], "25" = [62707, 63477] }
+hits = { "10" = [65722], "25" = [65723] }
+handled_by = "none"
+explain = "He grabs a player other than his tank and drops them into his slag pot for ten seconds of heavy fire; healers keep them alive, and a survivor gains a burst of haste."
+check = "none"
+duration = 10
+first = 25
+every = 30
+targets = 1
+# Grab (62707) picks a random living player within 90 yards who is neither his victim nor a construct's;
+# the pot (62717 / 63477) burns them every second (65722 / 65723) and, if they survive, gives Slag Imbued
+# (62836, +100% haste for 10 s). The script repeats it after 24 s and then delays every timer, its own
+# included, by 6 s, so it comes every 30 s.
+
+[[boss.mechanic]]
+id = "uld.ignis.iron_constructs"
+name = "Iron Constructs"
+kind = "kite"
+roles = ["tank"]
+spells = [62488]
+adds = [33121, 33191]
+handled_by = "none"
+explain = "Each time he wakes an Iron Construct he grows stronger; the off-tank drags the constructs through his scorched ground until they turn molten, then into the water to make them brittle."
+check = "none"
+every = { "10" = 40, "25" = 30 }
+# Activate Construct (62488) every 40 s (10-man) or 30 s (25-man) wakes one construct and gives him a
+# stack of Strength of the Creator (64473, +20% damage each). Heat (65667) from scorched ground stacks on
+# a construct; at 10 stacks it turns Molten (62373) and its threat resets; molten within 18 yards of the
+# water it becomes Brittle (62382 / 67114). His twentieth activation sends him berserk.
+
+[[boss.mechanic]]
+id = "uld.ignis.molten"
+name = "Molten construct"
+kind = "avoid_ground"
+roles = ["healer", "melee", "ranged"]
+spells = [62373]
+hits = [62530]
+handled_by = "none"
+explain = "A molten construct burns everyone within seven yards until it reaches the water; only the tank dragging it stays close."
+check = "uld.ignis.check_avoid"
+radius = 7
+duration = 30
+# Molten (62373, 30 s) pulses 62530 within 7 yards every second. Left to the tank: its threat was just
+# reset, so moving bodies out from round it as it walks would drag it after whoever it chases.
+area = "none"
+
+[[boss.mechanic]]
+id = "uld.ignis.shatter"
+name = "Brittle and Shatter"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = { "10" = [62382], "25" = [67114] }
+hits = [62383]
+adds = [33121, 33191]
+handled_by = "none"
+explain = "A brittle construct shatters on one big hit and takes a stack of his strength with it, but the blast hits everyone within ten yards; break it fast, from range where you can."
+check = "none"
+duration = 15
+# Brittle (62382, 25-man 67114) stuns the construct for 15 s and gives attackers +50% crit chance on it; one hit of at least
+# 5000 (the 10-man aura) or 3000 (the 25-man aura) shatters it (62383: physical damage to players within
+# 10 yards) and removes one stack of Strength of the Creator from him.
+
+[[boss.mechanic]]
+id = "uld.ignis.berserk"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [64238]
+handled_by = "none"
+explain = "When he wakes his twentieth construct he goes berserk; the kill has to come before then."
+check = "none"
+
+[[boss.check]]
+id = "uld.ignis.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Scorch", "Molten"]
+roles = ["healer", "melee", "ranged"]
+max_hits = 2
+
+[[boss]]
+index = 2
+name = "Razorscale"
+slug = "razorscale"
+creatures = [33186, 33724]
+script = "boss_razorscale.cpp"
+enrage = 600
+call = "razorscale: fire harpoons, kill dwarves, out of fire"
+phase = [
+  { id = "air", name = "In the air" },
+  { id = "grounded", name = "Chained down by the harpoons" },
+  { id = "perma_ground", name = "Grounded for good", hp_below = 50 },
+]
+# She lands for good when she drops below 50% while chained down; until then she circles, comes down after
+# 2 (10-man) or 4 (25-man) harpoon hits, sits stunned about 30 s, breathes, beats her wings and takes off.
+# Stock's "razorscale grounded" gathers ranged and healers within 12 yards of the arena centre: its
+# behind-the-boss branch waits for a landing spot (588, -166) that this core's landing point (585.4,
+# -173.5) never matches, so it does not keep them out of her front.
+
+[[boss.mechanic]]
+id = "uld.razorscale.harpoons"
+name = "Harpoon guns"
+kind = "use_object"
+phase = "air"
+roles = ["ranged"]
+spells = { "10" = [63658, 63657], "25" = [63659, 63658, 63657, 63524] }
+handled_by = "playerbots"
+playerbots = ["razorscale harpoon action"]
+explain = "Engineers rebuild the harpoon guns while she circles; a ranged player fires each gun as it comes up, and two hits, four on 25-man, chain her to the ground."
+check = "none"
+# Each built gun's controller fires its Harpoon Shot (triggering 62505 on her). Stock sends the ranged damage
+# dealer nearest a ready gun to use it. Its "already fired" test looks for Harpoon Chain auras (49679-49684)
+# this core never applies, so it relies on its own 5 s per-gun re-use timer and the gun's ready state.
+
+[[boss.mechanic]]
+id = "uld.razorscale.devouring_flame"
+name = "Devouring Flame"
+kind = "avoid_ground"
+phase = ["air", "perma_ground"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [63236]
+hits = { "10" = [64704], "25" = [64733] }
+handled_by = "partial"
+playerbots = ["razorscale avoid devouring flames", "avoid aoe"]
+handled_note = "stock steps away only once the fire burns, 3.5 yards for most though it reaches 5 (off-tanks not at all on the ground); avoid aoe needs a real-player master"
+explain = "She spits Devouring Flame at a player's spot, leaving fire that burns everything within five yards for twenty-two seconds; get out before it lands."
+check = "uld.razorscale.check_avoid"
+radius = 5
+duration = 22
+cast = 1.5
+landing = true
+# 63236: a 1.5 s cast at a random player, then a missile (speed 25) to where they stood that summons a
+# Devouring Flame stalker (34188 / 34189, 22 s, 63308). The stalker casts 64709 (25-man 64734), burning 5
+# yards round it every 2 s (64704 / 64733): an unselectable hostile trigger npc the hazard scan and stock
+# see. Answered for everyone, where the cast lands, from its completion; the missile's flight starts the
+# fire a moment later, so the last seconds of the burn are left to the hazard scan and stock.
+respond_roles = ["tank", "healer", "melee", "ranged"]
+
+[[boss.mechanic]]
+id = "uld.razorscale.fireball"
+name = "Fireball"
+kind = "raid_cooldowns"
+phase = "air"
+roles = ["healer"]
+spells = [63815]
+handled_by = "partial"
+playerbots = ["razorscale fire resistance action"]
+handled_note = "stock only has a paladin switch to Fire Resistance Aura for the fight"
+explain = "While she flies she throws a fireball at a random player every few seconds; healers keep everyone topped up."
+check = "none"
+first = 3
+
+[[boss.mechanic]]
+id = "uld.razorscale.dark_rune_adds"
+name = "Dark Rune dwarves"
+kind = "switch_adds"
+phase = "air"
+roles = ["tank", "melee", "ranged"]
+spells = [62899]
+adds = [33846, 33852, 33388, 33850, 33453, 33851]
+handled_by = "partial"
+playerbots = ["razorscale avoid sentinel", "razorscale ignore flying alone"]
+handled_note = "stock's main tank marks the weakest sentinel with a skull and bots gather in the arena while she flies with no dwarves up; the dwarves are fought as ordinary attackers"
+explain = "While she flies, mole machines dig up Dark Rune dwarves every forty-eight seconds; tanks pick them up and the raid kills them before the next wave."
+check = "none"
+first = 1
+every = 48
+# Each wave is 2 spawners (10-man) or 2-4 (25-man); each digs up a Dark Rune Sentinel alone (25%) or a
+# Guardian and Watcher pack. Guardians caught in her Flame Breath die to it (an achievement).
+
+[[boss.mechanic]]
+id = "uld.razorscale.sentinel_whirlwind"
+name = "Whirlwind"
+kind = "avoid_ground"
+phase = "air"
+roles = ["healer", "melee", "ranged"]
+spells = [63808]
+hits = [63807]
+adds = [33846, 33852]
+handled_by = "playerbots"
+playerbots = ["razorscale avoid whirlwind", "razorscale avoid sentinel"]
+explain = "Dark Rune Sentinels whirl for four seconds, cutting everyone within eight yards; everyone but the tank holding one steps back while it spins."
+check = "uld.razorscale.check_avoid"
+radius = 8
+duration = 4
+area = "caster"
+# 63808 is a 4 s self-channel triggering 63807 (8 yards) every second. Stock moves every non-tank 8 yards
+# off a sentinel that is channelling (its aura id 63806 is not this core's, but its channel test catches
+# 63808), and keeps ranged 8 yards off every sentinel.
+
+[[boss.mechanic]]
+id = "uld.razorscale.watcher_lightning"
+name = "Dark Rune Watcher lightning"
+kind = "interrupt"
+phase = "air"
+roles = ["melee", "ranged"]
+spells = { "10" = [63809, 64758], "25" = [64696, 64759] }
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
+explain = "Dark Rune Watchers cast Lightning Bolt and Chain Lightning over and over; interrupt them and kill them early."
+check = "none"
+# Lightning Bolt (2 s cast) every 3 s and Chain Lightning (1.5 s, 30 yards) every 9-15 s; the dwarves
+# are not immune to interrupts (creature immunities -286).
+
+[[boss.mechanic]]
+id = "uld.razorscale.flame_breath"
+name = "Flame Breath"
+kind = "move_out_cone"
+phase = ["grounded", "perma_ground"]
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [63317], "25" = [64021] }
+handled_by = "partial"
+playerbots = ["behind", "tank face"]
+handled_note = "melee damage dealers stand behind her and, once she is down for good, tanks turn her away from the group; stock gathers healers and ranged round her centre spot"
+explain = "Each time she is down she breathes fire fifty yards ahead of her; nobody but the tank holding her stands at her front."
+check = "uld.razorscale.check_avoid"
+radius = 50
+angle = 75
+cast = 2.5
+every = 21
+# spell_cone gives 63317 and 64021 75 degrees. Chained down, she faces north (her landing orientation)
+# for the breath at the end of the stun; grounded for good she breathes at her victim every 21 s. Answered
+# at the cast for healers and ranged; tanks and melee are left to stock.
+respond_roles = ["healer", "ranged"]
+
+[[boss.mechanic]]
+id = "uld.razorscale.wing_buffet"
+name = "Wing Buffet"
+kind = "positional"
+phase = ["grounded", "perma_ground"]
+roles = ["healer", "melee", "ranged"]
+spells = [62666]
+handled_by = "none"
+explain = "Each chained landing ends with her breath, then a Wing Buffet that knocks back everyone within thirty-five yards before she takes off, and her firebolt breaks the harpoon guns."
+check = "none"
+cast = 1.5
+radius = 35
+# Wing Buffet comes 2 s after the chained breath and once when she lands for good; Firebolt (62669) 2 s
+# later hits the harpoon fire states and the guns are destroyed and rebuilt from broken ones.
+
+[[boss.mechanic]]
+id = "uld.razorscale.fuse_armor"
+name = "Fuse Armor"
+kind = "tank_swap_at_stacks"
+phase = "perma_ground"
+roles = ["tank"]
+spells = [64821]
+hits = [64771, 64774]
+handled_by = "playerbots"
+playerbots = ["razorscale fuse armor action"]
+explain = "Grounded for good she stacks Fuse Armor on her tank, cutting armour and speed; at five stacks it fuses and stuns them, so the other tank takes her well before that."
+check = "none"
+stacks = 5
+duration = 20
+first = 15
+every = 12
+# 64821 stacks to 5 and adds 64771 (-20% armour, attack speed and movement) with each stack; at 5 it
+# becomes Fused Armor (64774, a 20 s stun). Stock moves the main-tank flag to the healthiest tank without
+# 2 stacks of 64771 once the main tank has 2.
+
+[[boss.mechanic]]
+id = "uld.razorscale.berserk"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [47008]
+handled_by = "none"
+explain = "She goes berserk after ten minutes; the kill has to come before then."
+check = "none"
+first = 600
+
+[[boss.check]]
+id = "uld.razorscale.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Devouring Flame", "Flame Breath", "Whirlwind"]
+roles = ["healer", "melee", "ranged"]
+max_hits = 2
+
+# Ulduar: XT-002 Deconstructor (3), the Assembly of Iron (4), Kologarn (5). Spell ids, timers and phases come
+# from this server's boss scripts (boss_xt002.cpp, boss_assembly_of_iron.cpp, boss_kologarn.cpp), Spell.dbc,
+# the world database's spelldifficulty_dbc, spell_script_names and conditions; the explanations are our own words.
+# SpellDifficulty.dbc has no rows for these spells: every 25-man id below comes from spelldifficulty_dbc, or for a
+# triggered spell from the trigger field of its 25-man parent in Spell.dbc. SpellInfoCorrections changes none of
+# the radii used here (it caps Lightning Whirl's targets at 3 and 8 and drops Boom's self-kill and Stone Grip's
+# absorb effect).
+# Stock playerbots' "ulduar" strategy (src/Ai/Raid/Uld, applied by map to every bot in 603) has nothing for
+# XT-002. For the Assembly it has three real moves: away from Brundir while he has Lightning Tendrils, away from
+# him (non-tanks only) while he has Overload, and a tank backing its boss off a Rune of Power. For Kologarn it has
+# raid marks and target picks (rubble, then the right arm, skull; Kologarn cross for the tanks), hunters' Frost
+# Trap on marked rubble and Aspect of the Wild, and three cheats: a teleport for bots near an eye beam and one for
+# bots that fall off his platform (both need the raid cheat, on by default: Playerbots.BotCheats "food,taxi,raid"),
+# and removing the 25-man Crunch Armor from bot tanks (raid cheat too).
+
+[[boss]]
+index = 3
+name = "XT-002 Deconstructor"
+slug = "xt002"
+creatures = [33293, 33885]
+script = "boss_xt002.cpp"
+enrage = 600
+call = "xt-002: bomb and light run out, everyone on the heart"
+phase = [
+  { id = "main", name = "Main fight" },
+  { id = "heart", name = "Heart exposed (at 75, 50 and 25 percent)", hp_below = 75 },
+  { id = "hard_mode", name = "Hard mode (his heart destroyed)" },
+]
+
+[[boss.mechanic]]
+id = "uld.xt002.searing_light"
+name = "Searing Light"
+kind = "run_out_debuff"
+phase = ["main", "hard_mode"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [63018], "25" = [65121] }
+hits = { "10" = [63023], "25" = [65120] }
+handled_by = "none"
+explain = "Searing Light marks a player for nine seconds and burns everyone within eight yards of them each second; the marked player steps away from the raid until it fades."
+check = "none"
+range = 8
+duration = 9
+first = { "10" = 11, "25" = 9 }
+every = { "10" = 20, "25" = 16 }
+area = "target"
+# XT casts the aura on himself and the script picks one random player, never his current target, so the cast start
+# names nobody: the run out starts when the aura (63018 / 65121) lands on the player. It pulses 63023 / 65120 every
+# second, 8 yards round the bearer (allies of the bearer). Tanks are listed for an off-tank holding adds.
+
+[[boss.mechanic]]
+id = "uld.xt002.gravity_bomb"
+name = "Gravity Bomb"
+kind = "run_out_debuff"
+phase = ["main", "hard_mode"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [63024], "25" = [64234] }
+hits = { "10" = [63025], "25" = [64233] }
+handled_by = "none"
+explain = "Gravity Bomb marks a player; after nine seconds it pulls in everyone within twenty yards and blasts those within twelve, so the marked player runs well clear of the raid."
+check = "none"
+range = 20
+radius = 12
+duration = 9
+first = { "10" = 21, "25" = 18 }
+every = { "10" = 20, "25" = 16 }
+area = "target"
+# Same targeting as Searing Light. At the aura's end 63025 / 64233 hits the bearer's allies within 12 yards and
+# pulls those within 20 toward the bearer; the bearer also takes the aura's own 12000 / 15000. Native spaces the
+# bearer by the larger number, 20 yards.
+
+[[boss.mechanic]]
+id = "uld.xt002.tympanic_tantrum"
+name = "Tympanic Tantrum"
+kind = "raid_cooldowns"
+phase = ["main", "hard_mode"]
+roles = ["healer"]
+spells = [62776]
+hits = [62775]
+handled_by = "none"
+explain = "Every minute he throws a tantrum for eight seconds that takes a tenth of everyone's health each second; healers heal through it with their raid cooldowns."
+check = "none"
+cast = 2
+duration = 8
+first = 60
+every = 60
+# 62775 ticks every second over the whole room (500 yards); the script makes each tick 10 percent of the target's
+# maximum health and it also dazes. It pauses Searing Light and Gravity Bomb for 10 s.
+
+[[boss.mechanic]]
+id = "uld.xt002.heart"
+name = "Heart of the Deconstructor"
+kind = "switch_adds"
+phase = "heart"
+roles = ["melee", "ranged"]
+spells = []
+adds = [33329, 33995]
+handled_by = "none"
+explain = "At three quarters, half and a quarter health he kneels and bares his heart for thirty seconds; everyone hits the heart, whose damage passes to him, and killing it starts the hard mode."
+check = "none"
+duration = 30
+# Exposed Heart (63849) doubles the heart's damage taken and the script moves every hit's damage to XT. He turns
+# passive at the threshold, kneels 6 s later and stands up 30 s after that. Killing the heart (hard mode) heals
+# him to full with Heartbreak (65737 / 64193: more health and damage) and ends the heart phases.
+
+[[boss.mechanic]]
+id = "uld.xt002.scrap_adds"
+name = "Scrapbots, Boombots and Pummellers"
+kind = "switch_adds"
+phase = "heart"
+roles = ["tank", "melee", "ranged"]
+spells = [62828, 62831, 62835]
+adds = [33343, 33887, 33346, 33886, 33344, 33888]
+handled_by = "none"
+explain = "While his heart is out, robots pour from the scrap piles; kill scrapbots before they reach and repair him, tank the pummellers, and shoot boombots far from the raid since they explode."
+check = "none"
+# Energy orbs from the heart wake the XT-Toy Piles farther than 90 yards from him, each pile at most every 12 s:
+# one boombot, a pummeller three times in ten, five to seven scrapbots. A scrapbot that reaches him heals him 1
+# percent (Scrap Repair). A boombot explodes (Boom, 10 yards, players and adds alike) on reaching him or at half
+# health: an instant burst, so nothing here moves bodies for it.
+
+[[boss.mechanic]]
+id = "uld.xt002.life_spark"
+name = "Life Spark"
+kind = "switch_adds"
+phase = "hard_mode"
+roles = ["tank", "melee", "ranged"]
+spells = [64210]
+adds = [34004, 34005]
+handled_by = "none"
+explain = "In hard mode each Searing Light leaves a Life Spark where it fades; a tank picks it up away from the raid and it dies fast, since its static charge hurts everyone while it lives."
+check = "none"
+# Summoned at the bearer when Searing Light ends while XT has Heartbreak. Static Charged (64227 / 64236) is an enemy
+# area aura over the room (800 / 2000 every 3 s); its melee Shock (64230) every 12 s.
+
+[[boss.mechanic]]
+id = "uld.xt002.void_zone"
+name = "Void Zone"
+kind = "avoid_ground"
+phase = "hard_mode"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [64208]
+handled_by = "partial"
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out after the effect lands, and only for bots with a real-player master (off in all-bot raids)"
+explain = "In hard mode each Gravity Bomb leaves a Void Zone where it went off that eats anyone within five yards for three minutes; the bomb carrier drops it at the edge and everyone stays out."
+check = "uld.xt002.check_avoid"
+radius = 5
+# Not answered by the responder: every one of up to a dozen void zones ticks a fresh mechanic each second, which would
+# crowd native's 64 mechanics in force; the hazard scan already measures each as a trigger npc (5 yd).
+area = "none"
+respond_roles = []
+# The Void Zone (34001, unselectable, 180 s) starts Consumption 2.5 s after it appears: a server-side aura (64209,
+# not in Spell.dbc) that casts 64208 every second, 5 yards round it. The responder answers each tick as a fresh
+# 3 s circle round the zone, so it binds for as long as the zone burns and stops when it despawns. The hazard scan
+# also sees it (an unselectable hostile npc whose periodic trigger does damage, 5 yards plus its reach).
+
+[[boss.mechanic]]
+id = "uld.xt002.berserk"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [26662]
+handled_by = "none"
+explain = "He berserks after ten minutes and then hits many times harder; it is a damage race."
+check = "none"
+first = 600
+
+[[boss.check]]
+id = "uld.xt002.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Consumption"]
+max_hits = 2
+
+[[boss]]
+index = 4
+name = "the Assembly of Iron"
+slug = "iron_council"
+creatures = [32867, 33693, 32927, 33692, 32857, 33694]
+script = "boss_assembly_of_iron.cpp"
+enrage = 900
+call = "iron council: steelbreaker first, out of overload and runes"
+phase = [
+  { id = "three", name = "All three alive" },
+  { id = "two", name = "Two left (after the first death)" },
+  { id = "last", name = "One left (Molgeim or Brundir)" },
+  { id = "hard_mode", name = "Hard mode (Steelbreaker is the last one left)" },
+]
+# Each death casts Supercharge on the survivors, heals them to full and unlocks the next ability of each (the
+# script's per-boss phase 1-3). Only the last one alive drops loot; Steelbreaker last is the hard mode.
+
+[[boss.mechanic]]
+id = "uld.iron_council.kill_order"
+name = "Kill order and Supercharge"
+kind = "kill_order"
+roles = ["tank", "melee", "ranged"]
+spells = [61920]
+handled_by = "none"
+explain = "Each one that dies fully heals the other two and gives them a new power; the usual order is Steelbreaker, Molgeim, then Brundir, and keeping Steelbreaker for last is the hard mode."
+check = "none"
+# Stock has no kill order or marks for the Assembly.
+
+[[boss.mechanic]]
+id = "uld.iron_council.fusion_punch"
+name = "Fusion Punch"
+kind = "dispel"
+roles = ["healer"]
+spells = { "10" = [61903], "25" = [63493] }
+handled_by = "partial"
+playerbots = ["dispel magic on party", "cleanse magic on party"]
+handled_note = "a priest's or paladin's magic dispel takes the lingering damage off when one is in the raid"
+explain = "Steelbreaker winds up Fusion Punch for three seconds and hits his tank hard, leaving a magic debuff that keeps hurting; dispel it at once and keep the tank topped up."
+check = "none"
+cast = 3
+duration = 4
+first = 15
+every = 15
+# A direct hit plus a 4 s damage over time (magic dispel type); not interruptible (no prevention type).
+
+[[boss.mechanic]]
+id = "uld.iron_council.high_voltage"
+name = "High Voltage"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = { "10" = [61890], "25" = [63498] }
+hits = { "10" = [63525], "25" = [63526] }
+handled_by = "none"
+explain = "While Steelbreaker lives he shocks the whole raid every three seconds; healers keep everyone topped up through it."
+check = "none"
+every = 3
+# His passive aura: 1500 / 3000 nature damage to every enemy in the room every 3 s.
+
+[[boss.mechanic]]
+id = "uld.iron_council.static_disruption"
+name = "Static Disruption"
+kind = "spread"
+phase = ["two", "hard_mode"]
+roles = ["healer", "ranged"]
+spells = { "10" = [61911], "25" = [63495] }
+hits = { "10" = [61912], "25" = [63494] }
+handled_by = "none"
+explain = "Once one of them is down, Steelbreaker throws Static Disruption at a ranged player, hitting everyone within six yards of them; ranged and healers stand apart."
+check = "none"
+radius = 6
+duration = 3
+cast = 1
+first = 20
+every = 20
+area = "group"
+# The script prefers a random player more than 10 yards away. 61912 / 63494 hits within 6 yards of the target and
+# leaves a stacking nature-damage-taken debuff (5 yards, 20 s). The cast takes 1 s and the bolt flies at 30
+# yards a second, so the spread is held 3 s from the cast start (cast plus up to about 2 s of flight, our estimate).
+
+[[boss.mechanic]]
+id = "uld.iron_council.overwhelming_power"
+name = "Overwhelming Power"
+kind = "tank_swap_at_stacks"
+phase = "hard_mode"
+roles = ["tank"]
+spells = { "10" = [64637], "25" = [61888] }
+hits = [61889]
+handled_by = "none"
+explain = "In hard mode Steelbreaker empowers his tank, who melts down and dies after a minute, 35 seconds on 25-man; the other tank taunts first and the empowered one walks away from everyone."
+check = "none"
+duration = { "10" = 60, "25" = 35 }
+first = 8
+every = { "10" = 61, "25" = 36 }
+# At the aura's end Meltdown (61889) kills its bearer and hits the bearer's allies within 15 yards, and the script
+# gives Steelbreaker an Electrical Charge. Not a run_out_debuff for the responder: binding the tank 15 yards from
+# everyone for the whole minute would pull it away from its melee.
+
+[[boss.mechanic]]
+id = "uld.iron_council.electrical_charge"
+name = "Electrical Charge"
+kind = "raid_cooldowns"
+phase = "hard_mode"
+roles = ["healer"]
+spells = [61902]
+handled_by = "none"
+explain = "In hard mode every player death heals Steelbreaker by a fifth and makes him hit a quarter harder; healers keep everyone alive."
+check = "none"
+# Cast on himself for each player he kills in his last phase and for each Meltdown (61889).
+
+[[boss.mechanic]]
+id = "uld.iron_council.shield_of_runes"
+name = "Shield of Runes"
+kind = "dispel"
+roles = ["ranged"]
+spells = { "10" = [62274], "25" = [63489] }
+handled_by = "partial"
+playerbots = ["purge", "spellsteal"]
+handled_note = "a shaman's Purge or a mage's Spellsteal removes it when one is in the raid"
+explain = "Molgeim shields himself with runes; purge or spellsteal the shield, because breaking it with damage makes him deal half again more damage for fifteen seconds."
+check = "none"
+cast = 1.5
+duration = 30
+first = 20
+every = 27
+# The absorb (20000 / 50000, magic) gives him Shield of Runes (62277 / 63967, +50 percent damage, 15 s) only when it
+# is used up; a dispel leaves no buff (spell_shield_of_runes_aura). Not interruptible (no prevention type).
+
+[[boss.mechanic]]
+id = "uld.iron_council.rune_of_power"
+name = "Rune of Power"
+kind = "positional"
+roles = ["tank"]
+spells = [61973]
+handled_by = "playerbots"
+playerbots = ["iron assembly rune of power action"]
+explain = "Molgeim drops a Rune of Power under whichever of them is most hurt; anyone in its five yards deals half again more damage, so tanks drag the bosses off it."
+check = "none"
+radius = 5
+cast = 1.5
+first = 30
+every = 60
+# The rune (33705) pulses 64320 (+50 percent damage done, 5 yards) every half second for 60 s. Its conditions take
+# every unit but the rune itself, so players standing in it are buffed too. Stock: a tank whose target has 64320
+# and is attacking it backs off 10 yards (a real move).
+
+[[boss.mechanic]]
+id = "uld.iron_council.rune_of_death"
+name = "Rune of Death"
+kind = "avoid_ground"
+phase = ["two", "last"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [62269], "25" = [63490] }
+handled_by = "partial"
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out after the effect lands, and only for bots with a real-player master (off in all-bot raids)"
+explain = "Molgeim marks the ground under a player with a Rune of Death for thirty seconds that burns anyone within thirteen yards; everyone steps out of it at once."
+check = "uld.iron_council.check_avoid"
+radius = 13
+duration = 30
+first = 35
+every = 30
+area = "dest"
+respond_roles = ["tank", "healer", "melee", "ranged"]
+# An instant persistent area aura at a random player (2750 / 3500 every half second, 13 yards, 30 s): a ground effect
+# left by an instant cast, answered round the target's place. The hazard scan also sees it (a hostile damaging
+# dynamic object of 13 yards).
+
+[[boss.mechanic]]
+id = "uld.iron_council.rune_of_summoning"
+name = "Rune of Summoning"
+kind = "switch_adds"
+phase = "last"
+roles = ["melee", "ranged"]
+spells = [62273]
+hits = { "10" = [62054], "25" = [63491] }
+adds = [32958, 33689]
+handled_by = "none"
+explain = "When Molgeim is the last he places a Rune of Summoning that lets out Lightning Elementals; each runs at a player and explodes over thirty yards, so kill them on the way in."
+check = "none"
+cast = 2
+first = 20
+every = 30
+# The rune lives 12 s and lets out an elemental every other second. An elemental follows a random player and casts
+# Lightning Blast (62054 / 63491, 30 yards) when it arrives.
+
+[[boss.mechanic]]
+id = "uld.iron_council.chain_lightning"
+name = "Chain Lightning"
+kind = "interrupt"
+roles = ["melee", "ranged"]
+spells = { "10" = [61879], "25" = [63479] }
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
+explain = "Brundir's Chain Lightning jumps from player to player; interrupt it every time."
+check = "none"
+cast = 2
+first = 9
+every = 9
+
+[[boss.mechanic]]
+id = "uld.iron_council.overload"
+name = "Overload"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [61869], "25" = [63481] }
+hits = [61878]
+handled_by = "partial"
+playerbots = ["iron assembly overload action"]
+handled_note = "stock moves healers and damage dealers within 35 yards of Brundir out to 25 while he has Overload; it leaves tanks where they are"
+explain = "Brundir charges Overload for six seconds, then blasts and stuns everyone within twenty yards of him; everyone, tanks included, gets out before it goes off."
+check = "uld.iron_council.check_avoid"
+radius = 20
+duration = 7
+first = 25
+every = 25
+area = "caster"
+respond_roles = ["tank"]
+# A 6 s self channel the script starts as a triggered cast (not interruptible: no prevention type); its one tick at
+# the end casts 61878 (20 yards, damage and stun; the 25-man aura triggers the same id). The script keeps him
+# alive through it while another council member lives. Held 7 s so the end tick is covered. Only tanks are left to
+# the responder (a tank holding Steelbreaker or Molgeim near him takes its boss out too).
+
+[[boss.mechanic]]
+id = "uld.iron_council.lightning_whirl"
+name = "Lightning Whirl"
+kind = "interrupt"
+phase = ["two", "last"]
+roles = ["melee", "ranged"]
+spells = { "10" = [61915], "25" = [63483] }
+hits = { "10" = [61916], "25" = [63482] }
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
+explain = "Once one of them is down, Brundir spins a Lightning Whirl that strikes several players each second for five seconds; interrupt it."
+check = "none"
+duration = 5
+first = 20
+every = 10
+# A 5 s channel (interruptible: interrupt channel flag and silence prevention); each second 61916 / 63482 hits 3 / 8
+# random players in the room (SpellInfoCorrections).
+
+[[boss.mechanic]]
+id = "uld.iron_council.lightning_tendrils"
+name = "Lightning Tendrils"
+kind = "avoid_ground"
+phase = "last"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [61887], "25" = [63486] }
+hits = { "10" = [61886], "25" = [63485] }
+handled_by = "playerbots"
+playerbots = ["iron assembly lightning tendrils action"]
+explain = "When Brundir is the last he rises with Lightning Tendrils for about sixteen seconds, drifting after players and shocking all within eighteen yards; keep well away from him."
+check = "uld.iron_council.check_avoid"
+radius = 18
+duration = 17
+first = 15
+every = 35
+area = "caster"
+# Every second 61886 / 63485 hits within 18 yards of him; he moves to a random player every 6 s and lands after
+# about 17 s. Stock moves every bot within 35 yards of him out to 28 yards while he has the aura, any role (a real
+# move), so the responder leaves it.
+
+[[boss.mechanic]]
+id = "uld.iron_council.berserk"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [47008]
+handled_by = "none"
+explain = "They berserk after fifteen minutes; it is a damage race."
+check = "none"
+first = 900
+
+[[boss.check]]
+id = "uld.iron_council.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Rune of Death", "Overload", "Lightning Tendrils"]
+max_hits = 4
+
+[[boss]]
+index = 5
+name = "Kologarn"
+slug = "kologarn"
+creatures = [32930, 33909]
+script = "boss_kologarn.cpp"
+enrage = 480
+melee_behind = false
+no_behind_since = 2
+call = "kologarn: break the right arm, kill rubble, kite eye beams"
+phase = [{ id = "main", name = "Main fight" }]
+# He is a vehicle fixed in the pit that never turns (DisableRotate): melee cannot get behind him. A bot that drops
+# below his platform is teleported back by stock ("kologarn fall from floor action", a cheat). Stock hunters also
+# take Aspect of the Wild ("kologarn nature resistance action", a real spell) against the eye beams.
+
+[[boss.mechanic]]
+id = "uld.kologarn.crunch_armor"
+name = "Crunch Armor"
+kind = "tank_swap_at_stacks"
+only = ["25"]
+roles = ["tank"]
+spells = { "25" = [64003, 64006] }
+hits = { "25" = [64002] }
+handled_by = "partial"
+playerbots = ["kologarn crunch armor action"]
+handled_note = "stock never swaps; with the raid cheat (on by default) a bot tank's Crunch Armor is simply removed, a real-player tank keeps it"
+explain = "On 25-man each Overhead Smash leaves Crunch Armor, a quarter of the tank's armour per stack for 45 seconds, up to four stacks; the second tank takes over before it piles up."
+check = "none"
+stacks = 4
+duration = 45
+first = 8
+every = 14
+# Overhead Smash (64003) and the one-armed one (64006) apply 64002. On 10-man they apply 63355: one stack for 6 s,
+# so no swap is needed there.
+
+[[boss.mechanic]]
+id = "uld.kologarn.overhead_smash"
+name = "Overhead Smash tremor"
+kind = "positional"
+roles = ["healer", "ranged"]
+spells = { "10" = [63356, 63573], "25" = [64003, 64006] }
+hits = { "10" = [64715], "25" = [64710] }
+handled_by = "none"
+explain = "Each Overhead Smash also shakes the ground within twenty yards of him, hurting everyone there and interrupting their spells; healers and ranged stand beyond that."
+check = "none"
+range = 20
+first = 8
+every = 14
+# Both smashes make him cast Overhead Smash Tremor on himself: damage and an interrupt to every enemy within 20 yards.
+# Stock ranged keep their usual spell distance; nothing places them for this.
+
+[[boss.mechanic]]
+id = "uld.kologarn.petrifying_breath"
+name = "Petrifying Breath"
+kind = "positional"
+roles = ["tank"]
+spells = { "10" = [62030], "25" = [63980] }
+handled_by = "playerbots"
+playerbots = ["tank"]
+explain = "If nobody is in his melee reach he breathes on his target and makes their skin brittle; a tank stays in melee with him the whole fight."
+check = "none"
+duration = 4
+# He breathes only when his target is out of melee range and no other enemy is in it (from 3 s after the pull):
+# 4 s of damage plus Brittle Skin (62055, more damage taken). Stock tanks hold melee as usual.
+
+[[boss.mechanic]]
+id = "uld.kologarn.stone_grip"
+name = "Stone Grip"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = { "10" = [62166], "25" = [63981] }
+hits = { "10" = [64290], "25" = [64292] }
+adds = [32934, 33911]
+handled_by = "partial"
+playerbots = ["kologarn mark dps target action", "kologarn rti target action", "attack rti target"]
+handled_note = "stock keeps skull on the right arm for damage dealers whenever no rubble lives, which frees the gripped; while rubble is up they wait"
+explain = "His right arm grabs one player, three on 25-man, and crushes them; damage dealers break the right arm fast, or the gripped die after fifteen seconds."
+check = "none"
+duration = 15
+first = 15
+every = 25
+targets = { "10" = 1, "25" = 3 }
+# Never his current target. The gripped take 64290 / 64292 each second and Squeezed Lifeless (64708) kills them
+# after 15 s; they are let go once the right arm takes 80000 / 380000 damage (script) or dies.
+
+[[boss.mechanic]]
+id = "uld.kologarn.shockwave"
+name = "Shockwave"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = { "10" = [63766], "25" = [63983] }
+hits = { "10" = [63783], "25" = [63982] }
+handled_by = "none"
+explain = "While his left arm lives it slams the floor every seventeen seconds, hitting the whole raid with Shockwave; healers keep everyone topped up for it."
+check = "none"
+first = 17
+every = 17
+# Cast by the arm-sweep stalker (33661) while the left arm is attached; 63783 / 63982 reach 200 yards, so there is
+# nowhere to move to.
+
+[[boss.mechanic]]
+id = "uld.kologarn.focused_eyebeam"
+name = "Focused Eyebeam"
+kind = "kite"
+roles = ["healer", "melee", "ranged"]
+spells = [63342]
+hits = { "10" = [63346], "25" = [63976] }
+adds = [33632, 33906, 33802, 33907]
+handled_by = "partial"
+playerbots = ["kologarn eyebeam action", "avoid aoe"]
+handled_note = "stock teleports any bot within four yards of a beam to one of two fixed spots (a raid cheat, on by default); nobody leads the beams away"
+explain = "Two eye beams lock onto a far player and follow them, burning everything within three yards; that player keeps moving and leads the beams away from the raid."
+check = "uld.kologarn.check_avoid"
+radius = 3
+duration = 10
+first = 10
+every = 20
+# 63342 picks one of the three farthest non-tank players, who summons both beams beside themself (a player's cast,
+# so no creature cast start); each beam chases that player and from 2 s on ticks 63346 / 63976 every second, 3
+# yards round it, for its 10 s life. The beams run slower than a player. Not a responded kind: moving the chased
+# player out of a 3-yard circle each tick is no kite, and stock's teleport already relocates bots near a beam. The
+# hazard scan sees both beams (unselectable hostile npcs whose periodic trigger does damage, 3 yards plus reach).
+
+[[boss.mechanic]]
+id = "uld.kologarn.rubble"
+name = "Rubble"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = { "10" = [63818], "25" = [63978] }
+adds = [33768, 33908]
+handled_by = "playerbots"
+playerbots = ["kologarn mark dps target action", "kologarn rti target action", "attack rti target", "kologarn rubble slowdown action"]
+explain = "Each arm that dies drops five rubble that pound anyone near them; damage dealers kill the rubble at once and hunters slow it."
+check = "none"
+# Rumble (63818, 7 yards) on 10-man, Stone Nova (63978, 10 yards, stacking) on 25-man, every 8-14 s. Falling
+# Rubble (63821 / 64001, 10 yards) lands where the arm fell. Stock marks rubble skull ahead of everything and its
+# hunters drop Frost Trap on it.
+
+[[boss.mechanic]]
+id = "uld.kologarn.arms"
+name = "His arms"
+kind = "kill_order"
+roles = ["melee", "ranged"]
+spells = []
+adds = [32933, 33910, 32934, 33911]
+handled_by = "playerbots"
+playerbots = ["kologarn mark dps target action", "kologarn rti target action", "attack rti target"]
+explain = "Each arm that dies takes a big bite out of his health and grows back fifty seconds later; damage dealers break the right arm first, then the rubble, then hit him."
+check = "none"
+# An arm's death deals Arm Dead Damage (63629) to him. Stock's order: rubble, then the right arm, then him (skull);
+# the left arm gets the moon mark, which nobody attacks.
+
+[[boss.mechanic]]
+id = "uld.kologarn.stone_shout"
+name = "Stone Shout"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = { "10" = [63716], "25" = [64005] }
+hits = { "10" = [63720], "25" = [64004] }
+handled_by = "none"
+explain = "With both arms gone he shouts at the whole raid every few seconds until an arm grows back; heal through it."
+check = "none"
+cast = 1.1
+# From 5 s after the second arm falls, again about every 2 s while both are down.
+
+[[boss.mechanic]]
+id = "uld.kologarn.berserk"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [64238]
+handled_by = "none"
+explain = "He berserks after eight minutes; it is a damage race."
+check = "none"
+first = 480
+
+[[boss.check]]
+id = "uld.kologarn.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Focused Eyebeam"]
+max_hits = 2
+
+# Ulduar (603): Auriaya (6), Hodir (7), Freya (9). Spell ids, timers and phases come from this server's
+# boss scripts (boss_auriaya.cpp, boss_hodir.cpp, boss_freya.cpp), Spell.dbc, spell_cone, spell_custom_attr,
+# creature_template(_addon), smart_scripts and the core's SpellInfoCorrections; the 25-man ids follow the world
+# database's spelldifficulty_dbc (Spell.dbc has no SpellDifficulty rows for these spells).
+#
+# Stock playerbots' "ulduar" strategy (src/Ai/Raid/Uld) for these three bosses:
+# - "auriaya fall from floor action": a cheat. A bot below z 410 in her room is teleported to its master; it plays
+#   no mechanic, so nothing below names it.
+# - "hodir move snowpacked icicle": a real move. While Hodir casts Flash Freeze, every bot more than 5 yards (2D)
+#   from the nearest Snowpacked Icicle Target (33174) walks onto it (MoveTo, normal priority, not forced).
+# - "hodir biting cold jump": a cheat. Only with the raid cheat on, a bot with 2+ Biting Cold stacks while its master
+#   has fewer simply has the aura removed (no jump, no move).
+# - "hodir frost resistance action", "freya nature resistance action", "freya fire resistance action": a paladin's
+#   resistance aura or a hunter's Aspect of the Wild only; no mechanic is played, so nothing below names them.
+# - "freya move away nature bomb": a real move (FleePosition 13 yards, combat priority) from any Nature Bomb object
+#   within 12 yards, for every bot.
+# - "freya mark dps target action": a tank bot (an assist tank when the main tank is a real player) marks skull:
+#   Eonar's Gift, else the Ancient Conservator, else the trio member with the most health, else the first Detonating
+#   Lasher only while every member has more health than a Detonate (4900 / 7200); damage bots follow skull, their
+#   default mark. It sets square on Freya.
+# - "freya move to healing spore action": ranged bots (ranged damage dealers and healers) walk within 6 yards of the
+#   nearest Healthy Spore while the Ancient Conservator lives (combat priority).
+# None of these moves is a forced move, so the responder never has to yield to them.
+
+[[boss]]
+index = 6
+name = "Auriaya"
+slug = "auriaya"
+creatures = [33515, 34175]
+script = "boss_auriaya.cpp"
+enrage = 600
+melee_behind = false
+no_behind_since = 2
+call = "auriaya: all in front, kick the blast, out of pools"
+phase = [{ id = "main", name = "Main fight" }]
+# Melee are not scored for standing behind her: Sonic Screech splits its damage among everyone in her front cone,
+# so the melee belong in front with the tank.
+
+[[boss.mechanic]]
+id = "uld.auriaya.sonic_screech"
+name = "Sonic Screech"
+kind = "soak"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [64422], "25" = [64688] }
+handled_by = "none"
+explain = "Sonic Screech blasts everything in front of her and splits its damage among all it hits; the whole raid stands in front of her with the tank to share it."
+check = "none"
+radius = 80
+cast = 2.5
+first = 45
+every = 50
+# A 120 degree frontal cone (spell_cone 120 for both ids), 80 yards long. spell_custom_attr gives both
+# SPELL_ATTR0_CU_SHARE_DAMAGE, so the 10-man 60125 and the 25-man 190000 base damage are divided among the targets
+# hit. A soak: the responder never moves anyone for it (it does not answer soaks), and no rule here moves bodies out
+# of her front.
+
+[[boss.mechanic]]
+id = "uld.auriaya.terrifying_screech"
+name = "Terrifying Screech"
+kind = "dispel"
+roles = ["healer"]
+spells = [64386]
+handled_by = "partial"
+playerbots = ["fear ward on main tank"]
+handled_note = "a priest bot keeps Fear Ward on the main tank, which stops one fear in three minutes; no default shaman totem set drops a Tremor Totem"
+explain = "Every thirty-five seconds Terrifying Screech fears everyone for three seconds just before Sentinel Blast; Fear Ward or a Tremor Totem keeps a kicker free."
+check = "none"
+cast = 2
+duration = 3
+first = 35
+every = 35
+# A magic fear (dispel type 1, mechanic fear) on every player in the room. Her immunities (creature_immunities -286)
+# do not include interrupts, and Spell.dbc lets this cast be interrupted too; it is left to the raid.
+
+[[boss.mechanic]]
+id = "uld.auriaya.sentinel_blast"
+name = "Sentinel Blast"
+kind = "interrupt"
+roles = ["melee", "ranged"]
+spells = { "10" = [64389], "25" = [64678] }
+hits = { "10" = [64392], "25" = [64679] }
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only, and a feared bot casts nothing; nobody is assigned to kick"
+explain = "Right after the fear she channels Sentinel Blast, shadow damage on everyone that also raises their shadow damage taken; interrupt it as soon as you can."
+check = "none"
+cast = { "10" = 4, "25" = 2 }
+duration = 3
+first = 36
+every = 35
+# A cast (4 s on 10-man, 2 s on 25-man) then a 3 s channel triggering 64392 / 64679 every second: 3500 / 6000 shadow
+# to every player and pet and +100% shadow damage taken per stack (5 stacks, 5 s). SpellInfoCorrections makes the
+# channel's aura magic. She is immune to interrupts only for the 3 s after she wakes the Feral Defender. Each blast
+# delays her other events by 5 s.
+
+[[boss.mechanic]]
+id = "uld.auriaya.guardian_swarm"
+name = "Guardian Swarm"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = [64396]
+adds = [34034, 34169]
+handled_by = "none"
+explain = "Guardian Swarm sets ten small cats on her tank over five seconds; area damage kills them before they shred that player."
+check = "none"
+cast = 2
+first = 70
+every = 40
+# Cast at her victim: 64397 summons a Swarming Guardian every half second for 5 s, and 65029 focuses them on him.
+
+[[boss.mechanic]]
+id = "uld.auriaya.sanctum_sentries"
+name = "Sanctum Sentry"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = []
+adds = [34014, 34166]
+handled_by = "none"
+explain = "Her Sanctum Sentries fight beside her and empower allies within ten yards; a second tank holds them apart from her and the raid kills them first."
+check = "none"
+# Strength of the Pack (64369 -> 64381 every second) gives allies within 10 yards +30% damage, Auriaya included.
+# Each sentry also pounces on players 8-25 yards away (Savage Pounce 64666 / 64374) and stacks Rip Flesh on its target
+# (64375 / 64667).
+
+[[boss.mechanic]]
+id = "uld.auriaya.feral_defender"
+name = "Feral Defender"
+kind = "switch_adds"
+roles = ["tank", "melee", "ranged"]
+spells = [64449]
+adds = [34035, 34171]
+handled_by = "none"
+explain = "A minute in the Feral Defender joins and leaps at random players; it gets up again thirty-five seconds after each death until it has died nine times."
+check = "none"
+first = 60
+# Eight Feral Essence stacks (64455): each lethal blow is a feign death that takes one stack and leaves a pool; it
+# rises 35 s later at full health with random aggro (61906), Feral Pounce (64478 / 64669) and Feral Rush (64496 /
+# 64674). With no stack left it dies for good.
+
+[[boss.mechanic]]
+id = "uld.auriaya.seeping_essence"
+name = "Seeping Feral Essence"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [64459], "25" = [64675] }
+handled_by = "partial"
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out of the pool once inside it, and only for bots with a real-player master"
+explain = "Each time the Feral Defender dies it leaves a pool that burns anyone within five yards for the rest of the fight; never stand in one and keep the cat off them."
+check = "uld.auriaya.check_avoid"
+radius = 5
+duration = 2
+# Not answered by the responder: every one of up to nine pools ticks a fresh mechanic each second, which would
+# crowd native's 64 mechanics in force; the hazard scan already measures each as a trigger npc (5 yd).
+area = "none"
+respond_roles = []
+# Each death summons an Auriaya Seeping Essence Stalker (64457 -> 34098 / 34174), an unselectable trigger npc whose
+# addon aura (64458 / 64676) casts 64459 / 64675 every second: 4500 / 6500 within 5 yards, until the fight ends. The
+# hazard scan already sees it (a trigger npc with a periodic damage aura, 5 yards). Answered at every tick, round the
+# stalker, for 2 s, so a bot is kept out as long as the pool burns. Up to nine pools, each ticking once a second.
+
+[[boss.mechanic]]
+id = "uld.auriaya.enrage"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [47008]
+handled_by = "none"
+explain = "She goes berserk after ten minutes; the kill has to come before then."
+check = "none"
+first = 600
+
+[[boss.check]]
+id = "uld.auriaya.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Seeping Feral Essence"]
+max_hits = 3
+
+[[boss]]
+index = 7
+name = "Hodir"
+slug = "hodir"
+creatures = [32845, 32846]
+script = "boss_hodir.cpp"
+enrage = 480
+call = "hodir: keep moving, snowdrift at flash freeze, break ice"
+phase = [
+  { id = "main", name = "Main fight" },
+  { id = "hard_mode", name = "Hard mode (kill him within three minutes, before the Rare Cache shatters)" },
+]
+
+[[boss.mechanic]]
+id = "uld.hodir.flash_freeze"
+name = "Flash Freeze"
+kind = "stack"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [61968]
+hits = [61968, 61969, 62226]
+handled_by = "playerbots"
+playerbots = ["hodir move snowpacked icicle"]
+explain = "Flash Freeze takes nine seconds to cast, then freezes everyone in ice; stand on a snowdrift where an icicle fell, since anyone still frozen at the next one dies."
+check = "none"
+radius = 9
+cast = 9
+first = 48
+every = 48
+area = "none"
+# At the cast's start Hodir force-casts 62476 (10) / 62477 (25) on 2 / 3 random players, each dropping a Snowpacked
+# Icicle (33173) at its own feet; it lands about 3.7 s later and leaves a Snowdrift (62463) with a Snowpacked Icicle
+# Target (33174), whose addon aura Safe Area (65705) pulses 62464 within 9 yards and spares those players. Anyone else
+# is stunned and then held in an ice block (61969); one already frozen dies (62226). The safe spots are nowhere when
+# the cast starts, so there is no cast-start place to gather on; stock walks every bot onto the nearest target.
+
+[[boss.mechanic]]
+id = "uld.hodir.snowpacked_icicle"
+name = "Snowpacked Icicle"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62460]
+hits = [65370]
+handled_by = "partial"
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps away from the falling icicle only in its last 1.7 seconds, and only for bots with a real-player master"
+explain = "As Flash Freeze begins, big icicles fall on a few players and burst for seven yards with a knockback; step out until it lands, then stand on the snowdrift it leaves."
+check = "uld.hodir.check_avoid"
+radius = 7
+first = 48
+every = 48
+targets = { "10" = 2, "25" = 3 }
+area = "caster"
+respond_roles = ["tank", "healer", "melee", "ranged"]
+# The marked players cast 62462 themselves (a force cast the responder cannot see), so this is answered at the
+# icicle's own fall aura (62460, cast by the Snowpacked Icicle 2 s after it appears), round the icicle, for that
+# aura's 1.7 s until Ice Shards (65370, 14000 within 7 yards, knockback) and the snowdrift land together. The binding
+# ends at the impact, before stock walks the bots onto the snowdrift there. The icicle is an unselectable npc whose
+# aura the hazard scan sees in those 1.7 s.
+
+[[boss.mechanic]]
+id = "uld.hodir.icicle"
+name = "Icicle"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62234]
+hits = [62457]
+handled_by = "partial"
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps away from the icicle only in its last 1.7 seconds, and only for bots with a real-player master"
+explain = "Between Flash Freezes an icicle falls on a random player every two seconds and hits within four yards; step off the marked spot."
+check = "uld.hodir.check_avoid"
+radius = 4
+duration = 4
+first = 2
+every = 2
+area = "dest"
+respond_roles = ["tank", "healer", "melee", "ranged"]
+# His aura 62227 picks one unfrozen player every 2 s (63545) and casts 62234 on them, summoning an Icicle (33169) at
+# their feet; its fall aura (62236) hits 62457 (14000 within 4 yards, knockback) 3.7 s later. Answered at 62234,
+# round that spot, for 4 s. The aura is off from each Flash Freeze until 24 s (10-man) / 12 s (25-man) later. Moving
+# also sheds Biting Cold.
+
+[[boss.mechanic]]
+id = "uld.hodir.biting_cold"
+name = "Biting Cold"
+kind = "stop_casting"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62038]
+hits = [62039, 62188]
+handled_by = "partial"
+playerbots = ["hodir biting cold jump"]
+handled_note = "a cheat, only with the raid cheat on: a bot with two stacks while its master has fewer has the debuff removed; no bot moves to shed it"
+explain = "Biting Cold stacks on anyone standing still and its damage doubles with each stack; keep moving between casts, or stand by the mage's Toasty Fire, to shed it."
+check = "none"
+stacks = 8
+# Script: standing still adds a stack every 4 s, moving (or Toasty Fire's aura 62821) takes one off every 2 s, and the
+# damage each second is 200 x 2^stacks (62188).
+
+[[boss.mechanic]]
+id = "uld.hodir.freeze"
+name = "Freeze"
+kind = "dispel"
+roles = ["healer"]
+spells = [62469]
+handled_by = "partial"
+playerbots = ["dispel magic on party", "cleanse magic on party"]
+handled_note = "a priest or paladin bot's magic dispel removes it when one is present and free"
+explain = "Freeze hits and roots everyone within ten yards of a random player for ten seconds; it is magic, so healers dispel the rooted."
+check = "none"
+radius = 10
+duration = 10
+first = 18
+every = 18
+# An instant missile (speed 40) at a random unfrozen player within 50 yards: 5550 frost and a 10 s root within 10
+# yards of where it lands; magic. It reaches its spot within about a second, too fast to walk 10 yards, so it is
+# left as a dispel. The freed priest helper dispels it as well (63499).
+
+[[boss.mechanic]]
+id = "uld.hodir.frozen_blows"
+name = "Frozen Blows"
+kind = "raid_cooldowns"
+roles = ["tank", "healer"]
+spells = { "10" = [62478], "25" = [63512] }
+hits = { "10" = [62867, 64544], "25" = [63511, 64545] }
+handled_by = "none"
+explain = "Soon after each Flash Freeze he gains Frozen Blows for twenty seconds: his hits on the tank add heavy frost damage and the raid takes frost every two seconds."
+check = "none"
+duration = 20
+first = 63
+every = 48
+# Cast 15 s after each Flash Freeze begins: his physical damage drops 70% but each melee hit adds 31062 / 40000
+# frost (62867 / 63511), and 64544 / 64545 hits everyone for 4000 every 2 s.
+
+[[boss.mechanic]]
+id = "uld.hodir.ice_blocks"
+name = "Flash Freeze ice blocks"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = []
+adds = [32926, 33352, 32938, 33353]
+handled_by = "none"
+explain = "The helpers start the fight frozen, and anyone a Flash Freeze catches is iced and dies at the next one; break those ice blocks quickly."
+check = "none"
+# Player blocks are Flash Freeze 32926 (25-man 33352), helper blocks 32938 (33353). The freed mage helper melts the
+# helpers' blocks too (64528). Hitting a helper's block before the pull starts the fight.
+
+[[boss.mechanic]]
+id = "uld.hodir.helper_buffs"
+name = "Helper buffs"
+kind = "positional"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [62807, 65123, 62821], "25" = [62807, 65133, 62821] }
+handled_by = "none"
+explain = "Freed helpers buff the raid: stand in the druid's Starlight for haste, by the mage's Toasty Fire against the cold, and beside the Storm Cloud player for crits."
+check = "none"
+# Starlight (62807): +50% haste within 8 yards of the druid's spot. Toasty Fire (62821, the fire npc 33342): within 11
+# yards, and it stops and sheds Biting Cold. Storm Cloud (65123 / 65133) on a player gives Storm Power (63711 / 65134,
+# +135% critical damage) to allies within 3 yards of them. The priest helper heals (62809).
+
+[[boss.mechanic]]
+id = "uld.hodir.rare_cache"
+name = "Rare Cache of Winter"
+kind = "enrage_timer"
+phase = "hard_mode"
+roles = ["melee", "ranged"]
+spells = [65272]
+handled_by = "none"
+explain = "In hard mode the kill has to come within three minutes of the pull, before he shatters the Rare Cache of Winter."
+check = "none"
+first = 180
+# 65272 is put on him at the pull; its one tick at 180 s casts Shatter Chest (62501) on the cache. Nothing else in
+# the fight changes.
+
+[[boss.mechanic]]
+id = "uld.hodir.enrage"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [26662]
+handled_by = "none"
+explain = "He goes berserk after eight minutes; the kill has to come before then."
+check = "none"
+first = 480
+
+[[boss.check]]
+id = "uld.hodir.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Ice Shards"]
+max_hits = 2
+
+# Thorim (603:8) and Mimiron (603:10). Spell ids, timers and radii come from boss_thorim.cpp and
+# boss_mimiron.cpp, Spell.dbc, spell_cone, spell_jump_distance, conditions, spell_linked_spell, the
+# creatures' SmartAI rows and SpellInfoCorrections; explanations are our own words. Ulduar spells carry no
+# SpellDifficulty.dbc row: the 25-man ids come from the world database's spelldifficulty_dbc, and a spell
+# with no row there is the same on both sizes.
+#
+# Stock playerbots (src/Ai/Raid/Uld) for Thorim: "thorim gauntlet positioning action" picks a gauntlet team
+# by group order (an off-tank, three damage dealers and a healer; seven and two on 25-man) that only moves
+# when its master leads it up the gauntlet; "thorim arena positioning action" gathers everyone else at the
+# arena centre whenever no arena add is up; "thorim mark dps target action" has the main tank skull the
+# opening pack's Acolyte, then an Evoker, and the off-tank cross the gauntlet's Acolyte, Colossus, Giant and
+# guards; "thorim phase 2 positioning action" holds the main tank and the ranged and healers on four fixed
+# spots once he is on the floor. Cheats: "thorim unbalancing strike action" strips the debuff (raid cheat
+# only) and "thorim fall from floor action" teleports a bot that fell through the floor to its master.
+# "thorim frost resistance action" and "thorim nature resistance action" are real auras (a paladin's Frost
+# Resistance Aura, a hunter's Aspect of the Wild) kept while he is fought.
+
+[[boss]]
+index = 8
+name = "Thorim"
+slug = "thorim"
+creatures = [32865, 33147]
+script = "boss_thorim.cpp"
+# Berserk (26662) comes five minutes after he jumps into the arena, not five minutes after the pull; phase
+# one has its own five-minute limit (uld.thorim.lightning_orb).
+enrage = 300
+call = "thorim: gauntlet team runs, arena holds the middle"
+phase = [
+  { id = "arena", name = "Arena and gauntlet" },
+  { id = "floor", name = "Thorim in the arena" },
+  { id = "hard_mode", name = "Hard mode (reach him within 150 s, before Touch of Dominion lands)" },
+]
+
+[[boss.mechanic]]
+id = "uld.thorim.split"
+name = "Arena and gauntlet"
+kind = "positional"
+phase = "arena"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = []
+handled_by = "partial"
+playerbots = ["thorim gauntlet positioning action", "thorim arena positioning action"]
+handled_note = "stock's gauntlet team (off-tank, three damage, a healer; seven and two on 25-man) runs only behind its master; the rest gather mid-arena between waves"
+explain = "The raid splits: a small team runs the gauntlet up to his balcony while the rest fight the arena adds; if the arena is ever left empty, his Lightning Orb kills everyone."
+check = "none"
+# Phase one opens 20 s after the six of the opening pack die. Every 5 s he looks for a living player in
+# the arena (x 2085-2185, y -305 to -214, below z 425); with none he summons the Lightning Orb. Phase two
+# starts when a player standing above z 430 (his balcony) damages him after the Ancient Rune Giant died.
+
+[[boss.mechanic]]
+id = "uld.thorim.lightning_orb"
+name = "Lightning Orb"
+kind = "enrage_timer"
+phase = "arena"
+roles = ["tank", "melee", "ranged"]
+spells = [62560, 62393]
+hits = [62392]
+handled_by = "none"
+explain = "Reach him within five minutes of the arena opening, or he enrages his adds and sends a Lightning Orb through the arena and gauntlet that kills everyone."
+check = "none"
+first = 300
+# At 5 min he casts Berserk (62560) on his adds within 200 yards and summons the Lightning Orb (33138),
+# whose 62393 aura pulses 62392 (100000 damage within 35 yards) every 0.2 s along its path.
+
+[[boss.mechanic]]
+id = "uld.thorim.charge_orb"
+name = "Charge Orb"
+kind = "avoid_ground"
+phase = "arena"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62016, 63238]
+hits = [62017]
+handled_by = "partial"
+playerbots = ["thorim arena positioning action"]
+handled_note = "stock gathers the arena team mid-arena, out of every orb's reach, only while no arena add is up; nobody leaves a charged orb during a wave"
+explain = "Every sixteen seconds he charges one of the orbs around the arena, which shocks everyone within thirty-five yards of it for fifteen seconds; fight in the middle, away from the glowing orb."
+check = "uld.thorim.check_avoid"
+radius = 35
+duration = 15
+cast = 2.5
+first = 14
+every = 16
+area = "caster"
+respond_spells = [63238]
+respond_roles = ["tank", "healer", "melee", "ranged"]
+# Charge Orb (62016, 2.5 s, his cast; conditions send it to one Thunder Orb, 33378) puts a 15 s aura on the
+# orb that casts Lightning Shock (62017, 35 yards) every second. The orb answers the hit with Lightning
+# Pillar (63238, triggered, its own cast), which is answered: 35 yards round that orb for the 15 s. The
+# seven orbs hang 13 yards up over the pillars, all about 42 yards from the arena centre, so the middle is
+# always safe. Not seen by the hazard scan or stock avoid aoe (35 yards is past their 15). Thorim's
+# balcony is 26 and 34 yards from the two southern orbs, so the gauntlet team can be held off him there
+# for up to 15 s when one of those is charged.
+
+[[boss.mechanic]]
+id = "uld.thorim.stormhammer"
+name = "Stormhammer"
+kind = "spread"
+phase = "arena"
+roles = ["healer", "ranged"]
+spells = [62042]
+hits = [62042, 62470]
+handled_by = "none"
+explain = "From his balcony he throws Stormhammer at a player, stunning them and blasting everyone within eight yards with Deafening Thunder; casters stand apart."
+check = "uld.thorim.check_avoid"
+radius = 8
+cast = 0.5
+first = 8
+every = 16
+area = "none"
+# 62042 hits one random enemy within 100 yards of him (its explicit victim is not the one hit), stuns it
+# 2 s, and the hit makes the target cast Deafening Thunder (62470, spell_linked_spell): 8 yards of damage
+# and 15 yards of -75% casting speed on the players round it. Left alone: the cast start does not say who
+# is hit, a spread would fight stock's mid-arena gather between waves, and the gauntlet team (also in
+# reach) would be pushed about in a hall whose sides the Runic Colossus smashes.
+
+[[boss.mechanic]]
+id = "uld.thorim.arena_adds"
+name = "Dark Rune adds"
+kind = "kill_order"
+phase = "arena"
+roles = ["melee", "ranged"]
+spells = []
+adds = [32878, 33156, 32886, 33159, 32877, 33155, 32876, 33158, 32904, 33157]
+handled_by = "playerbots"
+playerbots = ["thorim mark dps target action"]
+explain = "Dark Rune adds leap into the arena all through the first phase; kill the Acolytes and Evokers first, because they heal the rest."
+check = "none"
+# Waves: a Warbringer every 15 s (Aura of Celerity), an Evoker every 20 s, six or seven Commoners every
+# 21 s and a Champion every 25 s, each landing 19-24 yards from the centre. The opening pack's Acolyte
+# (32886) heals it. Stock's main tank skulls the Acolyte, then an Evoker within 50 yards.
+
+[[boss.mechanic]]
+id = "uld.thorim.dark_rune_heals"
+name = "Greater Heal and Runic Mending"
+kind = "interrupt"
+phase = "arena"
+roles = ["melee", "ranged"]
+spells = { "10" = [62334, 62328], "25" = [62442, 62446] }
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
+explain = "Dark Rune Acolytes cast Greater Heal and Evokers cast Runic Mending on their friends; interrupt both."
+check = "none"
+cast = 2
+
+[[boss.mechanic]]
+id = "uld.thorim.runic_shield"
+name = "Runic Shield"
+kind = "dispel"
+phase = "arena"
+roles = ["healer", "ranged"]
+spells = { "10" = [62321], "25" = [62529] }
+handled_by = "partial"
+playerbots = ["purge", "spellsteal"]
+handled_note = "a shaman's Purge or a mage's Spellsteal takes it off the bot's own target, when that class is in the raid"
+explain = "Evokers wrap themselves in Runic Shield, a large magic absorb; purge or spellsteal it."
+check = "none"
+cast = 0.5
+duration = 60
+# A magic buff (dispel type 1) absorbing 40000 (10) or 120000 (25) and halving physical damage taken.
+
+[[boss.mechanic]]
+id = "uld.thorim.runic_smash"
+name = "Runic Smash"
+kind = "avoid_ground"
+phase = "arena"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62057, 62058]
+hits = [62465]
+handled_by = "partial"
+playerbots = ["thorim gauntlet positioning action"]
+handled_note = "stock's gauntlet team stands on fixed spots on its master's side of the hall, so it dodges a smash only when its master does"
+explain = "Until it is engaged, the Runic Colossus smashes the left or right half of the gauntlet hall every eleven seconds after a five-second wind-up; run down the other half."
+check = "uld.thorim.check_avoid"
+radius = 10
+cast = 5
+every = 11
+area = "none"
+respond_roles = []
+# The colossus casts 62057 or 62058 on itself; at the hit every hand bunny of one row (33140 or 33141,
+# about 16 each down the hall) casts 62465, 10 yards round itself. The danger is that whole row, not a
+# place near the caster, so the responder leaves it.
+
+[[boss.mechanic]]
+id = "uld.thorim.gauntlet"
+name = "Gauntlet"
+kind = "kill_order"
+phase = "arena"
+roles = ["melee", "ranged"]
+spells = []
+adds = [33110, 33161, 32874, 33162, 32875, 33163, 32872, 33149, 32873, 33148]
+handled_by = "playerbots"
+playerbots = ["thorim mark dps target action"]
+explain = "The gauntlet team kills the Dark Rune Acolytes first, then the guards, the Runic Colossus and the Ancient Rune Giant; each mini-boss's death opens the next door."
+check = "none"
+# Stock's off-tank crosses an Acolyte, then the Colossus, the Giant and the guards; the gauntlet team
+# attacks the cross. The Giant's Runic Fortification (62942) makes the Dark Runes round it much stronger,
+# and it calls an Iron Honor Guard every 10 s once one has engaged.
+
+[[boss.mechanic]]
+id = "uld.thorim.rune_detonation"
+name = "Rune Detonation"
+kind = "avoid_ground"
+phase = "arena"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62526]
+hits = [62527]
+handled_by = "none"
+explain = "The Ancient Rune Giant roots a player with Rune Detonation, which explodes after four seconds on everyone within fifteen yards; move away from the rooted player."
+check = "uld.thorim.check_avoid"
+radius = 15
+duration = 4
+first = 12
+every = 12
+area = "dest"
+# 62526 roots its random target for 4 s, then the target's own 62527 hits its allies within 15 yards.
+# Answered at the cast, round the target (who cannot move anyway), for the 4 s.
+
+[[boss.mechanic]]
+id = "uld.thorim.lightning_charge"
+name = "Lightning Charge"
+kind = "move_out_cone"
+phase = "floor"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62976, 62186]
+hits = [62466]
+handled_by = "none"
+explain = "When a pillar's orb starts to glow he blasts a wide cone toward it five seconds later, and hits harder after each one; get out of the line between him and that orb."
+check = "uld.thorim.check_avoid"
+radius = 150
+first = 12.5
+every = 15
+area = "none"
+# He casts 62976 at a random pillar (32892); the Thunder Orb above it glows (62186, its tick moved to 5 s
+# by SpellInfoCorrections) and then pings him (62278); he turns to it and casts 62466, a 75-degree cone
+# (spell_cone) 150 yards long, and gains a stack of 62279 (+15% physical damage and attack speed). The
+# cone only exists once he turns, after the last cast a hook sees; stock's fixed floor spots ignore it.
+
+[[boss.mechanic]]
+id = "uld.thorim.unbalancing_strike"
+name = "Unbalancing Strike"
+kind = "tank_swap_at_stacks"
+phase = "floor"
+roles = ["tank"]
+spells = [62130]
+handled_by = "partial"
+playerbots = ["thorim unbalancing strike action"]
+handled_note = "only with the raid cheat on does stock strip the debuff from its tank (a cheat); nobody taunts"
+explain = "Unbalancing Strike cuts his tank's defense hard for fifteen seconds; the other tank taunts him after each strike."
+check = "none"
+stacks = 1
+duration = 15
+first = 8
+every = 20
+
+[[boss.mechanic]]
+id = "uld.thorim.chain_lightning"
+name = "Chain Lightning"
+kind = "spread"
+phase = "floor"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [62131], "25" = [64390] }
+handled_by = "none"
+explain = "His Chain Lightning jumps between players standing within five yards of each other; spread out once he is on the floor."
+check = "none"
+range = 5
+cast = 0.5
+first = 13
+every = 15
+area = "none"
+# Jumps 5 yards (spell_jump_distance), up to 8 targets. Left alone: stock holds the ranged and healers on
+# three fixed floor spots every tick with ordinary moves, which a spread would fight.
+
+[[boss.mechanic]]
+id = "uld.thorim.berserk"
+name = "Berserk"
+kind = "enrage_timer"
+phase = "floor"
+roles = ["melee", "ranged"]
+spells = [26662]
+handled_by = "none"
+explain = "He goes berserk five minutes after he jumps into the arena; the kill has to come before then."
+check = "none"
+first = 300
+
+[[boss.mechanic]]
+id = "uld.thorim.sif_frost_nova"
+name = "Sif's Frost Nova"
+kind = "avoid_ground"
+phase = "hard_mode"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [62597], "25" = [62605] }
+handled_by = "none"
+explain = "In hard mode Sif blinks to a spot in the arena and casts Frost Nova, hurting everyone within twelve yards and freezing them within fifteen; move away from her while she casts."
+check = "none"
+radius = 15
+cast = 2.5
+duration = 1
+first = 12.5
+every = 20
+area = "caster"
+# Sif teleports 2.5 s before the cast. 12 yards of damage, 15 yards of root (6 s). Answered at the cast
+# start, 15 yards round her, until just after it lands.
+
+[[boss.mechanic]]
+id = "uld.thorim.sif_blizzard"
+name = "Sif's Blizzard"
+kind = "avoid_ground"
+phase = "hard_mode"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [62577, 62576], "25" = [62603, 62602] }
+hits = { "10" = [62576], "25" = [62602] }
+handled_by = "partial"
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out of a patch after it lands, and only for bots with a real-player master"
+explain = "In hard mode Sif's Blizzard drifts slowly round the edge of the arena, leaving freezing patches eight yards wide; stay out of them."
+check = "none"
+radius = 8
+duration = 10
+first = 24
+every = 30
+area = "dest"
+respond_spells = { "10" = [62576], "25" = [62602] }
+respond_roles = ["tank", "healer", "melee", "ranged"]
+# Every 30 s she summons the Thorim Controller (32879, unselectable), which walks the arena's edge for 30 s
+# with 62577 (62603 on 25-man) dropping a 62576 (62602) patch at its feet every 2 s: a hostile damaging
+# dynamic object of 8 yards (SpellInfoCorrections) for 10 s, which the hazard scan sees. Each drop is
+# answered round its spot for its 10 s.
+
+[[boss.mechanic]]
+id = "uld.thorim.sif_frostbolt_volley"
+name = "Sif's Frostbolt Volley"
+kind = "raid_cooldowns"
+phase = "hard_mode"
+roles = ["healer"]
+spells = { "10" = [62580], "25" = [62604] }
+handled_by = "partial"
+playerbots = ["thorim frost resistance action"]
+handled_note = "a paladin keeps Frost Resistance Aura up while he is fought, when one is in the raid; the healing is the healers' own"
+explain = "In hard mode Sif's Frostbolt Volley hits and slows the whole raid every thirteen seconds; healers keep everyone topped up."
+check = "none"
+first = 20
+every = 13
+duration = 4
+
+[[boss.check]]
+id = "uld.thorim.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Lightning Shock", "Deafening Thunder", "Runic Smash", "Rune Detonation", "Lightning Charge"]
+max_hits = 3
+
+# Stock playerbots for Mimiron: "mimiron shock blast action" moves everyone within 15 yards (all melee) to
+# 20 yards from the Leviathan while it casts Shock Blast, and in the last phase teleports them out instead
+# (a cheat); "mimiron phase 1 positioning action" keeps the ranged and healers 6 yards apart; "mimiron rapid
+# burst action" sends every bot with forced moves to one of three ranged or three melee spots round VX-001
+# (in the last phase only the ranged, and the main tank to a tank spot); "mimiron rocket strike action"
+# steps 10 yards from a Rocket Strike mark (a teleport in the last phase, a cheat); "mimiron p3wx2 laser
+# barrage action" moves every bot to its master, teleporting any more than 15 yards away (a cheat);
+# "mimiron aerial command unit action" marks Bomb Bots (else the unit) with a cross for the ranged and an
+# Assault Bot with a skull, which the tanks and melee attack by default; "mimiron phase 4 mark dps action"
+# skulls the healthiest machine; "mimiron fire resistance action" is a paladin's Fire Resistance Aura;
+# "mimiron cheat action" (raid cheat only) kills every Proximity Mine and Bomb Bot near the main tank.
+
+[[boss]]
+index = 9
+name = "Freya"
+slug = "freya"
+creatures = [32906, 33360]
+script = "boss_freya.cpp"
+enrage = 600
+call = "freya: kill the gift, trio together, out of bombs"
+phase = [
+  { id = "adds", name = "Allies of Nature waves" },
+  { id = "bombs", name = "Nature bombs, after the waves" },
+  { id = "hard_mode", name = "Hard mode (one or more Elders still alive when she is pulled)" },
+]
+# Hard mode here: each Elder alive at the pull is made unselectable and passive, channels into her and is drained,
+# and she gains that Elder's power (Stonebark: Ground Tremor, Ironbranch: Iron Roots, Brightleaf: Unstable Sun Beam).
+# The Elders' own abilities (Brightleaf Flux, Solar Flare, Impale, Thorn Swarm, Fists of Stone, Petrified Bark, their
+# own Ground Tremor and Iron Roots) are cast only when an Elder is fought on its own before Freya, never in her fight,
+# so they are not listed. Brightleaf's own beams are the same Sun Beam npc casting the same 62451 / 62865, so the
+# unstable_sun_beam rule answers them there too. Touch of Eonar (62528 / 62892) heals her 6000 / 24000 a second.
+
+[[boss.mechanic]]
+id = "uld.freya.allies_of_nature"
+name = "Allies of Nature"
+kind = "switch_adds"
+phase = "adds"
+roles = ["melee", "ranged"]
+spells = [62685, 62686, 62687]
+adds = [33203, 33376, 33202, 33398, 32916, 33400, 32919, 33401, 32918, 33399]
+handled_by = "playerbots"
+playerbots = ["freya mark dps target action"]
+explain = "Six waves of her allies come, each a minute after the last or five seconds after it dies; kill every add, and when the waves end the nature bombs begin."
+check = "none"
+first = 10
+every = 60
+# A wave is the Ancient Conservator, the trio or ten Detonating Lashers, each kind twice in a random order. Every
+# first death takes Attuned to Nature (62519, 150 stacks, +8% healing taken each) down by 25, 10 or 2; all six waves
+# killed take all 150, which starts the bombs at once, else they start at the seventh minute tick.
+
+[[boss.mechanic]]
+id = "uld.freya.eonars_gift"
+name = "Eonar's Gift"
+kind = "switch_adds"
+roles = ["melee", "ranged"]
+spells = [62572]
+adds = [33228, 33385]
+handled_by = "playerbots"
+playerbots = ["freya mark dps target action"]
+explain = "Every forty-five seconds an Eonar's Gift sprouts and, twelve seconds later, heals her by thirty percent, sixty on 25-man; switch to it and kill it fast."
+check = "none"
+first = 30
+every = 45
+# 62572 lobs a missile that summons the Gift (62568) up to 35 yards away; after 12 s it casts Lifebinder's Gift
+# (62584 / 64185), a 30% / 60% heal on her and her allies. Stock marks it skull ahead of every other add.
+
+[[boss.mechanic]]
+id = "uld.freya.conservators_grip"
+name = "Conservator's Grip"
+kind = "positional"
+phase = "adds"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [62532]
+handled_by = "partial"
+playerbots = ["freya move to healing spore action"]
+handled_note = "stock walks ranged damage dealers and healers to the nearest Healthy Spore while the Conservator lives; melee and tanks stay gripped"
+explain = "The Ancient Conservator's Grip silences and pacifies everyone while it lives; stand within six yards of a Healthy Spore to be immune."
+check = "none"
+range = 6
+cast = 5
+first = 6
+# A 5 s cast 6 s after it engages, then an area aura on every player (pacify and silence) until it dies. Its spores
+# (33215, summoned every 8 s by 62566, gone after about 24 s) pulse Potent Pheromones (64321): silence immunity and
+# +25% damage within 6 yards. It is immune to interrupts (creature_immunities -343).
+
+[[boss.mechanic]]
+id = "uld.freya.natures_fury"
+name = "Nature's Fury"
+kind = "run_out_debuff"
+phase = "adds"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [62589], "25" = [63571] }
+hits = { "10" = [62590], "25" = [63570] }
+handled_by = "none"
+explain = "Nature's Fury makes its target hurt everyone within eight yards every two seconds for ten seconds; that player moves away from the others until it ends."
+check = "none"
+range = 8
+duration = 10
+first = 14
+every = 14
+area = "target"
+# The Conservator puts it on a random player (tank included) without it: every 2 s 62590 / 63570 hits the bearer's
+# allies within 8 yards. Answered at its cast: the bearer keeps 8 yards from everyone for its 10 s. A tank who gets
+# it holds his place (moving him would drag the Conservator through the melee), so tanks are not among the roles.
+
+[[boss.mechanic]]
+id = "uld.freya.elemental_trio"
+name = "Snaplasher, Storm Lasher and Ancient Water Spirit"
+kind = "switch_adds"
+phase = "adds"
+roles = ["tank", "melee", "ranged"]
+spells = [62686]
+adds = [32916, 33400, 32919, 33401, 33202, 33398]
+handled_by = "partial"
+playerbots = ["freya mark dps target action"]
+handled_note = "stock marks the member with the most health skull, which evens them out; it never holds back to kill all three inside the revive window"
+explain = "Snaplasher, Storm Lasher and the Water Spirit revive eleven seconds after dying while one of them still stands; even out their health and kill them together."
+check = "none"
+# Each dead member counts its own 11 s and comes back while fewer than three are down. Snaplasher's Hardened Bark
+# (62664 / 64191) grows its damage with each hit it takes; the Storm Lasher chains Lightning Lash (62648 / 62939).
+
+[[boss.mechanic]]
+id = "uld.freya.tidal_wave"
+name = "Tidal Wave"
+kind = "move_out_cone"
+phase = "adds"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [62653], "25" = [62935] }
+hits = { "10" = [62654], "25" = [62936] }
+handled_by = "none"
+explain = "The Water Spirit surges forty yards toward its target with Tidal Wave, a narrow wave that hits and knocks back everyone in its path; stay out of the line in front of it."
+check = "uld.freya.check_avoid"
+radius = 40
+angle = 20
+duration = 1
+cast = 2
+first = 12
+every = 12
+area = "cone"
+# A 2 s cast at its victim, then it charges 40 yards forward and casts 62654 / 62936 (5700 / 9250 and a knockback)
+# in a cone from where it stood: spell_cone 20 degrees, 40 yards. Answered at the cast's start, as a 20 degree front
+# cone toward its target, ending a second after the surge. Its tank is the target and cannot leave it, so tanks are
+# not among the roles.
+
+[[boss.mechanic]]
+id = "uld.freya.detonating_lashers"
+name = "Detonating Lasher"
+kind = "switch_adds"
+phase = "adds"
+roles = ["melee", "ranged"]
+spells = [62687]
+hits = { "10" = [62598], "25" = [62937] }
+adds = [32918, 33399]
+handled_by = "partial"
+playerbots = ["freya mark dps target action"]
+handled_note = "stock marks one lasher skull at a time and only while every member has more health than its death blast"
+explain = "Ten Detonating Lashers come at once and keep switching targets; each bursts for fire within fifteen yards as it dies, so kill them away from hurt players."
+check = "none"
+# Each Flame Lashes its target and picks a new random player every 10 s; Detonate (62598 / 62937, 4163 / 6825
+# within 15 yards) goes off the instant it dies, before any hook could move anyone.
+
+[[boss.mechanic]]
+id = "uld.freya.sunbeam"
+name = "Sunbeam"
+kind = "spread"
+roles = ["healer", "ranged"]
+spells = { "10" = [62623], "25" = [62872] }
+handled_by = "none"
+explain = "Sunbeam hits a random player and everyone within eight yards of them; ranged and healers stay spread apart."
+check = "none"
+radius = 8
+cast = 1.5
+first = 17
+every = 17
+area = "none"
+# A 1.5 s cast at a random player; it lands round that player's spot at the cast's end (5088 / 7400 nature), so the
+# target cannot step out of it. Moving the others out of a circle round where the target stood at the start would
+# pull the melee off her whenever the target is a melee, and a spread every 15-20 s costs the ranged and healers
+# their casts for a modest hit, so it is a standing spread, not answered.
+
+[[boss.mechanic]]
+id = "uld.freya.nature_bomb"
+name = "Nature Bomb"
+kind = "avoid_ground"
+phase = "bombs"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [64648]
+hits = { "10" = [64587], "25" = [64650] }
+handled_by = "playerbots"
+playerbots = ["freya move away nature bomb"]
+explain = "After the waves she drops nature bombs under several players every eighteen seconds; each bursts six seconds later for ten yards with a knockback, so step away."
+check = "uld.freya.check_avoid"
+radius = 10
+duration = 6
+first = 5
+every = 18
+targets = { "10" = 4, "25" = 10 }
+# 64648 flies at 3-4 (10-man) / 7-10 (25-man) players within 70 yards; where it hits a Nature Bomb (34129) appears
+# with its object (194902), and about 6 s later it casts 64587 / 64650 (5850 / 8775, knockback, 10 yards). Stock flees
+# 13 yards from any bomb object within 12.
+
+[[boss.mechanic]]
+id = "uld.freya.ground_tremor"
+name = "Ground Tremor"
+kind = "stop_casting"
+phase = "hard_mode"
+roles = ["healer", "ranged"]
+spells = { "10" = [62437], "25" = [62859] }
+handled_by = "none"
+explain = "In hard mode with Elder Stonebark alive her Ground Tremor hits everyone and locks out the spells of anyone casting; stop casting when she starts it."
+check = "none"
+cast = 2
+duration = { "10" = 8, "25" = 10 }
+first = 35
+every = 30
+# 5250 / 7600 to everyone and an interrupt that locks the interrupted school for 8 / 10 s. She is immune to
+# interrupts (creature_immunities -361), and a room-wide hit leaves nowhere to move to.
+
+[[boss.mechanic]]
+id = "uld.freya.iron_roots"
+name = "Iron Roots"
+kind = "switch_adds"
+phase = "hard_mode"
+roles = ["melee", "ranged"]
+spells = { "10" = [62862], "25" = [62439] }
+hits = { "10" = [62861], "25" = [62438] }
+adds = [33168, 33397]
+handled_by = "none"
+explain = "In hard mode with Elder Ironbranch alive she roots one player, three on 25-man, in Iron Roots that hurt every two seconds; kill the roots to free them."
+check = "none"
+first = 20
+every = 50
+targets = { "10" = 1, "25" = 3 }
+# The rooted player is held and hit every 2 s until the Strengthened Iron Roots (33168, summoned by 65158) die.
+
+[[boss.mechanic]]
+id = "uld.freya.unstable_sun_beam"
+name = "Unstable Sun Beam"
+kind = "avoid_ground"
+phase = "hard_mode"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [62451], "25" = [62865] }
+handled_by = "partial"
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out of the beam once inside it, and only for bots with a real-player master"
+explain = "In hard mode with Elder Brightleaf alive sun beams appear under one player, three on 25-man, and burn the ground there for ten seconds; walk out of them."
+check = "uld.freya.check_avoid"
+radius = { "10" = 4, "25" = 5 }
+duration = 10
+first = 60
+every = 43
+targets = { "10" = 1, "25" = 3 }
+area = "caster"
+respond_roles = ["tank", "healer", "melee", "ranged"]
+# 62450 makes the chosen players summon a Sun Beam (33170, unselectable) at their feet; its SmartAI casts Unstable
+# Energy (62451 / 62865) on itself at once: a 10 s ground effect, 4875 / 5850 a second within 4 / 5 yards. Answered
+# at that cast, round the beam, for its 10 s. A hostile damaging dynamic object of that size, so the hazard scan
+# sees it too.
+
+[[boss.mechanic]]
+id = "uld.freya.enrage"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [47008]
+handled_by = "none"
+explain = "She goes berserk after ten minutes; the kill has to come before then."
+check = "none"
+first = 600
+
+[[boss.check]]
+id = "uld.freya.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Nature Bomb", "Unstable Energy", "Tidal Wave"]
+max_hits = 2
+
+[[boss]]
+index = 10
+name = "Mimiron"
+slug = "mimiron"
+creatures = [33350, 33432, 34106, 33651, 34108, 33670, 34109]
+script = "boss_mimiron.cpp"
+# Berserk (64238 on every machine, again every 30 s) after 15 minutes; 10 minutes in hard mode.
+enrage = 900
+melee_behind = false
+no_behind_since = 2
+call = "mimiron: out of shock blast, dodge rockets and lasers"
+phase = [
+  { id = "mk2", name = "Leviathan Mk II" },
+  { id = "vx001", name = "VX-001" },
+  { id = "acu", name = "Aerial Command Unit" },
+  { id = "v07tron", name = "V-07-TR-0N, all three machines joined" },
+  { id = "hard_mode", name = "Hard mode (someone presses the red button to start the fight)" },
+]
+
+[[boss.mechanic]]
+id = "uld.mimiron.plasma_blast"
+name = "Plasma Blast"
+kind = "raid_cooldowns"
+phase = "mk2"
+roles = ["tank", "healer"]
+spells = { "10" = [62997], "25" = [64529] }
+handled_by = "none"
+explain = "The Leviathan's cannon fires Plasma Blast into its tank, burning for six seconds hard enough to kill; the tank uses a cooldown and the healers focus on it."
+check = "none"
+cast = 3
+duration = 6
+first = 10
+every = 22
+# 17000 (10) or 25000 (25) damage a second for 6 s on the Leviathan's victim.
+
+[[boss.mechanic]]
+id = "uld.mimiron.shock_blast"
+name = "Shock Blast"
+kind = "avoid_ground"
+phase = ["mk2", "v07tron"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [63631]
+handled_by = "playerbots"
+playerbots = ["mimiron shock blast action"]
+explain = "Every thirty seconds the Leviathan charges Shock Blast for four seconds, killing everyone within fifteen yards; everyone, tank included, runs out and comes back after."
+check = "uld.mimiron.check_avoid"
+radius = 15
+cast = 4
+first = 20
+every = 30
+area = "caster"
+# 100000 damage within 15 yards of the Leviathan. Stock walks the bots out on the Leviathan alone and
+# teleports them out in the last phase (a cheat).
+
+[[boss.mechanic]]
+id = "uld.mimiron.napalm_shell"
+name = "Napalm Shell"
+kind = "spread"
+phase = "mk2"
+roles = ["healer", "ranged"]
+spells = { "10" = [63666], "25" = [65026] }
+handled_by = "playerbots"
+playerbots = ["mimiron phase 1 positioning action"]
+explain = "The cannon lobs Napalm Shell at someone more than fifteen yards from the Leviathan, burning everyone within five yards; ranged and healers stand six yards apart."
+check = "uld.mimiron.check_avoid"
+radius = 5
+cast = 2
+duration = 8
+first = 3
+every = 14
+# Aimed at a random player more than 15 yards from the Leviathan; 5 yards of damage plus an 8 s burn.
+
+[[boss.mechanic]]
+id = "uld.mimiron.proximity_mines"
+name = "Proximity Mines"
+kind = "avoid_ground"
+phase = ["mk2", "v07tron"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [65347]
+hits = { "10" = [66351], "25" = [63009] }
+handled_by = "partial"
+playerbots = ["mimiron cheat action"]
+handled_note = "only with the raid cheat on does stock's main tank kill the mines near it (a cheat); nobody steps around them"
+explain = "After each Shock Blast the Leviathan scatters ten mines round itself that blow up on anyone who steps within two yards; walk round them and drag the Leviathan away."
+check = "none"
+radius = 3
+duration = 35
+first = 6
+every = 30
+area = "dest"
+landing = true
+respond_roles = ["tank", "healer", "melee", "ranged"]
+# The Leviathan casts 65347 ten times at once (triggered), each throwing a mine (34362, via 63016) to a
+# random spot within 15 yards; a mine explodes (66351, 63009 on 25-man, 3 yards) when a player comes
+# within 1.9 yards, or after 35 s. Answered where each throw lands, 3 yards round it, for the 35 s. The
+# mines are creatures with no aura, so neither the hazard scan nor stock avoid aoe sees them.
+
+[[boss.mechanic]]
+id = "uld.mimiron.rapid_burst"
+name = "Rapid Burst"
+kind = "move_out_cone"
+phase = "vx001"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [63382]
+hits = { "10" = [63387, 64019], "25" = [64531, 64532] }
+handled_by = "partial"
+playerbots = ["mimiron rapid burst action"]
+handled_note = "stock sends every bot with forced moves to one of three spots round VX-001, so a volley hits the bots at its target's spot; nobody steps out of the cone"
+explain = "VX-001 fires Rapid Burst, a three-second volley in a cone toward a player's spot; spread round it so each volley hits as few people as possible."
+check = "none"
+radius = 100
+angle = 60
+duration = 3
+every = 3.6
+area = "cone"
+respond_roles = []
+# 64840 parks a Burst Target where a player stands; VX-001 turns to it and channels 63382, which fires a
+# 60-degree, 100-yard cone (63387 and 64019 in turn, 64531 and 64532 on 25-man) every 0.5 s for 3 s.
+# Left to stock: moving bots out of the cone would fight its forced spots.
+
+[[boss.mechanic]]
+id = "uld.mimiron.laser_barrage"
+name = "P3Wx2 Laser Barrage"
+kind = "move_out_cone"
+phase = ["vx001", "v07tron"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [63414, 63274]
+hits = [63293]
+handled_by = "partial"
+playerbots = ["mimiron p3wx2 laser barrage action"]
+handled_note = "stock moves every bot to its master, teleporting any more than 15 yards away (a cheat), so the bots dodge the beam only if the master does"
+explain = "VX-001 spins up for four seconds, then sweeps a deadly laser across the room for ten seconds; move the way it turns and stay behind the beam."
+check = "uld.mimiron.check_avoid"
+radius = 50000
+cast = 4
+duration = 10
+first = 30
+every = 60
+area = "none"
+respond_roles = []
+# Spinning Up (63414, 4 s) turns VX-001 toward the DB Target (33576), which circles the room; the barrage
+# (63274, 10 s) then fires 63293 every 0.25 s, a 10-degree beam (spell_cone) across the room for 20000
+# damage, while VX-001 keeps turning after the target. No cast start says where the beam will sweep, so
+# the responder leaves it. In the last phase the Leviathan is rooted for the barrage (66490).
+
+[[boss.mechanic]]
+id = "uld.mimiron.rocket_strike"
+name = "Rocket Strike"
+kind = "avoid_ground"
+phase = ["vx001", "v07tron"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [64064]
+hits = [63041]
+handled_by = "playerbots"
+playerbots = ["mimiron rocket strike action"]
+explain = "A rocket marks a spot, usually a ranged player's, and lands five seconds later, killing everyone within three yards; step out of the marked circle."
+check = "uld.mimiron.check_avoid"
+radius = 3
+duration = 5
+first = 16
+every = 20
+area = "caster"
+# VX-001 fires one rocket (64402; both, 65034, in the last phase); the rocket's 63681 picks a player more
+# than 15 yards away when it can and summons the strike mark (34047) there, whose 64064 aura is the
+# warning; the mark detonates 63041 (3 yards) at 5 s. VX-001's own casts say nothing of the place.
+
+[[boss.mechanic]]
+id = "uld.mimiron.heat_wave"
+name = "Heat Wave"
+kind = "raid_cooldowns"
+phase = "vx001"
+roles = ["healer"]
+spells = [64533]
+handled_by = "partial"
+playerbots = ["mimiron fire resistance action"]
+handled_note = "a paladin keeps Fire Resistance Aura up while he is fought, when one is in the raid; the healing is the healers' own"
+explain = "Every ten seconds VX-001's Heat Wave burns the whole raid and leaves a short burn; healers keep everyone topped up."
+check = "none"
+duration = 5
+first = 10
+every = 10
+
+[[boss.mechanic]]
+id = "uld.mimiron.bomb_bots"
+name = "Bomb Bots"
+kind = "switch_adds"
+phase = "acu"
+roles = ["ranged"]
+spells = [63811]
+hits = [63801]
+adds = [33836, 34218]
+handled_by = "playerbots"
+playerbots = ["mimiron aerial command unit action"]
+explain = "The Aerial Command Unit drops a Bomb Bot every fifteen seconds that walks to a player and explodes; the ranged kill each one before it arrives."
+check = "none"
+cast = 2
+first = 15
+every = 15
+# A Bomb Bot explodes (63801, 5 yards) once its victim is within 3 yards (SmartAI). Stock's tank crosses
+# it for the ranged; with the raid cheat on, "mimiron cheat action" also kills it outright.
+
+[[boss.mechanic]]
+id = "uld.mimiron.assault_bots"
+name = "Assault Bots"
+kind = "switch_adds"
+phase = "acu"
+roles = ["tank", "melee"]
+spells = []
+hits = [64668]
+adds = [34057, 34115]
+handled_by = "playerbots"
+playerbots = ["mimiron aerial command unit action"]
+explain = "An Assault Bot comes out of a floor pad every thirty seconds and roots a player with Magnetic Field; tanks and melee kill it, and it drops a Magnetic Core."
+check = "none"
+first = 9
+every = 30
+
+[[boss.mechanic]]
+id = "uld.mimiron.magnetic_core"
+name = "Magnetic Core"
+kind = "use_object"
+phase = "acu"
+roles = ["melee", "ranged"]
+spells = [64444, 64436]
+adds = [34068]
+handled_by = "none"
+explain = "Take the Magnetic Core a dead Assault Bot drops and use it under the Aerial Command Unit; it pulls the unit down for twenty seconds, taking half again as much damage."
+check = "none"
+duration = 20
+# The item (46029, 100% from Assault Bots) casts 64444 within 10 yards of the unit; the core (34068) puts
+# 64436 on it: grounded, +50% damage taken, its own casts held back 23 s. No stock action loots or uses it.
+
+[[boss.mechanic]]
+id = "uld.mimiron.junk_bots"
+name = "Junk Bots"
+kind = "switch_adds"
+phase = "acu"
+roles = ["melee"]
+spells = []
+adds = [33855, 34114]
+handled_by = "none"
+explain = "Junk Bots walk in from the floor pads every ten seconds; melee and area damage kill them as they come."
+check = "none"
+first = 18
+every = 10
+
+[[boss.mechanic]]
+id = "uld.mimiron.hand_pulse"
+name = "Hand Pulse"
+kind = "move_out_cone"
+phase = "v07tron"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [64352, 64348], "25" = [64537, 64536] }
+handled_by = "partial"
+playerbots = ["mimiron rapid burst action"]
+handled_note = "in the last phase stock holds the ranged and healers on three spots round the machine, so a pulse hits those at its target's spot; nobody leaves the cone"
+explain = "In the last phase VX-001's hands pulse a cone at a random player every couple of seconds; spread round the machine so each pulse hits few people."
+check = "none"
+radius = 50000
+cast = 0.85
+every = 1.75
+area = "none"
+respond_roles = []
+# Each hand in turn casts a 60-degree cone (spell_cone) that crosses the room at a player within 80
+# yards. Its 0.85 s cast is too short to walk out of a cone that wide and the next comes 1.75 s later,
+# so the responder leaves it.
+
+[[boss.mechanic]]
+id = "uld.mimiron.kill_together"
+name = "Self Repair"
+kind = "kill_order"
+phase = "v07tron"
+roles = ["melee", "ranged"]
+spells = [64383]
+handled_by = "playerbots"
+playerbots = ["mimiron phase 4 mark dps action"]
+explain = "In the last phase a machine brought down starts a fifteen-second Self Repair and returns at half health unless all three are down at once; wear them down evenly."
+check = "none"
+cast = 15
+# The fight ends only when all three machines are casting Self Repair (64383, a 50% heal) together.
+# Stock skulls whichever machine has the most health, which evens them out.
+
+[[boss.mechanic]]
+id = "uld.mimiron.berserk"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [64238]
+handled_by = "none"
+explain = "His machines go berserk after fifteen minutes, ten in hard mode; the kill has to come before then."
+check = "none"
+first = 900
+
+[[boss.mechanic]]
+id = "uld.mimiron.flames"
+name = "Flames"
+kind = "avoid_ground"
+phase = "hard_mode"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [64563, 64561]
+hits = [64566]
+handled_by = "partial"
+playerbots = ["avoid aoe"]
+handled_note = "stock avoid aoe steps out of the fire after it burns, and only for bots with a real-player master"
+explain = "In hard mode fires spring up beside players every thirty seconds and creep toward the nearest one; never stand in the fire, and let Frost Bombs put it out."
+check = "none"
+radius = 3
+duration = 120
+first = 7
+every = 30
+# Not answered by the responder: up to 75 flames burn at once, each its own mechanic for up to 120 s, past
+# native's 64 in force; each flame is a trigger npc the hazard scan measures (3 yd).
+area = "none"
+respond_spells = [64561]
+respond_roles = []
+# Mimiron starts a fire 5 yards from each of three players (64563); every 5.75 s a fire adds a flame 7
+# yards toward the nearest player, up to 75 at once. Each flame (34121, unselectable) casts its own 64561
+# when it appears, ticking 64566 (3 yards) every second: a trigger npc the hazard scan and stock avoid aoe
+# see. Answered at that cast, 3 yards round the flame, until it is put out (Frost Bomb, Flame Suppressant,
+# a fire bot's Water Spray) and despawns, or for at most 120 s.
+
+[[boss.mechanic]]
+id = "uld.mimiron.frost_bomb"
+name = "Frost Bomb"
+kind = "avoid_ground"
+phase = "hard_mode"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [64623, 64624]
+hits = { "10" = [64626], "25" = [65333] }
+handled_by = "none"
+explain = "In hard mode VX-001 drops a Frost Bomb on a fire; ten seconds later it blasts everyone within thirty yards and puts out the flames there; get thirty yards away."
+check = "none"
+radius = 30
+duration = 10
+cast = 2
+every = 45
+# Not answered: in phases 2 and 4 stock's rapid burst spots pull bots back with forced moves, so a bot sent out
+# would be yielded on its way back in and hit anyway.
+area = "none"
+respond_spells = [64624]
+# VX-001's 64623 (2 s) picks a burning flame at its end, which summons the bomb (34149, via 64627); the
+# bomb casts 64624 on itself as it appears and explodes 10 s later (64626, 9425 damage; 65333, 47125 on
+# 25-man; 30 yards, knockback). Answered at 64624, 30 yards round the bomb, for the 10 s.
+
+[[boss.check]]
+id = "uld.mimiron.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Shock Blast", "Rocket Strike", "P3Wx2 Laser Barrage", "Napalm Shell"]
+max_hits = 2
+
+# Ulduar: General Vezax (603:11) and Yogg-Saron (603:12). Spell ids, timers and phases come from this
+# server's boss_general_vezax.cpp and boss_yoggsaron.cpp, Spell.dbc, spell_cone, spelldifficulty_dbc and the
+# conditions table; the explanations are our own words. Ulduar uses only 10 and 25: a spell with no row in
+# spelldifficulty_dbc is the same id on both sizes.
+# Stock playerbots (src/Ai/Raid/Uld) has Vezax and Yogg-Saron actions; several are raid cheats, gated by
+# BotCheatMask::raid, which the module's default Playerbots.BotCheats ("food,taxi,raid") turns on. Each cheat is
+# named in a comment beside the mechanic it touches.
+
+[[boss]]
+index = 11
+name = "General Vezax"
+slug = "vezax"
+creatures = [33271]
+script = "boss_general_vezax.cpp"
+enrage = 600
+call = "vezax: kick searing flames, dodge crash, marked run out"
+phase = [
+  { id = "main", name = "Main fight" },
+  { id = "hard_mode", name = "Hard mode (no Saronite Vapor killed: the sixth forms the Animus)", after = 188 },
+]
+# Hard mode: Vezax summons a Saronite Vapor every 30 s; if none was killed when the sixth comes (180 s), the
+# vapors fly to the middle, merge 8 s later into the Saronite Animus (63145) and Vezax takes Saronite Barrier
+# (63364, -99% damage taken) until it dies. While the barrier holds he casts no Searing Flames.
+# Stock "vezax shadow resistance action" (BossShadowResistanceAction) only makes a paladin switch to Shadow
+# Resistance Aura: a real aura, not a cheat; it is no mechanic of its own here.
+
+[[boss.mechanic]]
+id = "uld.vezax.shadow_crash"
+name = "Shadow Crash"
+kind = "avoid_ground"
+roles = ["healer", "melee", "ranged"]
+spells = [62660]
+hits = [62659]
+handled_by = "none"
+explain = "Every ten seconds he hurls a Shadow Crash at a player standing away from him; step aside before it lands, as it hits everyone within ten yards and knocks them back."
+check = "uld.vezax.check_avoid"
+radius = 10
+duration = 5
+first = 13
+every = 10
+# 62660 is instant, aimed at a random player more than 3 yards beyond his combat reach (12.6), else anyone.
+# Its destination is that player's spot at the cast (TARGET_DEST_TARGET_ENEMY; the hook runs after the instant
+# cast, so the destination is set). A 10 yd/s missile then lands 62659 (10 yards, damage and knockback) and the
+# void (63277). Answered at the cast, round the destination, for the flight (5 s covers 50 yards). Tanks are
+# left out of the rule: he never aims it at his tank, and moving the tank drags him. Stock has nothing before
+# the impact (its action reacts only to the void's aura, below).
+
+[[boss.mechanic]]
+id = "uld.vezax.shadow_crash_void"
+name = "Shadow Crash void"
+kind = "avoid_ground"
+roles = ["healer"]
+spells = [63277]
+handled_by = "playerbots"
+playerbots = ["vezax shadow crash action"]
+explain = "Each Shadow Crash leaves a dark patch for twenty seconds that raises spell damage but cuts healing done by three quarters; healers stay out of it."
+check = "none"
+radius = 8
+duration = 20
+# 63277 is a persistent area aura (a dynamic object, 8 yards, 20 s): +100% non-shadow spell damage, +75% shadow
+# damage and -75% healing done for anyone inside. It deals no damage, so the hazard scan does not see it. Stock
+# moves any bot carrying the aura (every role, not only healers) to a spot 15 yards from Vezax, a step round him.
+
+[[boss.mechanic]]
+id = "uld.vezax.mark_of_the_faceless"
+name = "Mark of the Faceless"
+kind = "run_out_debuff"
+roles = ["healer", "melee", "ranged"]
+spells = [63276]
+hits = [63278]
+handled_by = "playerbots"
+playerbots = ["vezax mark of the faceless action"]
+explain = "Mark of the Faceless drains everyone within fifteen yards of the marked player for ten seconds to heal Vezax; the marked player walks well away from the raid."
+check = "none"
+range = 15
+duration = 10
+first = 20
+every = 40
+targets = 1
+# 63276 pulses 63278 every second: a health leech on everyone within 15 yards of the marked player (the script
+# leaves the marked player out), which heals Vezax. He marks a random player beyond 15 yards of him when at
+# least 4 (10-man) or 9 (25-man) stand there, else anyone closer, so a tank can be marked. Stock sends the marked
+# bot to a fixed spot of the room (1913.7, 122.9) with a forced move.
+
+[[boss.mechanic]]
+id = "uld.vezax.searing_flames"
+name = "Searing Flames"
+kind = "interrupt"
+roles = ["melee", "ranged"]
+spells = [62661]
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
+explain = "Searing Flames burns the whole raid and strips three quarters of everyone's armour for ten seconds; interrupt every cast."
+check = "none"
+cast = 2
+first = 10
+every = { "10" = 15, "25" = 8 }
+# 100-yard fire damage and -75% armour for 10 s; interruptible (InterruptFlags 0x9). Each Surge of Darkness
+# delays it 10 s; under the hard mode's Saronite Barrier he does not cast it.
+
+[[boss.mechanic]]
+id = "uld.vezax.surge_of_darkness"
+name = "Surge of Darkness"
+kind = "kite"
+roles = ["tank"]
+spells = [62662]
+handled_by = "none"
+explain = "About once a minute Surge of Darkness doubles his melee damage and slows him for ten seconds; his tank walks away from him until it fades."
+check = "none"
+cast = 3
+duration = 10
+first = 63
+every = 63
+# 62662: +100% physical damage done, -55% movement speed, +35% size for 10 s. Kite inside his hall: the script
+# berserks him at once if he leaves x 1720-1940, y 20-210.
+
+[[boss.mechanic]]
+id = "uld.vezax.saronite_vapors"
+name = "Aura of Despair and Saronite Vapors"
+kind = "soak"
+phase = "main"
+roles = ["healer", "ranged"]
+spells = [62692, 63323]
+hits = [62692, 63338]
+adds = [33488, 33789]
+handled_by = "partial"
+playerbots = ["vezax cheat action"]
+handled_note = "only the raid cheat: stock refills a mana user's mana to full when it runs low; no bot kills a vapor or stands in its cloud"
+explain = "Aura of Despair stops all mana regeneration; outside hard mode kill Saronite Vapors and let casters stand in each one's cloud for a few ticks, as its damage doubles every tick."
+check = "none"
+radius = 8
+first = 30
+every = 30
+# Aura of Despair (62692, the whole room, from the pull) prevents mana regeneration and makes mana users immune
+# to energize effects; a shaman's Shamanistic Rage and Judgements of Wisdom become Corrupted Rage and Wisdom.
+# A killed vapor casts 63323 on itself for 30 s; every 2 s it stacks 63322 on players within 8 yards, and each
+# stack hits them for 100 x 2^stacks shadow damage (63338) and gives back half of it as mana (63337). Killing
+# any vapor rules out hard mode. "vezax cheat action" is a cheat: SetPower to full mana, nothing played.
+
+[[boss.mechanic]]
+id = "uld.vezax.saronite_animus"
+name = "Saronite Animus"
+kind = "switch_adds"
+phase = "hard_mode"
+roles = ["tank", "melee", "ranged"]
+spells = [63145]
+hits = [63420]
+adds = [33524, 34152]
+handled_by = "none"
+explain = "If no Saronite Vapor is killed the sixth forms a Saronite Animus that shields Vezax and hits the raid every two seconds with stacking shadow; kill it fast."
+check = "none"
+every = 2
+# The Animus casts Profound Darkness (63420) every 2 s: 750 shadow damage to everyone and +10% shadow damage
+# taken per stack (180 s, up to 99 stacks). Its death removes Vezax's Saronite Barrier and makes his loot the
+# hard-mode loot.
+
+[[boss.mechanic]]
+id = "uld.vezax.enrage"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [26662]
+handled_by = "none"
+explain = "He goes berserk after ten minutes, or at once if he is pulled out of his hall; kill him inside it before then."
+check = "none"
+first = 600
+
+[[boss.check]]
+id = "uld.vezax.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Shadow Crash"]
+max_hits = 2
+
+[[boss]]
+index = 12
+name = "Yogg-Saron"
+slug = "yogg"
+creatures = [33134, 33288, 33890]
+script = "boss_yoggsaron.cpp"
+enrage = 900
+melee_behind = false
+no_behind_since = 2
+call = "yogg: guardians die by sara, avoid clouds, look away"
+phase = [
+  { id = "phase_1", name = "Sara and her Guardians" },
+  { id = "phase_2", name = "Yogg-Saron, his tentacles and the brain" },
+  { id = "phase_3", name = "Yogg-Saron awakened", hp_below = 30 },
+  { id = "hard_mode", name = "Hard mode (fewer than four keepers; with none, Alone in the Darkness)" },
+]
+# Phases: phase 2 begins when Guardians' Shadow Novas have drained Sara (she takes damage from nothing else);
+# phase 3 when the Brain of Yogg-Saron falls below 30%, and Yogg-Saron is then set to 30% health.
+# Keepers: Freya, Hodir, Mimiron and Thorim help only when the raid spoke to them in the Observation Ring after
+# beating them (PERSISTENT_DATA_WATCHERS_MASK); none helping is Alone in the Darkness, which this playbook
+# assumes. What the keeper count changes in the script: on 25-man with fewer than four, Deafening Roar in phase 3;
+# Yogg-Saron's loot mode; the "lights in the darkness" achievements. Each present keeper adds its own help instead
+# (comments below): a raid-wide +10% damage aura plus Freya +20% healing taken, Hodir -20% damage taken, Mimiron
+# +20% speed, Thorim +20% health; Freya's sanity wells, Hodir's saving Protective Gaze, Mimiron's Destabilization
+# Matrix on tentacles, Thorim's Titanic Storm that kills weakened Immortal Guardians. Without them none of it.
+# The brain room and the three visions are places on the same map in the same phase (nothing in the script sets
+# a phase mask): about 85-90 yards below the main room (z about 236-265 and 240 against 325-330), reached by the
+# portals' teleports. The responder's areas and spacing only bind bots on the caster's floor (8 yards of height).
+# Stock "sara shadow resistance" and "yogg-saron shadow resistance" put up a paladin's Shadow Resistance Aura;
+# the Yogg-Saron trigger is registered as "yogg-saron shadow resistance triggerr" (sic), so only Sara's fires.
+
+[[boss.mechanic]]
+id = "uld.yogg.ominous_cloud"
+name = "Ominous Cloud"
+kind = "avoid_ground"
+phase = "phase_1"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [63031]
+adds = [33292]
+handled_by = "partial"
+playerbots = ["yogg-saron ominous cloud cheat action"]
+handled_note = "only the raid cheat: the main tank kills outright any cloud within 25 yards of Sara; nobody steers around the others"
+explain = "Ominous Clouds drift round the room, and anyone who comes within six yards of one calls an extra Guardian of Yogg-Saron; steer clear of them."
+check = "none"
+radius = 6
+area = "none"
+respond_roles = []
+# A cloud checks every half second for a player within 6 yards and then casts 63031, which summons a Guardian
+# there 10 s later; Sara also makes a far cloud summon one every 20 s, 2 s sooner each time down to 10 s. The
+# clouds circle the room and cast nothing before they are touched, so there is no place to answer (area none).
+# They are unselectable with no damaging aura, so the hazard scan does not see them either. With Hodir, a player
+# under his Flash Freeze cannot set a cloud off. "yogg-saron ominous cloud cheat action" is a cheat (Kill()).
+
+[[boss.mechanic]]
+id = "uld.yogg.guardians"
+name = "Guardian of Yogg-Saron"
+kind = "switch_adds"
+phase = "phase_1"
+roles = ["tank", "melee", "ranged"]
+spells = []
+adds = [33136, 33968]
+handled_by = "partial"
+playerbots = ["yogg-saron guardian positioning action"]
+handled_note = "stock's tanks drag every Guardian to Sara in the room's middle once all of them are on a tank; nobody holds damage until it is there"
+explain = "Only a Guardian of Yogg-Saron dying within fifteen yards of Sara can hurt her; tanks bring each Guardian next to her and the raid kills it there."
+check = "none"
+range = 15
+# On death a Guardian casts Shadow Nova at players (62714, 25-man 65209) and Shadow Nova at Sara (65719, 25000
+# damage to her within 15 yards); Sara ignores every other damage source. Stock's forced move goes to the room's
+# middle (1980.3, -25.6), Sara's spot.
+
+[[boss.mechanic]]
+id = "uld.yogg.shadow_nova"
+name = "Shadow Nova"
+kind = "avoid_ground"
+phase = "phase_1"
+roles = ["melee"]
+spells = { "10" = [62714], "25" = [65209] }
+handled_by = "none"
+explain = "A dying Guardian blasts everyone within fifteen yards with Shadow Nova; melee step back as it nears death and let the ranged finish it."
+check = "uld.yogg.check_avoid"
+radius = 15
+area = "none"
+# Cast at the Guardian's death (JustDied, triggered): it has hit before any hook can run, so area none. It also
+# hits other Guardians within 15 yards.
+
+[[boss.mechanic]]
+id = "uld.yogg.dark_volley"
+name = "Dark Volley"
+kind = "interrupt"
+phase = "phase_1"
+roles = ["melee", "ranged"]
+spells = [63038]
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
+explain = "Each Guardian casts Dark Volley, shadow bolts on everyone within thirty-five yards that also cut healing taken; interrupt it."
+check = "none"
+cast = 1.5
+every = 8
+# 35 yards, 8500-11500 shadow damage and -25% healing taken for 10 s; interruptible (InterruptFlags 0xf).
+
+[[boss.mechanic]]
+id = "uld.yogg.saras_spells"
+name = "Sara's Fervor and Sara's Blessing"
+kind = "raid_cooldowns"
+phase = "phase_1"
+roles = ["healer"]
+spells = [63138, 63134]
+handled_by = "none"
+explain = "Sara's Fervor doubles the damage a player takes for fifteen seconds, and Sara's Blessing heals one, then burns them for twenty; healers watch both targets."
+check = "none"
+cast = 4
+every = 5
+# Every 4.9 s Sara casts one of her three spells at one target (players for Fervor and Blessing, a Guardian for
+# Anger, by the conditions table). Fervor (63138): +20% damage done, +100% damage taken, 15 s. Blessing (63134):
+# a heal, then 6000 shadow every 2 s for 20 s. She is friendly in this phase, so they cannot be interrupted.
+
+[[boss.mechanic]]
+id = "uld.yogg.saras_anger"
+name = "Sara's Anger"
+kind = "dispel"
+phase = "phase_1"
+roles = ["ranged"]
+spells = [63147]
+handled_by = "partial"
+playerbots = ["tranquilizing shot enrage"]
+handled_note = "a hunter's stock Tranquilizing Shot removes it from the hunter's own current target when one is in the raid"
+explain = "Sara's Anger enrages a Guardian, making it bigger and far harder hitting for twelve seconds; a hunter's Tranquilizing Shot removes it."
+check = "none"
+cast = 4
+duration = 12
+# 63147 is an enrage (dispel type 9) on a Guardian (conditions: entry 33136): more damage done, +30% size.
+
+[[boss.mechanic]]
+id = "uld.yogg.insane"
+name = "Sanity and Insane"
+kind = "switch_adds"
+phase = ["phase_2", "phase_3"]
+roles = ["melee", "ranged"]
+spells = [63120]
+handled_by = "none"
+explain = "Sanity starts at one hundred and nothing brings it back; at zero a player goes insane, fights for him for a minute and then dies, so crowd-control or kill them."
+check = "none"
+duration = 60
+# The Voice gives everyone within 200 yards 100 stacks of Sanity (63050) during the first 15 s of the pull, so a
+# player who arrives later has none. Every 6 s it makes anyone without Sanity Insane (63120: charmed by Yogg-Saron,
+# +300% health, +100% damage, 60 s); when Insane ends the player dies. Sanity is lost to Psychosis (9, 12 on
+# 25-man), Malady of the Mind (3 at the cast and 3 at each jump), Brain Link (2 a second), a Laughing Skull's gaze
+# (2 a second), Yogg-Saron's Lunatic Gaze (4 a second) and Induce Madness (all of it). Only Freya's five sanity
+# wells give any back (+20 every 2 s inside one); stock's "yogg-saron sanity action" walks a bot to a well below
+# 40 Sanity, so with no Freya it never fires. Stock has no rule for an Insane member.
+
+[[boss.mechanic]]
+id = "uld.yogg.psychosis"
+name = "Psychosis"
+kind = "raid_cooldowns"
+phase = "phase_2"
+roles = ["healer"]
+spells = { "10" = [63795], "25" = [65301] }
+handled_by = "none"
+explain = "Sara's Psychosis hits one player every few seconds for shadow damage and nine Sanity, twelve on 25-man; it cannot be stopped, so healers keep everyone topped up."
+check = "none"
+cast = { "10" = 2.9, "25" = 1 }
+every = 3.5
+# 7500 (10-man) or 5000 (25-man) shadow damage on one random player anywhere, the illusion rooms included; it
+# skips anyone at 40 Sanity or less. Not interruptible (InterruptFlags 0), and Sara takes no damage in phase 2.
+
+[[boss.mechanic]]
+id = "uld.yogg.malady_of_the_mind"
+name = "Malady of the Mind"
+kind = "run_out_debuff"
+phase = "phase_2"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [63830]
+hits = [63830, 63881]
+handled_by = "partial"
+playerbots = ["yogg-saron malady of the mind action"]
+handled_note = "stock walks bots 15 yards away from a player carrying the first Malady, not from one it jumped to; the feared player itself cannot move"
+explain = "Malady of the Mind fears a player for four seconds and takes Sanity, then jumps to someone within ten yards of them; stay ten yards away from a feared player."
+check = "none"
+range = 10
+duration = 4
+cast = 1.5
+first = 12
+every = 20
+area = "none"
+respond_roles = []
+# 63830 picks one random player at 41 Sanity or more; when its 4 s fear ends, 63881 jumps to one player within
+# 10 yards of them (and so on). The run-out a responder could give binds only the marked player, who is feared
+# and cannot walk; everyone else has to step away, which the rule cannot ask, so area none.
+
+[[boss.mechanic]]
+id = "uld.yogg.brain_link"
+name = "Brain Link"
+kind = "stack"
+phase = "phase_2"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [63802]
+hits = [63803]
+handled_by = "none"
+explain = "Brain Link ties two players together for thirty seconds; more than twenty yards apart, both take damage and lose Sanity every second, so the pair stays close."
+check = "none"
+range = 20
+duration = 30
+cast = 1.5
+first = 18
+every = 30
+area = "none"
+# Sara puts 63802 on one player in the main room; the script then picks a second player within 50 yards as the
+# partner, who carries no aura of its own (it only receives the 63804 beam). Each second, apart by more than 20
+# yards, both take 63803 (3000 shadow, 2 Sanity). Stock's "yogg-saron brain link action" looks for another group
+# member carrying 63802 to walk to; with one carrier it does not fire, so handled_by none. The responder cannot
+# tell who the partner is, so area none. Either of the two dropping into a portal ends the link.
+
+[[boss.mechanic]]
+id = "uld.yogg.death_ray"
+name = "Death Ray"
+kind = "avoid_ground"
+phase = "phase_2"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [63882]
+hits = [63884]
+handled_by = "partial"
+playerbots = ["yogg-saron death orb action"]
+handled_note = "stock keeps bots 10 yards from the Death Orb above Sara, not from the four rays that walk out from under it"
+explain = "Each Death Orb drops four Death Rays that glow for five seconds and then wander for twelve, burning anyone within three yards; keep clear of every ray."
+check = "uld.yogg.check_avoid"
+radius = 3
+duration = 18
+area = "caster"
+first = 20
+every = 22
+respond_roles = ["tank", "healer", "melee", "ranged"]
+# Sara's 63891 summons the Death Orb 3 yards above her; its rays (33881) fall to the floor, start the 5 s warning
+# (63882) 1.2 s later and then for 12 s pulse 63884 every half second (20000 shadow within 3 yards; not on Insane
+# or Malady-feared players) while moving in eight 9-yard legs. Answered at each ray's warning, round the ray as it
+# moves, for 18 s (they despawn 19 s after the summon, which ends it). The ray is an unselectable trigger npc
+# whose periodic trigger aura deals damage, so the hazard scan also sees it (3 yards) while it burns. Stock moves
+# away from the orb with combat-priority moves, so the responder is not yielded to them.
+
+[[boss.mechanic]]
+id = "uld.yogg.knock_away"
+name = "Knock Away"
+kind = "avoid_ground"
+phase = ["phase_2", "phase_3"]
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [64020]
+handled_by = "partial"
+playerbots = ["yogg-saron phase 3 positioning action"]
+handled_note = "in phase three stock holds its melee and ranged at fixed spots outside it; nothing keeps bots off him in phase two"
+explain = "Yogg-Saron knocks back anyone within fourteen yards of him every second; melee hit him from the edge of their reach, never from up close."
+check = "none"
+radius = 14
+duration = 2
+# Not answered: each 1 s tick would start a fresh mechanic for the whole of phase 3, and with his 20-yard
+# combat reach bots stand outside 14 yards anyway.
+area = "none"
+respond_roles = []
+# His Knock Away aura (64022, from his appearance on, never removed) triggers 64020 every second: a knockback on
+# everyone within 14 yards. His combat reach is 20, so melee reach him from outside it. Answered at each tick,
+# round him. Stock's phase 3 spots (melee 18.5, ranged about 39 yards from the room's middle) lie outside it.
+
+[[boss.mechanic]]
+id = "uld.yogg.constrictor_tentacle"
+name = "Constrictor Tentacle"
+kind = "switch_adds"
+phase = "phase_2"
+roles = ["melee", "ranged"]
+spells = [64132]
+hits = { "10" = [64125], "25" = [64126] }
+adds = [33983, 33984]
+handled_by = "playerbots"
+playerbots = ["yogg-saron mark target action"]
+explain = "Constrictor Tentacles burst up under a player and squeeze them until the tentacle dies; kill these first to free them."
+check = "none"
+every = 15
+# Sara marks a random player in the main room (64132) and the tentacle rises at their feet, seats them (Lunge)
+# and squeezes them (6000, 25-man 7500, every 2 s); Blink and Demonic Circle do not free them. Stock's main tank
+# puts the skull on a living Constrictor first, then on a Corruptor.
+
+[[boss.mechanic]]
+id = "uld.yogg.corruptor_tentacle"
+name = "Corruptor Tentacle"
+kind = "dispel"
+phase = "phase_2"
+roles = ["healer"]
+spells = [64156, 64153, 64152, 64157]
+adds = [33985, 33986]
+handled_by = "partial"
+playerbots = ["remove curse on party", "cleanse spirit curse on party", "dispel magic on party", "cleanse magic on party", "abolish disease on party", "cure disease on party", "cleanse disease on party", "purify disease on party", "cleanse spirit disease on party", "abolish poison on party", "cure poison on party", "cleanse poison on party", "purify poison on party", "cleanse spirit poison on party"]
+handled_note = "stock cures remove each when a class that cures it is in the raid: mage, druid or shaman for the curse, priest or paladin for magic"
+explain = "Corruptor Tentacles put Apathy, Black Plague, Draining Poison or Curse of Doom on players in turn; cure them all, Curse of Doom first, as it hits hard after twelve seconds."
+check = "none"
+cast = 1.5
+every = 2
+# Every 2 s a Corruptor casts one at a random main-room player (1.5 s, interruptible): Apathy (magic, -60%
+# attack speed and movement, 20 s), Black Plague (disease, stuns, 24 s), Draining Poison (poison, damage and mana
+# drain, 18 s), Curse of Doom (curse, 20000 after 12 s). Stock's main tank marks a Corruptor skull once no
+# Constrictor lives. With Mimiron, his Destabilization Matrix slows Corruptors' and Crushers' casting.
+
+[[boss.mechanic]]
+id = "uld.yogg.crusher_tentacle"
+name = "Crusher Tentacle"
+kind = "switch_adds"
+phase = "phase_2"
+roles = ["tank", "melee"]
+spells = [64145]
+hits = [64147]
+adds = [33966, 33967]
+handled_by = "partial"
+playerbots = ["yogg-saron mark target action"]
+handled_note = "only the raid cheat: stock's main tank kills each Crusher outright; without it stock marks only Constrictors and Corruptors"
+explain = "A Crusher Tentacle smashes a narrow line before it with every swing and saps the raid's damage whenever nobody is in its reach; a tank holds it and melee kill it from the sides."
+check = "none"
+cast = 1.5
+every = 55
+# Rooted. Its melee swings proc Crush (64147: 15200-16800 in a 10-degree cone, 23 yards) and Focused Anger
+# (stacking damage and haste). With nobody in melee reach it channels Diminish Power (64145: -20% damage done for
+# every player); a melee hit breaks the channel. "yogg-saron mark target action" Kill()s it under the raid cheat.
+
+[[boss.mechanic]]
+id = "uld.yogg.descend_into_madness"
+name = "Descend into Madness"
+kind = "use_object"
+phase = "phase_2"
+roles = ["healer", "melee", "ranged"]
+spells = []
+adds = [34072]
+handled_by = "playerbots"
+playerbots = ["yogg-saron move to enter portal action", "yogg-saron use portal action"]
+explain = "A minute into this phase, then every eighty seconds, portals open for twenty-five seconds; four players, ten on 25-man, take them down into Yogg-Saron's mind."
+check = "none"
+first = 60
+every = 80
+duration = 25
+targets = { "10" = 4, "25" = 10 }
+# 4 (10-man) or 10 (25-man) portals, each usable once, teleport to the current vision (Stormwind, the Chamber of
+# the Aspects or Icecrown; they rotate). Stock sends its first 4 or 10 living non-tank members (healers too); with
+# the raid cheat they teleport to their portal instead of walking. Yogg-Saron himself is immune in this phase.
+
+[[boss.mechanic]]
+id = "uld.yogg.influence_tentacles"
+name = "Influence Tentacles"
+kind = "switch_adds"
+phase = "phase_2"
+roles = ["melee", "ranged"]
+spells = []
+hits = [64039]
+adds = [33943, 33959, 33716, 33717, 33718, 33719, 33720, 33567, 33433]
+handled_by = "partial"
+playerbots = ["yogg-saron illusion room action"]
+handled_note = "stock marks the nearest vision creature for its group, the friendly scene characters too, so bots can stall on one; with the raid cheat each bot teleports to it and kills it"
+explain = "In the vision kill every Influence Tentacle, disguised as the scene's guards or dragon consorts; each one strikes back with part of the damage it takes."
+check = "none"
+# They wear the vision's guise (consorts, Deathsworn Zealots, Suits of Armor) until hit; Grim Reprisal returns
+# 60% of each hit to the attacker (64039). The last one's death opens the door to the brain. Stock's list of
+# vision mobs (illusionMobs) also holds the scene's friendly characters (Garona, King Llane, the Aspects, the
+# Immolated Champion: faction 35), and it marks the nearest; the raid cheat teleports and deals its whole health.
+
+[[boss.mechanic]]
+id = "uld.yogg.laughing_skull"
+name = "Laughing Skull"
+kind = "face_away"
+phase = "phase_2"
+roles = ["healer", "melee", "ranged"]
+spells = [64168]
+handled_by = "partial"
+playerbots = ["yogg-saron illusion room action"]
+handled_note = "only the raid cheat: bots go to each Laughing Skull first and kill it outright; without it nobody looks away"
+explain = "Laughing Skulls in the vision drain Sanity from anyone facing them within thirty yards; keep your back to them."
+check = "uld.yogg.check_avoid"
+range = 30
+# Each skull (33990) is an unselectable trigger npc whose aura 64167 fires 64168 every second: 1750 shadow and 2
+# Sanity to players within 30 yards who face it and see it. The hazard scan sees it as a damaging trigger npc, cut
+# to stock's 15-yard cap; it is a facing check, not ground, so it should not be allow-listed. Under the raid cheat
+# stock teleports to the skull and deals its whole health (a cheat: it cannot be targeted).
+
+[[boss.mechanic]]
+id = "uld.yogg.brain_of_yogg_saron"
+name = "Brain of Yogg-Saron"
+kind = "kill_order"
+phase = "phase_2"
+roles = ["melee", "ranged"]
+spells = []
+adds = [33890, 33954]
+handled_by = "partial"
+playerbots = ["yogg-saron illusion room action"]
+handled_note = "stock sends a portal bot into the brain room only once its own master stands there; with no player master in the brain room nobody goes"
+explain = "When the vision's last tentacle dies its door opens; everyone goes in and burns the Brain of Yogg-Saron, which stuns him and his tentacles meanwhile."
+check = "none"
+# Killing the vision's tentacles shatters the illusion (64173): Sara, Yogg-Saron and the tentacles are stunned for
+# what is left of the brain's minute. Whoever damages the brain while any of that vision's tentacles lives is
+# killed by the script. Below 30% the brain ends phase 2.
+
+[[boss.mechanic]]
+id = "uld.yogg.induce_madness"
+name = "Induce Madness"
+kind = "use_object"
+phase = "phase_2"
+roles = ["healer", "melee", "ranged"]
+spells = [64059]
+handled_by = "playerbots"
+playerbots = ["yogg-saron move to exit portal action"]
+explain = "The brain's Induce Madness takes all Sanity from anyone still below when its minute-long cast ends; leave through the Flee to the Surface portal before then."
+check = "none"
+cast = 60
+# Cast by the brain at each vision's start; at its end everyone below the main room (z under 300) loses 100
+# Sanity and is sent back up, and Yogg-Saron takes the brain's health percentage. Stock walks to the exit portal
+# with 8 s of the cast left or once the brain is under 30% (with the raid cheat, teleports at 6 s).
+
+[[boss.mechanic]]
+id = "uld.yogg.lunatic_gaze"
+name = "Lunatic Gaze"
+kind = "face_away"
+phase = "phase_3"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [64163]
+hits = [64164]
+handled_by = "playerbots"
+playerbots = ["yogg-saron lunatic gaze action"]
+explain = "His Lunatic Gaze hits everyone facing him for four seconds and takes four Sanity each second; turn your back on him until it ends."
+check = "uld.yogg.check_avoid"
+duration = 4
+first = 7
+every = 17
+# 64163 is a 4 s channel that fires 64164 at once and every second: 5700-6300 shadow and 4 Sanity to players
+# within 130 yards who face him and see him, every 13-22 s. Stock turns every bot's back to him while he
+# channels (emergency priority) and switches its ranged damage dealers to the cross mark meanwhile.
+
+[[boss.mechanic]]
+id = "uld.yogg.immortal_guardians"
+name = "Immortal Guardian"
+kind = "switch_adds"
+phase = "phase_3"
+roles = ["tank", "melee", "ranged"]
+spells = []
+adds = [33988, 33989, 36064, 36067]
+handled_by = "playerbots"
+playerbots = ["yogg-saron mark target action", "yogg-saron phase 3 positioning action"]
+explain = "Immortal Guardians rise every ten seconds and cannot be killed; tanks gather them and damage drops each below ten percent, where it is weakened, then returns to Yogg-Saron."
+check = "none"
+every = 10
+# They appear 38-48 yards from him and wait 4 s; damage never takes them below 1 health. Their damage grows with
+# their health (Empowered, a stack per 10%); under 10% they are Weakened. Only Thorim's Titanic Storm kills a
+# weakened one, so with no keepers they pile up. Stock marks the lowest guardian above 10% skull, else Yogg-Saron,
+# and gathers its tanks at a fixed melee spot; under the raid cheat it Kill()s the lowest one outright.
+
+[[boss.mechanic]]
+id = "uld.yogg.shadow_beacon"
+name = "Shadow Beacon"
+kind = "kite"
+phase = "phase_3"
+roles = ["tank"]
+spells = [64465]
+adds = [36064, 36067]
+handled_by = "none"
+explain = "Shadow Beacon marks a guardian, three on 25-man, that ten seconds later heals itself and every ally within twenty yards; its tank drags it away from the others and from him."
+check = "none"
+duration = 10
+first = 45
+every = 45
+targets = { "10" = 1, "25" = 3 }
+# The marked guardian becomes 36064 for 10 s; at the end the beacon (its trigger set to 64467 by
+# SpellInfoCorrections) makes it cast Empowering Shadows on itself (64468, 25-man 64486): 11250 or 37500 health a
+# second for 20 s to its allies within 20 yards, the other guardians and Yogg-Saron among them. Stock gathers all
+# guardians on one tank at its phase 3 melee spot, about 18.5 yards from the room's middle where Yogg-Saron sits,
+# so a marked guardian held there can heal him too; nothing in stock separates it. The heals land on enemies of the
+# raid, not on players, so the mechanic names no hits.
+
+[[boss.mechanic]]
+id = "uld.yogg.drain_life"
+name = "Drain Life"
+kind = "interrupt"
+phase = "phase_3"
+roles = ["melee", "ranged"]
+spells = { "10" = [64159], "25" = [64160] }
+handled_by = "partial"
+playerbots = ["kick", "pummel", "shield bash", "counterspell", "wind shear", "mind freeze"]
+handled_note = "stock class interrupts fire on a bot's own current target only; nobody is assigned to kick"
+explain = "A wounded Immortal Guardian channels Drain Life on a player within forty yards for five seconds; interrupt it."
+check = "none"
+duration = 5
+every = 9.5
+# Below 85% health a guardian drains 2000 (25-man 3333) health a second from a random player within 40 yards.
+
+[[boss.mechanic]]
+id = "uld.yogg.deafening_roar"
+name = "Deafening Roar"
+kind = "raid_cooldowns"
+phase = "hard_mode"
+only = ["25"]
+roles = ["healer"]
+spells = [64189]
+handled_by = "none"
+explain = "On 25-man with fewer than four keepers he roars every minute in phase three, hurting the raid and silencing everyone within fifty yards for four seconds; heal up before it."
+check = "none"
+cast = 2.3
+duration = 4
+first = 30
+every = 60
+# Scheduled when phase 3 starts on 25-man if fewer than four keepers help (always with none): 7600-8400 to
+# everyone within 99 yards and a 4 s silence within 50 yards, first 30 s into phase 3.
+
+[[boss.mechanic]]
+id = "uld.yogg.extinguish_all_life"
+name = "Extinguish All Life"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [64166]
+handled_by = "none"
+explain = "Fifteen minutes after the pull he extinguishes all life and kills the raid; the kill has to come before then."
+check = "none"
+first = 900
+# Sara casts it (999999 to everyone) 15 minutes after the fight starts and every 5 s after.
+
+[[boss.check]]
+id = "uld.yogg.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Death Ray", "Shadow Nova", "Lunatic Gaze"]
+max_hits = 3
+
+# Algalon the Observer (Ulduar 603, BOSS_ALGALON 13). Spell ids, timers and numbers from
+# boss_algalon_the_observer.cpp, Spell.dbc, SpellInfoCorrections and the world database (spelldifficulty_dbc,
+# spell_linked_spell, conditions, creature spawns). Stock playerbots has nothing for Algalon: the Uld strategy
+# (src/Ai/Raid/Uld) ends with Yogg-Saron, and no source file under src/ names Algalon or any of his spells, so
+# every mechanic here is handled_by = "none". With stock alone the raid dies at the first Big Bang.
+#
+# Timers count from the end of his engage countdown: the script adds 26 s on the very first pull of the
+# instance and 8.5 s on every later pull before anything below starts (introDelay in JustEngagedWith).
+#
+# Phases: two kinds of phase matter here. The fight's phases are below (stars, then worm holes at 20%).
+# Separately, black holes, worm holes and the fifth Phase Punch put a player in phase 16 (SPELL_AURA_PHASE,
+# misc 16) for 10 s; Algalon, his stars, constellations and Cosmic Smash markers stay in phase 1. Pets,
+# totems and guardians follow their owner's phase (Unit::SetPhaseMask). The native responder never binds a
+# bot that is in another phase than the caster, so a bot hidden in a black hole is never moved by it.
+# Neither the hazard scan nor stock avoid aoe treats a black hole or worm hole as a hazard: their periodic
+# triggers (62168, 65250) apply the phase aura, not school damage, so nothing pushes a bot out of one.
+
+[[boss]]
+index = 13
+name = "Algalon the Observer"
+slug = "algalon"
+creatures = [32871, 33070]
+script = "boss_algalon_the_observer.cpp"
+enrage = 360
+call = "algalon: black hole for big bang, swap at four punches"
+phase = [
+  { id = "stars", name = "Stars and constellations" },
+  { id = "worm_holes", name = "Worm holes", hp_below = 20 },
+]
+# enrage: Berserk (47008) 360 s after the countdown; Ascend to the Heavens 480 s after it (see berserk).
+
+[[boss.mechanic]]
+id = "uld.algalon.big_bang"
+name = "Big Bang"
+kind = "stack"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [64443], "25" = [64584] }
+hits = { "10" = [64443], "25" = [64584] }
+handled_by = "none"
+explain = "Big Bang takes eight seconds and hits everyone he can see for over eighty thousand; be inside a black hole, or a worm hole after twenty percent, when it lands, then step back out."
+check = "uld.algalon.check_avoid_big_bang"
+radius = 6
+cast = 8
+first = 90
+every = 90.5
+# How it is survived in this core: 64443 (10) / 64584 (25) is an 8 s cast whose effect 0 hits every enemy unit
+# of the map (TARGET_UNIT_SRC_AREA_ENEMY, radius 50000) for 76313-88687 (10) or 107250-112750 (25) physical.
+# It pierces immunities (SPELL_ATTR0_NO_IMMUNITIES) but lacks SPELL_ATTR6_IGNORE_PHASE_SHIFT, so
+# SpellInfo::CheckTarget drops any unit Algalon cannot see: a player in phase 16. A Black Hole (32953) or,
+# below 20%, a Worm Hole (34099) applies 62168 / 65250 every second to players within 6 yards: phase 16 and a
+# screen effect for 10 s, plus (spell_linked_spell) 62169, 1532-1968 arcane damage a second for 10 s. So a
+# player within 6 yards of a hole when the cast ends takes nothing, and one who left it in the last ~10 s is
+# still phased. Big Bang's effect 1 then triggers 64445 (IGNORE_PHASE_SHIFT, whole map), whose first tick a
+# second later strips every phase aura and 62169 from everyone; a player still inside is phased again at the
+# next tick and can neither hit Algalon nor stop the damage, so step out of the hole after the cast.
+# Inside the hole's phase, eight Dark Matter (33089, phase-16 spawns, two at each star spot, wandering 20 yd,
+# hostile melee) can attack. The cast has no target or destination, so the responder cannot answer it (its
+# stack gathers round a cast's target); positional is not a responded kind. Algalon stands still from the cast
+# start until 3 s after it lands, and his melee, Quantum Strike, Phase Punch and Cosmic Smash wait 11 s.
+
+# Answered: at the cast start (an 8 s cast) every healer, melee and ranged bot gathers within the 6 yards of the
+# Black Hole or Worm Hole nearest it (area "nearest", within 40 yards; tanks stay out: Big Bang must find a
+# target, see big_bang_target), whatever phase it is in once inside; the gathering ends with the cast.
+area = "nearest"
+anchors = [32953, 34099]
+duration = 0.5
+
+[[boss.mechanic]]
+id = "uld.algalon.leave_hole"
+name = "Out of the black hole"
+kind = "avoid_ground"
+roles = ["healer", "melee", "ranged"]
+spells = [64445]
+hits = { "10" = [62169], "25" = [62169] }
+handled_by = "none"
+explain = "Once Big Bang has landed, step out of the black hole at once: inside it you cannot reach him and its shadow keeps burning you."
+check = "none"
+radius = 6
+duration = 3
+area = "nearest"
+anchors = [32953, 34099]
+# Big Bang's effect 1 triggers 64445 (Remove Player from Phase) as it lands; a bot still within 6 yards of the
+# hole is phased again at its next second and takes 62169 (1532-1968 arcane a second). Answered at 64445, round
+# the nearest hole, for 3 s, whatever phase the bot is in.
+
+[[boss.mechanic]]
+id = "uld.algalon.big_bang_target"
+name = "Big Bang needs a target"
+kind = "positional"
+roles = ["tank"]
+spells = { "10" = [64443], "25" = [64584] }
+handled_by = "none"
+explain = "If Big Bang finds nobody to hit he casts Ascend to the Heavens and the raid dies; one well-armoured tank stays outside each time and takes it behind a defensive cooldown."
+check = "none"
+# spell_algalon_big_bang counts the targets Big Bang selected (after the phase filter, before line of sight is
+# checked) and, at zero, DoAction(ACTION_ASCEND): 1.5 s later Ascend to the Heavens (64487, 2 s cast,
+# 655500-724500 arcane within 150 yards, IGNORE_PHASE_SHIFT) kills everyone, holes or not. Pets cannot be the
+# target: they follow their owner into phase 16. Big Bang is physical and nothing marks it as ignoring armour
+# (Unit::IsDamageReducedByArmor), so armour reduces it: against his level 83 a plate tank's 25-30k armour takes
+# roughly 60-64% off. Derived from the code, not yet seen in a live pull.
+
+[[boss.mechanic]]
+id = "uld.algalon.collapsing_stars"
+name = "Collapsing Star"
+kind = "kill_order"
+phase = "stars"
+roles = ["melee", "ranged"]
+spells = []
+adds = [32955, 34215]
+handled_by = "none"
+explain = "Four Collapsing Stars wander the room and shrink on their own; kill one well before each Big Bang so its black hole is open, and never two at the same moment."
+check = "none"
+first = 16.5
+every = 60
+# The script summons stars to fill four every 60 s from 16.5 s. Each loses 1% of its health a second
+# (Collapse 62018, spell_algalon_collapse_aura), so an untouched star dies about 100 s after it appears; the
+# first ones would only open their holes after the first Big Bang at 90 s. A star's death (killed or collapsed)
+# summons the Black Hole (62189 -> 32953) where it stands. Stars do no damage of their own (NullCreatureAI).
+
+[[boss.mechanic]]
+id = "uld.algalon.black_hole_explosion"
+name = "Black Hole Explosion"
+kind = "raid_cooldowns"
+phase = "stars"
+roles = ["healer"]
+spells = { "10" = [64122], "25" = [65108] }
+handled_by = "none"
+explain = "Every star that dies opens its black hole with a blast through the whole room, about sixteen thousand shadow, twenty on 25-man; heal everyone up before the next star falls."
+check = "none"
+radius = 200
+# Cast once by each new black hole at its spawn: 16088-16912 (10) / 20475-21525 (25) shadow within 200 yards.
+# It is instant and room-wide, so there is nothing to step out of; players already phased in another hole
+# are not hit.
+
+[[boss.mechanic]]
+id = "uld.algalon.living_constellations"
+name = "Living Constellation"
+kind = "switch_adds"
+phase = "stars"
+roles = ["tank", "melee", "ranged"]
+spells = { "10" = [64599], "25" = [64607] }
+adds = [33052, 33116]
+handled_by = "none"
+explain = "Every fifty seconds three Living Constellations come down and barrage random players; kill them, or tank one into a black hole the raid can spare, which swallows both."
+check = "none"
+first = 60
+every = 50
+cast = 2
+# Eleven constellations hover over the room from the start; every 50 s from 60 s three wake, take a random
+# player as target and come down. Each casts Arcane Barrage (64599 / 64607, 2 s cast, not interruptible) every
+# 5 s at one random enemy: 4163-4837 (10) / 8550-9450 (25) arcane. A black hole closes on a constellation
+# within 6 yards of it and no more than 5 yards above it (65508 -> 65509, conditions: Living Constellation):
+# the hole and the constellation both vanish, so never lead one into the last hole you need for Big Bang.
+
+[[boss.mechanic]]
+id = "uld.algalon.cosmic_smash"
+name = "Cosmic Smash"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [62301, 62300], "25" = [64598, 62300] }
+hits = { "10" = [62311], "25" = [64596] }
+handled_by = "none"
+explain = "Cosmic Smash marks the floor under one player, three on 25-man, and a meteor hits the mark about five seconds later; be ten yards from it before it falls."
+check = "none"
+radius = 10
+duration = 5
+first = 26
+every = 25.5
+targets = { "10" = 1, "25" = 3 }
+area = "caster"
+respond_spells = [62300]
+# Algalon's 62301 / 64598 (instant, no target) force-casts 62293 and 62295 on 1 / 3 random enemies (players or
+# pets) within 100 yards: 62293 summons the marker 33104 at that unit's feet for 10 s, 62295 the asteroid 33105. Algalon's
+# JustSummoned gives the marker its visual (62300, cast by the marker on itself) and lifts the asteroid 35 yards;
+# 4 s later the asteroid casts 62304 / 64597, a missile (45 / 40 yd/s) to the nearest marker (conditions), and
+# 62311 / 64596 hit: 41438-43562 (10) / 53625-56375 (25) fire within 100 yards (SpellInfoCorrections), full
+# inside 6 yards, 2/d of it from 6 to 10 yards and 1/d beyond (spell_algalon_cosmic_smash_damage), knockback
+# within 6. Answered at the marker's own 62300, round the marker, which marks the impact point about 4.8 s
+# ahead; radius 10 is where the script's falloff drops to a tenth; duration covers the fall. Algalon's own
+# cast is not answered (it names no place). Not answered by the 33105 missile cast: under a second before impact.
+# Caveat (from the code, unverified in game): the markers are summoned by the forced player (EffectForceCast
+# passes no original caster), so Algalon's JustSummoned may never see them; if so, 62300 is never cast, the
+# smash never falls and this rule never fires. No avoid check: its 100-yard falloff touches every player.
+
+[[boss.mechanic]]
+id = "uld.algalon.phase_punch"
+name = "Phase Punch"
+kind = "tank_swap_at_stacks"
+roles = ["tank"]
+spells = [64412]
+hits = [64412, 64417]
+handled_by = "none"
+explain = "Phase Punch stacks on the tank every fifteen seconds and the fifth stack phases the tank out of the fight; the other tank taunts after the fourth."
+check = "none"
+stacks = 4
+duration = 45
+first = 15.5
+every = 15.5
+# 64412: 8788-10212 arcane and a stacking aura (45 s, 5 stacks) whose 1 s tick (spell_algalon_phase_punch_aura)
+# keeps the stack's visual (64421-64435); at five it casts 64417: phase 16 and 62169's arcane damage for 10 s,
+# so Algalon loses the tank and turns to the next on his threat list. Stacks fall off 45 s after the last punch,
+# so two tanks trading every four punches never reach five.
+
+[[boss.mechanic]]
+id = "uld.algalon.quantum_strike"
+name = "Quantum Strike"
+kind = "heal_target"
+roles = ["healer"]
+spells = { "10" = [64395], "25" = [64592] }
+handled_by = "none"
+explain = "Quantum Strike hits the tank every few seconds for about sixteen thousand, thirty-five on 25-man; keep steady heals on the tank."
+check = "none"
+first = 3.5
+every = 3
+# Every 3 to 4.5 s at his victim: 15675-17325 (10) / 34125-35875 (25) physical.
+
+[[boss.mechanic]]
+id = "uld.algalon.worm_holes"
+name = "Unleashed Dark Matter"
+kind = "switch_adds"
+phase = "worm_holes"
+roles = ["tank", "melee", "ranged"]
+spells = [64450]
+adds = [34097, 34222]
+handled_by = "none"
+explain = "At twenty percent the stars and black holes vanish and four worm holes open, each sending out Unleashed Dark Matter every thirty seconds; kill it as it comes."
+check = "none"
+every = 30
+# Below 20% the script despawns constellations, stars and black holes and summons four Worm Holes (34099) at the
+# star spots. Each casts 64450 every 30 s (its first after 6-8 s), and the Unleashed Dark Matter chases a random
+# player within 100 yards. Big Bang goes on every 90.5 s: the worm holes phase like black holes (65251 -> 65250,
+# 6 yards) and are where the raid hides.
+
+[[boss.mechanic]]
+id = "uld.algalon.leash"
+name = "Leaving the room"
+kind = "positional"
+roles = ["tank"]
+spells = []
+handled_by = "none"
+explain = "Keep him within forty-seven yards of where he landed; drag him farther, or off the platform, and he casts Ascend to the Heavens on the whole raid."
+check = "none"
+range = 47
+# IsInRoom: more than 47 yards (2D) from his home (AlgalonLandPos) or below z 410 triggers ACTION_ASCEND.
+
+[[boss.mechanic]]
+id = "uld.algalon.berserk"
+name = "Berserk and Ascend to the Heavens"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [47008, 64487]
+handled_by = "none"
+explain = "Six minutes after his countdown he goes berserk, and two minutes after that Ascend to the Heavens kills everyone; the kill has to come before then."
+check = "none"
+first = 360
+# Berserk 47008 at 360 s (+900% damage, +150% attack speed); ACTION_ASCEND at 480 s: 64487 (2 s cast,
+# 655500-724500 arcane within 150 yards, ignores phase). The fight is won at 2% health (the outro takes over).
+
+[[boss.check]]
+id = "uld.algalon.check_avoid_big_bang"
+kind = "avoid"
+since = 2
+names = ["Big Bang"]
+roles = ["healer", "melee", "ranged"]
+max_hits = 0
+# Tanks are left out: one tank is meant to take each Big Bang (big_bang_target).

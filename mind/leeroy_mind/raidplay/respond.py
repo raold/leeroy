@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from leeroy_mind.logs import log
@@ -18,8 +18,10 @@ from leeroy_mind.protocol import Hello, register_command
 
 from .model import DEFAULT_CONE_DEGREES, DIFFICULTIES, DIFFICULTY_KEYS, PlaybookError, Playbooks, load
 
-# The hello feature of a worldserver that takes raid_mechanics (mod-leeroy's kFeatures).
+# The hello feature of a worldserver that takes raid_mechanics (mod-leeroy's kFeatures), and of one that also takes
+# `nearest` areas (Algalon's black holes); an older one gets the tables without those rules.
 FEATURE = "mechanics"
+FEATURE_NEAREST = "mechanics_nearest"
 # Native's bounds (LeeroyMechanicPolicy.h): rules a table, spells a rule, yards, seconds.
 MAX_RULES = 64
 MAX_SPELLS = 16
@@ -41,6 +43,7 @@ class MechanicRule:
     angle: float = 0.0
     duration: float = 0.0
     landing: bool = False
+    entries: tuple[int, ...] = field(default=(), metadata={"omit_default": True})  # a `nearest` area's creatures
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,17 +77,19 @@ def actionable(playbooks: Playbooks, map_id: int, difficulty: int) -> tuple[Mech
             duration = m.number("duration", key) or 0
             rules.append(MechanicRule(m.id, m.kind, m.area, roles, spells, _yards(m.number("radius", key)),
                                       _yards(m.number("range", key)), float(min(angle, 360)),
-                                      float(min(duration, MAX_DURATION)), m.landing))
+                                      float(min(duration, MAX_DURATION)), m.landing, m.anchors))
     return tuple(rules[:MAX_RULES])
 
 
-def tables(playbooks: Playbooks) -> dict[tuple[int, int], tuple[MechanicRule, ...]]:
-    """Every covered map and difficulty with at least one actionable mechanic."""
+def tables(playbooks: Playbooks, nearest: bool = True) -> dict[tuple[int, int], tuple[MechanicRule, ...]]:
+    """Every covered map and difficulty with at least one actionable mechanic; `nearest` False leaves out the rules
+    with a `nearest` area (for a worldserver whose hello lacks FEATURE_NEAREST)."""
     out = {}
     for map_id, raid in playbooks.raids.items():
         for key in raid.difficulties:
             difficulty = DIFFICULTY_KEYS.index(key)
-            if rules := actionable(playbooks, map_id, difficulty):
+            rules = tuple(r for r in actionable(playbooks, map_id, difficulty) if nearest or r.area != "nearest")
+            if rules:
                 out[(map_id, difficulty)] = rules
     return out
 
@@ -122,7 +127,9 @@ class MechanicFeed:
 
     def __init__(self, app, playbooks: Playbooks):
         self.app = app
-        self.tables = tables(playbooks)
+        self.all_tables = tables(playbooks)
+        self.older_tables = tables(playbooks, nearest=False)
+        self.tables = self.all_tables
         self.connected = False
         self.supported = False
         self.pending: list[tuple[int, int]] = []
@@ -148,6 +155,9 @@ class MechanicFeed:
             if not self.supported:
                 log("raidplay_respond_unsupported")
                 return
+            self.tables = self.all_tables if FEATURE_NEAREST in ev.features else self.older_tables
+            if self.tables is self.older_tables and self.older_tables != self.all_tables:
+                log("raidplay_respond_nearest_unsupported")
             for key in sorted(self.tables):
                 self.queue(key)
             return

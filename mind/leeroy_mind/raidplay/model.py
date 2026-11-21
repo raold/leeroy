@@ -60,13 +60,15 @@ RESPOND_KINDS = frozenset({"avoid_ground", "move_out_cone", "spread", "stack", "
 # Where a responded kind's danger lies when its spell starts (the responder's `area`), each kind's choices with its
 # default first; "none": the cast does not say where, so the responder leaves it (README).
 AREAS = MappingProxyType({
-    "avoid_ground": ("dest", "caster", "line", "ring", "none"),
+    "avoid_ground": ("dest", "caster", "line", "ring", "nearest", "none"),
     "move_out_cone": ("cone", "none"),
     "spread": ("group", "none"),
-    "stack": ("dest", "none"),
+    "stack": ("dest", "nearest", "none"),
     "run_out_debuff": ("target", "none"),
     "los": ("caster", "none"),
 })
+# A `nearest` area names at most this many creature entries (native's kMechanicMaxEntries).
+MAX_ANCHORS = 8
 # The core's cone when a spell names no other (Spell.cpp, 60 degrees).
 DEFAULT_CONE_DEGREES = 60
 # Checks run on the whole pull without a playbook row of their own (training/checks.py).
@@ -144,6 +146,7 @@ class Mechanic:
     respond_roles: tuple[str, ...] | None = None
     respond_spells: Mapping[str, tuple[int, ...]] | None = None
     landing: bool = False   # its place is read when the cast completes; nothing binds before
+    anchors: tuple[int, ...] = ()  # a `nearest` area: the creatures whose nearest one it lies round
 
     def applies(self, difficulty: str) -> bool:
         return difficulty in self.only
@@ -387,7 +390,7 @@ def _mechanic(raw, where: str, diffs: tuple[str, ...], phases: set[str], slug_pr
         _fail(where, "expected a table")
     _known(raw, {"id", "name", "kind", "phase", "roles", "spells", "hits", "only", "handled_by",
                  "playerbots", "handled_note", "explain", "check", "adds", "area", "respond_roles",
-                 "respond_spells", "landing", *NUMBERS}, where)
+                 "respond_spells", "landing", "anchors", *NUMBERS}, where)
     mid = _text(raw.get("id"), f"{where}.id")
     if (not mid.startswith(slug_prefix) or mid.startswith(slug_prefix + "check_")
             or not _ID.fullmatch(mid[len(slug_prefix):])):
@@ -475,6 +478,9 @@ def _respond(raw, where, kind, handled, roles, only, spells, numbers):
     landing = raw.get("landing", False)
     if type(landing) is not bool or landing and area not in ("dest", "ring"):
         _fail(where, "landing (true or false) is for a dest or ring area")
+    anchors = _ints(raw.get("anchors", []), f"{where}.anchors")
+    if (area == "nearest") != bool(anchors) or len(anchors) > MAX_ANCHORS or len(set(anchors)) != len(anchors):
+        _fail(where, f"anchors (1-{MAX_ANCHORS} creature entries, each once) is exactly for a nearest area")
     respond_roles = None
     if "respond_roles" in raw:
         value = raw["respond_roles"]
@@ -490,7 +496,7 @@ def _respond(raw, where, kind, handled, roles, only, spells, numbers):
             if any(i not in spells.get(d, ()) for i in chosen):
                 _fail(where, f"respond_spells for difficulty {d} must be among its spells")
         respond_spells = MappingProxyType({d: table[d] for d in only if table.get(d)})
-    return area, respond_roles, respond_spells, landing
+    return area, respond_roles, respond_spells, landing, anchors
 
 
 def _boss(raw, where: str, raid_key: str, map_id: int, diffs: tuple[str, ...]) -> Boss:

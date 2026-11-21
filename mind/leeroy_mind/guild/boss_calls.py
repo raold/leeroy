@@ -18,7 +18,7 @@ class BossCall:
 
 
 # The playbooks' calls (the ICC and Trial of the Crusader ones as they were before they moved
-# there, then Ruby Sanctum's); used only when the playbook data cannot be read, so guild life's
+# there, then Ruby Sanctum's, Ulduar's and Malygos's); used only when the playbook data cannot be read, so guild life's
 # calls never fail with it. A test keeps the two equal.
 _FALLBACK = {
     (631, 0): BossCall("marrowgar: spread out, kill spikes, run from coldflame"),
@@ -39,6 +39,21 @@ _FALLBACK = {
     (649, 2): BossCall("champions: focus the healers, cc what you can"),
     (649, 3): BossCall("twins: match your orb colour, swap on vortex"),
     (649, 4): BossCall("anub'arak: kite the spike over frost patches"),
+    (603, 0): BossCall("leviathan: kite when pursued, shut him down, keep pyrite up", False),
+    (603, 1): BossCall("ignis: melt constructs, cool them in water, dodge scorch"),
+    (603, 2): BossCall("razorscale: fire harpoons, kill dwarves, out of fire"),
+    (603, 3): BossCall("xt-002: bomb and light run out, everyone on the heart"),
+    (603, 4): BossCall("iron council: steelbreaker first, out of overload and runes"),
+    (603, 5): BossCall("kologarn: break the right arm, kill rubble, kite eye beams"),
+    (603, 6): BossCall("auriaya: all in front, kick the blast, out of pools"),
+    (603, 7): BossCall("hodir: keep moving, snowdrift at flash freeze, break ice"),
+    (603, 8): BossCall("thorim: gauntlet team runs, arena holds the middle"),
+    (603, 9): BossCall("freya: kill the gift, trio together, out of bombs"),
+    (603, 10): BossCall("mimiron: out of shock blast, dodge rockets and lasers"),
+    (603, 11): BossCall("vezax: kick searing flames, dodge crash, marked run out"),
+    (603, 12): BossCall("yogg: guardians die by sara, avoid clouds, look away"),
+    (603, 13): BossCall("algalon: black hole for big bang, swap at four punches"),
+    (616, 0): BossCall("malygos: kill sparks, bubbles on deep breath, shield surges"),
     (724, 0): BossCall("baltharus: branded run out, off-tank takes the clone", False),
     (724, 1): BossCall("zarithrian: swap on armor, kill the flamecallers", False),
     (724, 2): BossCall("saviana: beacons spread out, dodge her breath", False),
