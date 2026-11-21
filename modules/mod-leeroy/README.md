@@ -366,6 +366,9 @@ entire cast: known outstanding, unreadable or unverified receipts still fence th
 groupless character, map, instance, difficulty, flags and exact receipt revision. The character return
 and its handback proof share one guarded transaction. No migration or configuration change is needed;
 this follow-up requires a native rebuild before enabling member heroics.
+Restart recovery still retains a partial party whose identity cannot be proved: a reused numeric
+group ID, leader and roster subset do not authorize disband. Live cancellation can instead restore
+each independently owned member through the existing handback path.
 
 # Ground hazards in the owner's group
 

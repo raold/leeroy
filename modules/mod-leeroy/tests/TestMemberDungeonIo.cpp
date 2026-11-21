@@ -429,6 +429,25 @@ LEEROY_TEST(MemberDungeonIoCommittedTerminalIsImmutableWhileHandbacksWait)
     CHECK(DungeonRecoveryConflicts({101},false));
 }
 
+LEEROY_TEST(MemberDungeonIoRestartDoesNotBorrowAPartialReusedGroupIdentity)
+{
+    Fresh();auto data=Manifest();data["stage"]="grouping";data["instance"]=0;
+    data["effect"]="add_group";data["actor"]=103;
+    data.erase("return_scope");data.erase("recovery_authorized");
+    for(auto& body:data["bodies"])
+    {
+        body["changed"]=body["guid"].get<uint32>()<=102;
+        body["moved"]=false;
+    }
+    DungeonReceipt receipt{"test-start",15,data};Remember(receipt);
+    Group partial;partial.slots={{{101}},{{102}}};receiptGroups.active=&partial;
+    // The same numeric group, leader and subset can belong to a replacement party.
+    CHECK(!RecoverBodies(receipt));CHECK(!partial.disbanded);
+    CHECK_EQ(CharacterDatabase.transactions.size(),1u);
+    CHECK(DungeonRecoveryConflicts({101},false));
+    CHECK(!DungeonRecoveryConflicts({999},false));
+}
+
 namespace ReceiptRunnerTest
 {
 using namespace Leeroy::Guild;
