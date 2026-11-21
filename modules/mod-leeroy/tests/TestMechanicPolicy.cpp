@@ -837,6 +837,10 @@ LEEROY_TEST(Mechanic_IceCoverIsBehindAndCloseToTheFrozenPlayer)
     CHECK(!MechanicIceCover(boss, block, {23, 0, 20}, 2, 10));
     CHECK(!MechanicIceCover(boss, block, block, 2, 10));
     CHECK(!MechanicIceCover(boss, block, boss, 2, 10));
+    // A close boss and an off-axis block can pass the ray-width test while failing
+    // the core's distance-to-the-other-endpoint condition (including vertical rays).
+    CHECK(!MechanicIceCover(boss, {.2f, 1.87f, 0}, {2, 0, 0}, 2, 10));
+    CHECK(!MechanicIceCover(boss, {1.87f, .2f, 0}, {0, 2, 0}, 2, 10));
     // Rotate the room: the chosen spots must satisfy the core's actual between test,
     // including its vertical-line special case, not just our own helper.
     for (int degrees = 0; degrees < 360; ++degrees)

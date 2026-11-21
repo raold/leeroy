@@ -622,6 +622,7 @@ bool MechanicIceCover(HazardPoint boss, HazardPoint block, HazardPoint at, float
     float const dx = at.x - boss.x, dy = at.y - boss.y;
     float const length2 = dx * dx + dy * dy;
     float const bx = block.x - boss.x, by = block.y - boss.y;
+    float const cx = block.x - at.x, cy = block.y - at.y;
     float const along = bx * dx + by * dy;
     float const distance = std::hypot(Distance2d(block, at), block.z - at.z);
     // Strictly behind the block, on its floor, inside the core's ten-yard shelter.
@@ -629,7 +630,7 @@ bool MechanicIceCover(HazardPoint boss, HazardPoint block, HazardPoint at, float
     return std::isfinite(length2) && std::isfinite(distance) && length2 > 0 && along > 0 && along < length2
         && width > 0 && range > 0 && distance < range && SameFloor(block, at)
         && std::fabs(bx * dy - by * dx) < width * std::sqrt(length2)
-        && bx * bx + by * by < length2;
+        && bx * bx + by * by < length2 && cx * cx + cy * cy < length2;
 }
 
 std::vector<HazardPoint> MechanicIceSpots(HazardPoint boss, std::vector<HazardPoint> const& blocks, float range)
