@@ -20,6 +20,14 @@ LEEROY_TEST(Protocol_HelloShape)
     CHECK_EQ(json::parse(EncodeHello(1700000000000, 21, 0, 1699999990000))["started_ms"], 1699999990000LL);
 }
 
+LEEROY_TEST(Protocol_HelloAppendsTheBuildsOwnFeaturesOnce)
+{
+    auto j = json::parse(EncodeHello(1700000000000, 21, 0, 0, {"dc_toc", "dc_ulduar", "regear", "", "dc_toc"}));
+    CHECK(j["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
+        "dummy_party_on_arrival", "invites", "lead", "dc_toc", "dc_ulduar"}));
+    CHECK(!j.contains("started_ms"));
+}
+
 LEEROY_TEST(Protocol_ChatShapeAndOneLine)
 {
     std::string line = EncodeChat(5, {Channel::Whisper, 7, "Anna", 1, "hi\nthere", 571, 4395});

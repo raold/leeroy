@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "LeeroyProtocol.h"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <limits>
@@ -345,7 +346,8 @@ std::string DumpLine(json const& j)
     return j.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
-std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid, std::int64_t startedMs)
+std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid, std::int64_t startedMs,
+    std::vector<std::string> const& extra)
 {
     json j = Envelope(ts, "hello");
     j["server"] = "mod-leeroy";
@@ -357,6 +359,9 @@ std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t hu
     j["features"] = json::array();
     for (std::string_view feature : kFeatures)
         j["features"].push_back(std::string(feature));
+    for (std::string const& feature : extra)
+        if (!feature.empty() && std::find(j["features"].begin(), j["features"].end(), feature) == j["features"].end())
+            j["features"].push_back(feature);
     return DumpLine(j);
 }
 

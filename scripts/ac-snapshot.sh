@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Copy the live configs and the local commits of mod-playerbots and
-# mod-ollama-chat into this repo so they are versioned. The live files stay the
+# Copy the live configs and the local commits of mod-playerbots,
+# mod-ollama-chat and mod-dungeon-clear into this repo so they are versioned. The live files stay the
 # source of truth: this only snapshots them. Secrets are masked on the way in, and the copies are then
 # checked against the real values before anything can be committed.
 #
@@ -51,6 +51,9 @@ export_patches() {
 }
 export_patches mod-playerbots
 export_patches mod-ollama-chat
+# mod-dungeon-clear's local commits (Trial of the Crusader, the Ulduar Leviathan pass). A live checkout
+# without them exports none and clears patches/mod-dungeon-clear: apply the series (git am) first.
+export_patches mod-dungeon-clear
 
 # --- leak check ----------------------------------------------------------
 # Every secret value in the live configs must be absent from the copies: the

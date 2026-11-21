@@ -55,7 +55,16 @@ std::string DcHold::Observe(DcPhase phase, std::optional<bool> bossEngaged, std:
 std::vector<std::uint32_t> DcUnreachableBosses(std::uint32_t mapId)
 {
     if (mapId == 533) return {13, 14};
+    if (mapId == 603) return {0, 4, 7, 8, 9, 10, 11, 12, 13};
     return {};
+}
+
+std::vector<std::string> DcRaidFeatures(bool trialOfTheCrusader, bool ulduar)
+{
+    std::vector<std::string> out;
+    if (trialOfTheCrusader) out.emplace_back(OfflineDcTocFeature);
+    if (ulduar) out.emplace_back(OfflineDcUlduarFeature);
+    return out;
 }
 
 bool ClearedReachable(std::vector<std::uint8_t> const& bossStates, std::vector<std::uint32_t> const& unreachable)

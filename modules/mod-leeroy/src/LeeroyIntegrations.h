@@ -5,6 +5,9 @@
 
 #include "Define.h"
 
+#include <string>
+#include <vector>
+
 // World thread. Applies cast + owner contributions. Disable releases ordinary
 // cast pins but retains explicit owners with keep on and bring-online off until cleanup.
 // Returns the whole accepted union count; it is not proof of an individual owner's acceptance.
@@ -19,5 +22,9 @@ bool LeeroyInstallDcObserver();     // mod-dungeon-clear status reaches the mind
 // everyone running. No-ops when the module was built without that integration.
 void LeeroyPollDcTanks();
 void LeeroyResetDcTanks();
+
+// The hello features naming the raids the dungeon-clear this was built with can run for an offline raid (dc_toc,
+// dc_ulduar), from its DcCapabilities.h, probed by mod-leeroy.cmake. None without the integration.
+std::vector<std::string> LeeroyDcRaidFeatures();
 
 #endif

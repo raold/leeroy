@@ -400,6 +400,16 @@ output in `patches/`:
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.
+- **Trial of the Crusader** (mod-dungeon-clear): the tank runs the raid stage by
+  stage from Barrett Ramsey's gossip, pulls the faction champions and the twins,
+  and takes the bots down into Anub'arak's chamber when the floor breaks.
+- **Ulduar's Flame Leviathan** (mod-dungeon-clear): a siege-vehicle fight bots
+  cannot drive. He is never fought or credited; a raid of bots only is taken past
+  his gate by the Ulduar Teleporter's Colossal Forge destination, which the
+  instance offers once he is dead, and every boss after him is fought for real.
+  Razorscale is started at the Expedition Commander. Both raids are advertised
+  in a header mod-leeroy probes, so the guild's offline raids run them only on a
+  build that has them.
 
 Apply them to a checkout of each module with
 `git am /path/to/leeroy/patches/<module>/*.patch`.
@@ -414,6 +424,7 @@ Apply them to a checkout of each module with
 | `config/` | Snapshots of the live server and module configs, secrets masked |
 | `patches/mod-playerbots/` | Local playerbots commits, as `git format-patch` output |
 | `patches/mod-ollama-chat/` | Local mod-ollama-chat commits, same format |
+| `patches/mod-dungeon-clear/` | Local mod-dungeon-clear commits, same format |
 | `patches/dojo/mod-playerbots/` | The dojo's own playerbots commit (an external-controller hook), applied on top of the local commits in the dojo's isolated checkout only |
 | `modules/mod-leeroy/` | The guild module and its bridge, with unit tests and a smoke test in `tools/` |
 | `modules/mod-dojo/` | The dojo's native module, built only into the dojo's isolated core (the CI build compiles its disabled variant) |
@@ -446,8 +457,8 @@ They assume this repo is the install root, with the core checked out in
 | Workflow | When | What |
 |---|---|---|
 | `ci` | main pushes and pull requests | shellcheck on `scripts/`, gitleaks over each push's and pull request's commits, the mod-leeroy and mod-dojo unit tests, the mind's Python 3.14 suite, the console's browser tests, the voice and selfie Python 3.12 suites, the dojo's suite and fake-worker protocol smoke, and a headless cross-service rehearsal in separate environments |
-| `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots, then the dojo's series on top (plus playerbots' codestyle check), and to mod-ollama-chat; a nightly failure opens a `patch-drift` issue |
-| `build` | patch or module changes, weekly | compiles the fork core with the patched playerbots, mod-leeroy and mod-dojo's disabled variant (clang, `-Werror`, ccache) |
+| `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots, then the dojo's series on top (plus playerbots' codestyle check), to mod-ollama-chat, and to mod-dungeon-clear (plus its lints); a nightly failure opens a `patch-drift` issue |
+| `build` | patch or module changes, weekly | compiles the fork core with the patched playerbots, patched mod-dungeon-clear, mod-leeroy and mod-dojo's disabled variant (clang, `-Werror`, ccache), then runs dungeon-clear's suites for the raids its patches add |
 | `release` | `v*` tag | GitHub release with the patches, modules, configs and scripts |
 
 There is no deploy job: the server runs on one PC and is updated with the

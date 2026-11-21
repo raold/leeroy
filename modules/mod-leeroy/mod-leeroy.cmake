@@ -69,6 +69,24 @@ if (TARGET modules)
         endif()
     endif()
 
+    # The raids dungeon-clear can run for an offline raid beyond its baseline, advertised in its DcCapabilities.h
+    # (patches/mod-dungeon-clear). Each one becomes a hello feature the mind plans that raid on; a build without the
+    # header, or with the integration off, advertises none and the mind keeps refusing those raids.
+    set(LEEROY_DC_RAID_TOC 0)
+    set(LEEROY_DC_RAID_ULDUAR 0)
+    set(LEEROY_DC_CAPABILITIES_H "${LEEROY_DC_SRC}/Ai/Dungeon/DungeonClear/DcCapabilities.h")
+    if (LEEROY_HAS_DUNGEON_CLEAR AND EXISTS "${LEEROY_DC_CAPABILITIES_H}")
+        file(READ "${LEEROY_DC_CAPABILITIES_H}" LEEROY_PROBE_TEXT)
+        string(FIND "${LEEROY_PROBE_TEXT}" "#define DC_CAPABILITY_RAID_TRIAL_OF_THE_CRUSADER 1" LEEROY_PROBE_POS)
+        if (NOT LEEROY_PROBE_POS EQUAL -1)
+            set(LEEROY_DC_RAID_TOC 1)
+        endif()
+        string(FIND "${LEEROY_PROBE_TEXT}" "#define DC_CAPABILITY_RAID_ULDUAR_LEVIATHAN_PASS 1" LEEROY_PROBE_POS)
+        if (NOT LEEROY_PROBE_POS EQUAL -1)
+            set(LEEROY_DC_RAID_ULDUAR 1)
+        endif()
+    endif()
+
     set(LEEROY_HAS_TRANSMOG 0)
     set(LEEROY_TRANSMOG_H "${CMAKE_SOURCE_DIR}/modules/mod-transmog/src/Transmogrification.h")
     leeroy_module_active(mod-transmog LEEROY_TRANSMOG_ACTIVE)
@@ -92,7 +110,9 @@ if (TARGET modules)
     target_compile_definitions(modules PRIVATE
         LEEROY_HAS_OLLAMA_FILTER=${LEEROY_HAS_OLLAMA_FILTER}
         LEEROY_HAS_DUNGEON_CLEAR=${LEEROY_HAS_DUNGEON_CLEAR}
-        LEEROY_HAS_TRANSMOG=${LEEROY_HAS_TRANSMOG})
+        LEEROY_HAS_TRANSMOG=${LEEROY_HAS_TRANSMOG}
+        LEEROY_DC_RAID_TOC=${LEEROY_DC_RAID_TOC}
+        LEEROY_DC_RAID_ULDUAR=${LEEROY_DC_RAID_ULDUAR})
     set(LEEROY_OLLAMA_STATE OFF)
     if (LEEROY_HAS_OLLAMA_FILTER)
         set(LEEROY_OLLAMA_STATE ON)
@@ -106,6 +126,7 @@ if (TARGET modules)
         set(LEEROY_TRANSMOG_STATE ON)
     endif()
     message(STATUS "[mod-leeroy] ollama filter: ${LEEROY_OLLAMA_STATE}, dungeon-clear: ${LEEROY_DC_STATE}, transmog: ${LEEROY_TRANSMOG_STATE}")
+    message(STATUS "[mod-leeroy] dungeon-clear offline raids: toc ${LEEROY_DC_RAID_TOC}, ulduar ${LEEROY_DC_RAID_ULDUAR}")
 
     option(LEEROY_TESTS "Build the mod-leeroy unit tests" OFF)
     if (LEEROY_TESTS)
