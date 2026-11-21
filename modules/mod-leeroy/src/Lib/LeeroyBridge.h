@@ -46,6 +46,9 @@ public:
     void Greet(std::uint64_t serial, std::string hello, std::string cast);
     // The answer to a command from the last PopCommands; dropped unless that command's mind is still connected.
     void Reply(std::string line);
+    // Deferred world-thread reply: bound to the originating connection, even
+    // after later commands were popped. False if that connection is gone.
+    bool Reply(std::uint64_t serial, std::string line);
     // Appends up to max commands of the greeted mind to out (none before Greet); returns how many.
     std::size_t PopCommands(std::vector<Command>& out, std::size_t max);
 

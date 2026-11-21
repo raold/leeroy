@@ -580,3 +580,57 @@ def test_terminal_before_ack_sees_durable_original_and_wins(tmp_path, store, clo
         assert rig.h.row(rig.ident)["phase"] == "terminal" and not rig.h.lease and not heroics.holds(store.conn)
 
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("lost_reply", [False, True])
+def test_initial_receipt_failure_stays_sent_until_deferred_ack_or_absence(tmp_path, store, clock, monkeypatch,
+                                                                        lost_reply):
+    import asyncio
+    from types import SimpleNamespace
+    from leeroy_mind.bridge import ConnectionLost
+    from leeroy_mind.guild.protocol import MemberDungeonStatus, StartMemberDungeon
+    from leeroy_mind.protocol import Ack
+
+    people = {g + 90: replace(m, guid=g + 90, name=f"Member{g + 90}") for g, m in roster().items() if g <= 15}
+    monkeypatch.setitem(globals(), "roster", lambda: people)
+
+    async def go():
+        rig = Rig(tmp_path, store, clock)
+        await rig.connect()
+        await rig.h.tick()
+        rig.ident = store.conn.execute("SELECT id FROM member_heroic").fetchone()[0]
+        assert heroics.open_chat(store.conn, rig.ident, "talk", clock.now())
+        for guid in (101, 102, 103, 104):
+            rig.post(guid)
+        rig.h.finish_chat(SimpleNamespace(id="talk", reason="agreed", seed=SimpleNamespace(key="lfg:" + rig.ident)))
+        entered, complete = asyncio.Event(), asyncio.Event()
+        original_send = rig.app.send
+
+        async def send(cmd, *, preserve_id=False, expected_epoch=None):
+            if isinstance(cmd, MemberDungeonStatus):
+                error = "unknown_dungeon" if complete.is_set() else "dungeon_receipt_unproven"
+                return Ack(0, cmd.id, False, error)
+            if isinstance(cmd, StartMemberDungeon) and cmd.day_prepared:
+                entered.set()
+                await complete.wait()  # Native INSERT and independent readback are outstanding.
+                if lost_reply:
+                    raise ConnectionLost("synthetic disconnect before admission reply")
+                return Ack(0, cmd.id, False, "dungeon_receipt_unavailable")
+            return await original_send(cmd, preserve_id=preserve_id, expected_epoch=expected_epoch)
+
+        rig.app.send = send
+        task = asyncio.create_task(rig.h.tick())
+        await asyncio.wait_for(entered.wait(), 2)
+        assert rig.h.row(rig.ident)["phase"] == "sent"
+        assert heroics.holds(store.conn)
+        await rig.h.status(rig.ident)
+        assert rig.h.row(rig.ident)["phase"] == "sent"  # Pending native insertion is not proof of absence.
+        complete.set()
+        await task
+        if lost_reply:
+            assert rig.h.row(rig.ident)["phase"] == "sent"
+            await rig.h.status(rig.ident)  # Exact-ID absence after a failed insert or restart before commit.
+        assert rig.h.row(rig.ident)["phase"] == "talk_only"
+        assert rig.h.row(rig.ident)["returned"] and not heroics.holds(store.conn)
+
+    asyncio.run(go())

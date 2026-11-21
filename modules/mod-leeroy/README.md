@@ -352,6 +352,35 @@ Logs carry ids, guids and codes only. **Native rebuild required** (`ac-release.s
 
 `Leeroy.MemberDungeon.Enable = 1` enables the guild party runner after `.reload config`. It defaults to 0. The separate `Leeroy.Strings.Enable` key controls the owner's in-game strings. The mind's `[life] dungeons` switch admits a party after members agree on Discord. Halls of Lightning heroic uses normal entry and a dedicated DungeonClear test driver. The party tank leads. The native receipt records the original start, party, copy and return evidence in the characters database. Deploy the native module and mind together with `ac-release.sh --native`.
 
+Receipt reads, schema creation and checkpoint transactions run through the asynchronous Characters
+database pool. A start's positive acknowledgement waits for its first durable receipt before changing any member;
+each later checkpoint waits for an independent exact-ID/revision/payload readback. A slow or failed
+read keeps that transition pending while the world thread continues. Partial party construction
+resumes at its saved member index. Recovery polls at most four receipts per pass, retaining every
+unresolved receipt and each member's verified handback; it never rewrites the first terminal event.
+An initial failed insert receives a negative acknowledgement only after its absence is verified.
+Pending status queries remain unproven, never `unknown_dungeon`. Repeated original starts do not
+consume the prepared owner token twice. Deferred replies keep their originating bridge connection
+serial; a disconnect before admission leaves untouched bodies for normal exact-ID reconciliation.
+Database waits still count toward job/setup deadlines: a late verified start may immediately enter
+teardown rather than begin grouping after its deadline.
+Cancellation, admitted owner requests, deadlines and configuration shutdown remain live during pending receipt
+I/O. They stop an independently proved DungeonClear run immediately; group changes and returns
+still wait for persistence. Recovery publishes terminal and return transitions after asynchronous
+verification, including the settled receipt's final event before dropping it from recovery.
+Logging in alone still leaves an accepted member heroic active.
+
+An unavailable initial store read refuses new heroic admission and retries. It does not claim the
+entire cast: known outstanding, unreadable or unverified receipts still fence their own rosters
+(an unreadable receipt without a recoverable roster remains conservative). Offline returns use a
+0.01 coordinate tolerance for MySQL FLOAT round trips, while still requiring the same offline,
+groupless character, map, instance, difficulty, flags and exact receipt revision. The character return
+and its handback proof share one guarded transaction. No migration or configuration change is needed;
+this follow-up requires a native rebuild before enabling member heroics.
+Restart recovery still retains a partial party whose identity cannot be proved: a reused numeric
+group ID, leader and roster subset do not authorize disband. Live cancellation can instead restore
+each independently owned member through the existing handback path.
+
 # Ground hazards in the owner's group
 
 Stock playerbots adds its `avoid aoe` strategy to the combat engine only (`AutoAvoidAoe` with a game-client

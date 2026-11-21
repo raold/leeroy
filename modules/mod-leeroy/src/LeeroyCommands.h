@@ -38,6 +38,9 @@ struct LeeroyCommandResult
 {
     bool ok = false;
     std::string error;
+    // The handler owns the eventual reply to the original connection serial.
+    // Used only when admission itself must await an asynchronous durable proof.
+    bool deferred = false;
 };
 
 using LeeroyCommandHandler = std::function<LeeroyCommandResult(nlohmann::json const& msg)>;
