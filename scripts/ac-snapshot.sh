@@ -5,10 +5,16 @@
 # checked against the real values before anything can be committed.
 #
 # Usage: ac-snapshot.sh
+#
+# AC_SNAPSHOT_OUT names the checkout that receives config/ and patches/ (default
+# AC_ROOT). With AC_ROOT=/f/azerothcore and AC_SNAPSHOT_OUT set to a worktree,
+# the live install is only read and the snapshot lands in the worktree.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-OUT_CONF="$AC_ROOT/config"
+OUT="${AC_SNAPSHOT_OUT:-$AC_ROOT}"
+[ -e "$OUT/.git" ] || die "AC_SNAPSHOT_OUT is not a git checkout: $OUT"
+OUT_CONF="$OUT/config"
 
 # Credentials, tokens and keys. Empty and numeric values are flags or unset, so
 # they are kept; anything else becomes "<redacted>".
@@ -35,7 +41,7 @@ log "configs: $(find "$OUT_CONF" -name '*.conf' | wc -l) files -> config/"
 # Local commits of a module repo (everything ahead of its upstream branch),
 # written to patches/<module>/. Only that directory is ever cleared.
 export_patches() {
-    local module="$1" repo="$AC_MODULES/$1" out="$AC_ROOT/patches/$1" upstream
+    local module="$1" repo="$AC_MODULES/$1" out="$OUT/patches/$1" upstream
     upstream="$(git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name '@{u}')"
     rm -rf "$out"
     mkdir -p "$out"
@@ -58,9 +64,9 @@ while IFS= read -r line; do
     # their comment text would otherwise trip this check.
     grep -qF -- "$value" "$AC_CONF"/*.conf.dist "$AC_MODCONF"/*.conf.dist && continue
     while IFS= read -r hit; do
-        warn "a secret from the live configs appears in ${hit#"$AC_ROOT"/}"
+        warn "a secret from the live configs appears in ${hit#"$OUT"/}"
         leaks=1
-    done < <(grep -rlF -- "$value" "$OUT_CONF" "$AC_ROOT/patches" || true)
+    done < <(grep -rlF -- "$value" "$OUT_CONF" "$OUT/patches" || true)
 done < <(grep -hE "^[[:space:]]*${SECRET_KEYS}[[:space:]]*=" "$AC_CONF"/*.conf "$AC_MODCONF"/*.conf)
 [ "$leaks" -eq 0 ] || die "secrets leaked into the snapshot; it was not cleaned up, fix the mask before committing"
 log "leak check passed"
