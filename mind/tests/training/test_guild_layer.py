@@ -43,3 +43,23 @@ def test_report_lists_separate_strategy_baselines(fake):
     fake.conn.execute("""UPDATE tg_pull SET covariates='{"guild_strategy":17}' WHERE deaths=4""")
     rows = section(fake)["contexts"]
     assert [(r.get("guild_strategy"), r["pulls"], r["baseline_pulls"]) for r in rows] == [(None, 1, 1), (17, 1, 1)]
+
+def test_guild_layer_rechecks_decision_identity_at_transport(store, clock):
+    import asyncio
+    from .test_tg_applier import Fake, card
+    from leeroy_mind.training.cards import Directive
+
+    async def go():
+        ports = Fake(store, clock)
+        strategy = card(Directive("PullPlayerReleaseDelay", 125), id=17)
+        current = 17
+        ports.applier.guild_allowed = lambda context, ident: ident == current
+        perform = ports.applier._perform
+        async def replaced_before_dispatch(receipt, command):
+            nonlocal current
+            current = 18
+            await perform(receipt, command)
+        ports.applier._perform = replaced_before_dispatch
+        assert not await ports.apply(strategy, layer="guild")
+        assert current == 18 and not ports.sent
+    asyncio.run(go())

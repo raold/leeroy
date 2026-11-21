@@ -103,12 +103,37 @@ def allowance(bank, row, limits):
     return sum(n for _, i, n in slots if i == item) + row["count"] <= count * stacks
 
 
+def close_previous_weeks(app, week):
+    store = app.store
+    for state in history(store.conn):
+        stacks, results = state["stacks"], state["results"]
+        if state["week"] >= week or len(results) == len(stacks):
+            continue
+        direct = app.realm.part("direct")
+        for index, row in enumerate(stacks):
+            token = str(index)
+            if token in results:
+                continue
+            item, maker = row["item"], row["maker"]
+            ref = f"restock:{state['week']}:{item}:{index}"
+            outcome = verdict(direct.state("decision", ref), row["count"])
+            if outcome == "wait":
+                continue
+            with store.transaction():
+                if outcome == "credited":
+                    reason = "gathering" if MAKER[item] == 333 else "craft"
+                    BankLedger(store, app.clock).record_once(ref, [("in", reason, maker, item, row["count"])])
+                results[token] = "skipped" if outcome == "send" else outcome
+                store.set_meta(PREFIX + state["week"], json.dumps(state))
+
+
 async def run(app, *, start=False):
     cap = app.decisions.config.bank_restock_per_week
+    week = app.clock.local().strftime("%G-W%V")
+    close_previous_weeks(app, week)
     if (not cap or not requests.ready(app) or "bank_stock_target" not in
             (app.decisions.rules_for("bank").features or ())):
         return
-    week = app.clock.local().strftime("%G-W%V")
     store, key = app.store, PREFIX + week
     raw = store.get_meta(key)
     if not start and not raw:
@@ -141,9 +166,12 @@ async def run(app, *, start=False):
             return
         if status == "send":
             def valid():
-                return (rules.valid(app, bank) and requests.officer(app) == by and maker in requests.members(app)
+                return (app.clock.local().strftime("%G-W%V") == week and rules.valid(app, bank)
+                        and requests.officer(app) == by and maker in requests.members(app)
                         and makers.get(maker, {}).get(MAKER[item], 0) >= MIN_SKILL and allowance(bank, row, limits))
             if valid() and index < cap:
+                state["officer"] = by
+                store.set_meta(key, json.dumps(state))
                 await rules.send(app, BankStock(uuid4().hex, by, row["tab"], item, row["count"],
                                                 maker=maker, target=targets()[item][1] * min(targets()[item][2], limits[item])),
                                  ref, valid)

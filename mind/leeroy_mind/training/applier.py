@@ -87,6 +87,7 @@ class _Entry:
     member: MemberInfo
     directives: tuple[Directive, ...]
     receipts: list[int] = field(default_factory=list)
+    guild_strategy: int | None = None
 
 
 def _encode(command):
@@ -141,6 +142,7 @@ class Applier:
         self.ports, self.ledger = ports, ledger
         self.state_provider = state_provider
         self.application_allowed = application_allowed
+        self.guild_allowed = lambda context, ident: False
         self._lock = asyncio.Lock()
         self._entries: list[_Entry] = []
         self._receipts: dict[int, _Receipt] = {}
@@ -447,6 +449,7 @@ class Applier:
             state = self._state(scope["run_key"])
             guids = _command_guids(command)
             if (receipt.provider is not self.state_provider or not self._matches(scope)
+                    or "guild_strategy" in receipt.envelope and not self.guild_allowed(*receipt.envelope["guild_strategy"])
                     or not self._available(state, guids)
                     or any(g not in state.members or asdict(state.members[g]) != receipt.envelope["members"].get(str(g))
                            for g in guids)
@@ -512,9 +515,8 @@ class Applier:
             self._write_receipt(receipt)
 
     async def _send(self, run, layer, context, command, inverse, scope, keys=(), *,
-                    resume_held=False, application=False):
-        if (not self._matches(scope) or layer == "guild" and application
-                and not self.guild_allowed(context)):
+                    resume_held=False, application=False, guild_strategy=None):
+        if not self._matches(scope) or guild_strategy is not None and not self.guild_allowed(context, guild_strategy):
             return _Receipt(0, {}, settled=True, reason="stale")
         native = scope.get("native")
         if native is not None:
@@ -532,6 +534,8 @@ class Applier:
                         resume_held=resume_held, application=application,
                         members={str(g): asdict(state.members[g]) for g in _command_guids(command)
                                  if state is not None and g in state.members})
+        if guild_strategy is not None:
+            envelope["guild_strategy"] = [context, guild_strategy]
         ident = store.log_applied(self.ports.conn, run, layer, context, envelope,
                                  _encode(inverse), self.ports.clock.now())
         receipt = self._receipts[ident] = _Receipt(ident, envelope, provider=self.state_provider, run=run)
@@ -580,7 +584,8 @@ class Applier:
                     or any(validate_directive(d, state.vocab) for d in entry.directives)):
                 return False, "ownership"
             receipt = await self._send(entry.run, entry.layer, entry.context,
-                applied.command, applied.inverse, entry.scope, (entry.key,), application=application)
+                applied.command, applied.inverse, entry.scope, (entry.key,), application=application,
+                guild_strategy=entry.guild_strategy)
             entry.receipts.append(receipt.id)
             if (hello != self._hello or not self._matches(entry.scope) or not receipt.settled or not receipt.ok
                     or not self._available(self._state(entry.scope["run_key"]), (entry.key[0],))):
@@ -606,6 +611,8 @@ class Applier:
                 or not state or not self.acting(self.ports.clock.now())
                 or self._blocked or run_key in self._stopped or self._pending()
                 or tank_guid != state.tank_guid or lead_is_human != state.lead_is_human):
+            return False
+        if layer == "guild" and (not card.id or not self.guild_allowed(context, card.id)):
             return False
         if outside and state.run_key is not None:
             return False
@@ -654,7 +661,8 @@ class Applier:
                 previous = self._top(run_key, key)
                 self._serial += 1
                 entry = _Entry(run_key, layer, context, key, tuple(commands), self._serial, scope,
-                               state.members[key[0]], tuple(checks[key]))
+                               state.members[key[0]], tuple(checks[key]),
+                               guild_strategy=card.id if layer == "guild" else None)
                 self._entries.append(entry)
                 added.append(entry)
                 if self._top(run_key, key) is not entry:

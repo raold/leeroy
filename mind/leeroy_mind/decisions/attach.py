@@ -14,8 +14,12 @@ def attach_decisions(app):
         from . import strategy
         rules = service.rules_for("strategy")
         training.listener.guild_layer = lambda context: strategy.layer_for(app, context) if rules.native else None
+        training.listener.guild_hold = lambda: strategy.held(app)
         training.listener.guild_played = lambda ident: strategy.played(app, ident)
-        training.applier.guild_allowed = lambda context: bool(rules.native and strategy.layer_for(app, context))
+        def guild_allowed(context, ident):
+            selected = training.listener.guild_layer(context)
+            return selected is not None and selected[0] == ident
+        training.applier.guild_allowed = guild_allowed
     app.register_event_handler('hello', service.on_hello)
     from .ranks import observe_cast
     async def on_cast(ev):

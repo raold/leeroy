@@ -64,3 +64,27 @@ def test_mail_after_withdraw_once(store, clock):
     assert bank.next_step(row, ("acked", None, 20), None) == "mail"
     assert bank.next_step(row, ("acked", None, 20), ("dispatched", None, None)) == "wait"
     assert bank.next_step(row, ("acked", None, 20), ("acked", None, 55)) == "done"
+
+def test_overrule_before_late_job_keeps_the_confirmed_outflow(store, clock):
+    import asyncio
+    from types import SimpleNamespace as NS
+    from uuid import uuid4
+    from leeroy_mind.realm.actions import ActionContext
+    from leeroy_mind.realm.direct import DirectLedger
+    row = settled(store, clock)
+    ref = f"decision:{row['id']}:withdraw"
+    ctx = ActionContext(enabled=True, connected=True, presence_known=True, process_id="p", generation=1,
+                        connection_epoch=1, guild=8, human=1)
+    direct = DirectLedger(store, process_id="p", clock=clock)
+    cmd = protocol.BankWithdraw(uuid4().hex, 101, 46377, 20, 0, 102)
+    direct.prepare(cmd, owner="decision", ref=ref, context=ctx, expects_job=True)
+    direct.before_send(cmd, context=ctx)
+    ledger.overrule(store, row["id"], now=clock.now())
+    direct.on_job(protocol.RealmJob(0, cmd.id, "bank_withdraw", "done", "", 101, 20))
+    app = NS(store=store, clock=clock, realm=NS(part=lambda _: direct))
+    rules = bank.bank_rules()
+    for _ in range(2):
+        asyncio.run(rules.tick(app, clock.now()))
+    assert store.conn.execute("SELECT count(*) FROM realm_bank WHERE reason='request'").fetchone()[0] == 1
+    assert ledger.get(store.conn, row["id"])["status"] == "overruled"
+    assert direct.state("decision", ref.replace("withdraw", "mail")) is None

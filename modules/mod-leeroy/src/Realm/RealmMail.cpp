@@ -393,12 +393,19 @@ RealmStep Send(Queued& entry, std::uint32_t guid)
     auto const receiver = Receiver(*command);
     auto const* recipient = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(receiver));
     if (!receiver || !recipient || receiver == guid) return {StepState::Refused,"no_receiver"};
+    auto const recipientAccount = recipient->AccountId;
+    auto memberIdentityMatches = [&]()
+    {
+        if (!command->toGuid) return true;
+        auto const* current = sCharacterCache->GetCharacterCacheByGuid(PlayerGuid(receiver));
+        return current && current->AccountId == recipientAccount && Receiver(*command) == receiver;
+    };
     if (auto why = BoundaryPolicy(*command,receiver); !why.empty()) return {StepState::Refused,std::move(why)};
     auto* sender = FindOnline(guid);
     if (!sender) return {StepState::Refused,"offline"};
     auto const before = sender->GetMoney();
     if (!MailDebitAllowed(before,command->money,MAX_MONEY_AMOUNT)) return {StepState::Refused,"money"};
-    auto const allSources = BagSources(sender,recipient->AccountId);
+    auto const allSources = BagSources(sender,recipientAccount);
     if (!allSources) return {StepState::Refused,"no_item"};
     std::vector<MailBagFacts> bags;
     for (auto const& source : *allSources) bags.push_back({source.guid,source.entry,source.count,true});
@@ -460,9 +467,9 @@ RealmStep Send(Queued& entry, std::uint32_t guid)
     // All planning/allocation ends before consuming a sender asset. Recheck the
     // exact lease and every selected native object after allocation hooks.
     if (auto why = AdmissionReason(guid,Purpose::Mail,entry.id); !why.empty()) return refuse(std::move(why));
-    if (attempt.epoch != RealmModule::Instance().Epoch() || HumanGuid() != human || Receiver(*command) != receiver || sender->GetMoney() != before)
+    if (attempt.epoch != RealmModule::Instance().Epoch() || HumanGuid() != human || !memberIdentityMatches() || sender->GetMoney() != before)
         return refuse("mail_operation_identity");
-    for (auto const& source : sources) if (!ExactSource(sender,source,recipient->AccountId)) return refuse("no_item");
+    for (auto const& source : sources) if (!ExactSource(sender,source,recipientAccount)) return refuse("no_item");
     auto transaction = std::make_shared<MailTransaction>();
     if (command->money)
     {
@@ -514,7 +521,7 @@ RealmStep Send(Queued& entry, std::uint32_t guid)
     }
     if (!MailDebitProved(before,sender->GetMoney(),command->money,MAX_MONEY_AMOUNT)) return refuse("money");
     if (auto why = AdmissionReason(guid,Purpose::Mail,entry.id); !why.empty()) return refuse(std::move(why));
-    if (HumanGuid() != human || Receiver(*command) != receiver || attempt.epoch != RealmModule::Instance().Epoch()) return refuse("mail_operation_identity");
+    if (HumanGuid() != human || !memberIdentityMatches() || attempt.epoch != RealmModule::Instance().Epoch()) return refuse("mail_operation_identity");
     // Release object ownership immediately before the native transfer. The
     // online receiver owns them afterwards; the offline path deletes them.
     attempt.mutated = true;

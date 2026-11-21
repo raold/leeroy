@@ -44,6 +44,7 @@ class TrainingListener:
         self.prepare_run = prepare_run
         self.farm_basis = farm_basis
         self.guild_layer = self.guild_played = None
+        self.guild_hold = lambda: False
         self.run = None
         self._muster = None
         self._pull = False
@@ -135,7 +136,8 @@ class TrainingListener:
         experiment. The callback fallback excludes its just-stored pull.
         """
         guild = self.guild_layer(context) if self.guild_layer and not self._pull else None
-        strategy = guild[0] if guild else self._guild_applied or 0
+        applied = self._guild_applied if self._effective_context == context and self._pull else None
+        strategy = guild[0] if guild else applied or 0
         key = (self.run_key(run), context, strategy)
         if key not in self._farm_at_entry:
             cutoff = int(self.ports.clock.now() * 1000) if before_ms is None else before_ms
@@ -387,6 +389,8 @@ class TrainingListener:
             if not self._valid(token):
                 return
             run = token[0]
+            if self.guild_layer and self.guild_hold():
+                return
             if (boss, state.next_entry) != self._muster:
                 self._boss, self._muster = boss, (boss, state.next_entry)
                 self._prepared = self._release_ok = False
@@ -404,6 +408,13 @@ class TrainingListener:
                     if guild and run.lead_is_human and any(d.lever != "lust_at" for d in guild[1].directives):
                         guild = None
                     card, arm = self.card_for(context, run)
+                    if guild:
+                        keys = {d.lever for d in card.directives}
+                        if any(d.lever in keys for d in guild[1].directives):
+                            guild = None  # the higher layer already owns the proposed lever
+                        elif any(d.lever == "lust_at" for d in guild[1].directives) and (
+                                not self.lust_provider or not any(m.cls == 7 for m in self._members(run).values())):
+                            guild = None
                     ok = False
                     try:
                         async with asyncio.timeout(self.APPLY_TIMEOUT):

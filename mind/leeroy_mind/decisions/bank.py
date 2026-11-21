@@ -195,7 +195,29 @@ class BankRules:
         return (ready(app) and app.realm.action_context().guild == bank["guild"]
                 and 0 <= app.clock.now() - bank["read_at"] <= FRESH_S)
 
+    def reconcile(self, app):
+        # A late completion still moved stock even if the owner overruled the request or the
+        # officer left. Fold the native proof into both ledgers without admitting another command.
+        store = app.store
+        rows = store.conn.execute(
+            "SELECT d.id,d.value,d.effect_ref,r.value AS moved FROM realm_direct r "
+            "JOIN guild_decision d ON r.ref='decision:'||d.id||':withdraw' AND d.kind='bank' "
+            "LEFT JOIN meta m ON m.key='decisions:bank:out:'||d.id "
+            "WHERE r.owner='decision' AND r.kind='bank_withdraw' AND r.state='acked' "
+            "AND r.value IS NOT NULL AND m.key IS NULL").fetchall()
+        for row in rows:
+            req, ident = json.loads(row["value"]), row["id"]
+            if int(row["moved"]) != req["count"]:
+                continue
+            with store.transaction():
+                rid = BankLedger(store, app.clock).record("out", "request", req["guid"], req["item"], req["count"])
+                store.set_meta(f"decisions:bank:out:{ident}", str(rid))
+                effect = json.loads(row["effect_ref"] or "{}")
+                effect.update(refs=[f"decision:{ident}:withdraw", f"decision:{ident}:mail"], realm_bank=rid)
+                store.conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (json.dumps(effect), ident))
+
     async def tick(self, app, now):
+        self.reconcile(app)
         if self.features is None or not officer(app):
             return
         conn = app.store.conn
@@ -233,12 +255,6 @@ class BankRules:
         withdrawal, mail = [direct.state("decision", ref) for ref in refs]
         step = next_step(row, withdrawal, mail)
         receipt = f"decisions:bank:out:{ident}"
-        if withdrawal and withdrawal[0] == "acked" and withdrawal[2] == req["count"] and not store.get_meta(receipt):
-            with store.transaction():
-                rid = BankLedger(store, app.clock).record("out", "request", req["guid"], req["item"], req["count"])
-                store.set_meta(receipt, str(rid))
-                store.conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?",
-                                   (json.dumps({"refs": refs, "realm_bank": rid}), ident))
         if step == "done":
             ledger.take_effect(store, ident, effect_ref={"refs": refs, "realm_bank": int(store.get_meta(receipt))}, now=now)
         elif step in ("unknown", "refused"):

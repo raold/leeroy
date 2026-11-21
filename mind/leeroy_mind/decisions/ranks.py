@@ -13,13 +13,11 @@ CAST_KEY = "decisions:rank:cast"
 
 def observe_cast(store, cast, *, now):
     """Baseline the existing cast once. Only later additions have a known join time."""
-    if not cast:
-        return
     with store.transaction():
         raw = store.get_meta(CAST_KEY)
         previous = json.loads(raw) if raw else {}
         current = {str(g): previous.get(str(g), now if raw else None) for g in cast}
-        if current != previous:
+        if raw is None or current != previous:
             store.set_meta(CAST_KEY, json.dumps(current))
         for key in previous.keys() - current.keys():
             for row in (ledger.pending(store.conn, "rank", "rank:"+key), ledger.current(store.conn, "rank", "rank:"+key)):

@@ -60,7 +60,7 @@ def layer_for(app, context):
     if v.get("levers") != LEVERS.get(v.get("change")) or not v.get("levers"):
         return None
     directives = tuple(Directive(k, n) for k, n in v["levers"].items())
-    return row["id"], replace(stock_card(context), directives=directives)
+    return row["id"], replace(stock_card(context), id=row["id"], directives=directives)
 
 
 def played(app, ident):
@@ -86,8 +86,11 @@ class StrategyRules:
         return True
 
     async def undo(self, app, row):
-        # The next muster removes the prior physical layer through training's journal.
-        pass
+        training = getattr(app, "training", None)
+        if training and training.listener._guild_applied == row["id"]:
+            # Re-enter normal journalled preparation at the next safe resting status, including
+            # one for the same boss. Combat and wipe-silence keep their existing hold.
+            training.listener._muster = None
 
     async def tick(self, app, now):
         if server_quiet(app) or not getattr(getattr(app, "world", None), "members", None):
@@ -114,7 +117,9 @@ class StrategyRules:
                                         text=f"After two wipes on {context}, let's try {v['change'].replace('_',' ')}.",
                                         now=now)
                     ledger.settle(app.store, row["id"], settled_by=v["lead"], message=post, now=now)
-                    if not self.native or not getattr(app, "training", None):
+                    training = getattr(app, "training", None)
+                    cfg = getattr(getattr(training, "ports", None), "cfg", None)
+                    if not self.native or not training or (cfg and (not cfg.telemetry or not cfg.act)):
                         ledger.talk_only(app.store, row["id"], reason="training_off", now=now)
 
 

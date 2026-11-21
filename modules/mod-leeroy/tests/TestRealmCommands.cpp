@@ -662,9 +662,9 @@ LEEROY_TEST(Realm_AnnouncementText)
 LEEROY_TEST(RealmCommands_MemberMailRejectsMoneyNewItemsAndSelf)
 {
     auto msg = Message("mail_send_ok");
-    msg["to_guid"] = 102; msg["items"][0]["from"] = "bags"; msg["money"] = 0;
+    msg["to_guid"] = 102u; msg["items"][0]["from"] = "bags"; msg["money"] = 0u;
     std::string error; CHECK(ParseMailSend(msg,error).has_value());
-    msg["money"] = 1; Reject(msg,"to_guid");
-    msg["money"] = 0; msg["items"][0]["from"] = "new"; Reject(msg,"to_guid");
+    msg["money"] = 1u; Reject(msg,"to_guid");
+    msg["money"] = 0u; msg["items"][0]["from"] = "new"; Reject(msg,"to_guid");
     msg["items"][0]["from"] = "bags"; msg["to_guid"] = msg["from_guid"]; Reject(msg,"to_guid");
 }

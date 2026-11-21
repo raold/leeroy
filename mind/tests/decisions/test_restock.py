@@ -54,3 +54,18 @@ def test_enchant_mats_needs_enchanting_from_professions(store, guild, clock):
     bank["professions"] = {102: {333: 375}}
     requests = requests_due(store.conn, bank, store.cast(), guild, now=clock.now())
     assert [(r["kind"], r["guid"], r["item"]) for r in requests] == [("enchant_mats", 102, 34054)]
+
+
+def test_week_rollover_credits_late_jobs_without_starting_unissued_stacks(store, clock):
+    import json
+    from types import SimpleNamespace as NS
+    week = "2026-W47"
+    rows = [{"item": 43015, "count": 20, "maker": 101}] * 2
+    key = restock.PREFIX + week
+    store.set_meta(key, json.dumps(dict(week=week, stacks=rows, results={}, no_maker=[], officer=104)))
+    direct = NS(state=lambda owner, ref: ("acked", None, 20) if ref.endswith(":0") else None)
+    app = NS(store=store, clock=clock, realm=NS(part=lambda _: direct))
+    for _ in range(2):
+        restock.close_previous_weeks(app, "2026-W48")
+    assert json.loads(store.get_meta(key))["results"] == {"0": "credited", "1": "skipped"}
+    assert store.conn.execute("SELECT count(*) FROM realm_bank WHERE reason='craft'").fetchone()[0] == 1

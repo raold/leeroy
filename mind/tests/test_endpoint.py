@@ -1333,7 +1333,7 @@ def test_undo_only_where_reversible(store, clock, tmp_path, caplog):
     caplog.set_level(logging.INFO)
     now = clock.now()
     made = {}
-    for kind, subject in (("loot_rule", "loot"), ("strategy", "strategy:631:9:0"), ("rank", "rank:105")):
+    for kind, subject in (("loot_rule", "loot"), ("bank", "bank:fixture"), ("rank", "rank:105")):
         made[kind] = ledger.propose(store, kind=kind, subject=subject, value={}, positions=[], now=now)
         if kind != "rank":
             ledger.settle(store, made[kind], settled_by=102, now=now)
@@ -1345,9 +1345,9 @@ def test_undo_only_where_reversible(store, clock, tmp_path, caplog):
         async with served(tmp_path) as (app, ep):
             app.decisions = decisions_service(store, clock)
             undone = await ask(ep, "decision", {"action": "overrule", "id": made["loot_rule"]})
-            future = await ask(ep, "decision", {"action": "overrule", "id": made["strategy"]})
+            future = await ask(ep, "decision", {"action": "overrule", "id": made["bank"]})
             early = await ask(ep, "decision", {"action": "overrule", "id": made["rank"]})
-            again = await ask(ep, "decision", {"action": "overrule", "id": made["strategy"]})
+            again = await ask(ep, "decision", {"action": "overrule", "id": made["bank"]})
             app.decisions = None
             off = await ask(ep, "decision", {"action": "overrule", "id": 1})
             return undone, future, early, again, off
@@ -1363,7 +1363,7 @@ def test_undo_only_where_reversible(store, clock, tmp_path, caplog):
     rows = {r["id"]: r for r in store.conn.execute("SELECT * FROM guild_decision")}
     assert all(r["status"] == "overruled" and r["overruled_by_owner"] == 1 for r in rows.values())
     assert f"decision_op action=overrule id={made['loot_rule']} outcome=undone" in caplog.text
-    assert f"decision_op action=overrule id={made['strategy']} outcome=overruled" in caplog.text
+    assert f"decision_op action=overrule id={made['bank']} outcome=overruled" in caplog.text
 
 
 def test_his_vote_counts_once(store, clock, tmp_path):
