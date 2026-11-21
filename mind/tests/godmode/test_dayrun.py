@@ -37,6 +37,23 @@ def test_plan_never_moves_into_his_group_or_instance():
     assert classify(Duel("duel", 101, 102, day_permit=PERMIT)).reserved_manifest == (101,102)
 
 
+@pytest.mark.parametrize("hostility", ["rival", "feud"])
+def test_hostile_day_pair_never_reaches_native_admission(tmp_path, store, clock, hostility):
+    import asyncio
+    async def go():
+        rig = Rehearsal(tmp_path,store,clock)
+        await rig.connect()
+        rig.plan(activity="duel_practice", place="org_duel", members=(101,102))
+        if hostility == "rival":
+            store.conn.execute("INSERT OR REPLACE INTO relationship(a,b,affinity) VALUES(102,101,-80)")
+        else:
+            store.conn.execute("INSERT INTO feud(a,b,started,cause) VALUES(101,102,1,'synthetic')")
+        await rig.tick()
+        assert not any(isinstance(command,dayrun.DayBegin) for command in rig.app.sent)
+        assert store.conn.execute("SELECT reason FROM day_plan").fetchone()[0] == "changed_tie"
+    asyncio.run(go())
+
+
 def test_planned_block_has_no_activity_claim(store):
     from leeroy_mind.awareness.card import card, CardContext
     store.conn.execute("INSERT INTO day_plan(night,member,starts,ends,activity,place,status) "

@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from leeroy_mind.bridge import BridgeError, NotConnected
 from leeroy_mind.bodies import BodyEvidenceUnavailable
-from leeroy_mind.guild.protocol import BotDo, ClearLockout, DayOwnerCheck, StartOfflineRaid
+from leeroy_mind.guild.protocol import BotDo, ClearLockout, DayOwnerCheck, StartMemberDungeon, StartOfflineRaid
 from leeroy_mind.nightly.attraction import reflection_row
 from leeroy_mind.protocol import Hello
 from leeroy_mind.realm.actions import ActionRejected
@@ -559,6 +559,12 @@ class DayRun:
         if self.cleanup_tasks:
             await asyncio.gather(*self.cleanup_tasks, return_exceptions=True)
 
+    def inspection_origins(self,members):
+        rows = self.conn.execute("SELECT DISTINCT p.begin_id,p.token,p.boot FROM day_permit p "
+            "JOIN day_plan d ON d.action_ref='day:'||p.plan WHERE p.state!='closed' AND d.member IN "
+            "(SELECT value FROM json_each(?)) ORDER BY p.begin_id",(json.dumps(sorted(members)),)).fetchall()
+        return tuple(r[0] for r in rows) if all(r[1] and r[2]==self.boot for r in rows) else None
+
     async def handoff(self, command, members, reason, valid, send):
         """Submit the original owner action once, after overlapping native permits report closed."""
         request_id = command.id
@@ -573,9 +579,15 @@ class DayRun:
             raise ActionRejected("day_takeover_duplicate")
         if not valid():
             raise ActionRejected("day_takeover_expired")
-        if not blocks:
-            return await send(command)
         context = self.realm.action_context()
+        heroics = getattr(getattr(self.app,"guild",None),"heroics",None)
+        heroic = ""
+        if heroics is not None and reason in {"raid","summon","string"}:
+            from .heroics import overlapping
+            heroic = overlapping(self.conn,targets,context.guild,context.human)
+        starting = isinstance(command,StartMemberDungeon)
+        if not blocks and not heroic and not starting:
+            return await send(command)
         if not self.context_valid(cleanup=True):
             raise ActionRejected("day_takeover_expired")
         if any(self.permit(plan)["boot"] != self.boot for (plan,) in blocks):
@@ -642,9 +654,10 @@ class DayRun:
                     self.advance(p, self.app.clock.now())
                 await wait_for_evidence()
 
-            if active:
+            if active or heroic or starting:
                 origins = tuple(p["begin_id"] for p in active)
-                binding = DayOwnerCheck(request_id, origins, int(expires * 1000))
+                binding = DayOwnerCheck(request_id, origins, int(expires * 1000), heroic_start=heroic,
+                                        owner_guid=context.human if heroic else 0)
                 check = replace(command, id=uuid4().hex, day_check=binding)
                 refusal = await control(check)
                 if refusal == "day_driver_required" and isinstance(command, StartOfflineRaid):
@@ -660,10 +673,19 @@ class DayRun:
                 command = replace(command, day_prepared=check.id)
             while True:
                 active = [p for (plan,) in blocks if (p := self.permit(plan))["state"] != "closed"]
-                if not active:
+                retained = heroic and overlapping(self.conn,targets,context.guild,context.human)==heroic
+                if not active and not retained:
                     break
                 if (not current() or any(p["state"] == "unresolved" and p["release_ids"] is None for p in active)):
                     raise ActionRejected("day_cleanup_unresolved")
+                if retained:
+                    try:
+                        async with asyncio.timeout_at(deadline):
+                            await heroics.status(heroic)
+                    except (BridgeError, OSError, TimeoutError):
+                        raise ActionRejected("dungeon_cleanup_unresolved") from None
+                    if not active and not overlapping(self.conn,targets,context.guild,context.human):
+                        break
                 await wait_for_evidence()
             if not current():
                 raise ActionRejected("day_takeover_expired")

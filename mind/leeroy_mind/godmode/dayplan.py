@@ -8,7 +8,7 @@ from leeroy_mind.culture import wowcal
 from leeroy_mind.nightly.llm import ReflectionError, check_schema, system_prompt
 from leeroy_mind.nightly.store import set_run_plan
 from leeroy_mind.realm.calendar_time import TIMEZONE
-from leeroy_mind.server.state import roster_ties
+from leeroy_mind.server.state import roster_ties, tie_kind
 from leeroy_mind.tuning.edits import load, member_edits
 
 PAIRINGS = {"city": ("city",), "inn": ("inn",), "fishing": ("fish",),
@@ -76,7 +76,7 @@ def completed_units(ctx):
                                   (ctx.night,)).fetchone()[0]
 
 
-def remaining_schedule(ctx):
+def remaining_schedule(ctx, *, exclude=()):
     """Choose unfinished, reciprocal cohorts before either reserving or spending model time."""
     conn = ctx.store.conn
     slots = slots_for(conn, ctx.night)
@@ -85,7 +85,7 @@ def remaining_schedule(ctx):
     planned = {r[0] for r in conn.execute("SELECT DISTINCT member FROM day_plan WHERE night=?", (ctx.night,))}
     finished = {r[0] for r in conn.execute("SELECT unit FROM night_step WHERE night=? AND stage='day_plans'",
                                           (ctx.night,))}
-    available = {g for g in ctx.members() if g not in planned and str(g) not in finished}
+    available = {g for g in ctx.members() if g not in planned and str(g) not in finished and g not in exclude}
     if not available:
         return slots, [], {}
     overlays = load(conn, ctx.clock.now())
@@ -125,8 +125,18 @@ async def stage_day_plans(ctx, places, *, enabled=lambda: True):
     if used is None:
         used = completed_units(ctx) if limit is not None else 0
 
+    class PairChanged(Exception):
+        pass
+
+    def validate_pair():
+        if len(members) == 2:
+            a, b = members
+            if {tie_kind(ctx.store.conn, a, b), tie_kind(ctx.store.conn, b, a)} & {"rival", "feud"}:
+                raise PairChanged
+
     def reserve_call():
         nonlocal used
+        validate_pair()
         if not enabled() or limit is not None and used >= limit:
             raise ReflectionError("day_plan_admission_closed", fatal=False)
         if limit is not None:
@@ -140,9 +150,11 @@ async def stage_day_plans(ctx, places, *, enabled=lambda: True):
     system = system_prompt("day_plans", "Choose two to four different slots for tomorrow's WoW day. "
         "Choose only listed activity/place pairs. Build one shared schedule for these members.",
         ctx.settings.data_dir, human=ctx.ident)
-    for members in cohorts:
+    attempted = set()
+    while cohorts:
         if not enabled() or limit is not None and used >= limit:
             return
+        members = cohorts.pop(0)
         unit = str(members[0])
         options = choices(places, holiday=active, paired=len(members) == 2)
         layout = schema(options, slots)
@@ -155,16 +167,22 @@ async def stage_day_plans(ctx, places, *, enabled=lambda: True):
             if len({b["slot"] for b in blocks}) != len(blocks) or any(
                     b["place"] not in options[b["activity"]] for b in blocks):
                 raise ValueError("invalid_day_pairing")
+            validate_pair()
+        except PairChanged:
+            slots, cohorts, edits = remaining_schedule(ctx, exclude=attempted)
+            continue
         except (ValueError, ReflectionError) as exc:
             if isinstance(exc, ReflectionError) and exc.fatal:
                 raise
             ctx.fail("day_plans", unit, ValueError("invalid_day_plan"))
+            attempted.update(members)
             continue
 
         if not enabled():
             return
 
         def write(store):
+            validate_pair()
             current = slots_for(store.conn, ctx.night)
             if any(b["slot"] not in current for b in blocks):
                 return
@@ -175,7 +193,14 @@ async def stage_day_plans(ctx, places, *, enabled=lambda: True):
                         "partners,status) VALUES(?,?,?,?,?,?,?,'planned')", (ctx.night, member,
                         *current[b["slot"]], b["activity"], None if b["place"] == "none" else b["place"],
                         json.dumps(companions)))
-        ctx.commit("day_plans", unit, write)
+        try:
+            with ctx.store.transaction():
+                validate_pair()
+                ctx.commit("day_plans", unit, write)
+        except PairChanged:
+            slots, cohorts, edits = remaining_schedule(ctx, exclude=attempted)
+            continue
+        attempted.update(members)
 
 
 def attach(runner, settings, places):

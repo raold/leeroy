@@ -256,10 +256,10 @@ class Realm:
             self.queue.on_hello(ev)
             self.recall.on_hello(ev)
 
-    def configure_day_plans(self, enabled):
+    def configure_day_plans(self, enabled, *, owner_handoff=False):
         day = self.parts.get("day")
         if day is None:
-            if not enabled and not self.app.store.conn.execute(
+            if not enabled and not owner_handoff and not self.app.store.conn.execute(
                     "SELECT 1 FROM day_permit WHERE state!='closed' LIMIT 1").fetchone():
                 return
             from leeroy_mind.godmode.dayrun import DayRun
@@ -968,7 +968,11 @@ def attach_realm(app) -> Realm:
     app.register_shutdown_receipt("realm_pvp", realm.on_realm_pvp)
     app.register_shutdown_drain(realm.close)
     build_parts(realm)
-    realm.configure_day_plans(getattr(getattr(getattr(app, 'cfg', None), 'life', None), 'day_plans', False))
+    life = getattr(getattr(app, 'cfg', None), 'life', None)
+    realm.configure_day_plans(getattr(life, 'day_plans', False))
+    guild = getattr(app, 'guild', None)
+    if callable(getattr(guild, 'configure_dungeons', None)):
+        guild.configure_dungeons(getattr(life, 'dungeons', False), realm)
     if (direct := realm.parts.get("direct")) is not None:
         # Like the recoveries in Realm.__init__: once, before anything can send.
         direct.recover(process_id=realm._process_id)

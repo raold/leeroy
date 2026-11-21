@@ -20,7 +20,7 @@ from .roster import Roster
 
 log = logging.getLogger(__name__)
 EVENTS = ("hello", "login", "logout", "chat", "zone", "boss", "death", "resurrect", "dc_status", "loot_drop", "job",
-          "guild_group", "group")
+          "guild_group", "group", "member_dungeon_capability")
 
 
 class GuildTurnSource:
@@ -92,6 +92,23 @@ class GuildLife:
         self._snapshot_owner = None
         self._snapshot_valid = False
         self._connected = False
+        self.heroics = None
+        self._heroic_feature = False
+
+    def configure_dungeons(self, enabled, realm=None):
+        realm = realm if realm is not None else self.app.realm
+        if self.heroics is None:
+            from leeroy_mind.godmode.heroics import HELD, Heroics
+            if not enabled and not self.app.store.conn.execute(
+                    "SELECT 1 FROM member_heroic WHERE " + HELD + " LIMIT 1").fetchone():
+                return
+            if "day" not in realm.parts:
+                realm.configure_day_plans(False, owner_handoff=True)
+            self.heroics = Heroics(self,realm)
+            self.heroics.advertised = self._heroic_feature
+            if self._tasks and not self._stopping:
+                self._tasks.append(asyncio.create_task(self._loop("heroics",self.heroics.tick),name="guild-heroics"))
+        self.heroics.configure(enabled)
 
     def _roster(self):
         return Roster(self.maintenance, self.cfg, self.armory,
@@ -115,6 +132,9 @@ class GuildLife:
         # This happens before core session startup may await its model check.
         if online:
             self.offline._cancel()
+            if self.heroics is not None:
+                self.heroics.end_offers("owner_online")
+                await self.heroics.release()
         identity_changed = (ev.human_guid if isinstance(ev, Hello) else ev.guid) not in {0, self.ports.human_guid}
         if not online or isinstance(ev, Hello) or identity_changed:
             if self.raid_night.active or self.raid_night.run is not None:
@@ -134,11 +154,29 @@ class GuildLife:
         # each recipient checks its own sent timestamp, ID, kind and partition.
         if name == "job":
             self.ports.jobs.feed(ev)
+            if ev.kind=="member_dungeon" and self.heroics is not None:
+                self.heroics.job(ev)
+                if ev.state in {"done","failed"}:
+                    await self.ports.jobs.wait(ev.id,0)
+                return
             await self.offline.on_job(ev)
             await self.roster.on_job(ev)
             return
         if self.app.is_backlog(ev):
             return
+        if name == "member_dungeon_capability":
+            realm = getattr(self.app,"realm",None)
+            if realm is not None and realm._delivery_epoch(ev)==realm._transport_epoch:
+                c = realm.action_context()
+                if c.presence_known and (c.guild,c.human)==(ev.guild,ev.human):
+                    self._heroic_feature = ev.enabled
+                    if self.heroics is not None:
+                        self.heroics.advertised = ev.enabled
+                        if not ev.enabled:
+                            self.heroics.end_offers("native_disabled")
+            return
+        if name=="boss" and self.heroics is not None:
+            self.heroics.boss(ev)
         if name in {"hello", "login", "logout"}:
             if name != "hello" and (not ev.human or ev.guid != self.ports.human_guid):
                 return
@@ -150,6 +188,11 @@ class GuildLife:
                 self.roster = self._roster()
             if name == "hello":
                 # First: the runner's raids must be known before any offline tick can plan one.
+                self._heroic_feature = "member_dungeon_v1" in ev.features
+                if self.heroics is not None:
+                    self.heroics.advertised = self._heroic_feature
+                    self.heroics.poll_at = 0
+                    self.heroics.set_playing(None)
                 await self.offline.on_hello(ev)
                 self._connected = True
                 self.ports.enabled = True
@@ -182,6 +225,13 @@ class GuildLife:
         if connected:
             return
         self._connected = False
+        self._heroic_feature = False
+        if self.heroics is not None:
+            self.heroics.advertised = False
+            self.heroics.attached = None
+            self.heroics.set_playing(None)
+            self.heroics.end_offers("disconnected")
+            await self.heroics.release()
         self.ports.enabled = False
         self.source.clear()
         self.ports.jobs.close()
@@ -238,7 +288,10 @@ class GuildLife:
                                                  guard=self._console_refusal)
 
     def members_in_play(self) -> frozenset[int]:
-        return (self.raid_night.members_in_play() | self.offline.members_in_play()) - {self.ports.human_guid}
+        playing = self.raid_night.members_in_play() | self.offline.members_in_play()
+        if (heroics := getattr(self, "heroics", None)) is not None:
+            playing |= heroics.members_in_play()
+        return playing - {self.ports.human_guid}
 
     async def offline_tick(self):
         if not self._ready():
@@ -327,6 +380,8 @@ class GuildLife:
         self.source.managed = True
         lanes = [("online", self.online_tick), ("offline", self.offline_tick),
                  ("roster", self.roster_tick), ("speech", self.speech_tick)]
+        if self.heroics is not None:
+            lanes.append(("heroics", self.heroics.tick))
         lanes += [(type(listener).__name__, lambda listener=listener: self.listener_tick(listener))
                   for listener in self.listeners]
         self._tasks = [asyncio.create_task(self._loop(name, action), name="guild-" + name)
@@ -345,6 +400,8 @@ class GuildLife:
             await asyncio.gather(*self._tasks, return_exceptions=True)
             await self.offline._release()
             await self.ports.release_gpu("guild_speech")
+            if self.heroics is not None:
+                await self.heroics.release()
             await self.ports.close()
             self._tasks = []
 

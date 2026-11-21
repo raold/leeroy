@@ -1189,6 +1189,8 @@ class MindApp:
         changed = cfg.models.live != self.cfg.models.live
         if cfg.life.day_plans != self.cfg.life.day_plans:
             self.configure_day_plans(cfg.life.day_plans)
+        if cfg.life.dungeons != self.cfg.life.dungeons and self.guild is not None:
+            self.guild.configure_dungeons(cfg.life.dungeons)
         self.cfg = cfg
         self.engine.apply_config(cfg)
         return changed

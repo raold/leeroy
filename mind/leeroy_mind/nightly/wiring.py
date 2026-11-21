@@ -68,6 +68,10 @@ def attach(app):
             app.configure_day_plans(candidate.life.day_plans)
             # A later world-dial refresh reapplies the file config to the talk engine.
             app.file_cfg = replace(app.file_cfg, life=replace(app.file_cfg.life, day_plans=candidate.life.day_plans))
+        if app.cfg.life.dungeons != candidate.life.dungeons:
+            if app.guild is not None:
+                app.guild.configure_dungeons(candidate.life.dungeons)
+            app.file_cfg = replace(app.file_cfg, life=replace(app.file_cfg.life,dungeons=candidate.life.dungeons))
         app.cfg = candidate
         app.engine.apply_config(candidate)
         scheduler.settings = updated

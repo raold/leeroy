@@ -550,13 +550,15 @@ class RaidNight:
 
         try:
             runner = getattr(getattr(getattr(self.ports, "app", None), "realm", None), "parts", {}).get("day")
-            if runner is not None and isinstance(command, (ClearLockout, FormRaid)):
-                targets = set(command.guids if isinstance(command, ClearLockout) else (command.leader_guid, *command.members))
+            heroic_summon = isinstance(command, Summon) and getattr(
+                getattr(getattr(self.ports, "app", None), "guild", None), "heroics", None) is not None
+            if runner is not None and (isinstance(command, (ClearLockout, FormRaid)) or heroic_summon):
+                targets = set((command.leader_guid, *command.members) if isinstance(command, FormRaid) else command.guids)
                 targets.discard(self.ports.human_guid)
                 def valid():
                     self._check(epoch)
                     return targets <= {c.guid for c in self._candidates() if c.available}
-                ack = await runner.handoff(command, targets, "raid", valid, send_original)
+                ack = await runner.handoff(command, targets, "summon" if heroic_summon else "raid", valid, send_original)
             else:
                 ack = await send_original(command)
         except ActionRejected:

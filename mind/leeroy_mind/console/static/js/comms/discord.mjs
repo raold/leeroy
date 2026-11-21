@@ -142,7 +142,7 @@ export function botName(bot) { return Object.prototype.hasOwnProperty.call(BOT_N
 export function memberStatus(member) {
   const lines = [];
   if (typeof member.status === 'string' && member.status.length <= 80 && member.status) { lines.push(member.status); }
-  if (member.presence?.playing) { lines.push('Playing WoW'); }
+  if (member.presence?.playing && member.status !== 'Playing — Halls of Lightning') { lines.push('Playing WoW'); }
   return lines;
 }
 
