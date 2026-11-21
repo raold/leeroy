@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ordered, initial, step, swipe, coverWhy, flagCodes, lookWords, SWIPE_PX } from "../../../leeroy_mind/console/static/js/gallerymodel.mjs";
+import { ordered, initial, step, swipe, coverWhy, flagCodes, lookWords, SWIPE_PX, ALL_KEY, wantsAll,
+         galleryPath, earlierWords, earlierHint, coverNote } from "../../../leeroy_mind/console/static/js/gallerymodel.mjs";
 
 test("photos stay newest first and start at the cover without reordering", function () {
   const rows = [{ id: "a", rendered: 1, cover: true }, { id: "b", rendered: 3 }, { id: "c", rendered: 2 }];
@@ -46,4 +47,32 @@ test("a flagged candidate names the photo critic's codes, a clean one nothing", 
   assert.equal(flagCodes({ flag: "limbs,<b>x</b>,eyes" }), "limbs, eyes");
   assert.equal(flagCodes({ flag: 7 }), "");
   assert.equal(flagCodes(null), "");
+});
+test("show all sets is off unless this browser remembered it on", function () {
+  assert.equal(ALL_KEY, "guild-console-gallery-all");
+  assert.equal(wantsAll("all"), true);
+  for (const stored of ["current", "", null, undefined, true, 1, "ALL"]) { assert.equal(wantsAll(stored), false); }
+  assert.equal(galleryPath(101, false), "/api/selfies/gallery?guid=101");
+  assert.equal(galleryPath(101, true), "/api/selfies/gallery?guid=101&all=1");
+});
+test("photos of earlier looks are marked and counted", function () {
+  assert.equal(earlierWords({ earlier: true }), "earlier looks");
+  assert.equal(earlierWords({ earlier: "yes" }), "");
+  assert.equal(earlierWords({}), "");
+  assert.equal(earlierWords(null), "");
+  assert.equal(earlierHint({ earlier: 5 }, false), "5 photos of earlier looks hidden.");
+  assert.equal(earlierHint({ earlier: 1 }, false), "1 photo of earlier looks hidden.");
+  assert.equal(earlierHint({ earlier: 5 }, true), "Showing 5 photos of earlier looks too.");
+  assert.equal(earlierHint({ earlier: 0 }, false), "");
+  assert.equal(earlierHint({}, true), "No photos of earlier looks.");
+  assert.equal(earlierHint(null, false), "");
+});
+test("an earlier looks candidate can be made the cover, with a note on what that means", function () {
+  assert.match(coverNote({ kind: "candidate", earlier: true }), /face from the cover/);
+  assert.equal(coverNote({ kind: "candidate", earlier: true, cover: true }), "");
+  assert.equal(coverNote({ kind: "candidate" }), "");
+  assert.equal(coverNote({ kind: "snap", earlier: true }), "");
+  assert.equal(coverNote(null), "");
+  const state = { mind: { ok: true }, control: { enabled: true } };
+  assert.equal(coverWhy({ kind: "candidate", earlier: true }, state), "");
 });

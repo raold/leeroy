@@ -57,6 +57,9 @@ The console applies the same rule (`selfies.store.looks_floor`) to what it shows
 gallery, its photo URLs and the "Choose selfies" queue leave out older sets, and the gallery
 leaves out situations planned from looks she no longer has. Her cover is always shown; with
 no cover nothing is hidden. Rows and files are kept, and picks and undos accept any ready set.
+The gallery's "Show all sets" (off by default, remembered per browser) lifts that rule there
+only (`all=1` on its list and photo URLs): older sets and situations are listed too, each
+marked "earlier looks"; the lust-set, world-set and file rules stay. Sending is unchanged.
 The retained image is copied; its original is never moved or consumed. Its caption describes
 that retained photo, not the new scene being planned. The new photo waits for ten continuous
 minutes of confirmed offline presence and no running night. Unrendered requests expire
