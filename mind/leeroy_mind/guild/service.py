@@ -19,6 +19,19 @@ from .roster import Roster
 
 
 log = logging.getLogger(__name__)
+
+
+def _where(error) -> str:
+    """Where `error` was raised: the innermost traceback frame as `file.py:line function`."""
+    tb, last = error.__traceback__, None
+    while tb is not None:
+        last, tb = tb, tb.tb_next
+    if last is None:
+        return "?"
+    code = last.tb_frame.f_code
+    return f"{code.co_filename.replace(chr(92), '/').rsplit('/', 1)[-1]}:{last.tb_lineno} {code.co_name}"
+
+
 EVENTS = ("hello", "login", "logout", "chat", "zone", "boss", "death", "resurrect", "dc_status", "loot_drop", "job",
           "guild_group", "group", "member_dungeon_capability")
 
@@ -369,9 +382,10 @@ class GuildLife:
                 await action()
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                # No SQL parameters, identities, paths or chat in public logs.
-                log.warning("guild lane failed: %s", name)
+            except Exception as error:
+                # No SQL parameters, identities, paths or chat in public logs: the exception's
+                # class and the line that raised it are code, never its message.
+                log.warning("guild lane failed: %s %s at %s", name, type(error).__name__, _where(error))
             await self.app.clock.sleep(1)
 
     async def run(self):

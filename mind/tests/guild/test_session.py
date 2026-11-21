@@ -9,7 +9,9 @@ import pytest
 from leeroy_mind.guild.config import GuildConfig
 from leeroy_mind.guild.dkp import LedgerEntry
 from leeroy_mind.guild.lines import INSTRUCTIONS, TEMPLATES, instruction, template
-from leeroy_mind.guild.loot import LootMaster, item_price, price_category, wants_item
+from leeroy_mind.bridge import AckTimeout, ConnectionLost, NotConnected, valid_preserved_id
+from leeroy_mind.guild.loot import RETRY_AFTER_S, LootMaster, command_id, item_price, price_category, wants_item
+from leeroy_mind.guild.ports import TransportUnavailable
 from leeroy_mind.guild.session import MvpVote, RaidPlan, RaidSession
 from leeroy_mind.guild.store import add_ledger, balances
 from leeroy_mind.guild.upgrades import ItemInfo
@@ -52,6 +54,11 @@ async def opened(setup, *, offline=False, bind=True):
 def set_balance(ports, guid, amount):
     current = balances(ports.conn).get(guid, 0)
     add_ledger(ports.conn, [LedgerEntry(ports.clock.now(), guid, amount - current, "adjust")])
+
+
+def loot_states(ports):
+    return [json.loads(value)["state"] for (value,) in
+            ports.conn.execute("SELECT value FROM meta WHERE key GLOB 'guild:loot:*' ORDER BY key")]
 
 
 def items_charged(ports):
@@ -216,6 +223,8 @@ async def test_failed_give_charges_nothing_and_no_loser_notice(setup):
 async def test_success_for_wrong_command_id_never_charges(setup):
     ports, _, _, _ = setup
     session = await opened(setup)
+    set_balance(ports, 105, 100)
+    set_balance(ports, 106, 40)
     async def wrong(command):
         ports.sent.append(command)
         return Ack(0, "another-command", True, "")
@@ -223,7 +232,14 @@ async def test_success_for_wrong_command_id_never_charges(setup):
     await session.on_loot_drop(drop())
     await advance(ports, 20)
     await session.tick()
-    assert items_charged(ports) == [] and "wrong_ack" in ports.said[-1][2]
+    assert items_charged(ports) == [] and ports.said[-1] == (104, "raid", template("loot_give_unknown", item="Testblade"))
+    await advance(ports, RETRY_AFTER_S)
+    await session.tick()
+    assert items_charged(ports) == [] and ports.said[-1] == (104, "raid", template(
+        "loot_give_lost", item="Testblade", winner="M105"))
+    await advance(ports, RETRY_AFTER_S)
+    await session.tick()
+    assert len(ports.sent) == 2 and loot_states(ports) == ["uncertain"]
 
 
 @_run_async
@@ -364,10 +380,13 @@ async def test_concurrent_ticks_never_give_one_item_twice(setup):
 
 
 @_run_async
-async def test_cancel_during_remote_give_is_uncertain_and_never_retried_or_charged(setup):
+async def test_cancel_during_remote_give_is_uncertain_and_resent_once_only_after_a_wait(setup):
     ports, _, _, _ = setup
     session = await opened(setup)
+    set_balance(ports, 105, 100)
+    set_balance(ports, 106, 40)
     entered = asyncio.Event()
+    original = ports.send
     async def interrupted(command):
         ports.sent.append(command)
         entered.set()
@@ -380,9 +399,20 @@ async def test_cancel_during_remote_give_is_uncertain_and_never_retried_or_charg
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    said = len(ports.said)
     await session.tick()
     await session.on_loot_drop(drop())
-    assert len(ports.sent) == 1 and items_charged(ports) == []
+    assert len(ports.sent) == 1 and items_charged(ports) == [] and len(ports.said) == said
+    assert loot_states(ports) == ["uncertain"]
+    ports.send = original
+    await advance(ports, RETRY_AFTER_S)
+    await session.tick()
+    first, again = ports.sent
+    assert again.id == first.id + "-r1" and (again.index, again.item_id, again.to_guid) == (first.index, first.item_id, first.to_guid)
+    assert items_charged(ports) == [(105, -80.0, 50001)] and loot_states(ports) == ["charged"]
+    await advance(ports, RETRY_AFTER_S)
+    await session.tick()
+    assert len(ports.sent) == 2 and len(items_charged(ports)) == 1
 
 
 @_run_async
@@ -620,3 +650,213 @@ async def test_an_instance_scripts_step_is_no_kill(setup):
     assert ports.conn.execute("SELECT COUNT(*) FROM dkp_ledger WHERE reason='kill'").fetchone()[0] == 0
     await session.on_boss(Boss(0, 631, 77, 11, "Sindragosa", "killed", (101, 102)))
     assert session.kills == 1
+
+
+def test_give_identities_are_wire_legal_and_distinct_per_attempt():
+    key = "guild:loot:18:09835043f7c15c8a25bca35afc35489ab2d845d3ea6ad1835df09413a45e74a0"
+    first, again = command_id(18, key), command_id(18, key, 1)
+    assert first == "guild-loot-18-ea6ad1835df09413a45e74a0" and again == first + "-r1"
+    assert valid_preserved_id(first) and valid_preserved_id(again)
+
+
+@pytest.mark.parametrize("error", [AckTimeout("no ack"), ConnectionLost("gone"), RuntimeError("x")])
+@_run_async
+async def test_an_unknown_give_is_told_logged_by_code_and_resent_once(setup, error, caplog):
+    ports, _, _, _ = setup
+    session = await opened(setup)
+    set_balance(ports, 105, 100)
+    set_balance(ports, 106, 40)
+    original = ports.send
+    async def lost(command):
+        ports.sent.append(command)
+        raise error
+    ports.send = lost
+    await session.on_loot_drop(drop())
+    await advance(ports, 20)
+    with caplog.at_level("WARNING", logger="leeroy_mind.guild.loot"):
+        await session.tick()
+    assert items_charged(ports) == [] and loot_states(ports) == ["uncertain"]
+    assert ports.said[-1] == (104, "raid", "Testblade: lost track of that hand-out, checking again")
+    logged = [r.getMessage() for r in caplog.records if r.name == "leeroy_mind.guild.loot"]
+    assert len(logged) == 1 and f"code={type(error).__name__}" in logged[0]
+    assert "item=50001 to=105" in logged[0] and "Testblade" not in logged[0] and "M105" not in logged[0]
+    await advance(ports, RETRY_AFTER_S - 1)
+    await session.tick()
+    assert len(ports.sent) == 1
+    ports.send = original
+    await advance(ports, 1)
+    await session.tick()
+    assert len(ports.sent) == 2 and ports.sent[1].id.endswith("-r1")
+    assert items_charged(ports) == [(105, -80.0, 50001)] and ports.said[-1] == (104, "raid", "Testblade -> M105, 80 dkp")
+
+
+@pytest.mark.parametrize("error", ["no_item", "no_source"])
+@_run_async
+async def test_a_resent_give_that_finds_the_slot_empty_charges_nobody(setup, error):
+    ports, _, _, _ = setup
+    session = await opened(setup)
+    set_balance(ports, 105, 100)
+    set_balance(ports, 106, 40)
+    original = ports.send
+    async def timeout(command):
+        ports.sent.append(command)
+        raise AckTimeout("no ack")
+    ports.send = timeout
+    await session.on_loot_drop(drop())
+    await advance(ports, 20)
+    await session.tick()
+    ports.send = original
+    ports.acks["give_loot"].append((False, error))
+    await advance(ports, RETRY_AFTER_S)
+    await session.tick()
+    assert items_charged(ports) == [] and loot_states(ports) == ["gone"] and ports.lost == []
+    assert ports.said[-1] == (104, "raid", "Testblade: it's no longer on the corpse, so no dkp charged")
+    await advance(ports, RETRY_AFTER_S)
+    await session.tick()
+    assert len(ports.sent) == 2
+
+
+@_run_async
+async def test_a_first_give_refused_is_failed_not_resent(setup):
+    ports, _, _, _ = setup
+    session = await opened(setup)
+    set_balance(ports, 105, 100)
+    set_balance(ports, 106, 40)
+    ports.acks["give_loot"].append((False, "no_item"))
+    await session.on_loot_drop(drop())
+    await advance(ports, 20)
+    await session.tick()
+    await advance(ports, RETRY_AFTER_S)
+    await session.tick()
+    assert loot_states(ports) == ["failed"] and len(ports.sent) == 1
+    assert ports.said[-1] == (104, "raid", "Testblade: couldn't hand that out (no_item)")
+
+
+@pytest.mark.parametrize("error", [NotConnected("down"), TransportUnavailable("off")])
+@_run_async
+async def test_a_give_refused_before_it_left_the_mind_goes_again_unannounced(setup, error):
+    ports, _, _, _ = setup
+    session = await opened(setup)
+    set_balance(ports, 105, 100)
+    set_balance(ports, 106, 40)
+    original = ports.send
+    async def down(command):
+        raise error
+    ports.send = down
+    await session.on_loot_drop(drop())
+    await advance(ports, 20)
+    said = len(ports.said)
+    await session.tick()
+    assert loot_states(ports) == ["pending"] and len(ports.said) == said and items_charged(ports) == []
+    ports.send = original
+    await session.tick()
+    (key,), = ports.conn.execute("SELECT key FROM meta WHERE key GLOB 'guild:loot:*'").fetchall()
+    assert [c.id for c in ports.sent] == [command_id(session.raid_id, key)]
+    assert items_charged(ports) == [(105, -80.0, 50001)]
+
+
+@_run_async
+async def test_a_resend_refused_before_it_left_the_mind_keeps_its_one_retry(setup):
+    ports, _, _, _ = setup
+    session = await opened(setup)
+    set_balance(ports, 105, 100)
+    set_balance(ports, 106, 40)
+    original = ports.send
+    async def timeout(command):
+        ports.sent.append(command)
+        raise AckTimeout("no ack")
+    ports.send = timeout
+    await session.on_loot_drop(drop())
+    await advance(ports, 20)
+    await session.tick()
+    async def down(command):
+        raise NotConnected("down")
+    ports.send = down
+    await advance(ports, RETRY_AFTER_S)
+    await session.tick()
+    assert loot_states(ports) == ["uncertain"]
+    ports.send = original
+    await session.tick()
+    assert [c.id[-3:] for c in ports.sent] == [ports.sent[0].id[-3:], "-r1"]
+    assert items_charged(ports) == [(105, -80.0, 50001)]
+
+
+@_run_async
+async def test_an_old_uncertain_receipt_without_its_intended_award_is_left_alone(setup):
+    ports, _, _, _ = setup
+    session = await opened(setup)
+    await session.on_loot_drop(drop())
+    key, value = ports.conn.execute("SELECT key,value FROM meta WHERE key GLOB 'guild:loot:*'").fetchone()
+    record = json.loads(value)
+    record.update(state="uncertain", command_id="guild-loot:1:" + key[-24:])
+    with ports.conn:
+        ports.conn.execute("UPDATE meta SET value=? WHERE key=?", (json.dumps(record), key))
+    await advance(ports, 120)
+    await session.tick()
+    assert ports.sent == [] and loot_states(ports) == ["uncertain"]
+
+
+@_run_async
+async def test_a_give_left_sending_by_an_earlier_process_is_resent_once(setup):
+    ports, cfg, armory, _ = setup
+    session = await opened(setup)
+    set_balance(ports, 105, 100)
+    set_balance(ports, 106, 40)
+    async def crash(command):
+        ports.sent.append(command)
+        raise SystemExit  # the process dies mid-send: the receipt stays "sending"
+    ports.send = crash
+    await session.on_loot_drop(drop())
+    await advance(ports, 20)
+    with pytest.raises(SystemExit):
+        await session.tick()
+    assert loot_states(ports) == ["sending"]
+    del ports.send
+    restored = LootMaster(ports, cfg, armory, session.ctx)
+    await restored.tick()
+    assert [c.id[-3:] for c in ports.sent][1:] == ["-r1"] and items_charged(ports) == [(105, -80.0, 50001)]
+
+
+@_run_async
+async def test_a_tier_mark_draws_bids_from_its_classes_and_is_handed_out(setup):
+    ports, cfg, armory, _ = setup
+    mark = ItemInfo(52025, "Vanquisher's Mark of Sanctification", 4, 80, 0, 15, 0, 1192, frozenset())
+    armory._items[52025] = mark
+    session = await opened(setup)
+    set_balance(ports, 106, 100)
+    await session.on_loot_drop(LootDrop(0, 631, 77, 36597, (LootItem(52025, mark.name, 4, 0),)))
+    (value,), = ports.conn.execute("SELECT value FROM meta WHERE key GLOB 'guild:loot:*'").fetchall()
+    record = json.loads(value)
+    bidding = {b["guid"] for b in record["bidders"] if b["gain"]}
+    assert bidding == {103, 104, 106}  # the mages and the death knight; no warrior, priest or hunter
+    assert record["price"] == item_price(mark, cfg.dkp.prices)
+    await advance(ports, 20)
+    await session.tick()
+    assert [c.item_id for c in ports.sent] == [52025] and ports.sent[0].to_guid == 106
+    assert loot_states(ports) == ["charged"]
+
+
+@_run_async
+async def test_an_unsettled_award_holds_its_dkp_from_later_bids(setup):
+    ports, _, _, _ = setup
+    session = await opened(setup)
+    set_balance(ports, 105, 100)
+    set_balance(ports, 106, 40)
+    original = ports.send
+    async def timeout(command):
+        ports.sent.append(command)
+        raise AckTimeout("no ack")
+    ports.send = timeout
+    await session.on_loot_drop(drop(index=0))
+    await advance(ports, 20)
+    await session.tick()  # 105 wins at 80; unknown, held
+    ports.send = original
+    await session.on_loot_drop(drop(index=1))
+    await advance(ports, 20)
+    await session.tick()  # 105's 80 is held from the second drop's bids: 106 wins it
+    second = [c for c in ports.sent if c.index == 1]
+    assert len(second) == 1 and second[0].to_guid == 106 and items_charged(ports) == [(106, -40.0, 50001)]
+    await advance(ports, RETRY_AFTER_S)
+    await session.tick()  # the first drop's resend lands: 105 pays the 80 that was held
+    assert items_charged(ports) == [(106, -40.0, 50001), (105, -80.0, 50001)]
+    assert balances(ports.conn)[105] == 20 and balances(ports.conn)[106] == 0

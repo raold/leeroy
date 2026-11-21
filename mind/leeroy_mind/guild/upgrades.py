@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from statistics import mean
 
+from .tokens import tier_target
+
 
 @dataclass(frozen=True, slots=True)
 class ItemInfo:
@@ -73,6 +75,18 @@ def suits(item: ItemInfo, family: str, role: str | None) -> bool:
     return True
 
 
+def _tier_pieces(item: ItemInfo, cls: int) -> tuple[ItemInfo, ...] | None:
+    """The tier pieces a token (tokens.TIER_TOKENS) buys a member of class `cls`: her armour, its
+    item level, one per slot it buys for. A tier set is always its class's, so no stats are
+    read (each spec has its own set). None when `item` is no tier token."""
+    target = tier_target(item.item_id) if item.item_class == 15 else None
+    if target is None:
+        return None
+    item_level, slots = target
+    return tuple(ItemInfo(item.item_id, item.name, item.quality, item_level, slot, 4, _ARMOUR[cls],
+                          item.allowable_class, frozenset()) for slot in slots)
+
+
 def upgrade_gain(item: ItemInfo, cls: int, family: str, equipped: dict[int, int], *,
                  role: str | None = None) -> int | None:
     """The item levels `item` would gain her (a member of class `cls`, stat `family` and raid
@@ -81,6 +95,11 @@ def upgrade_gain(item: ItemInfo, cls: int, family: str, equipped: dict[int, int]
         return None
     if item.allowable_class != -1 and not item.allowable_class & (1 << (cls - 1)):
         return None
+    pieces = _tier_pieces(item, cls)
+    if pieces is not None:
+        # A tier token is worth the tier piece it buys her, in the slot it gains her most
+        return max((gain for piece in pieces
+                    if (gain := upgrade_gain(piece, cls, family, equipped, role=role)) is not None), default=None)
     if item.item_class == 15 and item.inventory_type == 0:
         baseline = round(mean(equipped.values())) if equipped else 200
         gain = item.item_level - baseline
