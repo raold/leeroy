@@ -37,6 +37,7 @@ written for health's owner-replies alone)."""
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 from dataclasses import replace
 
@@ -75,11 +76,12 @@ INTERRUPT_GAP_S = 1800.0
 AWAY_WEIGHT = 0.1
 # a DM post of his this fresh that no answer of hers replies to yet keeps her (_dm_unanswered)
 OPEN_POST_S = 86400.0
-# meta life:away:<guid> = "<since>,<until>" (unix seconds, numbers only): her newest away, for
+# meta life:away:<guid> = "<since>,<until>;..." (unix seconds, numbers only): recent aways, for
 # health's owner-replies bound; the mind never reads it back (a restart forgets every away) and
 # drops a key AWAY_KEEP_S after its away ended (health looks back a day)
 AWAY_KEY = "life:away:{guid}"
 AWAY_KEEP_S = 86400.0
+AWAY_MAX = 64  # a day's half-hour interruptions plus intervals overlapping its edge
 
 
 class LifeService:
@@ -416,19 +418,23 @@ class LifeService:
         log.info("life_back: guid=%d said=0", guid)
 
     def _mark(self, guid: int, a: Away) -> None:
-        """Meta life:away:<guid> = her away's since and until (numbers only, overwritten by her
-        next), for health's owner-replies; keys of aways over for AWAY_KEEP_S are dropped. A
+        """Keep each recent away for health; an early return replaces that same interval.
+        Intervals over for AWAY_KEEP_S are dropped in the same transaction. A
         failed write is logged (`life_meta_failed`), never raised: the away holds either way."""
         try:
-            self.store.set_meta(AWAY_KEY.format(guid=guid), f"{a.since:.0f},{a.until:.0f}")
-            stale = []
-            for key, value in self.store.conn.execute(
-                    "SELECT key, value FROM meta WHERE key GLOB 'life:away:*'").fetchall():
-                until = parse_away(value)
-                if until is None or until[1] < self.clock.now() - AWAY_KEEP_S:
-                    stale.append(key)
-            for key in stale:
-                self.store.conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+            with self.store.transaction():
+                key = AWAY_KEY.format(guid=guid)
+                history = dict(parse_aways(self.store.get_meta(key)))
+                history[round(a.since)] = round(a.until)
+                self.store.set_meta(key, ";".join(f"{s:.0f},{u:.0f}" for s, u in sorted(history.items())))
+                for key, value in self.store.conn.execute(
+                        "SELECT key, value FROM meta WHERE key GLOB 'life:away:*'").fetchall():
+                    kept = [(s, u) for s, u in parse_aways(value)
+                            if u >= self.clock.now() - AWAY_KEEP_S]
+                    if kept:
+                        self.store.set_meta(key, ";".join(f"{s:.0f},{u:.0f}" for s, u in kept))
+                    else:
+                        self.store.conn.execute("DELETE FROM meta WHERE key = ?", (key,))
         except sqlite3.Error as e:
             log.warning("life_meta_failed reason=%s", type(e).__name__)
 
@@ -685,9 +691,16 @@ def parse_away(value) -> tuple[float, float] | None:
         since, until = (float(x) for x in str(value).split(","))
     except (TypeError, ValueError):
         return None
-    if not (since <= until) or since != since:
+    if not (math.isfinite(since) and math.isfinite(until) and since <= until):
         return None
     return since, until
+
+
+def parse_aways(value) -> tuple[tuple[float, float], ...]:
+    """Bounded history, also accepting the old single-interval value. Never restores live aways."""
+    if not isinstance(value, str) or len(value) > 4096:
+        return ()
+    return tuple(sorted({a for item in value.split(";") if (a := parse_away(item)) is not None}))[-AWAY_MAX:]
 
 
 def _failed(op: str, exc: Exception) -> None:

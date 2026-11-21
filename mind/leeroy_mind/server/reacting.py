@@ -196,6 +196,9 @@ class Reactor:
 
     def _live_allowed(self, guid, author, channel, emoji, now):
         app, world = self.app, self.app.world
+        life = getattr(getattr(app, 'engine', None), 'life', None)
+        if life is not None and life.is_away(guid):
+            return False
         cast, p = world.discord_members(), app.personas.get(guid)
         officers = {g for g in cast if world.is_officer(g)}
         if (p is None or guid not in cast or guid in {author,app.human_guid}

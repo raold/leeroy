@@ -78,7 +78,8 @@ def _members(conn, owner_now: datetime, trial_rank: int, human: int, *, server=F
     life_config.pin(life_config.stored(conn), life_config.state_on())
     geo = geo_config.stored(conn)
     personas = _personas(conn)
-    from leeroy_mind.server.state import read_heroic_presence, read_play
+    from leeroy_mind.server.state import STEPPED_KEY, read_heroic_presence, read_play
+    stepped = read_play(conn, owner_now.timestamp(), key=STEPPED_KEY) if life_config.availability() else frozenset()
     playing = read_play(conn, owner_now.timestamp()) if server else frozenset()
     heroic = read_heroic_presence(conn, owner_now.timestamp()) if server else frozenset()
     playing |= heroic
@@ -100,6 +101,8 @@ def _members(conn, owner_now: datetime, trial_rank: int, human: int, *, server=F
                 p, local=presence.her_local(owner_now, p, enabled=geo),
                 body_online=bool(r["online"]), body_zone=r["zone"], rng_seed=presence.RNG_SEED,
                 in_his_group=r['guid'] in playing)
+        if r['guid'] in stepped and state.state != 'offline':
+            state = presence.Presence('idle', False, state.zone)
         try:
             ckey = layout.class_key(r["class"])
         except KeyError:
@@ -115,6 +118,8 @@ def _members(conn, owner_now: datetime, trial_rank: int, human: int, *, server=F
                 rng_seed=presence.RNG_SEED) if p is not None else None
             if r["guid"] in heroic:
                 out[-1]["status"] = "Playing — Halls of Lightning"
+            if r["guid"] in stepped:
+                out[-1]['status'] = None
     return out
 
 

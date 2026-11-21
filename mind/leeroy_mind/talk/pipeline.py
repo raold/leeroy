@@ -5322,7 +5322,8 @@ class Pipeline:
             if parts is not None and len(parts) > 1:
                 pieces = parts
                 room = max(room, *(len(x.split()) for x in parts))
-        plain = plain and coherent  # her brb and back: no slips, no typos, no marks
+        no_pair_mark = plain  # brb/back never add emoticons, including with coherence off
+        plain = plain and coherent  # coherence also removes slips and typos
         out: list[Styled] = []
         typing = replace(p.typing, typo_rate=0.0) if plain else p.typing
         most = 1 if words else max(turn.max_lines, len(pieces) if lines else 0)
@@ -5341,7 +5342,7 @@ class Pipeline:
                                speaker=p.character_name, kind=turn.kind, keep_case=keep,
                                max_lines=most if len(pieces) == 1 else 1,
                                aliases=aliases(p), force_lines=two_lines and not words,
-                               no_emoticon=romance or turn.kind in NO_MARK_KINDS or plain,
+                               no_emoticon=romance or turn.kind in NO_MARK_KINDS or no_pair_mark,
                                wink_ok=not (self._to_member(turn) or names_any(
                                    piece, [m.name for g, m in self._members_for(turn.channel).items()
                                            if g != self.human.guid])), game=not discord,

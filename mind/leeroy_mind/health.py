@@ -1359,19 +1359,19 @@ def _own_time_due(conn, human: int, now: float, availability: int):
     from .groups.store import readers
     from .life import config as life_config
     from .life.interrupt import BACK_FIND_S
-    from .life.service import AWAY_KEY, parse_away
+    from .life.service import AWAY_KEY, parse_aways
     from .personas.io import load_persona
     from .storage.store import Store
     store = Store(conn, clock=SystemClock())
     personas: dict[int, object] = {}
-    aways: dict[int, tuple[float, float] | None] = {}
+    aways: dict[int, tuple[tuple[float, float], ...]] = {}
     local_now = local_at(now)
 
     def away(guid: int):
         if guid not in aways:
             row = conn.execute("SELECT value FROM meta WHERE key = ?",
                                (AWAY_KEY.format(guid=guid),)).fetchone()
-            aways[guid] = parse_away(row[0]) if row is not None else None
+            aways[guid] = parse_aways(row[0]) if row is not None else ()
         return aways[guid]
 
     def persona(guid: int):
@@ -1418,8 +1418,9 @@ def _own_time_due(conn, human: int, now: float, availability: int):
             life_config.pin(*pinned)
         cap = life_config.stored_cap(conn)
         for g in members:  # she stepped away when he wrote: she finds it once she is back
-            a = away(g)
-            if a is not None and a[0] <= ts < a[1]:
+            for a in away(g):
+                if not a[0] <= ts < a[1]:
+                    continue
                 back = a[1] + BACK_FIND_S[1]
                 # ...and no later than the cap after his post (DiscordTalk._due_of), for her
                 # own DM and a group line that names her

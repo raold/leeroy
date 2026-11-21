@@ -74,6 +74,29 @@ def test_pulled_into_play_forces_playing_presence(tmp_path):
         run(app.stop())
 
 
+def test_short_away_presence_is_live_and_its_console_snapshot_expires(tmp_path):
+    from leeroy_mind.server.state import STEPPED_KEY, PLAY_STALE_S, read_play
+    app = mind_app(tmp_path, toml='[server]\nenabled=true')
+    try:
+        now = app.clock.now()
+        stepped = {101}
+        app.engine.life = SimpleNamespace(is_away=lambda g: g in stepped)
+        app.world.human_online = True
+        app.world.group = SimpleNamespace(members=(app.human_guid, 101), leader_guid=app.human_guid)
+        refresh_play(app, now)
+        state = state_of(app, 101, now)
+        assert state.presence == Presence('idle', False, state.presence.zone)
+        assert state.status is None and state.reading is None
+        assert read_play(app.store.conn, now, key=STEPPED_KEY) == {101}
+        assert not read_play(app.store.conn, now + PLAY_STALE_S + 1, key=STEPPED_KEY)
+        stepped.clear()
+        refresh_play(app, now + 1)
+        assert not read_play(app.store.conn, now + 1, key=STEPPED_KEY)
+        assert state_of(app, 101, now + 1).presence.playing
+    finally:
+        run(app.stop())
+
+
 def test_tie_kind_bands_and_feud_and_crush(store):
     for score, label in [(60, 'friend'), (30, 'fond'), (-30, 'rival'), (0, 'neutral')]:
         store.conn.execute('INSERT OR REPLACE INTO relationship(a,b,affinity) VALUES (101,102,?)', (score,))
