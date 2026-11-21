@@ -14,11 +14,11 @@
 
 namespace Leeroy::Guild
 {
-inline constexpr std::array<std::string_view, 18> kCommandTypes = {
+inline constexpr std::array<std::string_view, 19> kCommandTypes = {
     "form_raid", "summon", "clear_lockout", "set_loot_master", "give_loot",
     "start_offline_raid", "gear_up", "raid_control", "remove_friend", "set_spec",
     "bot_do", "stock_items", "offline_raid_stop", "string_do", "guild_add_roster",
-    "start_member_dungeon", "member_dungeon_stop", "member_dungeon_status"
+    "start_member_dungeon", "member_dungeon_stop", "member_dungeon_status", "get_loot_receipt"
 };
 inline constexpr std::array<std::string_view, 12> kBotStrategyAdd = {
     "behind", "tank face", "mark rti", "boost", "ss tank", "ss healer",
@@ -64,6 +64,7 @@ struct SetLootMasterCmd { std::uint32_t memberGuid = 0, looterGuid = 0, threshol
 struct GiveLootCmd
 {
     std::uint32_t map = 0, instanceId = 0, sourceEntry = 0, index = 0, itemId = 0, toGuid = 0;
+    bool receipt = false;
 };
 struct OfflineRaidCmd
 {
@@ -114,6 +115,7 @@ std::optional<SummonCmd> ParseSummon(nlohmann::json const&, std::string& error);
 std::optional<ClearLockoutCmd> ParseClearLockout(nlohmann::json const&, std::string& error);
 std::optional<SetLootMasterCmd> ParseSetLootMaster(nlohmann::json const&, std::string& error);
 std::optional<GiveLootCmd> ParseGiveLoot(nlohmann::json const&, std::string& error);
+std::optional<std::string> ParseLootReceipt(nlohmann::json const&, std::string& error);
 std::optional<OfflineRaidCmd> ParseOfflineRaid(nlohmann::json const&, std::string& error);
 std::optional<OfflineRaidCmd> ParseMemberDungeon(nlohmann::json const&, std::string& error);
 std::optional<std::string> ParseDungeonTarget(nlohmann::json const&, std::string& error);

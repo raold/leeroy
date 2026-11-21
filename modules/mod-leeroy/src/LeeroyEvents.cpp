@@ -194,7 +194,8 @@ void PublishLootDrop(Map const* map, ObjectGuid source, uint32 sourceEntry, Loot
     for (std::size_t i = 0; i < loot.items.size(); ++i)
     {
         ItemTemplate const* proto = sObjectMgr->GetItemTemplate(loot.items[i].itemid);
-        if (!proto || proto->Quality < ITEM_QUALITY_EPIC)
+        if (!proto || proto->Quality < ITEM_QUALITY_EPIC || proto->IsCurrencyToken()
+            || loot.items[i].freeforall || loot.items[i].needs_quest)
             continue;
         Leeroy::LootItem item;
         item.itemId = proto->ItemId;

@@ -48,6 +48,7 @@ void LeeroyModule::LoadConfig(bool /*reload*/)
     cfg.bankMailEnable = sConfigMgr->GetOption<bool>("Leeroy.Decisions.BankMail.Enable", false);
     cfg.realmEnable = sConfigMgr->GetOption<bool>("Leeroy.Realm.Enable", false);
     cfg.dayPlans = sConfigMgr->GetOption<bool>("Leeroy.DayPlans.Enable", false);
+    cfg.lootReceipts = sConfigMgr->GetOption<bool>("Leeroy.LootReceipts.Enable", false);
     cfg.worldEnable = sConfigMgr->GetOption<bool>("Leeroy.World.Enable", false);
     cfg.playStyleEnable = sConfigMgr->GetOption<bool>("Leeroy.PlayStyle.Enable", false);
     cfg.raidLeadEnable = sConfigMgr->GetOption<bool>("Leeroy.RaidLead.Enable", false);

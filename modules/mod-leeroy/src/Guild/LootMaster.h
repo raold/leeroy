@@ -5,6 +5,7 @@
 #include "LeeroyCommands.h"
 #include "LeeroyLootLedger.h"
 #include "ObjectGuid.h"
+#include "DatabaseEnvFwd.h"
 
 class Creature;
 class Player;
@@ -33,6 +34,8 @@ void NoteGameObjectLoot(Player* player, ObjectGuid guid, Loot* loot);
 
 // Commands and transfers run on the world thread after the map-update barrier.
 LeeroyCommandResult HandleGiveLoot(nlohmann::json const& message);
+LeeroyCommandResult TransferLoot(nlohmann::json const& message, CharacterDatabaseTransaction transaction,
+                                std::optional<LootSourceObservation> expected = {});
 void RegisterLootMasterHandler();
 }
 

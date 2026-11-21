@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "LootMaster.h"
+#include "LootReceipts.h"
 #include "GuildPorts.h"
 
 #include "Creature.h"
@@ -38,7 +39,8 @@ bool HasEpic(Loot const& loot)
     return std::any_of(loot.items.begin(), loot.items.end(), [](::LootItem const& item)
     {
         ItemTemplate const* info = sObjectMgr->GetItemTemplate(item.itemid);
-        return info && info->Quality >= ITEM_QUALITY_EPIC;
+        return info && info->Quality >= ITEM_QUALITY_EPIC && !info->IsCurrencyToken()
+            && !item.freeforall && !item.needs_quest;
     });
 }
 
@@ -118,6 +120,16 @@ void NoteGameObjectLoot(Player* player, ObjectGuid guid, Loot* loot)
 LeeroyCommandResult HandleGiveLoot(nlohmann::json const& message)
 {
     std::string error;
+    auto cmd = ParseGiveLoot(message, error);
+    if (!cmd) return Fail(error);
+    if (cmd->receipt) return BeginLootReceipt(message);
+    return TransferLoot(message, {});
+}
+
+LeeroyCommandResult TransferLoot(nlohmann::json const& message, CharacterDatabaseTransaction transaction,
+                                std::optional<LootSourceObservation> expected)
+{
+    std::string error;
     auto const cmd = ParseGiveLoot(message, error);
     if (!cmd)
         return Fail(error);
@@ -127,6 +139,9 @@ LeeroyCommandResult HandleGiveLoot(nlohmann::json const& message)
     auto& ledger = LootSourceLedger::Instance();
     auto const observed = ledger.Observe(cmd->map, cmd->instanceId, cmd->sourceEntry);
     if (!observed)
+        return Fail("no_source");
+    if (expected && (expected->source != observed->source || expected->group != observed->group
+        || expected->generation != observed->generation))
         return Fail("no_source");
     Map* map = sMapMgr->FindMap(cmd->map, cmd->instanceId);
     if (!map || !map->IsRaid())
@@ -167,7 +182,7 @@ LeeroyCommandResult HandleGiveLoot(nlohmann::json const& message)
     ::LootItem& item = loot.items[cmd->index];
     ItemTemplate const* info = sObjectMgr->GetItemTemplate(item.itemid);
     if (item.itemid != cmd->itemId || item.is_looted || !item.count || !loot.unlootedCount
-        || item.freeforall || item.needs_quest || !info || info->Quality < ITEM_QUALITY_EPIC)
+        || item.freeforall || item.needs_quest || !info || info->Quality < ITEM_QUALITY_EPIC || info->IsCurrencyToken())
         return Fail("no_item");
 
     Player* target = FindOnline(cmd->toGuid);
@@ -207,6 +222,8 @@ LeeroyCommandResult HandleGiveLoot(nlohmann::json const& message)
     Item* awarded = target->StoreNewItem(dest, item.itemid, true, item.randomPropertyId, allowed);
     if (!awarded)
         return Fail("not_eligible");
+    // Same Characters transaction as the receipt; never acknowledge just the in-memory item.
+    if (transaction) target->SaveInventoryAndGoldToDB(transaction);
     target->SendNewItem(awarded, count, false, false, true);
     target->UpdateLootAchievements(&item, &loot);
     item.count = 0;
@@ -217,5 +234,9 @@ LeeroyCommandResult HandleGiveLoot(nlohmann::json const& message)
     return {true, {}};
 }
 
-void RegisterLootMasterHandler() { RegisterCommand("give_loot", HandleGiveLoot); }
+void RegisterLootMasterHandler()
+{
+    RegisterCommand("give_loot", HandleGiveLoot);
+    RegisterCommand("get_loot_receipt", GetLootReceipt);
+}
 }

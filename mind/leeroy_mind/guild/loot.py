@@ -7,6 +7,7 @@ import json
 import logging
 from typing import TYPE_CHECKING
 from weakref import WeakValueDictionary
+from uuid import uuid4
 
 from leeroy_mind.bridge import NotConnected, valid_preserved_id
 
@@ -14,7 +15,7 @@ from .dkp import Award, Bidder, LedgerEntry, award
 from .lines import member_name, public_text, template
 from .pick import is_claim
 from .ports import TransportUnavailable
-from .protocol import GiveLoot
+from .protocol import GiveLoot, GetLootReceipt
 from .roles import role_of, stat_family
 from .store import _insert_ledger, balances
 from .upgrades import upgrade_gain
@@ -34,6 +35,11 @@ _LOCKS: WeakValueDictionary = WeakValueDictionary()
 # copy: a give that went through left its slot looted, so the second answers `no_item`.
 RETRY_AFTER_S = 30
 MAX_ATTEMPT = 1
+
+# The core distributes currency tokens per eligible player. Keep the known Wrath
+# raid currencies out even if a template lookup failed or an older server sent them.
+RAID_CURRENCIES = frozenset({29434, 40752, 40753, 45624, 47241, 49426})
+CURRENCY_BAG_FAMILY = 0x2000
 
 
 def command_id(raid_id, key, attempt=0) -> str:
@@ -64,6 +70,87 @@ def _put(conn, key, value):
 def _once(conn, key) -> bool:
     with conn:
         return conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES (?, 'true')", (key,)).rowcount == 1
+
+
+def _charge(conn, key, raid_id, now):
+    """Receipt and DKP share one transaction, including recovery after the raid ended."""
+    with conn:
+        record = _get(conn, key)
+        if record is None or record["state"] != "acknowledged":
+            return False
+        result = Award(**record["award"])
+        council = record.get("mode") == "loot_council"
+        _insert_ledger(conn, [LedgerEntry(now, result.guid, 0.0 if council else -result.paid,
+                       "item", raid_id, record["item_id"], "council:" + key if council else key)])
+        record["state"] = "charged"
+        _put(conn, key, record)
+    return True
+
+
+async def reconcile_receipts(ports):
+    """Read-only native proof, never another give. Keep polling even after raid closure.
+
+    A missing row, reserved row, failed query or lost status ack proves nothing. Only
+    an exact persisted award charges; a persisted rejection releases the held bid.
+    """
+    guild = _get(ports.conn, "guild_id")
+    rows = ports.conn.execute("SELECT key,value FROM meta WHERE key LIKE 'guild:loot:%' "
+                              "AND json_extract(value,'$.receipt')=1 "
+                              "AND json_extract(value,'$.state') IN ('sending','uncertain','acknowledged') "
+                              "AND json_extract(value,'$.receipt_owner')=? "
+                              "AND COALESCE(json_extract(value,'$.receipt_guild'),0)=? "
+                              "AND (json_extract(value,'$.state')='acknowledged' OR "
+                              "COALESCE(json_extract(value,'$.retry_at'),0)<=?) "
+                              "ORDER BY COALESCE(json_extract(value,'$.retry_at'),0),key LIMIT 16",
+                              (ports.human_guid, guild or 0, ports.clock.now())).fetchall()
+    for key, raw in rows:
+        record = json.loads(raw)
+        if record.get("receipt_owner") != ports.human_guid or record.get("receipt_guild") != guild:
+            continue
+        raid_id = int(key.split(":")[2])
+        if record["state"] == "acknowledged":
+            _charge(ports.conn, key, raid_id, ports.clock.now())
+            continue
+        if record.get("retry_at", 0) > ports.clock.now():
+            continue
+        # Shared with the session: never observe its in-flight give as crashed.
+        lock_key = (id(ports.conn), raid_id)
+        lock = _LOCKS.get(lock_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _LOCKS[lock_key] = lock
+        if lock.locked():
+            continue
+        async with lock:
+            current = _get(ports.conn, key)
+            if current is None or current["state"] not in {"sending", "uncertain"}:
+                continue
+            current.update(state="uncertain", retry_at=ports.clock.now() + RETRY_AFTER_S)
+            with ports.conn:
+                _put(ports.conn, key, current)
+            cmd = GetLootReceipt(id="loot-proof-" + uuid4().hex, give_id=current["command_id"],
+                                 **{k: current[k] for k in ("map", "instance_id", "source_entry", "index", "item_id")},
+                                 to_guid=current["intent"]["guid"])
+            try:
+                ack = await ports.send(cmd)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                continue
+            if (ack.id != cmd.id or current.get("receipt_owner") != ports.human_guid
+                    or current.get("receipt_guild") != _get(ports.conn, "guild_id")):
+                continue
+            if ack.ok is True:
+                current.update(state="acknowledged", award=current["intent"])
+            elif ack.error == "loot_receipt_rejected":
+                current.update(state="failed", error="loot_receipt_rejected")
+            else:
+                continue
+            with ports.conn:
+                _put(ports.conn, key, current)
+            if ack.ok is True:
+                _charge(ports.conn, key, raid_id, ports.clock.now())
+                log.info("guild_loot_receipt_recovered raid=%d item=%d", raid_id, current["item_id"])
 
 
 def price_category(item) -> str:
@@ -133,7 +220,8 @@ class LootMaster:
             seen = set()
             for slot in ev.items:
                 if (type(slot.index) is not int or not 0 <= slot.index <= 255
-                        or type(slot.item_id) is not int or slot.item_id <= 0 or slot.quality < 4):
+                        or type(slot.item_id) is not int or slot.item_id <= 0 or slot.quality < 4
+                        or slot.item_id in RAID_CURRENCIES):
                     continue
                 identity = (ev.map, ev.instance_id, ev.source_entry, ev.ts, slot.index)
                 key = self._prefix + _digest(identity)
@@ -159,6 +247,8 @@ class LootMaster:
                 if not self._active():
                     break
                 item = items.get(slot.item_id)
+                if item is not None and item.bag_family & CURRENCY_BAG_FAMILY:
+                    continue
                 bids = []
                 if item is not None:
                     cast = self.ports.cast()
@@ -210,15 +300,8 @@ class LootMaster:
         result = Award(**record["award"])
         # A loot council charges nothing: its row says so (decisions.loot_rules)
         council = record.get("mode") == "loot_council"
-        with self.ports.conn:
-            current = _get(self.ports.conn, key)
-            if current is None or current["state"] != "acknowledged":
-                return
-            _insert_ledger(self.ports.conn, [LedgerEntry(self.ports.clock.now(), result.guid,
-                                                       0.0 if council else -result.paid, "item", self.ctx.raid_id,
-                                                       record["item_id"], "council:" + key if council else key)])
-            current["state"] = "charged"
-            _put(self.ports.conn, key, current)
+        if not _charge(self.ports.conn, key, self.ctx.raid_id, self.ports.clock.now()):
+            return
         facts = dict(item=record["name"], winner=member_name(self.ports, result.guid), paid=result.paid)
         if result.close:
             facts.update(runner_up=member_name(self.ports, result.runner_up), runner_bid=result.runner_up_bid)
@@ -236,12 +319,17 @@ class LootMaster:
         not charged yet, and a give of unknown outcome that will be sent again. Later bids leave
         it aside, so one balance never pays for two drops."""
         held = {}
-        for _, row in self._records():
+        rows = self._records()
+        rows += [(key, json.loads(value)) for key, value in self.ports.conn.execute(
+            "SELECT key,value FROM meta WHERE key LIKE 'guild:loot:%' AND key NOT LIKE ? "
+            "AND json_extract(value,'$.receipt')=1", (self._prefix + "%",))]
+        for _, row in rows:
             if row.get("mode") == "loot_council":
                 continue  # a council charges nothing
             if row.get("state") == "acknowledged":
                 pay = row.get("award")
-            elif row.get("state") in {"sending", "uncertain"} and row.get("attempt", 0) < MAX_ATTEMPT:
+            elif row.get("state") in {"sending", "uncertain"} and (row.get("receipt")
+                    or row.get("attempt", 0) < MAX_ATTEMPT):
                 pay = row.get("intent")
             else:
                 continue
@@ -266,6 +354,8 @@ class LootMaster:
                     await self._finish(key, record)
                     continue
                 if record["state"] in {"uncertain", "sending"}:
+                    if record.get("receipt"):
+                        continue  # independent proof lane; never re-grant an unknown award
                     # "sending" under this lock is a give an earlier process never settled
                     if (not isinstance(record.get("intent"), dict) or record.get("attempt", 0) >= MAX_ATTEMPT
                             or record.get("retry_at", 0) > self.ports.clock.now() or not self._here(record)):
@@ -280,6 +370,8 @@ class LootMaster:
                 if record["state"] != "pending" or record["due"] > self.ports.clock.now():
                     continue
                 if not self._here(record):
+                    continue
+                if self.cfg.loot_receipts and not getattr(self.ports, "loot_receipts", False):
                     continue
                 current_balances = balances(self.ports.conn)
                 held = self._held()
@@ -313,6 +405,9 @@ class LootMaster:
                         # The intended award rides with the give, so an unknown outcome can be sent
                         # again; `award` is written only by a matching ack (the console's winner)
                         current.update(state="sending", intent=asdict(result), attempt=0)
+                        if self.cfg.loot_receipts:
+                            current.update(receipt=True, receipt_owner=self.ports.human_guid,
+                                           receipt_guild=_get(self.ports.conn, "guild_id"))
                     _put(self.ports.conn, key, current)
                 if result is None:
                     await self.ports.say(self.ctx.plan.loot_guid, "raid", template("loot_unclaimed", item=record["name"]))
@@ -326,7 +421,8 @@ class LootMaster:
         native's loot slot is the guard, so a give that went through cannot go twice."""
         command = GiveLoot(id=command_id(self.ctx.raid_id, key, attempt), map=record["map"],
                            instance_id=record["instance_id"], source_entry=record["source_entry"],
-                           index=record["index"], item_id=record["item_id"], to_guid=result.guid)
+                           index=record["index"], item_id=record["item_id"], to_guid=result.guid,
+                           receipt=record.get("receipt", False))
         try:
             ack = await self.ports.send(command)
         except asyncio.CancelledError:
@@ -342,6 +438,9 @@ class LootMaster:
                     record["state"] = "pending"
                     record.pop("intent", None)
                     record.pop("attempt", None)
+                    # Proven unsent: a restart may choose a different opt-in mode.
+                    for field in ("receipt", "receipt_owner", "receipt_guild"):
+                        record.pop(field, None)
                 _put(self.ports.conn, key, record)
             log.info("guild_loot_give_unsent raid=%d item=%d command=%s", self.ctx.raid_id, record["item_id"],
                      command.id)
@@ -360,6 +459,9 @@ class LootMaster:
             with self.ports.conn:
                 _put(self.ports.conn, key, record)
             await self._finish(key, record)
+            return False
+        if record.get("receipt") and ack.error not in {"loot_receipt_disabled", "loot_receipt_busy"}:
+            self._unknown(key, record, command, attempt, "receipt_unproven")
             return False
         # After an unknown first give, an empty slot (or a corpse with nothing left to loot) is most
         # likely that give: nobody is charged

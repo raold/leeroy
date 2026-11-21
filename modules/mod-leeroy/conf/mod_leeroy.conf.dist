@@ -131,6 +131,10 @@ Leeroy.CastArenaTeams.Leave = 1
 
 # Realm actors and cast protection stay off until separately accepted.
 Leeroy.Realm.Enable = 0
+
+# Durable give_loot reservations and inventory receipts. Also needs [guild] loot_receipts=true.
+# Status remains readable when disabled, to settle awards made before disabling.
+Leeroy.LootReceipts.Enable = 0
 Leeroy.DayPlans.Enable = 0
 Leeroy.CastGuard = 0
 # Bounded world-thread body steps per tick, clamped to 1-20.

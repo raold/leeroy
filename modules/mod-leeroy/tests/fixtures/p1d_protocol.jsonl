@@ -55,3 +55,7 @@
 {"name":"start_member_dungeon_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"start_member_dungeon","id":"heroic1","ts":0,"leader_guid":101,"members":[102,103,104,105],"map_id":602}}
 {"name":"member_dungeon_stop_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"member_dungeon_stop","id":"heroic2","ts":0,"start_id":"heroic1"}}
 {"name":"member_dungeon_status_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"member_dungeon_status","id":"heroic3","ts":0,"start_id":"heroic1"}}
+{"name":"get_loot_receipt_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"get_loot_receipt","id":"proof-1","ts":0,"give_id":"give-1","map":631,"instance_id":77,"source_entry":36597,"index":0,"item_id":50001,"to_guid":105}}
+{"name":"get_loot_receipt_bad_id","kind":"command","valid":false,"error":"bad field: give_id","msg":{"v":1,"type":"get_loot_receipt","id":"proof-1","ts":0,"give_id":"bad:id","map":631,"instance_id":77,"source_entry":36597,"index":0,"item_id":50001,"to_guid":105}}
+{"name":"give_loot_receipt_ok","kind":"command","valid":true,"msg":{"v":1,"type":"give_loot","id":"give-1","ts":0,"map":631,"instance_id":77,"source_entry":36597,"index":0,"item_id":50001,"to_guid":105,"receipt":true}}
+{"name":"give_loot_receipt_bad_flag","kind":"command","valid":false,"error":"bad field: receipt","msg":{"v":1,"type":"give_loot","id":"give-1","ts":0,"map":631,"instance_id":77,"source_entry":36597,"index":0,"item_id":50001,"to_guid":105,"receipt":"true"}}
