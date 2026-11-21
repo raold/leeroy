@@ -404,6 +404,7 @@ class Scene:
     romance_style: str = ""  # opted-in private wardrobe: warm, playful or confident
     romance_pose: str = ""  # fixed code in romance_styling.POSES
     romance_light: str = ""  # fixed code in romance_styling.LIGHTS
+    outfit_reveal: int = 0  # optional fixed beach/gym catalogue level; absent on legacy scenes
 
 
 def scene_from(data: dict) -> Scene:
@@ -419,11 +420,12 @@ def scene_from(data: dict) -> Scene:
         raise ValueError("scene: unknown style")
     return Scene(**{f.name: data[f.name] for f in fields(Scene)
                     if f.name not in ("outfit", "style", "recipe", "romance_style",
-                                      "romance_pose", "romance_light")},
+                                      "romance_pose", "romance_light", "outfit_reveal")},
                  outfit=outfit, style=style, recipe=data.get("recipe", 0),
                  romance_style=data.get("romance_style", ""),
                  romance_pose=data.get("romance_pose", ""),
-                 romance_light=data.get("romance_light", ""))
+                 romance_light=data.get("romance_light", ""),
+                 outfit_reveal=data.get("outfit_reveal", 0))
 
 
 def scene_json(s: Scene) -> dict:
@@ -436,6 +438,8 @@ def scene_json(s: Scene) -> dict:
         del out["recipe"]
     if not s.romance_style:
         del out["romance_style"]
+    if not s.outfit_reveal:
+        del out["outfit_reveal"]
     for field in ('romance_pose', 'romance_light'):
         if not getattr(s, field):
             del out[field]
@@ -534,6 +538,10 @@ def scene_renderable(p: Persona | None, s: Scene) -> str | None:
         return missing
     if s.style == LUST and not suggestive(p):
         return LUST_HELD
+    if type(s.outfit_reveal) is not int or s.outfit_reveal != 0:
+        from .outfit_reveal import scene_valid
+        if not scene_valid(s):
+            return "scene.outfit_reveal: held"
     from .romance_styling import EXPRESSIONS, LIGHTS, POSES
     if (not isinstance(s.romance_style, str) or not isinstance(s.romance_pose, str)
             or not isinstance(s.romance_light, str)

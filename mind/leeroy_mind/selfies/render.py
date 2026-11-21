@@ -441,13 +441,23 @@ def _varied_specs(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int,
                   set_no: int) -> tuple[PromptSpec | None, ...] | None:
     """A varied set's prompts by slot (varied.py; None for a slot that renders her ordinary
     photo) while the switch is on and its plan still holds for her; None renders the set as an
-    ordinary one (logged by code when it had a plan)."""
+    ordinary one (logged by code when it had a plan). Called only for queued sets: _render_set
+    discards any uncommitted files and rebuilds all four slots before marking the set ready.
+    Updating coverage here cannot relabel candidates in an already ready set."""
     from . import varied
     if not getattr(cfg, "varied_sets", False):
         return None
     looks = varied.looks_for(ctx.store, p, guid, set_no)
     if looks is not None:
         try:
+            from .outfit_reveal import restyle_look
+            updated = tuple(None if x is None else restyle_look(
+                p, x, getattr(cfg, 'outfit_reveal', None), f'{guid}:{set_no}:{i}')
+                for i, x in enumerate(looks))
+            if updated != looks:
+                with ctx.store.transaction():
+                    varied.write_plan(ctx.store, guid, set_no, updated, varied._day(ctx.store, guid, set_no))
+                looks = updated
             return tuple(None if x is None else build_varied_prompt(p, x) for x in looks)
         except ValueError:
             pass
@@ -522,7 +532,10 @@ async def _render_set(ctx: "NightContext", cfg: SelfieCfg, worker: SelfieWorker,
     staging = files.staging_dir(data, guid, set_no)
     staging.mkdir(parents=True)
     from .photo_extra import light_for
-    ordinary = build_prompt(p, kind_style=chosen_style(ctx.store, p), light=light_for(ctx.store,p))
+    from .outfit_reveal import profile
+    kind_style = chosen_style(ctx.store, p)
+    clothed = profile(p, getattr(cfg, 'outfit_reveal', None), f'{guid}:{set_no}', kind_style=kind_style)
+    ordinary = build_prompt(clothed, kind_style=kind_style, light=light_for(ctx.store,p))
     if varied is None:
         spec = ordinary
     else:

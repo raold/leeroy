@@ -11,6 +11,44 @@ against its configuration even if the worker reports an image as unflagged. Miss
 result scores are never replaced with zero.
 Install the mind and worker changes together; no migration or native rebuild is needed.
 
+## Beach and gym clothing coverage
+
+Add `outfit_reveal = 1` through `outfit_reveal = 5` under `[selfies]` in `mind.toml`, then
+restart the mind through the normal release/service workflow. Omit the key to retain the
+existing wardrobe choices. It is independent of `romance_styling`, heat, posing and how often
+photos are offered. No worker setting, migration or native rebuild is needed.
+
+| Level | Beach / pool | Gym |
+| --- | --- | --- |
+| 1 | Rash guard and swim shorts, high-neck one-piece | Loose tee and leggings, long-sleeved top and track trousers |
+| 2 | Tankini, sporty one-piece | Fitted tank and leggings, sports top and capris |
+| 3 | Bikini with fuller-coverage bottoms | Cropped athletic top and leggings or workout shorts |
+| 4 | Tie-side / halter bikini with cheeky high-cut bottoms | Sports crop top and short gym shorts |
+| 5 | Opaque triangle / halter bikini top with thong bikini bottoms | Opaque strappy / low-back sports crop top and short fitted shorts |
+
+Each level has two outfits per activity, using the member's saved colour palette. The chosen
+level replaces clothing only within an already eligible beach or gym photo. Casual, work,
+current-clothes requests and evening outfits keep their existing choices. Gymwear never becomes
+swimwear. Setting this key overrides the eligible photo's existing beach/gym garment choice;
+it does not edit the saved persona or her selected cover.
+
+It applies to newly rendered ordinary profile sets, varied sets (including queued plans),
+private situational photos planned after restart, and private photo requests. A varied set's
+stored plan is updated with the actual outfit before rendering, so its gallery labels and
+later cover metadata agree. Previously rendered files and already planned private scenes are
+unchanged. `selfies try` uses the same coverage setting.
+
+The existing eligibility remains: fictional women aged 25+ with the lust style and no young-coded
+looks; heat must already permit the category (gym P3, swimwear P4). Public scenes and plain
+photos do not receive the coverage transformation. Requests from a channel for a lust-styled
+member retain their existing private-DM routing. Image classification, cutoff, delivery checks,
+name and age screens, and the nudity/underwear negatives remain active. An allowed clothing
+choice can still produce a refused image; this setting never overrides that result.
+
+Rollback: remove `outfit_reveal` before installing a version that predates it. Old code will
+reject unfamiliar varied-plan outfits and render an ordinary set instead. Existing ready
+images keep their recorded metadata; this setting does not re-render them.
+
 ## Styling
 
 `[selfies] romance_styling = true` opts new private situational and requested photos into
