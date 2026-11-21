@@ -102,6 +102,10 @@ class Seed:
         """Who already knows a subject before any of it is posted in the channel."""
         if self.kind in ('life', 'photo', 'group_start', 'loot_wish', 'intent', 'bank_request', 'restock', 'day'):
             return self.about
+        if self.kind == "lfg":
+            return self.about[:1]
+        if self.kind == "heroic_result":
+            return self.witnesses
         if self.kind == 'his_day':
             return self.witnesses
         return None
@@ -412,7 +416,7 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
            culture_enabled: bool = False, culture_store=None, ident=None,
            culture_calendar: bool = False, culture_loot: bool = False,
            intents_enabled: bool = False, decisions_enabled: bool = False,
-           culture_memes: bool = False, day_plans: bool = False) -> list[Seed]:
+           culture_memes: bool = False, day_plans: bool = False, dungeons: bool = False) -> list[Seed]:
     # human_name is deliberately not a fallback: the persisted character row is the
     # authority; an operator's real name must not become a seed.
     names = _names(conn, cast, human)
@@ -439,6 +443,11 @@ def gather(conn, *, now: float, local: datetime, cast: Mapping[int, Persona],
             for kind, source in (('meme', culture.meme_seeds), ('meme_image', culture.meme_image_seeds)):
                 result += _read(kind, lambda source=source: source(culture_store, now=now, local=local,
                                                                    personas=cast, human=human, ident=ident))
+    if dungeons:
+        from leeroy_mind.godmode.heroics import seeds as heroic_seeds
+        guild = conn.execute("SELECT value FROM meta WHERE key='guild_id'").fetchone()
+        if guild:
+            result += _read('lfg', lambda: heroic_seeds(conn,now,int(guild[0]),human))
     if day_plans:
         from leeroy_mind.godmode.dayrun import seeds
         result += _read('day', lambda: seeds(conn, now, names))

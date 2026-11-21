@@ -203,7 +203,18 @@ class ServerEngine:
             if is_group(channel):
                 conversation.maximum = self.rng.randint(2,4)
                 conversation.readers = observed.group_audiences.get(channel,frozenset())
+            if seed.kind=="lfg":
+                from leeroy_mind.godmode.heroics import open_chat
+                heroic = getattr(getattr(self.app,"guild",None),"heroics",None)
+                if heroic is None or not heroic.current(heroic.row(seed.key.removeprefix("lfg:"))):
+                    return
+                with self.app.store.transaction():
+                    if not open_chat(self.app.store.conn,seed.key.removeprefix("lfg:"),conversation.id,now):
+                        return
+                conversation.maximum = 12
             if not self._valid(conversation, cast[0]):
+                if seed.kind=="lfg":
+                    heroic.finish_chat(conversation)
                 return
             if is_group(channel):
                 from leeroy_mind.groups.conversations import reserve
@@ -292,6 +303,8 @@ class ServerEngine:
         if conversation.reason or self._blocked(self.app.clock.now()) or not self._joke_valid(conversation, speaker):
             return False
         godmode = getattr(self.app, 'godmode', None)
+        if conversation.seed.kind=="lfg" and not self.app.guild.heroics.chatting(conversation,speaker):
+            return False
         # An intent opens the conversation only while it waits; once posted, the talk goes on.
         if (conversation.seed.kind == 'intent' and not conversation.messages
                 and (godmode is None or not godmode.seed_valid(conversation.seed))):
@@ -461,6 +474,10 @@ class ServerEngine:
                         name = observed.personas[g].character_name
                         if re.search(r'(?<!\w)@?'+re.escape(name)+r'\b', row[1], re.I):
                             addressed.add(g)
+                    if conversation.seed.kind=="lfg":
+                        from leeroy_mind.godmode.heroics import speakers
+                        posted = speakers(app.store.conn,conversation.seed.key.removeprefix("lfg:"))
+                        eligible = [g for g in eligible if g not in posted] or eligible
                     speaker = self.rng.choices(eligible, weights=[3 if g in addressed else 1 for g in eligible], k=1)[0]
                     gap = answer_delay(observed.states[speaker].presence.state, self.rng)
                     if self.rng.random() < .1:
@@ -535,6 +552,11 @@ class ServerEngine:
                     burst=burst, keep_channel=True, review_required=True, guards=guards,
                     still_valid=lambda c=conversation,g=speaker,p=parent:self._valid(c,g,p))
                 from leeroy_mind.culture.seeds import joke_of
+                if conversation.seed.kind=="lfg":
+                    from leeroy_mind.godmode.heroics import record_post
+                    start = conversation.seed.key.removeprefix("lfg:")
+                    meta.on_discord_record = lambda line,message,at: record_post(
+                        app.store.conn,start,conversation.id,speaker,message,at)
                 bank_open = parent is None and conversation.seed.kind in ("bank_request", "restock")
                 if bank_open:
                     from leeroy_mind.decisions.bank import record_post
@@ -575,6 +597,17 @@ class ServerEngine:
                 added = [i for i in meta.discord_messages if (row := self._message(conversation, i)) is not None
                          and row[2] is None and i not in conversation.messages]
                 conversation.messages.extend(added)
+                if conversation.seed.kind=="lfg":
+                    from leeroy_mind.godmode.heroics import consent
+                    if meta.guard_verdict in ("drop","failed_open") or not added:
+                        if app.guild.heroics.dropped(conversation,speaker):
+                            last = None
+                            continue
+                        conversation.reason = 'guard_drop'
+                        break
+                    if consent(app.store.conn,start):
+                        conversation.reason = 'agreed'
+                        break
                 if added and conversation.seed.kind == 'group_start':
                     app.store.conn.execute('DELETE FROM meta WHERE key=?',
                         ('groups:first:'+conversation.channel.removeprefix('gdm:'),))
@@ -607,6 +640,8 @@ class ServerEngine:
     def _finished(self, conversation):
         if self._live.pop(conversation.id, None) is None:
             return
+        if conversation.seed.kind=="lfg":
+            self.app.guild.heroics.finish_chat(conversation)
         value = dict(id=conversation.id, channel=conversation.channel, seed=conversation.seed.kind,
                      messages=len(conversation.messages), started=conversation.started,
                      reason=conversation.reason or 'cancelled')

@@ -1,5 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "DayPlans.h"
+#include "Guild/MemberDungeonJob.h"
+#include "Guild/MemberDungeonReceipts.h"
 #include "LeeroyDayPlan.h"
 #include "RealmPorts.h"
 #include "Guild/GuildAdd.h"
@@ -25,6 +27,8 @@ struct PreparedOwner
     std::set<std::string> tokens;
     bool consumed;
     Json driverBinding; // Non-null tickets permit only one dedicated-driver preparation, never body ownership.
+    std::string heroic;
+    std::vector<std::uint32_t> heroicMembers;
     std::map<std::uint32_t, std::pair<std::optional<BodyIdentity>, std::uint64_t>> bodies;
 };
 std::map<std::string, PreparedOwner> prepared;
@@ -39,7 +43,8 @@ std::set<std::uint32_t> OwnerGroup(std::optional<BodyIdentity> const& owner)
 bool OwnerWaiting(std::uint32_t guid)
 {
     return std::any_of(prepared.begin(), prepared.end(), [&](auto const& it) {
-        return it.second.driverBinding.is_null() && !it.second.consumed && NowUnixMs() < it.second.expires && it.second.bodies.contains(guid);
+        return it.second.original.value("type",std::string{}) != "start_member_dungeon" &&
+            it.second.driverBinding.is_null() && !it.second.consumed && NowUnixMs() < it.second.expires && it.second.bodies.contains(guid);
     });
 }
 
@@ -168,7 +173,12 @@ LeeroyCommandResult Begin(Json const& message)
 
 DayOwnerCheck::DayOwnerCheck(Json const& message, std::vector<std::uint32_t> members, std::string reason)
 {
-    if ((!message.contains("day_check") && message.contains("day_driver_ticket")) ||
+    auto const wireType = message.value("type", std::string{});
+    inspectingDungeon = wireType == "member_dungeon_inspect";
+    bool const dungeonDriver = wireType == "member_dungeon_prepare_driver";
+    if ((inspectingDungeon || dungeonDriver) && !message.contains("day_check"))
+    { error = "day_owner_scope"; return; }
+    if ((!message.contains("day_check") && (message.contains("day_driver_ticket") || message.contains("dungeon_driver_ticket"))) ||
         (message.contains("day_check") && message.contains("day_prepared")))
     { error = "day_owner_scope"; return; }
     if (!message.contains("day_check") && !message.contains("day_prepared"))
@@ -204,22 +214,40 @@ DayOwnerCheck::DayOwnerCheck(Json const& message, std::vector<std::uint32_t> mem
         auto& saved = found->second;
         if (!saved.driverBinding.is_null() || !currentRequest(saved))
         { error = "day_owner_changed"; return; }
-        if (DayGuildAddProgress(saved.tokens, saved.expires) != DayHandoff::Ready)
+        if (!saved.tokens.empty() && DayGuildAddProgress(saved.tokens, saved.expires) != DayHandoff::Ready)
         { error = "day_cleanup_unresolved"; return; }
+        if (!saved.heroic.empty())
+        {
+            if (!Guild::DungeonReturned(saved.heroic,saved.heroicMembers))
+            { error = "dungeon_cleanup_unresolved"; return; }
+            auto* human = FindOnline(saved.human);
+            if (!human || Guild::HisFight(human))
+            {
+                saved.consumed = true;
+                error = "dungeon_owner_scope";
+                return;
+            }
+        }
         saved.consumed = true; // Keep the check ID fenced through its original deadline.
         return;
     }
     checking = true;
     auto wire = message.at("type").get<std::string>();
     constexpr std::string_view prefix = "day_check_";
-    preparingDriver = wire == "day_prepare_offline_driver";
-    if (preparingDriver != message.contains("day_driver_ticket") || (!preparingDriver && !wire.starts_with(prefix)))
+    preparingDriver = wire == "day_prepare_offline_driver" || dungeonDriver;
+    if (dungeonDriver != message.contains("dungeon_driver_ticket") ||
+        (wire == "day_prepare_offline_driver") != message.contains("day_driver_ticket") ||
+        (!inspectingDungeon && !preparingDriver && !wire.starts_with(prefix)))
     { error = "day_owner_scope"; return; }
-    original["type"] = preparingDriver ? "start_offline_raid" : wire.substr(prefix.size());
+    original["type"] = dungeonDriver || inspectingDungeon ? "start_member_dungeon" :
+        preparingDriver ? "start_offline_raid" : wire.substr(prefix.size());
+    original.erase("dungeon_driver_ticket");
+    original.erase("dungeon_inspect");
     original.erase("day_driver_ticket");
     auto const& check = message.at("day_check");
     if (!check.is_object() || !check.contains("request_id") || !check["request_id"].is_string() ||
-        !check.contains("origins") || !check["origins"].is_array() || check["origins"].empty() ||
+        !check.contains("origins") || !check["origins"].is_array() ||
+        (check["origins"].empty() && original["type"] != "start_member_dungeon" && !check.contains("heroic_start")) ||
         check["origins"].size() > 40 || (!preparingDriver && prepared.size() >= 40))
     { error = "day_owner_scope"; return; }
     expires = check.value("expires_ms", std::int64_t{});
@@ -248,10 +276,24 @@ DayOwnerCheck::DayOwnerCheck(Json const& message, std::vector<std::uint32_t> mem
         if (OwnerWaiting(guid) || (!current.empty() && !tokens.contains(current)))
         { error = "day_owner_scope"; return; }
     }
+    if (check.contains("heroic_start"))
+    {
+        if (!check["heroic_start"].is_string() || (why != "raid" && why != "string" && why != "summon") ||
+            check.value("owner_guid",0u) != HumanGuid() || !FindOnline(HumanGuid()) || Guild::HisFight(FindOnline(HumanGuid())))
+        { error = "dungeon_owner_scope"; return; }
+        heroic = check["heroic_start"].get<std::string>();
+        for (auto guid : targets)
+            if (!Guild::MemberDungeonFor(guid).empty())
+            {
+                if (!Guild::CanProjectDungeonBody(heroic,guid)) { error = "dungeon_owner_scope"; return; }
+                heroicMembers.push_back(guid);
+            }
+        if (heroic.empty() || heroicMembers.empty()) { error = "dungeon_owner_scope"; return; }
+    }
     binding = check;
     if (preparingDriver)
     {
-        auto found = prepared.find(message.value("day_driver_ticket", std::string{}));
+        auto found = prepared.find(message.value(dungeonDriver ? "dungeon_driver_ticket" : "day_driver_ticket", std::string{}));
         if (found == prepared.end() || !DayDriverTicketMatches(found->second.driverBinding, binding,
                                                              found->second.tokens, tokens) ||
             !currentRequest(found->second))
@@ -259,6 +301,10 @@ DayOwnerCheck::DayOwnerCheck(Json const& message, std::vector<std::uint32_t> mem
         expires = found->second.expires;
         found->second.consumed = true;
     }
+}
+bool DayOwnerCheck::ProjectsDungeon(std::uint32_t guid) const
+{
+    return checking && !heroic.empty() && Guild::CanProjectDungeonBody(heroic,guid);
 }
 std::string DayOwnerCheck::Token(std::uint32_t guid) const
 {
@@ -283,11 +329,16 @@ LeeroyCommandResult DayOwnerCheck::Accept(bool coldDriver) const
     auto& module = RealmModule::Instance();
     auto owner = Identity(HumanGuid(), true);
     PreparedOwner request{original, LeeroyCommandSerial(), module.Epoch(), module.BodyGeneration(HumanGuid()), GuildId(), HumanGuid(),
-                          expires, owner, OwnerGroup(owner), tokens, false, coldDriver ? binding : Json(nullptr), {}};
+                          expires, owner, OwnerGroup(owner), tokens, false, coldDriver ? binding : Json(nullptr), heroic, heroicMembers, {}};
     for (auto guid : targets)
         request.bodies.emplace(guid, std::pair{Identity(guid, true), module.BodyGeneration(guid)});
     auto refusal = StoreDayOwnerRequest(prepared, checkId, std::move(request), coldDriver,
                                         [&](auto const& token) { RevokeDay(token, why); });
+    if (refusal.empty() && !coldDriver)
+    {
+        if (why != "heroic") CancelPreparedDungeon(targets);
+        if (!heroic.empty()) return Guild::StopMemberDungeon(heroic,true);
+    }
     return {refusal.empty(), refusal};
 }
 
@@ -493,6 +544,15 @@ void TickDayPlans()
                   [&](auto const& item) { return item.second.Released() && now > item.second.ends + 86400000; });
 }
 void InvalidateDayOwnerChecks() { prepared.clear(); }
+bool HasPreparedOwner(std::uint32_t guid) { return OwnerWaiting(guid); }
+void CancelPreparedDungeon(std::vector<std::uint32_t> const& picks)
+{
+    std::erase_if(prepared, [&](auto const& item){
+        auto const& p = item.second;
+        return !p.consumed && p.original.value("type",std::string{}) == "start_member_dungeon" &&
+            std::any_of(picks.begin(),picks.end(),[&](auto g){return p.bodies.contains(g);});
+    });
+}
 
 void RegisterDayOwnerCheck(std::string const& originalType, LeeroyCommandHandler handler)
 {

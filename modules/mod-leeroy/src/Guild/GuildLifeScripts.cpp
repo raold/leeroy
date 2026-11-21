@@ -11,6 +11,8 @@
 #include "MechanicJob.h"
 #include "BotCommands.h"
 #include "OfflineRaidJob.h"
+#include "MemberDungeonJob.h"
+#include "MemberDungeonReceipts.h"
 #include "OwnerSay.h"
 #include "RaidLead.h"
 #include "PlayStyle.h"
@@ -34,6 +36,7 @@ public:
         Leeroy::Guild::ReloadHazards();
         Leeroy::Guild::ReloadMechanics();
         Leeroy::Guild::ReloadStrings();
+        Leeroy::Guild::ReloadMemberDungeon();
         Leeroy::Guild::ReloadLead();
         Leeroy::Guild::ReloadGuildAdd();
     }
@@ -46,6 +49,8 @@ public:
         Leeroy::Guild::RegisterSocialCommands();
         Leeroy::Guild::RegisterBotCommandHandlers();
         Leeroy::Guild::RegisterOfflineRaidHandler();
+        Leeroy::Guild::RegisterMemberDungeon();
+        Leeroy::Guild::TickDungeonRecovery(0);
         Leeroy::Guild::RegisterOwnerSayHandler();
         Leeroy::Guild::RegisterGuildAddRosterHandler();
         Leeroy::Guild::RegisterRaidLeadHandler();
@@ -67,6 +72,7 @@ public:
         Leeroy::Guild::TickGroupRez(diff);
         Leeroy::Guild::TickHazards(diff);
         Leeroy::Guild::TickMechanics(diff);
+        Leeroy::Guild::TickDungeonRecovery(diff);
         Leeroy::Guild::TickOfflineRaid(diff);
         Leeroy::Guild::TickStrings(diff);
         Leeroy::Guild::TickLead(diff);

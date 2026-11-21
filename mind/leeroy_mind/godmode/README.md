@@ -1,4 +1,4 @@
-# Godmode (D6 Part A)
+# Godmode, strings and member activities
 
 He edits a member's mind, and he pulls strings that she carries out in her own way. Both are
 off by default.
@@ -193,9 +193,35 @@ alone gives no evidence of release. Recovery never replays a body command.
 Migration `0064_day_plans.sql` adds the plan, permit, step and handoff tables. Deploy with
 `ac-release.sh --native` to install the changed worldserver and mind together.
 
+## Members' heroics
+
+Enable `[life] dungeons = true` and `Leeroy.MemberDungeon.Enable = 1`. The Discord conversation uses the server and its guards. Apply the native key with `.reload config`. The mind rereads its switch on session start and nightly configuration reload. Day planning and godmode edits have their own switches.
+
+While the owner is away, a tank can invite four level-80 guild members to Halls of Lightning heroic in `#lfg-and-alts`. The party needs one tank, one healer and three damage dealers. The proposal prefers the tank's friends and avoids rivals and open feuds in either direction. It expires in an hour. Each local calendar day has at most one proposal for this guild and owner.
+
+Four different members of the final five must post through the guarded Discord conversation. A dropped turn can bring in a matching bench member. The new roster must agree again and every replacement must post. A deleted post loses its vote. If the conversation ends early, the proposal ends `talk_only`.
+
+Normal entry, lockouts, independent ownership and the dedicated DC driver's eligibility are checked before anyone leaves a day activity. A cold driver may take up to eight preparations, spaced at least 60 seconds while login is pending. Each uses the same proposal and a short-lived native ticket. The owner handoff has its own 30-second deadline. A confirmed start uses the party tank as leader and normal heroic access and difficulty.
+
+His login leaves an accepted run active. An admitted add-from-guild, raid summon, join or come request for its members can stop it. The original request waits for its own day and dungeon handbacks before continuing. A full, fresh native heartbeat puts the five in play and shows “Playing — Halls of Lightning.” Kills and wipes from that party's instance can reach Discord. If a restart precedes the next heartbeat, the mind can still give witnesses an event memory from the encounter it recorded for that run and copy. Repeated deliveries count once.
+
+The mind migration is `0065_member_heroics.sql`. Native creates `leeroy_member_dungeon_receipt` in the characters database on the first admitted start. A restart queries the original start ID. Cleanup records the party and instance before disband, preserves the first terminal and retains unresolved bodies. At 600 seconds after a cleanup-failed report, native can release its job slot when it finds no member still under that job’s control. A later party can use disjoint bodies as soon as status confirms the slot was released. The original roster stays fenced until its handback is proved. External GM teleports can leave an unresolved receipt.
+
+### Inspecting an unresolved return
+
+Preserve a read-only copy of the native characters-database row keyed by `(realm, start_id)`. Use the exact, case-sensitive original start command ID. Record its `revision`, nullable `active_slot`, `settled`, and full `payload`. Preserve the original terminal with its ID, reason, kill and wipe counts and timestamp. Include `failure_verified_ms` when present. A null slot allows a disjoint job to start. Whole-roster return requires a verified settled receipt.
+
+In the payload, check the guild, human owner, tank, ordered roster, last stage, effect and actor, driver, group, map, difficulty, instance copy and the disband `return_scope`. For each GUID preserve its saved outdoor position, dungeon and raid difficulties, leader flag, and its `changed`, `moved`, `returned` and `abandoned` fields. A per-member entry in `handbacks` binds that GUID to the exact start after character-row verification. Older receipts can lack these entries. A verified member may subsequently have moved.
+
+Compare unresolved GUIDs with read-only character and group membership records. Check map and instance, position, difficulty mask, leader flag, online status and group ID. Preserve any available live observations of the bot's session, group, master and competing ownership. Match the native status response to its revision and start ID. The mind's `member_heroic` row records delivery of that status. The Realm journal separately owns its day permits, operations and handoff requests. Closing a Realm operation cannot settle a native heroic receipt.
+
+For a missing or contradictory receipt, foreign copy or owner, or a body with only a live observation or matching old position, send the preserved evidence and affected GUIDs to the release owner for disposition. Keep the unresolved fence in place. Manual restoration requires separate authority for each affected body.
+
+Ship mind and worldserver together with `ac-release.sh --native`. The initial rotation contains map 602, whose four encounter slots in route order are 0, 3, 1 and 2. The automated rehearsal uses a synthetic worldserver.
+
 ## Not reachable here
 
-- Members' heroics (Part D), an arena queue and "go to a place" strings.
+- An arena queue and "go to a place" strings.
 - A string that brings a member into his instance, or anything inside one: refused by design.
 - "Stands in fire" inside instances waits for the dojo's policy work; `skill` changes only what
   the play-style map can say outdoors.

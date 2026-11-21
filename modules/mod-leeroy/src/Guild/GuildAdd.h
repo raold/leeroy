@@ -17,7 +17,8 @@ bool GuildAddAwaiting(std::uint32_t guid);
 // The owner's join_group string (Strings.cpp), under the add command's own fences for a party of his: why the pick
 // would skip this member, or the Realm or an offline raid holding someone in his group (empty when she may join);
 // and the add command's teleport beside him.
-std::string GuildAddJoinRefusal(Player* human, Player* bot, std::string const& dayToken = {});
+std::string GuildAddJoinRefusal(Player* human, Player* bot, std::string const& dayToken = {},
+    std::string const& dungeon = {});
 bool GuildAddBring(Player* bot, Player* human);
 // guild_add_roster: the posted raid lineup the owner's add picker follows while Leeroy.GuildAdd.FollowRoster is on.
 // World thread (OnStartup).

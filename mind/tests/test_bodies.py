@@ -67,7 +67,7 @@ def proof_for(candidate_run, *, owner="raid", scope="session", members=(101, 102
 def test_historical_ranks_and_immutable_record_copies():
     assert RANKS == {
         "raid": 0, "offline_raid": 1, "training": 2, "benchmark": 2,
-        "realm_event": 3, "realm_day": 4,
+        "realm_event": 3, "member_dungeon": 3, "realm_day": 4,
     }
     members = {101, 102}
     row = hold("training", members)

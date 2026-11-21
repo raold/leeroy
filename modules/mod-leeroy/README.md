@@ -290,6 +290,10 @@ set**, and the leader flag is never touched.
   `raid_control ready_check` with him as `leader_guid`.
 
 Logs carry ids, guids and codes only. **Native rebuild required** (`ac-release.sh --native`).
+## Members' heroic parties
+
+`Leeroy.MemberDungeon.Enable = 1` enables the guild party runner after `.reload config`. It defaults to 0. The separate `Leeroy.Strings.Enable` key controls the owner's in-game strings. The mind's `[life] dungeons` switch admits a party after members agree on Discord. Halls of Lightning heroic uses normal entry and a dedicated DungeonClear test driver. The party tank leads. The native receipt records the original start, party, copy and return evidence in the characters database. Deploy the native module and mind together with `ac-release.sh --native`.
+
 # Ground hazards in the owner's group
 
 Stock playerbots adds its `avoid aoe` strategy to the combat engine only (`AutoAvoidAoe` with a game-client

@@ -78,8 +78,10 @@ def _members(conn, owner_now: datetime, trial_rank: int, human: int, *, server=F
     life_config.pin(life_config.stored(conn), life_config.state_on())
     geo = geo_config.stored(conn)
     personas = _personas(conn)
-    from leeroy_mind.server.state import read_play
+    from leeroy_mind.server.state import read_heroic_presence, read_play
     playing = read_play(conn, owner_now.timestamp()) if server else frozenset()
+    heroic = read_heroic_presence(conn, owner_now.timestamp()) if server else frozenset()
+    playing |= heroic
     out = []
     for r in views.rows(conn, "SELECT guid, name, race, class, gender, level, rank, online, map, "
                               "zone, spec_tab FROM cast_member WHERE guid != ? AND level >= ? "
@@ -111,6 +113,8 @@ def _members(conn, owner_now: datetime, trial_rank: int, human: int, *, server=F
             out[-1]['status'] = presence.status_text(p,
                 presence.her_local(owner_now, p, enabled=geo), state,
                 rng_seed=presence.RNG_SEED) if p is not None else None
+            if r["guid"] in heroic:
+                out[-1]["status"] = "Playing — Halls of Lightning"
     return out
 
 

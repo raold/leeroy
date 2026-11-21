@@ -56,7 +56,7 @@ def test_all_job_fixtures_round_trip_typed_nested_fields():
         assert type(ev.guids) is tuple and type(ev.skipped) is tuple
         assert all(type(skip) is JobSkip for skip in ev.skipped)
         expected = dict(members_in_instance=None, last_progress_ts=None, boss_engaged=None, dc_state=None,
-                        kept=None)
+                        kept=None, map_id=None, returned=None, revision=None, slot_held=None)
         expected.update({key: value for key, value in msg.items() if key not in ("v", "type")})
         assert json.loads(json.dumps(dataclasses.asdict(ev))) == expected
 

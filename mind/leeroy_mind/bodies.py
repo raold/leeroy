@@ -35,6 +35,7 @@ RANKS = {
     "training": 2,
     "benchmark": 2,
     "realm_event": 3,
+    "member_dungeon": 3,
     "realm_day": 4,
 }
 

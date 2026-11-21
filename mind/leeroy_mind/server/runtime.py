@@ -39,8 +39,10 @@ async def snapshot(app, now, *, include_seeds=False):
     playing, online = pulled_into_play(app), frozenset(app.world.online)
     comms = app.engine.comms
     server, voice_session = getattr(app, 'server', None) is not None, live_voice_session(app)
+    from .state import heroic_players
+    heroic = heroic_players(app)
     observed = {g: StateInputs(p, cast, officers, online, playing, human, local.tzinfo,
-                 comms.room_of(g) if comms is not None else None, server, voice_session) for g, p in personas.items()}
+                 comms.room_of(g) if comms is not None else None, server, voice_session, g in heroic) for g, p in personas.items()}
     trial_rank = getattr(getattr(getattr(app, 'realm', None), 'cfg', None), 'trial_rank', 4)
     path, library = Path(app.data_dir) / 'mind.db', Path(app.data_dir) / 'library.db'
     from leeroy_mind.culture.config import app_calendar, app_enabled, app_loot, app_memes
@@ -53,6 +55,7 @@ async def snapshot(app, now, *, include_seeds=False):
     groups_config = getattr(getattr(app,'groups',None),'config',None)
     decisions_on = getattr(app, 'decisions', None) is not None
     day_plans = getattr(getattr(getattr(app, 'cfg', None), 'life', None), 'day_plans', False)
+    dungeons = getattr(getattr(getattr(app, 'cfg', None), 'life', None), 'dungeons', False)
     intents_on = getattr(app, 'godmode', None) is not None
     # Imported here, on the loop: a first import inside the worker spent its CPU budget on
     # compiling modules (about 1 s of the 2 s at the first read after a start).
@@ -107,7 +110,8 @@ async def snapshot(app, now, *, include_seeds=False):
                                 culture_enabled=culture_on, culture_store=worker_store, ident=identity,
                                 culture_calendar=calendar_on, culture_loot=loot_on,
                                 decisions_enabled=decisions_on, intents_enabled=intents_on,
-                                culture_memes=memes_on, **({'day_plans': True} if day_plans else {}))
+                                culture_memes=memes_on, **({'day_plans': True} if day_plans else {}),
+                                **({'dungeons': True} if dungeons else {}))
                 seeds = fresh(conn, source, now=now)
                 if photos_on:
                     seeds += fresh(conn, photo_seeds(conn, now=now, local=local, dial=photo_dial), now=now)

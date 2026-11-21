@@ -91,6 +91,37 @@ def day_context(h):
     return ctx
 
 
+@pytest.mark.parametrize("when", [1, 2])
+@pytest.mark.parametrize("hostility", ["rival", "feud"])
+def test_new_hostility_during_model_draw_reselects_legal_cohorts(h, when, hostility):
+    from leeroy_mind.nightly.budget import plan_night
+
+    ctx = day_context(h)
+    asyncio.run(plan_night(ctx, stages=frozenset({"day_plans"})))
+    llm = ctx.reasoner.llm
+    script = llm._script
+
+    def reply(model, messages):
+        if len(llm.calls) == when:
+            with ctx.store.transaction():
+                if hostility == "rival":
+                    ctx.store.conn.execute("INSERT INTO relationship(a,b,affinity) VALUES(104,103,-80)")
+                else:
+                    ctx.store.conn.execute("INSERT INTO feud(a,b,started,cause) VALUES(103,104,1,'synthetic')")
+        return script(model, messages)
+
+    llm._script = reply
+    asyncio.run(plan.stage_day_plans(ctx, Places.load(DIST)))
+    partners = {g: json.loads(p) for g, p in ctx.store.conn.execute(
+        "SELECT member,partners FROM day_plan WHERE activity='inn'")}
+    assert partners[101] == [102] and partners[102] == [101]
+    assert partners[103] == [105] and partners[105] == [103]
+    assert partners.get(104, []) == []
+    assert len(llm.calls) == ctx.plan["day_calls"] == 3
+    asyncio.run(plan.stage_day_plans(ctx, Places.load(DIST)))
+    assert len(llm.calls) == 3
+
+
 @pytest.mark.parametrize("scenario,expected", [
     ("neutral", [(101,102), (103,104), (105,)]),
     ("friends", [(102,103), (101,104), (105,)]),

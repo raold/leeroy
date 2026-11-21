@@ -154,6 +154,9 @@ def choose_cast(channel: str, seed: Seed, states: Mapping[int, DiscordState],
             weight *= 4
         weight *= edits_of(p).channel_weight(channel)  # godmode hangouts; 0: she avoids it
         weights[guid] = weight
+    if seed.kind == "lfg":
+        party = [g for g in seed.about if weights.get(g,0)>0]
+        return party if len(party)>=4 and seed.about[0] in party else []
     if seed.bank_announcement(channel):
         return pick_speakers({g:w for g,w in weights.items() if g in officers and g in seed.about[:1]}, 1, rng)
     if sum(w > 0 for w in weights.values()) < 2:

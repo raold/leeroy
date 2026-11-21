@@ -238,7 +238,8 @@ TrainingRun* GetRun(Player* leader)
 }
 #endif
 
-bool TrainingDcOwns(std::uint32_t guid)
+bool TrainingDcOwns(std::uint32_t guid, [[maybe_unused]] std::uint32_t exceptJobLeader,
+    [[maybe_unused]] std::uint64_t exceptJobToken)
 {
 #if LEEROY_HAS_DUNGEON_CLEAR
     if (!guid) return false;
@@ -246,10 +247,9 @@ bool TrainingDcOwns(std::uint32_t guid)
     // nor a missing/replaced player or group is permission to forget their bodies.
     for (auto const& [leader, run] : runs)
         if (OwnsBody(run.scope, run.manifest, guid)) return true;
-    if (jobs.Owns(guid)) return true;
-    for (auto leader : jobs.Leaders())
-        if (auto* job = jobs.Find(leader); job && OwnsBody(job->scope, job->manifest, guid)) return true;
-    return false;
+    return jobs.OwnsBesides(guid,exceptJobLeader,exceptJobToken,[](auto const& job,auto member) {
+        return OwnsBody(job.scope,job.manifest,member);
+    });
 #else
     (void)guid;
     return false;

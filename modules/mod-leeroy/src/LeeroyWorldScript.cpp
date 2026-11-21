@@ -6,6 +6,7 @@
 #include "LeeroyEvents.h"
 #include "LeeroyIntegrations.h"
 #include "LeeroyModule.h"
+#include "Guild/MemberDungeonJob.h"
 #include "Training/TrainingTap.h"
 #include "LeeroyProtocol.h"
 #include "LeeroyQueueFence.h"
@@ -158,6 +159,9 @@ public:
             Player* humanPlayer = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(human));
             bool const humanOnline = humanPlayer && humanPlayer->IsInWorld();
             auto features = LeeroyDcRaidFeatures();
+#if LEEROY_HAS_DUNGEON_CLEAR
+            if (Leeroy::Guild::MemberDungeonEnabled()) features.emplace_back("member_dungeon_v1");
+#endif
             if (module.Config().dayPlans && module.Config().realmEnable)
                 features.emplace_back("day_plan_handoff_v1");
             bridge.Greet(serial, Leeroy::EncodeHello(now, module.GuildId(), humanOnline ? human : 0, _startedMs,

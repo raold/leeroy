@@ -52,3 +52,6 @@
 {"name":"offline_raid_stop_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"offline_raid_stop","id":"stop1","ts":0,"raid_id":"raid1"}}
 {"name":"string_do_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"string_do","id":"t13","ts":0,"guid":1101,"kind":"emote","target_guid":1,"emote":"wave"}}
 {"name":"string_do_bad_kind","kind":"command","valid":false,"error":"bad field: kind","msg":{"v":1,"type":"string_do","id":"t14","ts":0,"guid":1101,"kind":"queue_arena","target_guid":1,"emote":""}}
+{"name":"start_member_dungeon_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"start_member_dungeon","id":"heroic1","ts":0,"leader_guid":101,"members":[102,103,104,105],"map_id":602}}
+{"name":"member_dungeon_stop_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"member_dungeon_stop","id":"heroic2","ts":0,"start_id":"heroic1"}}
+{"name":"member_dungeon_status_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"member_dungeon_status","id":"heroic3","ts":0,"start_id":"heroic1"}}

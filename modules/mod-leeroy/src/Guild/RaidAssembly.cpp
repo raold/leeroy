@@ -1,6 +1,8 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "RaidAssembly.h"
+#include "MemberDungeonJob.h"
+#include "MemberDungeonReceipts.h"
 #include "Realm/DayPlans.h"
 #include "HazardJob.h"
 #include "PlayStyle.h"
@@ -58,7 +60,8 @@ std::string GroupOwnership(Group const* group)
 {
     if (GroupHasRealmOwner(group)) return "busy:realm_owner";
     for (auto const& slot : group->GetMemberSlots())
-        if (!Owned(slot.guid.GetCounter()))
+        if (DungeonRecoveryConflicts({slot.guid.GetCounter()},false)) return "busy:member_dungeon";
+        else if (!Owned(slot.guid.GetCounter()))
             return NotCast(slot.guid.GetCounter());
     return {};
 }
@@ -158,6 +161,7 @@ LeeroyCommandResult HandleClearLockout(json const& msg)
     {
         if (!Owned(low))
             return Fail(NotCast(low));
+        if (DungeonRecoveryConflicts({low},false) && !check.ProjectsDungeon(low)) return Fail("busy:member_dungeon");
         if (Realm::RealmOwns(low) && check.Token(low).empty()) return Fail("busy:realm_owner");
     }
 
@@ -203,6 +207,10 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
     if (!check.error.empty()) return Fail(check.error);
     if (!Owned(cmd->leaderGuid))
         return Fail(NotCast(cmd->leaderGuid));
+    for (auto g : cmd->members)
+        if (DungeonRecoveryConflicts({g},false) && !check.ProjectsDungeon(g)) return Fail("busy:member_dungeon");
+    if (DungeonRecoveryConflicts({cmd->leaderGuid},false) && !check.ProjectsDungeon(cmd->leaderGuid))
+        return Fail("busy:member_dungeon");
     if (Realm::RealmOwns(cmd->leaderGuid) && check.Token(cmd->leaderGuid).empty()) return Fail("busy:realm_owner");
     for (uint32 low : cmd->members)
     {
@@ -224,9 +232,9 @@ LeeroyCommandResult HandleFormRaid(json const& msg)
     Difficulty const difficulty = Difficulty(RaidDifficulty(cmd->size, cmd->heroic));
     if (!GetMapDifficultyData(cmd->mapId, difficulty))
         return Fail("no_difficulty");
-    if (leader->GetMap()->IsDungeon() || leader->IsBeingTeleported())
+    if (!check.ProjectsDungeon(cmd->leaderGuid) && (leader->GetMap()->IsDungeon() || leader->IsBeingTeleported()))
         return Fail("in_instance");
-    Group* group = leader->GetGroup();
+    Group* group = check.ProjectsDungeon(cmd->leaderGuid) ? nullptr : leader->GetGroup();
     if (group)
     {
         if (!group->IsLeader(leader->GetGUID()))
@@ -371,11 +379,15 @@ LeeroyCommandResult HandleSummon(json const& msg)
     auto const cmd = ParseSummon(msg, error);
     if (!cmd)
         return Fail(error);
+    Realm::DayOwnerCheck check(msg,cmd->guids,"summon");
+    if (!check.error.empty()) return Fail(check.error);
+    for (auto g : cmd->guids)
+        if (DungeonRecoveryConflicts({g},false) && !check.ProjectsDungeon(g)) return Fail("busy:member_dungeon");
     for (uint32 low : cmd->guids)
     {
         if (!IsCast(low))
             return Fail(NotCast(low));
-        if (Realm::RealmOwns(low)) return Fail("busy:realm_owner");
+        if (Realm::RealmOwns(low) && check.Token(low).empty()) return Fail("busy:realm_owner");
         if (auto* bot = FindOnline(low); bot && GroupHasRealmOwner(bot->GetGroup()))
             return Fail("busy:realm_owner");
     }
@@ -411,6 +423,17 @@ LeeroyCommandResult HandleSummon(json const& msg)
             return Fail("busy:realm_owner");
         if (!Owned(summonerLow) || !(summoner = FindOnline(summonerLow)))
             return Fail("bad field: summoner_guid");
+    }
+    if (check.Checking())
+    {
+        for (auto guid : cmd->guids)
+        {
+            auto* bot = FindOnline(guid);
+            if (!check.ProjectsDungeon(guid))
+                if (auto reason = SummonFailure(bot); !reason.empty()) return Fail(reason);
+            if (job.inside && (!bot || !bot->GetGroup() || bot->GetGroup()->GetGUID() != job.group)) return Fail("leader_not_inside");
+        }
+        return check.Accept();
     }
     job.result.id = msg.at("id").get<std::string>();
     job.result.kind = "summon";
@@ -610,6 +633,7 @@ void RegisterRaidAssemblyHandlers()
     RegisterCommand("form_raid", HandleFormRaid);
     RegisterCommand("set_loot_master", HandleSetLootMaster);
     RegisterCommand("summon", HandleSummon);
+    Realm::RegisterDayOwnerCheck("summon", HandleSummon);
     RegisterCommand("raid_control", HandleRaidControl);
 }
 }

@@ -36,6 +36,7 @@ class StateInputs:
     voice_room: str | None
     server: bool = False
     voice_session: bool = False
+    heroic: bool = False
 
 
 def live_voice_session(app) -> bool:
@@ -52,7 +53,7 @@ def capture(app, guid: int) -> StateInputs:
         frozenset(g for g in cast if app.world.is_officer(g)), frozenset(app.world.online),
         pulled_into_play(app), app.human_guid, app.clock.local().tzinfo,
         comms.room_of(guid) if comms is not None else None,
-        getattr(app, 'server', None) is not None, live_voice_session(app))
+        getattr(app, 'server', None) is not None, live_voice_session(app), guid in heroic_players(app))
 
 
 def company_in(conn, channel, guid, now, cast, human) -> tuple[int, ...]:
@@ -62,6 +63,22 @@ def company_in(conn, channel, guid, now, cast, human) -> tuple[int, ...]:
     return tuple(r[0] for r in conn.execute('SELECT DISTINCT author FROM discord_message '
         'WHERE channel=? AND deleted IS NULL AND author<>? AND ts BETWEEN ? AND ? ORDER BY author',
         (channel, guid, now-900, now)) if r[0] in cast and r[0] != human)
+
+
+def heroic_players(app):
+    heroic = getattr(getattr(app,"guild",None),"heroics",None)
+    return heroic.members_in_play() if heroic is not None else frozenset()
+
+
+def read_heroic_presence(conn,now):
+    from leeroy_mind.godmode.heroics import HEARTBEAT_FRESH
+    row = conn.execute("SELECT value FROM meta WHERE key='guild:heroic-presence'").fetchone()
+    try:
+        at,guids = json.loads(row[0]) if row else (0,[])
+        return frozenset(guids) if (0<=now-at<=HEARTBEAT_FRESH and len(guids)==5 and
+                                    all(type(g) is int and g>0 for g in guids)) else frozenset()
+    except (ValueError,TypeError):
+        return frozenset()
 
 
 def pulled_into_play(app) -> frozenset[int]:
@@ -131,7 +148,8 @@ def state_of(app, guid: int, now: float, *, conn=None, observed=None) -> Discord
         from .seats import read_seats
         seats = read_seats(conn, now, human=observed.human).get('rooms', {})
         room = next((room for room, guids in seats.items() if guid in guids), None)
-    return DiscordState(presence, status_text(p, local, presence, rng_seed=RNG_SEED) if p else None,
+    status = "Playing — Halls of Lightning" if observed.heroic else (status_text(p, local, presence, rng_seed=RNG_SEED) if p else None)
+    return DiscordState(presence, status,
                         reading, room, last, mentions, company)
 
 

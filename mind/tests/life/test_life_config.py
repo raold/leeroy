@@ -76,7 +76,8 @@ def test_a_life_that_is_no_table_reads_as_empty(tmp_path, caplog, monkeypatch):
 def test_the_default_template_says_what_the_code_does(tmp_path):
     import tomllib
     life = tomllib.loads(config.DEFAULT_TOML)["life"]
-    assert life == {"day_plans": False, "availability": 0, "state": False, "dm_wait_cap_s": 75, "wow_vs_life": 5}
+    assert life == {"day_plans": False, "dungeons": False, "availability": 0, "state": False,
+                    "dm_wait_cap_s": 75, "wow_vs_life": 5}
     assert config.load_config(tmp_path / "absent.toml").life == config.LifeCfg()
 
 
