@@ -1,8 +1,8 @@
 name: patches
 
-# Applies patches/mod-playerbots (then the dojo's patches/dojo/mod-playerbots on top) and patches/mod-ollama-chat to
-# the newest upstream. Nightly, so an upstream change that breaks a local patch shows up as an issue here before
-# ac-update.sh runs into the same conflict.
+# Applies patches/mod-playerbots (then the dojo's patches/dojo/mod-playerbots on top), patches/mod-ollama-chat and
+# patches/mod-dungeon-clear to the newest upstream. Nightly, so an upstream change that breaks a local patch shows up
+# as an issue here before ac-update.sh runs into the same conflict.
 
 on:
   push:
@@ -105,4 +105,49 @@ jobs:
               --body "The nightly check could not apply \`patches/mod-ollama-chat\` to upstream \`main\`: $RUN_URL
 
           Rebase the local commits in \`modules/mod-ollama-chat\` (\`ac-update.sh\` stops on the same conflict), then run \`scripts/ac-snapshot.sh\` and commit."
+          fi
+
+  mod-dungeon-clear:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: leeroy
+
+      - name: Clone upstream mod-dungeon-clear
+        run: git clone --filter=blob:none --branch master https://github.com/jrad7/mod-dungeon-clear.git dungeon-clear
+
+      - name: Apply the local patches
+        working-directory: dungeon-clear
+        run: |
+          git -c user.name=leeroy-ci -c user.email=ci@invalid am --3way ../leeroy/patches/mod-dungeon-clear/*.patch
+          git log --oneline -n "$(find ../leeroy/patches/mod-dungeon-clear -name '*.patch' | wc -l)"
+
+      # The module's own build-free gates, which its upstream CI runs first: no RNG in decision code, no raw config
+      # reads, nothing MSVC cannot compile.
+      - name: Dungeon-clear lints
+        working-directory: dungeon-clear
+        run: |
+          bash tools/check_determinism.sh
+          python3 tools/check_config_reads.py
+          python3 tools/check_msvc_portability.py
+
+      - name: Open or update the drift issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create patch-drift --color D93F0B --description "Local patches no longer apply to upstream" --force
+          issue=$(gh issue list --label patch-drift --state open --search "mod-dungeon-clear in:title" --json number --jq '.[0].number')
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "Still failing: $RUN_URL"
+          else
+            gh issue create --label patch-drift \
+              --title "mod-dungeon-clear patches no longer apply to upstream master" \
+              --body "The nightly check could not apply \`patches/mod-dungeon-clear\` to upstream \`master\`, or the result failed its lints: $RUN_URL
+
+          Rebase the local commits in \`modules/mod-dungeon-clear\` (\`ac-update.sh\` stops on the same conflict), then run \`scripts/ac-snapshot.sh\` and commit."
           fi

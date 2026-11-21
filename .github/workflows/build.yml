@@ -3,8 +3,9 @@ name: build
 # Compiles the mod-playerbots fork of AzerothCore with the patched playerbots
 # module, using the warning flags upstream playerbots CI uses, and the module set
 # the live server runs: mod-leeroy with all three integrations on (patched
-# mod-ollama-chat, mod-dungeon-clear, mod-transmog) and mod-dojo's disabled
-# variant. PCH is off so ccache can carry most of the work between runs.
+# mod-ollama-chat, patched mod-dungeon-clear, mod-transmog) and mod-dojo's disabled
+# variant, then builds and runs the dungeon-clear suites for the raids its local
+# patches add. PCH is off so ccache can carry most of the work between runs.
 # Not a required check: it is path-filtered and a cold build takes over an hour.
 
 on:
@@ -60,8 +61,9 @@ jobs:
           # 906eb2a: upstream main tip that the two patches in patches/mod-ollama-chat apply to (the live
           # checkout's merge-base, the same tip the `patches` workflow clones).
           OLLAMA_SHA: 906eb2a45f5b3b815a281977005371193517eb32
-          # 0dfe558: the commit the live server builds (jrad7/mod-dungeon-clear, 2026-11-04).
-          DC_SHA: 0dfe558d6370d8b8bd94bba2ad75374975f2a833
+          # 142732c: the upstream master tip the live server builds (jrad7/mod-dungeon-clear, 2026-11-14), which the
+          # patches in patches/mod-dungeon-clear apply to.
+          DC_SHA: 142732c59ce1597e6407ec5a23c6b308a9d4b219
           # d309745: upstream azerothcore/mod-transmog master tip when this was written. Live uses a zip
           # extraction of an older snapshot, so CI builds upstream, not the identical files.
           TRANSMOG_SHA: d309745c9151ff2ea4202204c1efa991848414bf
@@ -74,6 +76,8 @@ jobs:
           clone mod-dungeon-clear jrad7/mod-dungeon-clear "$DC_SHA"
           clone mod-transmog azerothcore/mod-transmog "$TRANSMOG_SHA"
           git -C core/modules/mod-ollama-chat -c user.name=leeroy-ci -c user.email=ci@invalid             am --3way "$GITHUB_WORKSPACE"/leeroy/patches/mod-ollama-chat/*.patch
+          git -C core/modules/mod-dungeon-clear -c user.name=leeroy-ci -c user.email=ci@invalid \
+            am --3way "$GITHUB_WORKSPACE"/leeroy/patches/mod-dungeon-clear/*.patch
           # -Werror stays on for mod-leeroy and mod-dojo. The one exception is in mod-dungeon-clear's own files,
           # which all compile into the shared `modules` target, so it is relaxed per source file, not per target:
           # clang -Wmismatched-tags on `DcApproachState` (declared `class` in Action/DcActionShared.h, defined
@@ -84,6 +88,10 @@ jobs:
           # CI only: see .github/workflows/build.yml
           file(GLOB_RECURSE LEEROY_CI_DC_SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/*.cpp")
           set_source_files_properties(${LEEROY_CI_DC_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wno-error=mismatched-tags")
+          # The test target (BUILD_TESTING, below) is defined in the root directory; -Werror is for the modules.
+          file(GLOB LEEROY_CI_DC_TESTS "${CMAKE_CURRENT_LIST_DIR}/t/*.cpp")
+          set_source_files_properties(${LEEROY_CI_DC_TESTS} "${CMAKE_SOURCE_DIR}/src/test/mocks/TestMap.cpp"
+            DIRECTORY "${CMAKE_SOURCE_DIR}" PROPERTIES COMPILE_OPTIONS "-Wno-error")
           CMAKE
 
       # mod-dojo builds its disabled variant here (AC_ENABLE_DOJO stays off); beside mod-leeroy, its configure also
@@ -124,8 +132,26 @@ jobs:
             exit 1
           }
 
+      - name: Require dungeon-clear's Trial of the Crusader and Ulduar support
+        run: |
+          grep -F '[mod-leeroy] dungeon-clear offline raids: toc 1, ulduar 1' configure.log || {
+            echo '::error::the patched dungeon-clear does not advertise its raids, so the hello would not list dc_toc/dc_ulduar'
+            grep -F '[mod-leeroy]' configure.log || true
+            exit 1
+          }
+
       - name: Build
         run: cmake --build build -j "$(nproc)" -- -k
+
+      # Dungeon-clear's own gtest suites for what patches/mod-dungeon-clear adds (the two raids' kernels and data) and the
+      # registry lints every authored event and roster row must pass. Configuring with BUILD_TESTING after the build adds
+      # only the test target (its coverage flags reach the root directory, not the modules already built).
+      - name: Build and run the dungeon-clear raid tests
+        run: |
+          cmake -S core -B build -DBUILD_TESTING=ON > configure-tests.log
+          cmake --build build --target dungeon_clear_tests -j "$(nproc)"
+          ./build/dungeon_clear_tests \
+            --gtest_filter='TrialOfTheCrusader*:Ulduar*:DungeonEventIntegrityTest*:BossRoster*:DcEncounterChests*:TrialOfTheChampion*'
 
       - name: ccache stats
         if: always()
