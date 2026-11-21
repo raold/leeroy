@@ -5,7 +5,8 @@ from dataclasses import replace
 import pytest
 
 from leeroy_mind.guild.config import GuildConfig
-from leeroy_mind.guild.offline import UNSUPPORTED, next_raid_key, stall_cause, unsupported
+from leeroy_mind.guild.offline import RUNNABLE_WITH, UNSUPPORTED, next_raid_key, runnable, stall_cause, unsupported
+from leeroy_mind.protocol import Hello
 from leeroy_mind.guild.protocol import StopOfflineRaid
 from leeroy_mind.guild.raids import split_key
 from leeroy_mind.guild.lines import OUTCOME_NEUTRAL, OUTCOME_WORDS, outcome_words
@@ -23,6 +24,64 @@ def test_runner_never_plans_raids_dungeon_clear_cannot_run():
     assert unsupported(("toc25", "ulduar25", "icc25", "TOC10H")) == {
         "toc25": "dc_no_bosses", "ulduar25": "dc_gate", "toc10h": "dc_no_bosses"}
     assert unsupported(("icc25", "naxx10")) == {}
+
+
+def test_a_hello_feature_lifts_each_refusal_and_only_its_own():
+    assert set(RUNNABLE_WITH) == set(UNSUPPORTED)
+    assert RUNNABLE_WITH == {"toc": "dc_toc", "ulduar": "dc_ulduar"}
+    assert runnable("icc") and runnable("icc", {"dc_toc"})
+    assert not runnable("toc") and runnable("toc", {"dc_toc"}) and not runnable("toc", {"dc_ulduar"})
+    assert not runnable("ulduar", {"dc_toc", "regear"}) and runnable("ulduar", frozenset({"dc_ulduar"}))
+    rotation = ("toc25", "ulduar10", "icc25")
+    assert unsupported(rotation, {"dc_toc"}) == {"ulduar10": "dc_gate"}
+    assert unsupported(rotation, {"dc_ulduar"}) == {"toc25": "dc_no_bosses"}
+    assert unsupported(rotation, {"dc_toc", "dc_ulduar"}) == {}
+    # Never run, so the configured order decides; each raid only once its feature is listed.
+    assert next_raid_key(rotation, {}) == "icc25"
+    assert next_raid_key(rotation, {}, features={"dc_ulduar"}) == "ulduar10"
+    assert next_raid_key(rotation, {}, features={"dc_toc", "dc_ulduar"}) == "toc25"
+    assert next_raid_key(rotation, {"toc25": 5, "icc25": 9}, features={"dc_toc", "dc_ulduar"}) == "ulduar10"
+    with pytest.raises(ValueError):
+        next_raid_key(("toc10",), {}, features={"dc_ulduar"})
+
+
+def hello(features=()):
+    return Hello(ts=1, server="mod-leeroy", version="0.1.0", guild_id=21, human_guid=0, features=tuple(features))
+
+
+@_run_async
+async def test_a_hello_listing_dc_toc_lets_the_runner_plan_trial_of_the_crusader(setup, caplog):
+    ports, _, controller = setup
+    controller.cfg = replace(controller.cfg, offline_rotation=("toc10",))
+    with caplog.at_level("INFO"):
+        await controller.on_hello(hello(("item_links", "dc_toc")))
+        await controller.tick()
+    sent = ports.sent[-1]
+    assert (sent.map_id, sent.size, sent.heroic) == (649, 10, False)
+    assert offline_log(caplog, "offline_raid_supported") == ["offline_raid_supported features=dc_toc"]
+    assert not offline_log(caplog, "offline_raid_unsupported")
+
+
+@_run_async
+async def test_a_hello_listing_dc_ulduar_lets_the_runner_plan_ulduar(setup):
+    ports, _, controller = setup
+    controller.cfg = replace(controller.cfg, offline_rotation=("ulduar25", "icc10"))
+    await controller.on_hello(hello(("dc_ulduar",)))
+    await controller.tick()
+    assert (ports.sent[-1].map_id, ports.sent[-1].size) == (603, 25)
+
+
+@_run_async
+async def test_a_worldserver_without_the_feature_brings_the_refusal_back(setup, caplog):
+    ports, _, controller = setup
+    controller.cfg = replace(controller.cfg, offline_rotation=("toc25", "icc10"))
+    await controller.on_hello(hello(("dc_toc",)))
+    assert controller._raid_key() == "toc25"
+    with caplog.at_level("INFO"):
+        await controller.on_hello(hello(("item_links",)))  # an older native: a rollback
+        assert controller._raid_key() == "icc10"
+    assert offline_log(caplog, "offline_raid_unsupported") == [
+        "offline_raid_unsupported raid=toc25 reason=dc_no_bosses"]
 
 
 def test_default_rotation_holds_only_raids_the_runner_can_run():

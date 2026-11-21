@@ -1,0 +1,917 @@
+From 97fc35a50789166402b1c684c56b59b080f03ae0 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 21:06:49 -0500
+Subject: [PATCH 2/2] Pass Flame Leviathan for raids of bots by the Ulduar
+ Teleporter
+
+Flame Leviathan is a siege-vehicle fight bots cannot drive: playerbots
+boards a vehicle only when the bot's master sits in one, and it has no
+convoy, approach or ram movement. His Lightning Wall is the only way into
+the rest of Ulduar and opens only on his death.
+
+He is never fought, killed or credited: his row stays, skipped by design.
+For a raid of bots only (no member a person controls), a conditional pass
+(hook 69) moves every bot outside his gate to the Ulduar Teleporter's
+Colossal Forge destination, spell 64028's target position, which the
+teleporter offers only once he is dead. No loot, kill, achievement or boss
+state comes of it, and every boss after him is fought for real; a group a
+person is in keeps the gate. The pass is due on live state only, so it
+also takes stragglers a restart or recall puts back at the entrance.
+
+Razorscale hovers out of reach until a player tells the Expedition
+Commander they are ready, so she gets a commander objective in front of
+her and a ground anchor on her runway. Kologarn's Cache of Living Stone is
+looted as an encounter chest. DcCapabilities.h advertises the pass.
+---
+ CMakeLists.txt                                |   8 +-
+ README.md                                     |   8 +-
+ mod-dungeon-clear.cmake                       |   1 +
+ .../Data/DungeonEventRegistry.cpp             |   1 +
+ .../Data/Events/DungeonEventTables.h          |  72 ++++++
+ .../DungeonClear/Data/Events/UlduarEvents.cpp | 142 +++++++++++
+ src/Ai/Dungeon/DungeonClear/DcCapabilities.h  |   5 +
+ .../Overrides/BossRosterRegistry.cpp          |   1 +
+ .../Overrides/ObjectiveHookRegistry.cpp       |   1 +
+ .../Overrides/ObjectiveHookRegistry.h         |   5 +
+ .../DungeonClear/Overrides/UlduarDriver.cpp   | 128 ++++++++++
+ .../DungeonClear/Util/DcEncounterChests.h     |   4 +-
+ src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h |   1 +
+ .../DungeonClear/Util/DcUlduarPassDecision.h  |  50 ++++
+ t/TestEventRegistry.cpp                       |   9 +
+ t/TestUlduar.cpp                              | 240 ++++++++++++++++++
+ t/run_tests.sh                                |   2 +-
+ 17 files changed, 673 insertions(+), 5 deletions(-)
+ create mode 100644 src/Ai/Dungeon/DungeonClear/Data/Events/UlduarEvents.cpp
+ create mode 100644 src/Ai/Dungeon/DungeonClear/Overrides/UlduarDriver.cpp
+ create mode 100644 src/Ai/Dungeon/DungeonClear/Util/DcUlduarPassDecision.h
+ create mode 100644 t/TestUlduar.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index ac312cb..71c033d 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -38,13 +38,17 @@ AC_ADD_SCRIPT("${CMAKE_CURRENT_LIST_DIR}/src")
+ 
+ # New files added: Data/Events/TrialOfTheCrusaderEvents.cpp,
+ #   Overrides/TrialOfTheCrusaderDriver.cpp, Util/DcTocRaidDecision.h,
+-#   DcCapabilities.h
++#   Data/Events/UlduarEvents.cpp, Overrides/UlduarDriver.cpp,
++#   Util/DcUlduarPassDecision.h, DcCapabilities.h
+ #   (Trial of the Crusader, map 649 — greenfield: every boss a script summon, so
+ #    `dc on` refused the map. Five arena holds on the script's boss slots, a
+ #    conditional driver, hook 67, that clicks Barrett Ramsey whenever he offers
+ #    his gossip and pulls the champions and twins, a descent, hook 68, that puts
+ #    the bots in Anub'arak's chamber (a bot never falls), and his boss row.
+-#    DcCapabilities.h advertises it to modules that build beside this one.)
++#    Ulduar, map 603 — Flame Leviathan skipped by design (the siege-vehicle
++#    fight), a conditional pass, hook 69, that takes a raid of bots only to the
++#    Ulduar Teleporter's Colossal Forge destination, and Razorscale's commander.
++#    DcCapabilities.h advertises both to modules that build beside this one.)
+ 
+ # New files added: Data/Events/TrialOfTheChampionEvents.cpp,
+ #   Overrides/TrialOfTheChampionDriver.cpp, Util/DcTocDriverDecision.h
+diff --git a/README.md b/README.md
+index faeeb43..b514ba6 100644
+--- a/README.md
++++ b/README.md
+@@ -128,7 +128,13 @@ each phase.)
+ In raids, Trial of the Crusader is run stage by stage: the tank talks to Barrett
+ Ramsey whenever he offers the next stage (or a retry after a wipe), pulls the
+ faction champions and the twins, and takes the bots down into Anub'arak's chamber
+-when the floor breaks (a bot cannot fall).
++when the floor breaks (a bot cannot fall). In Ulduar, Flame Leviathan is a
++siege-vehicle fight bots cannot drive: it is skipped by design, and a raid of bots
++only, with nobody in it a person controls, is taken past his gate by the
++Expedition Base Camp teleporter's Colossal Forge destination, the way the instance
++itself takes a raid past him once he is dead. He is never fought or credited, and a
++group a person is in keeps the gate. Razorscale is started at the Expedition
++Commander.
+ 
+ Faction-specific events run only for the relevant side, and heroic-only events
+ never fire on a normal run. If an event cannot complete (for example, a scripted
+diff --git a/mod-dungeon-clear.cmake b/mod-dungeon-clear.cmake
+index 8cca0d1..46f9cec 100644
+--- a/mod-dungeon-clear.cmake
++++ b/mod-dungeon-clear.cmake
+@@ -122,6 +122,7 @@ if (BUILD_TESTING)
+             "${MOD_PATH}/t/TestCullingOfStratholme.cpp"
+             "${MOD_PATH}/t/TestTrialOfTheChampion.cpp"
+             "${MOD_PATH}/t/TestTrialOfTheCrusader.cpp"
++            "${MOD_PATH}/t/TestUlduar.cpp"
+             "${MOD_PATH}/t/TestOculus.cpp"
+             "${MOD_PATH}/t/TestGundrak.cpp"
+             "${MOD_PATH}/t/TestBlackwingLair.cpp"
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp b/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp
+index 070fdc0..3dd4605 100644
+--- a/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp
+@@ -615,6 +615,7 @@ namespace
+             RegisterCullingOfStratholmeEvents(t);
+             RegisterTrialOfTheChampionEvents(t);
+             RegisterTrialOfTheCrusaderEvents(t);
++            RegisterUlduarEvents(t);
+             RegisterOculusEvents(t);
+             RegisterKarazhanEvents(t);
+             return t;
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h b/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
+index 05eecd8..1d5bba8 100644
+--- a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
++++ b/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
+@@ -5348,6 +5348,74 @@ void RegisterTrialOfTheCrusaderEvents(std::vector<DungeonEvent>& out);
+ // pulls when their stage is in progress and nothing has come.
+ std::vector<uint32> const& TocRaidPullEntries();
+ 
++// --- Ulduar (map 603) --------------------------------------------------------
++//
++// Ulduar opens with FLAME LEVIATHAN, a siege-vehicle fight: the raid boards the
++// salvaged demolishers, siege engines and choppers at the Expedition Base Camp,
++// drives them to the Formation Grounds, kills the two Colossi at his gate (he
++// waits for them: boss_flame_leviathan's _startTimer) and fights him from the
++// vehicles. The Lightning Wall behind him (194905, DOOR_TYPE_PASSAGE) is the only
++// way into the rest of Ulduar, and it opens only on his death. Bots cannot drive
++// that fight: mod-playerbots boards a vehicle only when the bot's MASTER sits in
++// one (FlameLeviathanVehicleNearTrigger), and has no convoy, approach or ram
++// movement for one.
++//
++// THE RULING. Dungeon clear never fights, kills or credits the Leviathan: his row
++// is skipped by design. For a raid of bots ONLY — no member a person controls,
++// which is what an offline raid is — it passes him the way the instance itself
++// takes a raid past him once he is dead: the Expedition Base Camp's Ulduar
++// Teleporter (GO 194569) and its "Colossal Forge" destination, spell 64028, whose
++// spell_target_position (553.23, -12.32, 410.07) lies beyond the wall. The
++// teleporter's gossip shows that option only once the Leviathan is DONE (source
++// 15 conditions on menu 10389), so this IS a skip: no loot, no kill, no
++// achievement and no boss state change for him; every boss after him is fought
++// for real. A group a person is in keeps the gate exactly as before. Razorscale
++// is started by gossip with the Expedition Commander (npc_expedition_commander),
++// so she gets an objective in front of her and a ground anchor on the runway.
++namespace DcUlduar
++{
++    constexpr uint32 MAP_ID = 603;
++
++    // Boss slots (ulduar.h), equal to the DBC encounter indexes.
++    constexpr uint32 BOSS_LEVIATHAN  = 0;
++    constexpr uint32 BOSS_RAZORSCALE = 2;
++
++    constexpr uint32 NPC_LEVIATHAN            = 33113;
++    constexpr uint32 NPC_RAZORSCALE           = 33186;
++    constexpr uint32 NPC_EXPEDITION_COMMANDER = 33210;
++
++    constexpr uint32 GO_ULDUAR_TELEPORTER          = 194569;
++    constexpr uint32 SPELL_COLOSSAL_FORGE_TELEPORT = 64028;
++    // spell_target_position 64028, the fallback if the row is missing.
++    constexpr float FORGE_X = 553.233f, FORGE_Y = -12.324f, FORGE_Z = 410.07f, FORGE_O = 3.1765f;
++
++    // West of this is outside the Leviathan's gate: the entrance (-914, -149), the
++    // Expedition Base Camp (-806..-706) and the Formation Grounds (130..395). The
++    // gate is the Leviathan Door at x 395.06 and the Lightning Wall at 401.31;
++    // every boss after him stands at x > 550.
++    constexpr float OUTSIDE_MAX_X = 395.0f;
++
++    // Razorscale: the commander, and a ground anchor on the runway beside him (her
++    // spawn hovers at z 490 over it). The runway floor is z 391.5-391.9.
++    constexpr float COMMANDER_X = 585.667f, COMMANDER_Y = -104.448f, COMMANDER_Z = 391.6f;
++    constexpr float RUNWAY_X = 586.0f, RUNWAY_Y = -125.0f, RUNWAY_Z = 391.6f;
++
++    constexpr uint32 PASS_LOG_THROTTLE_MS = 30000;
++    constexpr uint32 COMMANDER_TIMEOUT_MS = 600000;
++
++    constexpr uint32 EVENT_LEVIATHAN_PASS = 1;  // conditional
++    constexpr uint32 EVENT_RAZORSCALE     = 2;  // anchored, just before her row
++
++    constexpr uint32 ORDER_RAZORSCALE = BOSS_RAZORSCALE;  // ties her row; objectives sort first
++
++    // ObjectiveHookRegistry id (flat space).
++    constexpr uint32 HOOK_ULD_PASS = 69;
++}
++
++// Ulduar (603) — TWO events: the Leviathan pass (conditional) and Razorscale's
++// commander (anchored). See UlduarEvents.cpp.
++void RegisterUlduarEvents(std::vector<DungeonEvent>& out);
++
+ // --- The Oculus (map 578) ---------------------------------------------------
+ //
+ // Four rings stacked in open air. Only the entrance floor is reachable on foot;
+@@ -6143,6 +6211,10 @@ void RegisterKarazhanRoster(std::vector<BossRosterPatch>& t);
+ // and a boss row for Anub'arak in the chamber below. Every boss is a summon, so
+ // the derived roster is empty; see TrialOfTheCrusaderEvents.cpp.
+ void RegisterTrialOfTheCrusaderRoster(std::vector<BossRosterPatch>& t);
++// Ulduar (603) — Flame Leviathan kept but skipped by design (the siege-vehicle
++// fight), and Razorscale re-anchored onto her runway behind the Expedition
++// Commander's objective. See UlduarEvents.cpp.
++void RegisterUlduarRoster(std::vector<BossRosterPatch>& t);
+ 
+ // --- wing layouts (one appender per split map) ---------------------------
+ // Records which boss credit-entries belong to which wing of a multi-wing map;
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/UlduarEvents.cpp b/src/Ai/Dungeon/DungeonClear/Data/Events/UlduarEvents.cpp
+new file mode 100644
+index 0000000..b0fd81d
+--- /dev/null
++++ b/src/Ai/Dungeon/DungeonClear/Data/Events/UlduarEvents.cpp
+@@ -0,0 +1,142 @@
++/*
++ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
++ * and/or modify it under version 3 of the License, or (at your option), any later version.
++ */
++
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonRosterBuilders.h"
++
++#include <vector>
++
++#include "Group.h"
++#include "InstanceScript.h"
++#include "Player.h"
++#include "PlayerbotAI.h"
++#include "Playerbots.h"
++
++#include "Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcTargeting.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcUlduarPassDecision.h"
++
++// --- Ulduar (map 603) --------------------------------------------------------
++//
++// The ruling and the reasons live in namespace DcUlduar in DungeonEventTables.h.
++// This file is the authored shape: the Leviathan's row skipped by design, the
++// conditional pass that takes a raid of bots past his gate, and Razorscale's
++// commander in front of her re-anchored row. Every other boss is the derived
++// roster as it was.
++
++namespace
++{
++    using namespace DcUlduar;
++
++    // --- event 1's gate: a party of bots, some of it outside the Leviathan's gate
++    bool UlduarLeviathanPassDue(Player* bot, AiObjectContext* /*context*/)
++    {
++        if (!bot || bot->GetMapId() != MAP_ID)
++            return false;
++
++        InstanceScript* inst = DcTargeting::GetInstanceScript(bot);
++        if (!inst)
++            return false;
++
++        bool person = false;
++        uint32 outside = 0;
++        auto const look = [&](Player* m)
++        {
++            if (!m)
++                return;
++            if (DcPlayerbotCompat::IsHumanControlled(m))
++            {
++                person = true;
++                return;
++            }
++            if (m->IsInWorld() && m->IsAlive() && m->GetMapId() == bot->GetMapId() &&
++                DcUlduarPass::Outside(m->GetPositionX()))
++                ++outside;
++        };
++        if (Group* group = bot->GetGroup())
++        {
++            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
++                look(ref->GetSource());
++        }
++        else
++            look(bot);
++
++        return DcUlduarPass::Due(static_cast<uint32>(inst->GetBossState(BOSS_LEVIATHAN)), bot->IsAlive(),
++                                 person, outside);
++    }
++}
++
++void RegisterUlduarEvents(std::vector<DungeonEvent>& out)
++{
++    // (1) FLAME LEVIATHAN: THE ULDUAR TELEPORTER — conditional.
++    //
++    // Due whenever the predicate above is: at the start of a run (the raid lands
++    // at the entrance, west of everything), after a restart or recall that puts
++    // members back there, and on a re-entered instance. Its one Custom step moves
++    // every eligible bot to the Colossal Forge teleporter's destination and is
++    // done the same tick, so it never holds a tick it does not use (StepsOwnMovement
++    // makes that Done a yield). REPEATABLE because the same signal must re-fire for
++    // every straggler; OPTIONAL so a timeout re-arms it.
++    out.push_back(
++        EventBuilder(MAP_ID, EVENT_LEVIATHAN_PASS, "Flame Leviathan: the Ulduar Teleporter")
++            .Conditional(&UlduarLeviathanPassDue)
++            .Repeatable()
++            .Optional()
++            .StepsOwnMovement()
++            .Custom(HOOK_ULD_PASS)
++            .Build());
++
++    // (2) RAZORSCALE: THE EXPEDITION COMMANDER — anchored on OBJ(1), just before
++    // her row. She hovers over the runway out of reach until a player tells the
++    // commander they are ready (npc_expedition_commander::sGossipSelect, menu 10314
++    // option 0): she then flies in and engages, and the fight is mod-playerbots'
++    // `ulduar` strategy's (harpoons, ground phases). So: the raid muster at the
++    // commander, the click, and a hold on the runway until her slot reads
++    // IN_PROGRESS (or DONE), so the objective cannot finish on a click that did not
++    // start her. PERSISTENT: her adds can start a fight before her slot moves.
++    out.push_back(
++        EventBuilder(MAP_ID, EVENT_RAZORSCALE, "Razorscale: the Expedition Commander")
++            .Anchored(ORDER_RAZORSCALE)
++            .Persistent()
++            .Custom(DC_HOOK_RAID_MUSTER)
++                .Timeout(240000)
++            .Gossip(NPC_EXPEDITION_COMMANDER, /*option*/ 0, /*searchRadius*/ 30.0f)
++            .MoveToHoldUntilBossState(RUNWAY_X, RUNWAY_Y, RUNWAY_Z, /*radius*/ 20.0f, BOSS_RAZORSCALE,
++                                      DcBossStateBit(IN_PROGRESS) | DcBossStateBit(DONE))
++                .Timeout(COMMANDER_TIMEOUT_MS)
++            .Build());
++}
++
++// --- the roster ----------------------------------------------------------------------
++//
++// FLAME LEVIATHAN stays in the roster, skipped by design (the vehicle-piloted boss
++// skipByDesign exists for), so the panel shows why the clear passes him.
++//
++// RAZORSCALE's spawn hovers at z 490 over her runway, out of every mesh; her row is
++// re-added on the runway floor with her real bit 2 (an explicit bit, so it does not
++// depend on the derived row being present to inherit from), behind the commander's
++// objective. The objective ties her order key and so sorts first; its own
++// encounterIndex is only that ordering hint, and it is finished by her slot reading
++// DONE (doneBossStateIndex), so a re-entered instance does not talk to him again.
++void RegisterUlduarRoster(std::vector<BossRosterPatch>& t)
++{
++    using namespace DcRoster;
++
++    BossRosterPatch p;
++    p.mapId = MAP_ID;
++    p.skipByDesign = { NPC_LEVIATHAN };
++    p.remove = { NPC_RAZORSCALE };
++
++    DungeonBossInfo commander = MakeObjective(OBJ(EVENT_RAZORSCALE), /*encounterIndex*/ ORDER_RAZORSCALE, MAP_ID,
++                                              "Razorscale: the Expedition Commander",
++                                              COMMANDER_X, COMMANDER_Y, COMMANDER_Z, /*arriveRadius*/ 8.0f,
++                                              /*gateEntry*/ 0, /*hook*/ 0, EVENT_RAZORSCALE);
++    commander.doneBossStateIndex = static_cast<int32>(BOSS_RAZORSCALE);
++    p.add.push_back(commander);
++    p.add.push_back(MakeBossWithBit(NPC_RAZORSCALE, MAP_ID, "Razorscale", RUNWAY_X, RUNWAY_Y, RUNWAY_Z,
++                                    BOSS_RAZORSCALE));
++    t.push_back(std::move(p));
++}
+diff --git a/src/Ai/Dungeon/DungeonClear/DcCapabilities.h b/src/Ai/Dungeon/DungeonClear/DcCapabilities.h
+index b677b67..cba3604 100644
+--- a/src/Ai/Dungeon/DungeonClear/DcCapabilities.h
++++ b/src/Ai/Dungeon/DungeonClear/DcCapabilities.h
+@@ -17,4 +17,9 @@
+ // Data/Events/TrialOfTheCrusaderEvents.cpp.
+ #define DC_CAPABILITY_RAID_TRIAL_OF_THE_CRUSADER 1
+ 
++// Ulduar (map 603): a raid of bots passes Flame Leviathan by the Ulduar
++// Teleporter's Colossal Forge destination (never fighting or crediting him), and
++// Razorscale is started at the Expedition Commander. Data/Events/UlduarEvents.cpp.
++#define DC_CAPABILITY_RAID_ULDUAR_LEVIATHAN_PASS 1
++
+ #endif  // _PLAYERBOT_DCCAPABILITIES_H
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp b/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp
+index 93be67e..9eac5ad 100644
+--- a/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp
+@@ -76,6 +76,7 @@ namespace
+             RegisterCullingOfStratholmeRoster(t);
+             RegisterTrialOfTheChampionRoster(t);
+             RegisterTrialOfTheCrusaderRoster(t);
++            RegisterUlduarRoster(t);
+             RegisterOculusRoster(t);
+             RegisterKarazhanRoster(t);
+             return t;
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp
+index a50ca88..70ab58f 100644
+--- a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp
+@@ -847,6 +847,7 @@ namespace
+             RegisterCullingOfStratholmeHooks(t);
+             RegisterTrialOfTheChampionHooks(t);
+             RegisterTrialOfTheCrusaderHooks(t);
++            RegisterUlduarHooks(t);
+             RegisterOculusHooks(t);
+             RegisterKarazhanChessHooks(t);
+             RegisterKarazhanHooks(t);
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h
+index 3e70011..9402fd5 100644
+--- a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h
+@@ -201,6 +201,11 @@ void RegisterTrialOfTheChampionHooks(ObjectiveHookRegistry::HookTable& out);
+ // its decisions are the pure kernel Util/DcTocRaidDecision.h.
+ void RegisterTrialOfTheCrusaderHooks(ObjectiveHookRegistry::HookTable& out);
+ 
++// Ulduar (map 603) — the Flame Leviathan pass for a raid of bots (69). See
++// UlduarDriver.cpp; the ruling is in DungeonEventTables.h (namespace DcUlduar)
++// and its decisions are the pure kernel Util/DcUlduarPassDecision.h.
++void RegisterUlduarHooks(ObjectiveHookRegistry::HookTable& out);
++
+ // The Oculus (map 578) — the flight driver (38: muster, fly, land, Eregos) and the
+ // Eregos hold's telemetry (39). See OculusDriver.cpp. Its decisions are the pure
+ // kernel Util/DcOculusDriverDecision.h; each member flies its own drake from the
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/UlduarDriver.cpp b/src/Ai/Dungeon/DungeonClear/Overrides/UlduarDriver.cpp
+new file mode 100644
+index 0000000..f51f6f6
+--- /dev/null
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/UlduarDriver.cpp
+@@ -0,0 +1,128 @@
++/*
++ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
++ * and/or modify it under version 3 of the License, or (at your option), any later version.
++ */
++
++#include "ObjectiveHookRegistry.h"
++
++#include <cmath>
++#include <vector>
++
++#include "Group.h"
++#include "InstanceScript.h"
++#include "Log.h"
++#include "Player.h"
++#include "PlayerbotAI.h"
++#include "Playerbots.h"
++#include "SpellMgr.h"
++
++#include "Ai/Dungeon/DungeonClear/Data/DungeonBossInfo.h"
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcTargeting.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcThrottle.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcUlduarPassDecision.h"
++
++// --- Ulduar (map 603) — the imperative half ------------------------------------
++//
++// ONE hook:
++//
++//   69  UlduarPassLeviathan — every eligible bot of the party to the Colossal Forge
++//
++// The ruling (why this is a pass and not a fight, and who it is for) is in
++// DungeonEventTables.h, namespace DcUlduar; the decisions are the pure kernel
++// Util/DcUlduarPassDecision.h, tested in t/TestUlduar.cpp. The destination is read
++// from the teleporter spell's own spell_target_position row, so the raid lands
++// exactly where the Ulduar Teleporter puts a player who picks the Colossal Forge.
++
++namespace
++{
++    using namespace DcUlduar;
++
++    struct Destination
++    {
++        float x, y, z, o;
++    };
++
++    Destination ColossalForge()
++    {
++        if (SpellTargetPosition const* pos =
++                sSpellMgr->GetSpellTargetPosition(SPELL_COLOSSAL_FORGE_TELEPORT, EFFECT_0))
++            if (pos->target_mapId == MAP_ID)
++                return {pos->target_X, pos->target_Y, pos->target_Z, pos->target_Orientation};
++        return {FORGE_X, FORGE_Y, FORGE_Z, FORGE_O};
++    }
++
++    // --- hook 69: THE LEVIATHAN PASS --------------------------------------------------
++    //
++    // Synchronous, like the module's TeleportParty step: one call moves everyone it
++    // can and returns Done, which (StepsOwnMovement) yields the tick. A member it
++    // cannot move this tick (in combat, riding, mid-teleport) is moved by the next
++    // firing: the predicate stays due while any bot is outside.
++    ObjectiveArriveResult UlduarPassLeviathan(Player* bot, AiObjectContext* context,
++                                              DungeonBossInfo const& /*info*/)
++    {
++        if (!bot || !context || bot->GetMapId() != MAP_ID)
++            return ObjectiveArriveResult::Done;
++
++        InstanceScript* inst = DcTargeting::GetInstanceScript(bot);
++        if (!inst || inst->GetBossState(BOSS_LEVIATHAN) == DONE)
++            return ObjectiveArriveResult::Done;  // the gate is open: walk
++
++        std::vector<Player*> members;
++        if (Group* group = bot->GetGroup())
++        {
++            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
++                if (Player* m = ref->GetSource())
++                    members.push_back(m);
++        }
++        else
++            members.push_back(bot);
++
++        // The ruling's other half, re-checked here so no path into this hook can
++        // move anyone while a person is in the group.
++        for (Player* m : members)
++            if (DcPlayerbotCompat::IsHumanControlled(m))
++                return ObjectiveArriveResult::Done;
++
++        Destination const to = ColossalForge();
++        uint32 moved = 0, waiting = 0;
++        for (Player* m : members)
++        {
++            if (!m->IsInWorld() || m->GetMapId() != bot->GetMapId() || m->IsBeingTeleported())
++                continue;
++            bool const outside = DcUlduarPass::Outside(m->GetPositionX());
++            if (!DcUlduarPass::Moves(m->IsAlive(), GET_PLAYERBOT_AI(m) != nullptr, /*personControlled*/ false,
++                                     m->IsInCombat(), m->GetVehicle() != nullptr, m->GetPositionX()))
++            {
++                if (outside && m->IsAlive())
++                    ++waiting;
++                continue;
++            }
++
++            float const angle = static_cast<float>(moved) * 0.7f;
++            float const off = moved ? 1.5f + 0.5f * static_cast<float>(moved) : 0.0f;
++            m->GetMotionMaster()->Clear();
++            m->NearTeleportTo(to.x + std::cos(angle) * off, to.y + std::sin(angle) * off, to.z, to.o,
++                              /*casting*/ false, /*vehicle*/ false, /*withPet*/ true);
++            ++moved;
++        }
++
++        DcRunState& st = DcRun::Of(context);
++        if ((moved || waiting) && !st.Throttled(DcThrottle::UldPassLog, PASS_LOG_THROTTLE_MS))
++            LOG_INFO("playerbots.dungeonclear",
++                     "[DC:{}] Ulduar — Flame Leviathan (state {}) is passed, not fought: {} bot(s) taken to "
++                     "the Colossal Forge by the Ulduar Teleporter's destination ({:.1f}, {:.1f}, {:.1f}); "
++                     "{} outside still waiting (combat, a vehicle)",
++                     bot->GetName(), static_cast<uint32>(inst->GetBossState(BOSS_LEVIATHAN)), moved, to.x, to.y,
++                     to.z, waiting);
++        return ObjectiveArriveResult::Done;
++    }
++}
++
++// Id 69 (one flat space across every dungeon).
++void RegisterUlduarHooks(ObjectiveHookRegistry::HookTable& out)
++{
++    ObjectiveHookRegistry::AddHook(out, DcUlduar::HOOK_ULD_PASS, &UlduarPassLeviathan);
++}
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcEncounterChests.h b/src/Ai/Dungeon/DungeonClear/Util/DcEncounterChests.h
+index d6dea76..283117a 100644
+--- a/src/Ai/Dungeon/DungeonClear/Util/DcEncounterChests.h
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcEncounterChests.h
+@@ -23,7 +23,7 @@
+ // Dust Covered Chest itself, so neither is listed.
+ namespace DcEncounterChests
+ {
+-    inline constexpr std::array<uint32_t, 19> ENTRIES = {
++    inline constexpr std::array<uint32_t, 21> ENTRIES = {
+         169243,  // Chest of The Seven — BRD Tomb of the Seven, respawned on TYPE_TOMB_OF_SEVEN DONE (lock 57)
+         190663,  // Dark Runed Chest — CoS Mal'ganis, normal (lock 1634)
+         193597,  // Dark Runed Chest — CoS Mal'ganis, heroic
+@@ -38,6 +38,8 @@ namespace DcEncounterChests
+         // attempts band and raid size (lock 1634).
+         195665, 195666, 195667, 195668,  // Argent Crusade Tribute Chest, 10H
+         195669, 195670, 195671, 195672,  // Argent Crusade Tribute Chest, 25H
++        // Ulduar: Kologarn's reward (lock 1634), 10 / 25.
++        195046, 195047,  // Cache of Living Stone
+     };
+ 
+     inline constexpr bool IsEncounterChest(uint32_t goEntry)
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h b/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
+index 9a8cb6d..cc48de4 100644
+--- a/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
+@@ -90,6 +90,7 @@ enum class DcThrottle : uint8
+     TocrLog,             // the Trial of the Crusader driver's `DcTocRaid progress=...` line
+     TocrWarn,            // the Trial of the Crusader driver's "Barrett keeps offering" WARN
+     TocrClick,           // the Trial of the Crusader driver's Barrett click (and its log line)
++    UldPassLog,          // the Ulduar Leviathan pass's line
+     OcTelemetryLog,      // the Oculus driver's `DcOc ring=...` line
+     OcWarn,              // the Oculus WARNs (blocked chord, stalled leg, fabricated essence)
+     OcGossip,            // the Oculus rider's giver click (and its log line)
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcUlduarPassDecision.h b/src/Ai/Dungeon/DungeonClear/Util/DcUlduarPassDecision.h
+new file mode 100644
+index 0000000..6b3a6f4
+--- /dev/null
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcUlduarPassDecision.h
+@@ -0,0 +1,50 @@
++/*
++ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
++ * and/or modify it under version 3 of the License, or (at your option), any later version.
++ */
++
++#ifndef _PLAYERBOT_DCULDUARPASSDECISION_H
++#define _PLAYERBOT_DCULDUARPASSDECISION_H
++
++#include <cstdint>
++
++#include "Define.h"
++
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
++
++// PURE kernel for Ulduar's Flame Leviathan pass (map 603, hook 69). The ruling and
++// the reasons are in DungeonEventTables.h (namespace DcUlduar); the glue is
++// Overrides/UlduarDriver.cpp.
++//
++// The pass is a pure function of live state, with no latch: it is due whenever
++// the Leviathan is not DONE, the party is bots only, and some bot of it stands
++// outside his gate. That makes it right at the start of a run, after a restart
++// or a recall that puts members back at the entrance, and on a re-entered
++// instance, and it can never move anyone once the gate is open (he is DONE) or a
++// person is in the group.
++namespace DcUlduarPass
++{
++    constexpr uint32 ENCOUNTER_DONE = 3;
++
++    // West of the Leviathan Door: the entrance, the base camp and the Formation
++    // Grounds. Everything after him is east of the Lightning Wall.
++    inline bool Outside(float x)
++    {
++        return x < DcUlduar::OUTSIDE_MAX_X;
++    }
++
++    inline bool Due(uint32 leviathanState, bool leaderAlive, bool personInGroup, uint32 botsOutside)
++    {
++        return leviathanState != ENCOUNTER_DONE && leaderAlive && !personInGroup && botsOutside > 0;
++    }
++
++    // One member: moved only when it is a bot nobody controls, alive, out of combat
++    // (the teleporter's own spell script refuses a target in combat), not riding
++    // anything, and outside the gate.
++    inline bool Moves(bool alive, bool isBot, bool personControlled, bool inCombat, bool onVehicle, float x)
++    {
++        return alive && isBot && !personControlled && !inCombat && !onVehicle && Outside(x);
++    }
++}
++
++#endif
+diff --git a/t/TestEventRegistry.cpp b/t/TestEventRegistry.cpp
+index 916518c..80224b6 100644
+--- a/t/TestEventRegistry.cpp
++++ b/t/TestEventRegistry.cpp
+@@ -368,6 +368,12 @@ namespace
+             // TocRaidDescend) teleports exactly those bots down and reports Done.
+             // Repeatable: never latched, a straggler put back at the entrance re-fires it.
+             {649, 7},
++            // Ulduar "Flame Leviathan: the Ulduar Teleporter": a POSITION is the gate —
++            // UlduarLeviathanPassDue reads true only while a bot of an all-bot party is
++            // west of the Leviathan's gate with him not DONE — and its lone step (hook 69,
++            // UlduarPassLeviathan) moves exactly those bots past it and reports Done.
++            // Repeatable: never latched, a straggler put back at the entrance re-fires it.
++            {603, 1},
+             // Blackfathom Deeps "Climb out of the Forgotten Pool": a POSITION is
+             // the gate — ForgottenPoolExitDue reads true only while the tank is
+             // over deep water inside the pool box — and its lone step (hook 63,
+@@ -1476,6 +1482,9 @@ TEST(DungeonEventIntegrityTest, StepsOwnMovementIsConfinedToVettedEvents)
+         // Trial of the Crusader "Into Anub'arak's chamber": hook 68 teleports the bots
+         // still at arena level onto the chamber floor; there is no anchor to hold.
+         {649, 7},
++        // Ulduar "Flame Leviathan: the Ulduar Teleporter": hook 69 teleports the bots
++        // outside the gate to the Colossal Forge; there is no anchor to hold.
++        {603, 1},
+         // Blackfathom Deeps "Climb out of the Forgotten Pool": hook 63 swims the
+         // fallen tank along the pool floor and up the ramp with its own raw
+         // spline; the per-tick hold would pin it in the water it has to leave.
+diff --git a/t/TestUlduar.cpp b/t/TestUlduar.cpp
+new file mode 100644
+index 0000000..c8e7233
+--- /dev/null
++++ b/t/TestUlduar.cpp
+@@ -0,0 +1,240 @@
++/*
++ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
++ * and/or modify it under version 3 of the License, or (at your option), any later version.
++ */
++
++// Ulduar (map 603).
++//
++//   1. THE PASS KERNEL (DcUlduarPass) — who is moved past Flame Leviathan's gate,
++//      and when: a raid of bots only, the Leviathan not DONE, outside the gate.
++//
++//   2. THE AUTHORED DATA — the Leviathan kept but skipped by design, Razorscale
++//      re-anchored onto her runway behind the Expedition Commander, the two event
++//      rows, and the ruling's geometry (the base camp teleporter outside the gate,
++//      its Colossal Forge destination beyond it).
++
++#include "gtest/gtest.h"
++
++#include <cmath>
++#include <vector>
++
++#include "InstanceScript.h"
++
++#include "Ai/Dungeon/DungeonClear/Data/DungeonBossInfo.h"
++#include "Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
++#include "Ai/Dungeon/DungeonClear/DcCapabilities.h"
++#include "Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcEncounterChests.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcUlduarPassDecision.h"
++
++using namespace DcUlduar;
++
++namespace
++{
++    DungeonEvent const* Ev(uint32 id) { return DungeonEventRegistry::Find(MAP_ID, id); }
++
++    BossRosterPatch const* Patch()
++    {
++        for (BossRosterPatch const& p : BossRosterRegistry::AllPatches())
++            if (p.mapId == MAP_ID)
++                return &p;
++        return nullptr;
++    }
++
++    DungeonBossInfo Derived(uint32 entry, uint32 bit, char const* name, float x, float y, float z)
++    {
++        DungeonBossInfo b;
++        b.entry = entry;
++        b.encounterIndex = bit;
++        b.name = name;
++        b.mapId = MAP_ID;
++        b.x = x;
++        b.y = y;
++        b.z = z;
++        return b;
++    }
++
++    // What BossSpawnIndex derives for Ulduar: the kill-credit encounters with a
++    // creature row (instance_encounters 744-770 and creature.sql), in DBC order.
++    // Assembly, Hodir, Thorim, Freya and Algalon are spell credits; Yogg-Saron has
++    // no creature row (Sara has).
++    std::vector<DungeonBossInfo> DerivedRoster()
++    {
++        return {
++            Derived(NPC_LEVIATHAN, 0, "Flame Leviathan", 420.728f, -15.3721f, 409.804f),
++            Derived(33118, 1, "Ignis the Furnace Master", 586.542f, 378.798f, 360.923f),
++            Derived(NPC_RAZORSCALE, 2, "Razorscale", 588.0f, -178.0f, 490.0f),
++            Derived(33293, 3, "XT-002 Deconstructor", 886.275f, -12.0545f, 409.602f),
++            Derived(32930, 5, "Kologarn", 1797.15f, -24.4027f, 448.741f),
++            Derived(33515, 6, "Auriaya", 1956.2f, 49.3155f, 411.358f),
++            Derived(33432, 10, "Mimiron", 2744.65f, 2569.46f, 364.397f),
++            Derived(33271, 11, "General Vezax", 1852.78f, 81.3856f, 342.461f),
++        };
++    }
++}
++
++// ===========================================================================
++//  1. THE PASS KERNEL
++// ===========================================================================
++
++TEST(Ulduar, CapabilityIsAdvertised)
++{
++    EXPECT_EQ(DC_CAPABILITY_RAID_ULDUAR_LEVIATHAN_PASS, 1);
++}
++
++TEST(Ulduar, OutsideIsWestOfTheLeviathansGate)
++{
++    EXPECT_TRUE(DcUlduarPass::Outside(-914.041f)) << "the entrance (areatrigger 5379)";
++    EXPECT_TRUE(DcUlduarPass::Outside(-706.122f)) << "the base camp's Ulduar Teleporter";
++    EXPECT_TRUE(DcUlduarPass::Outside(131.248f)) << "the Formation Grounds teleporter";
++    EXPECT_TRUE(DcUlduarPass::Outside(367.031f)) << "the Colossi at his door";
++    EXPECT_FALSE(DcUlduarPass::Outside(395.062f)) << "the Leviathan Door itself";
++    EXPECT_FALSE(DcUlduarPass::Outside(401.308f)) << "the Lightning Wall";
++    EXPECT_FALSE(DcUlduarPass::Outside(FORGE_X)) << "the Colossal Forge landing";
++    for (DungeonBossInfo const& b : DerivedRoster())
++        if (b.entry != NPC_LEVIATHAN)
++            EXPECT_FALSE(DcUlduarPass::Outside(b.x)) << b.name << " is past the gate";
++}
++
++TEST(Ulduar, PassIsDueOnlyForBotsOutsideWhileHeLives)
++{
++    constexpr uint32 NOT_STARTED = 0, SPECIAL = 4;
++    EXPECT_TRUE(DcUlduarPass::Due(NOT_STARTED, true, false, 25));
++    EXPECT_TRUE(DcUlduarPass::Due(SPECIAL, true, false, 1)) << "engaged once and evaded: still in the way";
++    EXPECT_FALSE(DcUlduarPass::Due(DcUlduarPass::ENCOUNTER_DONE, true, false, 25))
++        << "the gate is open; the raid walks, as a player's would";
++    EXPECT_FALSE(DcUlduarPass::Due(NOT_STARTED, true, true, 25))
++        << "THE RULING: a group a person is in keeps the gate exactly as before";
++    EXPECT_FALSE(DcUlduarPass::Due(NOT_STARTED, false, false, 25));
++    EXPECT_FALSE(DcUlduarPass::Due(NOT_STARTED, true, false, 0)) << "everyone is past already";
++}
++
++TEST(Ulduar, OnlyAFreeBotOutsideIsMoved)
++{
++    float const camp = -706.0f;
++    EXPECT_TRUE(DcUlduarPass::Moves(true, true, false, false, false, camp));
++    EXPECT_FALSE(DcUlduarPass::Moves(false, true, false, false, false, camp)) << "dead";
++    EXPECT_FALSE(DcUlduarPass::Moves(true, false, false, false, false, camp)) << "no bot AI: a person";
++    EXPECT_FALSE(DcUlduarPass::Moves(true, true, true, false, false, camp)) << "a self-bot is a person";
++    EXPECT_FALSE(DcUlduarPass::Moves(true, true, false, true, false, camp))
++        << "in combat: the teleporter's own spell script refuses that";
++    EXPECT_FALSE(DcUlduarPass::Moves(true, true, false, false, true, camp)) << "riding a vehicle";
++    EXPECT_FALSE(DcUlduarPass::Moves(true, true, false, false, false, FORGE_X)) << "already past";
++}
++
++// ===========================================================================
++//  2. THE AUTHORED DATA
++// ===========================================================================
++
++TEST(Ulduar, TheRulingsGeometry)
++{
++    EXPECT_EQ(MAP_ID, 603u);
++    EXPECT_EQ(BOSS_LEVIATHAN, 0u);
++    EXPECT_EQ(BOSS_RAZORSCALE, 2u);
++    EXPECT_EQ(SPELL_COLOSSAL_FORGE_TELEPORT, 64028u) << "the teleporter's gossip option 2 (menu 10389)";
++    EXPECT_EQ(GO_ULDUAR_TELEPORTER, 194569u);
++    // spell_target_position 64028.
++    EXPECT_NEAR(FORGE_X, 553.233f, 0.01f);
++    EXPECT_NEAR(FORGE_Y, -12.324f, 0.01f);
++    EXPECT_NEAR(FORGE_Z, 410.07f, 0.01f);
++    // The boundary sits between his door and the wall behind him.
++    EXPECT_LE(OUTSIDE_MAX_X, 395.062f);
++    EXPECT_GT(OUTSIDE_MAX_X, 368.768f) << "the eastern Colossus at his door is outside";
++}
++
++TEST(Ulduar, LeviathanIsSkippedByDesignAndRazorscaleIsReanchored)
++{
++    BossRosterPatch const* p = Patch();
++    ASSERT_NE(p, nullptr);
++    EXPECT_EQ(p->gate, DcDifficultyGate::Any);
++    ASSERT_EQ(p->skipByDesign.size(), 1u);
++    EXPECT_EQ(p->skipByDesign[0], NPC_LEVIATHAN) << "the vehicle-piloted boss skipByDesign exists for";
++    ASSERT_EQ(p->remove.size(), 1u);
++    EXPECT_EQ(p->remove[0], NPC_RAZORSCALE);
++
++    std::vector<DungeonBossInfo> const roster = BossRosterRegistry::ApplyPatch(*p, DerivedRoster());
++
++    // The Leviathan is still listed — the panel shows why the clear passes him —
++    // and is never a candidate.
++    DungeonBossInfo const* levi = nullptr;
++    for (DungeonBossInfo const& b : roster)
++        if (b.entry == NPC_LEVIATHAN)
++            levi = &b;
++    ASSERT_NE(levi, nullptr);
++    EXPECT_TRUE(levi->skipByDesign);
++    EXPECT_EQ(levi->encounterIndex, 0u) << "his bit is untouched: nothing here credits him";
++
++    // Clear order: the Leviathan, Ignis, the commander, Razorscale, XT-002...
++    std::vector<uint32> order;
++    for (DungeonBossInfo const& b : roster)
++        order.push_back(b.entry);
++    std::vector<uint32> const expect = {
++        NPC_LEVIATHAN, 33118, BossRosterRegistry::ObjectiveEntry(EVENT_RAZORSCALE), NPC_RAZORSCALE,
++        33293, 32930, 33515, 33432, 33271,
++    };
++    EXPECT_EQ(order, expect);
++
++    for (DungeonBossInfo const& b : roster)
++    {
++        if (b.entry == NPC_RAZORSCALE)
++        {
++            EXPECT_EQ(b.kind, DungeonAnchorKind::Boss);
++            EXPECT_EQ(b.encounterIndex, BOSS_RAZORSCALE) << "her real kill bit, explicitly";
++            EXPECT_LT(b.z, 400.0f) << "on the runway floor, not at her hover 100yd up";
++            EXPECT_LT(std::hypot(b.x - COMMANDER_X, b.y - COMMANDER_Y), 30.0f);
++        }
++        if (b.entry == BossRosterRegistry::ObjectiveEntry(EVENT_RAZORSCALE))
++        {
++            EXPECT_EQ(b.kind, DungeonAnchorKind::Objective);
++            EXPECT_EQ(b.eventId, EVENT_RAZORSCALE);
++            EXPECT_EQ(b.doneBossStateIndex, static_cast<int32>(BOSS_RAZORSCALE))
++                << "a re-entered instance does not talk to him again";
++            EXPECT_NEAR(b.x, COMMANDER_X, 0.01f);
++        }
++    }
++}
++
++TEST(Ulduar, EventFlagsAreAsAuthored)
++{
++    DungeonEvent const* pass = Ev(EVENT_LEVIATHAN_PASS);
++    ASSERT_NE(pass, nullptr);
++    EXPECT_EQ(pass->activation, EventActivation::Conditional);
++    EXPECT_TRUE(pass->condition);
++    EXPECT_TRUE(pass->repeatable) << "every straggler re-fires it";
++    EXPECT_FALSE(pass->required);
++    EXPECT_TRUE(pass->stepsOwnMovement);
++    EXPECT_FALSE(pass->drivesInCombat);
++    EXPECT_FALSE(pass->ownsThePull);
++    EXPECT_FALSE(pass->encounterActive);
++    ASSERT_EQ(pass->steps.size(), 1u);
++    EXPECT_EQ(pass->steps[0].kind, EventStepKind::Custom);
++    EXPECT_EQ(pass->steps[0].hookId, HOOK_ULD_PASS);
++    EXPECT_TRUE(ObjectiveHookRegistry::Has(HOOK_ULD_PASS)) << "hook 69 is not registered";
++
++    DungeonEvent const* rz = Ev(EVENT_RAZORSCALE);
++    ASSERT_NE(rz, nullptr);
++    EXPECT_EQ(rz->activation, EventActivation::Anchored);
++    EXPECT_TRUE(rz->persistent);
++    EXPECT_TRUE(rz->required);
++    EXPECT_FALSE(rz->stepsOwnMovement);
++    ASSERT_EQ(rz->steps.size(), 3u);
++    EXPECT_EQ(rz->steps[0].kind, EventStepKind::Custom);
++    EXPECT_EQ(rz->steps[0].hookId, DC_HOOK_RAID_MUSTER) << "the raid musters before her fight";
++    EXPECT_EQ(rz->steps[1].kind, EventStepKind::Gossip);
++    EXPECT_EQ(rz->steps[1].creatureEntry, NPC_EXPEDITION_COMMANDER);
++    EXPECT_EQ(rz->steps[1].gossipOption, 0) << "menu 10314 has one option, 'We are ready to help!'";
++    EXPECT_EQ(rz->steps[2].kind, EventStepKind::MoveTo);
++    EXPECT_EQ(rz->steps[2].bossStateId, static_cast<int32>(BOSS_RAZORSCALE));
++    EXPECT_EQ(rz->steps[2].bossStateClearMask, DcBossStateBit(IN_PROGRESS) | DcBossStateBit(DONE))
++        << "the objective must not finish on a click that did not start her";
++    EXPECT_EQ(rz->steps[2].restartOnBossStateMask, 0u)
++        << "she reads NOT_STARTED for the seconds she flies in after the click";
++}
++
++TEST(Ulduar, KologarnsCacheIsLooted)
++{
++    EXPECT_TRUE(DcEncounterChests::IsEncounterChest(195046));
++    EXPECT_TRUE(DcEncounterChests::IsEncounterChest(195047));
++}
+diff --git a/t/run_tests.sh b/t/run_tests.sh
+index b3aafe7..23a504d 100755
+--- a/t/run_tests.sh
++++ b/t/run_tests.sh
+@@ -32,7 +32,7 @@ cmake --build build --target dungeon_clear_tests -j$(nproc)
+ # mmaps/ for the map, so listing one costs nothing when the navmesh is absent.
+ echo "Running unit tests..."
+ cd "${BUILD_DIR}"
+-./dungeon_clear_tests --gtest_filter='*DungeonClear*:Dc*:RoomAggro*:BossRoster*:DungeonEvent*:EventBuilder*:CullingOfStratholme*:TrialOfTheChampion*:TrialOfTheCrusader*:Oculus*:BlackMorassRouteProbe*'
++./dungeon_clear_tests --gtest_filter='*DungeonClear*:Dc*:RoomAggro*:BossRoster*:DungeonEvent*:EventBuilder*:CullingOfStratholme*:TrialOfTheChampion*:TrialOfTheCrusader*:Ulduar*:Oculus*:BlackMorassRouteProbe*'
+ 
+ echo "----------------------------------------------------------"
+ echo "Tests completed successfully!"

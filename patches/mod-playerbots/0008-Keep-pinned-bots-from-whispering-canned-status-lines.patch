@@ -1,7 +1,7 @@
-From 41386b71b6ec92882fffaf06b540c589adc0364f Mon Sep 17 00:00:00 2001
+From c183b9fa8e7d8bad2df2c92c2350ba52a7a56066 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 31 Oct 2026 13:18:19 -0400
-Subject: [PATCH 08/11] Keep pinned bots from whispering canned status lines
+Subject: [PATCH 08/12] Keep pinned bots from whispering canned status lines
 
 When the group leader changed, ResetAiAction whispered "AI was reset to
 defaults" and UpdateAIGroupMaster then added "Hello, I follow you!" or
@@ -29,7 +29,7 @@ index 0ec911dd..d386be9c 100644
      return true;
  }
 diff --git a/src/Bot/PlayerbotAI.cpp b/src/Bot/PlayerbotAI.cpp
-index 3aabfccb..28fc21c4 100644
+index 96baaf89..774ccbcf 100644
 --- a/src/Bot/PlayerbotAI.cpp
 +++ b/src/Bot/PlayerbotAI.cpp
 @@ -532,12 +532,16 @@ void PlayerbotAI::UpdateAIGroupMaster()

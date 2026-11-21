@@ -38,13 +38,18 @@ NOTHING_TO_KILL = frozenset({NO_FRESH_RAID, "setup:starting:dc_no_bosses"})
 # Native stopped a run that reached Running at a door dungeon-clear cannot open. With no kill and no
 # wipe nobody fought a boss: the run is voided like NOTHING_TO_KILL (its attendance taken back).
 DOOR_BLOCKED = "dc_door_blocked"
-# Raids the offline runner (dungeon-clear driving the tank bot) cannot run, with the code naming why.
-# toc: the herald's event summons every boss, none has a static spawn, so dungeon-clear's roster is
-# empty and `dc on` is refused (2026-11-11: setup:starting:timeout). ulduar: its first boss, Flame
-# Leviathan, is a siege-vehicle fight behind a gate only that event opens, and dungeon-clear pauses
-# in front of it (2026-11-13: stalled after 30 minutes without a boss). Never planned, whatever
-# the configured rotation says.
+# Raids the offline runner (dungeon-clear driving the tank bot) cannot run on a stock dungeon-clear,
+# with the code naming why. toc: the herald's event summons every boss, none has a static spawn, so
+# dungeon-clear's roster is empty and `dc on` is refused (2026-11-11: setup:starting:timeout).
+# ulduar: its first boss, Flame Leviathan, is a siege-vehicle fight behind a gate only that event
+# opens, and dungeon-clear pauses in front of it (2026-11-13: stalled after 30 minutes without a
+# boss). Never planned, whatever the configured rotation says, unless the worldserver's last hello
+# lists the raid's RUNNABLE_WITH feature.
 UNSUPPORTED = {"toc": "dc_no_bosses", "ulduar": "dc_gate"}
+# The hello feature that lifts each refusal: mod-leeroy lists it when the dungeon-clear it was built
+# with advertises the raid in its DcCapabilities.h (leeroy patches/mod-dungeon-clear): ToC run stage
+# by stage from Barrett Ramsey's gossip; Ulduar with Flame Leviathan passed, never fought.
+RUNNABLE_WITH = {"toc": "dc_toc", "ulduar": "dc_ulduar"}
 DC_STATES = frozenset({"unknown", "off", "on", "paused", "door"})
 CLEANUP_GRACE_S = 60
 # Native stops a run at its own timeout and then tears down (setup, return and cleanup waits are
@@ -138,21 +143,26 @@ def refused_member(error: str, plan: RaidPlan) -> int | None:
     return guid if guid in plan.members else None
 
 
-def unsupported(rotation) -> dict[str, str]:
+def runnable(raid_key: str, features=frozenset()) -> bool:
+    """Whether the offline runner can run this raid, given the last hello's features."""
+    return raid_key not in UNSUPPORTED or RUNNABLE_WITH[raid_key] in features
+
+
+def unsupported(rotation, features=frozenset()) -> dict[str, str]:
     """The rotation's keys the offline runner cannot run, each with the code that names why."""
     out = {}
     for key in rotation:
         raid, size, heroic = split_key(key)
-        if raid.key in UNSUPPORTED:
+        if not runnable(raid.key, features):
             out[f"{raid.key}{size}{'h' if heroic else ''}"] = UNSUPPORTED[raid.key]
     return out
 
 
-def next_raid_key(rotation, last_run: dict[str, float], skip=()) -> str:
+def next_raid_key(rotation, last_run: dict[str, float], skip=(), features=frozenset()) -> str:
     """Never-run first, then oldest; the configured order resolves ties.
 
     Raids in `skip` proved today that they have nothing to kill, and raids the runner cannot run
-    (UNSUPPORTED) are never chosen.
+    (UNSUPPORTED without their RUNNABLE_WITH feature in `features`) are never chosen.
     """
     keys = []
     for key in rotation:
@@ -164,7 +174,7 @@ def next_raid_key(rotation, last_run: dict[str, float], skip=()) -> str:
             keys.append(canonical)
     if not keys:
         raise ValueError("offline rotation is empty")
-    keys = [key for key in keys if key not in skip and split_key(key)[0].key not in UNSUPPORTED]
+    keys = [key for key in keys if key not in skip and runnable(split_key(key)[0].key, features)]
     if not keys:
         raise ValueError("no offline raid left to try today")
 
@@ -210,6 +220,9 @@ class OfflineRaids:
         self._lease = False
         self._gpu_waiting = False  # logged the owner's GPU pause holding the day's raid back
         self._unsupported_logged = set()
+        # The last hello's features: which raids beyond the baseline the runner can run (RUNNABLE_WITH).
+        # Empty before the first hello, so a restarted mind plans only the baseline until native greets it.
+        self._features = frozenset()
         self._owned = _get(ports.conn, OWNED_KEY)
         # A restart must see a new native heartbeat before using any saved observation.
         self._progress = None
@@ -293,12 +306,23 @@ class OfflineRaids:
             log.info("offline_raid_waiting reason=gpu_paused")
 
     def _raid_key(self):
-        for key, why in unsupported(self.cfg.offline_rotation).items():
+        for key, why in unsupported(self.cfg.offline_rotation, self._features).items():
             if key not in self._unsupported_logged:
                 self._unsupported_logged.add(key)
                 log.info("offline_raid_unsupported raid=%s reason=%s", key, why)
         return next_raid_key(self.cfg.offline_rotation, last_run(self.ports.conn),
-                             set(self._day_state().get("skipped", [])))
+                             set(self._day_state().get("skipped", [])), self._features)
+
+    async def on_hello(self, ev):
+        """Each (re)greeting names what this worldserver's runner can run: a newer build lifts a
+        refusal, an older one (a rollback) brings it back."""
+        features = frozenset(f for f in getattr(ev, "features", ()) if isinstance(f, str))
+        lifted = sorted(RUNNABLE_WITH[raid] for raid in UNSUPPORTED if RUNNABLE_WITH[raid] in features)
+        if features != self._features:
+            self._unsupported_logged = set()
+            if lifted:
+                log.info("offline_raid_supported features=%s", ",".join(lifted))
+        self._features = features
 
     def _busy(self):
         """Members to leave out of today's plans: those a refusal named today (never sent again

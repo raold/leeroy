@@ -1,0 +1,2027 @@
+From 2408ca1dd7bfd444be8c8916796661ead2fe3564 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 21:06:41 -0500
+Subject: [PATCH 1/2] Run Trial of the Crusader stage by stage from Barrett
+ Ramsey
+
+Every boss on map 649 is a script summon, so the derived roster was empty
+and `dc on` refused the map. Barrett Ramsey starts each stage and the
+instance script summons him again after every kill and every wipe's
+cleanup, so his gossip flag is a live signal that needs no latch.
+
+Five arena objectives hold the raid on a stage point until the script's
+own boss slot reads DONE. A conditional driver (hook 67) clicks Barrett
+whenever he offers, the raid muster is ready and the last kill is looted,
+and pulls an idle faction champion or twin while a stage is in progress
+with nothing engaged: they are released aggressive but out of aggro range.
+When the Lich King breaks the floor a bot cannot fall, so a descent (hook
+68) puts every bot still at arena level on Anub'arak's chamber floor;
+Anub'arak is an ordinary boss row. The decisions are pure kernels in
+Util/DcTocRaidDecision.h. The Champions' Cache and the heroic Tribute
+Chests are looted as encounter chests. DcCapabilities.h advertises the
+support to modules that build beside this one.
+---
+ CMakeLists.txt                                |  10 +
+ README.md                                     |   5 +
+ mod-dungeon-clear.cmake                       |   1 +
+ .../Data/DungeonEventRegistry.cpp             |   1 +
+ .../Data/Events/DungeonEventTables.h          | 172 +++++
+ .../Data/Events/TrialOfTheCrusaderEvents.cpp  | 229 +++++++
+ src/Ai/Dungeon/DungeonClear/DcCapabilities.h  |  20 +
+ src/Ai/Dungeon/DungeonClear/DcRunState.h      |  24 +
+ .../Overrides/BossRosterRegistry.cpp          |   1 +
+ .../Overrides/ObjectiveHookRegistry.cpp       |   1 +
+ .../Overrides/ObjectiveHookRegistry.h         |   6 +
+ .../Overrides/TrialOfTheCrusaderDriver.cpp    | 402 ++++++++++++
+ .../DungeonClear/Util/DcEncounterChests.h     |   9 +-
+ src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h |   4 +
+ .../DungeonClear/Util/DcTocRaidDecision.h     | 247 +++++++
+ t/TestEventRegistry.cpp                       |  29 +
+ t/TestTrialOfTheCrusader.cpp                  | 601 ++++++++++++++++++
+ t/run_tests.sh                                |   2 +-
+ 18 files changed, 1762 insertions(+), 2 deletions(-)
+ create mode 100644 src/Ai/Dungeon/DungeonClear/Data/Events/TrialOfTheCrusaderEvents.cpp
+ create mode 100644 src/Ai/Dungeon/DungeonClear/DcCapabilities.h
+ create mode 100644 src/Ai/Dungeon/DungeonClear/Overrides/TrialOfTheCrusaderDriver.cpp
+ create mode 100644 src/Ai/Dungeon/DungeonClear/Util/DcTocRaidDecision.h
+ create mode 100644 t/TestTrialOfTheCrusader.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 44cff86..ac312cb 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -36,6 +36,16 @@ AC_ADD_SCRIPT("${CMAKE_CURRENT_LIST_DIR}/src")
+ #    essence, mounts it, flies its drake on a lane and steps off over mesh. The
+ #    first thing in the module that moves anything through the air.)
+ 
++# New files added: Data/Events/TrialOfTheCrusaderEvents.cpp,
++#   Overrides/TrialOfTheCrusaderDriver.cpp, Util/DcTocRaidDecision.h,
++#   DcCapabilities.h
++#   (Trial of the Crusader, map 649 — greenfield: every boss a script summon, so
++#    `dc on` refused the map. Five arena holds on the script's boss slots, a
++#    conditional driver, hook 67, that clicks Barrett Ramsey whenever he offers
++#    his gossip and pulls the champions and twins, a descent, hook 68, that puts
++#    the bots in Anub'arak's chamber (a bot never falls), and his boss row.
++#    DcCapabilities.h advertises it to modules that build beside this one.)
++
+ # New files added: Data/Events/TrialOfTheChampionEvents.cpp,
+ #   Overrides/TrialOfTheChampionDriver.cpp, Util/DcTocDriverDecision.h
+ #   (Trial of the Champion, map 650 — greenfield before this: every run failed at
+diff --git a/README.md b/README.md
+index ffe7190..faeeb43 100644
+--- a/README.md
++++ b/README.md
+@@ -125,6 +125,11 @@ to expand. (Trial of the Champion's joust itself is fought by mod-playerbots'
+ `wotlk-toc` strategy; mod-dungeon-clear musters the mounted party and starts
+ each phase.)
+ 
++In raids, Trial of the Crusader is run stage by stage: the tank talks to Barrett
++Ramsey whenever he offers the next stage (or a retry after a wipe), pulls the
++faction champions and the twins, and takes the bots down into Anub'arak's chamber
++when the floor breaks (a bot cannot fall).
++
+ Faction-specific events run only for the relevant side, and heroic-only events
+ never fire on a normal run. If an event cannot complete (for example, a scripted
+ NPC the party let die), the run either stalls for the player or skips the step,
+diff --git a/mod-dungeon-clear.cmake b/mod-dungeon-clear.cmake
+index a46866f..8cca0d1 100644
+--- a/mod-dungeon-clear.cmake
++++ b/mod-dungeon-clear.cmake
+@@ -121,6 +121,7 @@ if (BUILD_TESTING)
+             "${MOD_PATH}/t/TestHallsOfReflection.cpp"
+             "${MOD_PATH}/t/TestCullingOfStratholme.cpp"
+             "${MOD_PATH}/t/TestTrialOfTheChampion.cpp"
++            "${MOD_PATH}/t/TestTrialOfTheCrusader.cpp"
+             "${MOD_PATH}/t/TestOculus.cpp"
+             "${MOD_PATH}/t/TestGundrak.cpp"
+             "${MOD_PATH}/t/TestBlackwingLair.cpp"
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp b/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp
+index ee6eda9..070fdc0 100644
+--- a/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.cpp
+@@ -614,6 +614,7 @@ namespace
+             RegisterHallsOfReflectionEvents(t);
+             RegisterCullingOfStratholmeEvents(t);
+             RegisterTrialOfTheChampionEvents(t);
++            RegisterTrialOfTheCrusaderEvents(t);
+             RegisterOculusEvents(t);
+             RegisterKarazhanEvents(t);
+             return t;
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h b/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
+index 666cf3d..05eecd8 100644
+--- a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
++++ b/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
+@@ -5180,6 +5180,174 @@ std::vector<uint32> const& TocSoldierEntries();
+ // stands down (DcTocDriver::FollowerMountsItself has the why).
+ bool TocFollowerMountsItself(Player* bot);
+ 
++// --- Trial of the Crusader (map 649) -----------------------------------------
++//
++// Every boss is SUMMONED by the instance script (instance_trial_of_the_crusader.cpp)
++// and every stage is started by one NPC: Barrett Ramsey, whom the script summons
++// at the south end of the arena whenever the next stage may start — when the
++// instance is created, a few seconds after each kill, and after every wipe's
++// InstanceCleanup (then with his "another shot" text and option). His gossip is
++// SmartAI (2026_10_16_00.sql): his menu's first visible option opens the stage's
++// action menu, whose first visible option sets instance data
++// TYPE_ANNOUNCER_GOSSIP_SELECT; he then drops his gossip flag, walks to the exit
++// and despawns. So "Barrett offers his gossip" is the one live signal that the
++// raid may start the next stage, and it needs no latch: the script offers it again
++// after every wipe. BossSpawnIndex derives an EMPTY roster here (no boss has a
++// creature row), which is why `dc on` used to refuse the map.
++//
++// THE SHAPE: five anchored holds in the arena (one per stage, each done when the
++// script's own boss slot reads DONE, the fifth also once the floor is down), a
++// boss row for Anub'arak in the chamber below, and two conditional drivers: the
++// Barrett driver (hook 67: click him, and pull the champions and the twins, which
++// do not come on their own) and the descent (hook 68: put the bots into
++// Anub'arak's chamber — the floor collapses under a player and he falls, but a
++// clientless bot never falls).
++//
++// PATHFINDING IS OFF ON THIS MAP (DisableMgr::IsPathfindingEnabled, 649 like
++// 650): every move is a straight line. Nothing here leaves the arena bowl or the
++// chamber below it, and the one way between them is the descent's teleport.
++namespace DcTrialOfTheCrusader
++{
++    constexpr uint32 MAP_ID = 649;
++
++    // --- instance data (trial_of_the_crusader.h) -------------------------------
++    //
++    // Boss slots match DungeonEncounter.dbc's encounter indexes (the header says
++    // so), so the slot and the DBC bit are the same number here.
++    constexpr uint32 BOSS_NORTHREND_BEASTS  = 0;
++    constexpr uint32 BOSS_JARAXXUS          = 1;
++    constexpr uint32 BOSS_FACTION_CHAMPIONS = 2;
++    constexpr uint32 BOSS_TWIN_VALKYR       = 3;
++    constexpr uint32 BOSS_ANUBARAK          = 4;
++    constexpr uint32 BOSS_COUNT             = 5;
++
++    // GetData answers only TYPE_INSTANCE_PROGRESS; GetGuidData(DATA_BARRETT)
++    // resolves whichever Barrett entry is up (ObjectData creatureData).
++    constexpr uint32 TYPE_INSTANCE_PROGRESS = 1;
++    constexpr uint32 DATA_BARRETT           = 0;
++
++    // --- TYPE_INSTANCE_PROGRESS (enum Progress) ---------------------------------
++    //
++    // It only ever moves forward (InstanceCleanup despawns and fails the stage, it
++    // never lowers this counter), and Barrett's gossip at each value starts that
++    // stage or its retry.
++    constexpr uint32 PROGRESS_INITIAL             = 0;
++    constexpr uint32 PROGRESS_INTRO_DONE          = 1;  // the beasts' retry point
++    constexpr uint32 PROGRESS_BEASTS_DEAD         = 2;
++    constexpr uint32 PROGRESS_JARAXXUS_INTRO_DONE = 3;  // Jaraxxus' retry point
++    constexpr uint32 PROGRESS_JARAXXUS_DEAD       = 4;
++    constexpr uint32 PROGRESS_CHAMPIONS_DEAD      = 6;
++    constexpr uint32 PROGRESS_VALKYR_DEAD         = 8;  // the Lich King's Barrett
++    constexpr uint32 PROGRESS_ANUB_ARAK           = 9;  // the floor is down, he is up
++    constexpr uint32 PROGRESS_DONE                = 10;
++
++    // --- creatures ---------------------------------------------------------------
++    //
++    // Barrett is a different entry per stage (GetBarrettEntry); the driver never
++    // looks him up by entry, only through GetGuidData(DATA_BARRETT). The entries
++    // are here for the record and the registry pins.
++    constexpr uint32 NPC_BARRETT_BEASTS            = 34816;
++    constexpr uint32 NPC_BARRETT_BEASTS_HC         = 35909;
++    constexpr uint32 NPC_BARRETT_JARAXXUS          = 35035;
++    constexpr uint32 NPC_BARRETT_FACTION_CHAMPIONS = 35766;
++    constexpr uint32 NPC_BARRETT_VALKYR            = 35770;
++    constexpr uint32 NPC_BARRETT_LICH_KING         = 35771;
++
++    constexpr uint32 NPC_ICEHOWL   = 34797;  // the beasts' kill credit (bit 0)
++    constexpr uint32 NPC_JARAXXUS  = 34780;
++    constexpr uint32 NPC_LIGHTBANE = 34497;
++    constexpr uint32 NPC_DARKBANE  = 34496;  // the twins' kill credit (bit 3)
++    constexpr uint32 NPC_ANUBARAK  = 34564;
++
++    // The faction champions: Horde ones for an Alliance raid and the other way
++    // round. They are summoned on a balcony, jump down to the west (Alliance raid)
++    // or east floor and are released REACT_AGGRESSIVE and attackable — 30-45yd
++    // from the middle of the bowl, so nothing brings them in. The first one
++    // engaged (its JustEngagedWith sets TYPE_FACTION_CHAMPIONS_START) sends all of
++    // them. The twins are released the same way 37yd off, at the north corners.
++    constexpr uint32 NPC_CHAMPIONS[] = {
++        34461, 34460, 34469, 34467, 34468, 34465, 34471, 34466, 34473, 34472, 34463, 34470, 34474, 34475,
++        34458, 34451, 34459, 34448, 34449, 34445, 34456, 34447, 34441, 34454, 34455, 34444, 34450, 34453,
++    };
++
++    // --- places ----------------------------------------------------------------
++    //
++    // The bowl's centre is Locs[LOC_CENTER] (563.67, 139.57); the entrance is
++    // areatrigger 5503 at its south gate (563.61, 80.68, 395.2); Barrett is
++    // summoned at Locs[LOC_BARRETT]. The stage is 23.6yd south of the centre and
++    // 25yd north of Barrett: the beasts come in through the north gate, Jaraxxus is
++    // summoned at the centre and walks 10yd south (13.6yd short of the stage, so the
++    // raid does not wait out his minute of speeches standing in him), and the
++    // champions and the twins stop 30-60yd away on three sides of it.
++    constexpr float STAGE_X = 563.7f, STAGE_Y = 116.0f, STAGE_Z = 394.3f;
++    constexpr float BARRETT_X = 559.15f, BARRETT_Y = 90.56f, BARRETT_Z = 395.27f;
++    constexpr float OBJ_ARRIVE  = 10.0f;
++    constexpr float HOLD_RADIUS = 15.0f;
++
++    // Anub'arak (Locs[LOC_ANUB]) and the chamber below the arena. Everything above
++    // SPLIT_Z is the arena; the chamber's floor is at ~142. The landing is between
++    // the corpses the script moves down (x 604-635) and the Web Door (661.6, 144.7),
++    // which is open whenever he is not engaged.
++    constexpr float ANUB_X = 785.9f, ANUB_Y = 133.42f, ANUB_Z = 142.612f;
++    constexpr float LANDING_X = 650.0f, LANDING_Y = 139.0f, LANDING_Z = 142.0f;
++    constexpr float SPLIT_Z = 300.0f;
++
++    // --- the driver's tuning -----------------------------------------------------
++    //
++    // A census radius that covers the whole bowl from anywhere in it (its radius
++    // is ~60yd; the entrance is 59yd from the centre).
++    constexpr float ARENA_SCAN = 130.0f;
++    // The click. The core allows 5.5yd (INTERACTION_DISTANCE); the approach aims
++    // GOSSIP_STANDOFF short of him on the tank's own bearing.
++    constexpr float GOSSIP_REACH    = 4.5f;
++    constexpr float GOSSIP_STANDOFF = 3.0f;
++    constexpr uint32 MOVE_REISSUE_MS = 2000;
++    // A click that landed drops his gossip flag at once, so this only spaces out
++    // clicks that did not: a heroic Barrett whose first option asks for the Call of
++    // the Crusade achievement the clicker lacks, or a menu not ready yet.
++    constexpr uint32 CLICK_RETRY_MS  = 5000;
++    // Barrett's gossip still up this long after the first click: WARN (throttled).
++    constexpr uint32 CLICK_WARN_MS    = 60000;
++    constexpr uint32 WARN_THROTTLE_MS = 60000;
++    // Loot from the last kill is left to finish before the next click (the next
++    // stage's start moves the beasts', Jaraxxus' and the twins' corpses away), but
++    // never for longer than this.
++    constexpr uint32 LOOT_WAIT_MS = 45000;
++    constexpr uint32 TELEMETRY_MS = 15000;
++
++    // --- step timeouts ----------------------------------------------------------
++    constexpr uint32 STAGE_TIMEOUT_MS  = 1800000;  // 30 min a stage: intro, fight, retries
++    constexpr uint32 DRIVER_TIMEOUT_MS = 1800000;  // Repeatable + Optional: re-arms
++
++    // --- event / objective ids -----------------------------------------------------
++    constexpr uint32 EVENT_BEASTS    = 1;
++    constexpr uint32 EVENT_JARAXXUS  = 2;
++    constexpr uint32 EVENT_CHAMPIONS = 3;
++    constexpr uint32 EVENT_VALKYR    = 4;
++    constexpr uint32 EVENT_LICH_KING = 5;
++    constexpr uint32 EVENT_DRIVER    = 6;  // conditional: Barrett and the pulls
++    constexpr uint32 EVENT_DESCENT   = 7;  // conditional: into Anub'arak's chamber
++
++    constexpr uint32 ORDER_BEASTS    = 1;
++    constexpr uint32 ORDER_JARAXXUS  = 2;
++    constexpr uint32 ORDER_CHAMPIONS = 3;
++    constexpr uint32 ORDER_VALKYR    = 4;
++    constexpr uint32 ORDER_LICH_KING = 5;
++    constexpr uint32 ORDER_ANUBARAK  = 6;
++
++    // ObjectiveHookRegistry ids. One flat space; 66 was the last before these.
++    constexpr uint32 HOOK_TOCR_DRIVER  = 67;
++    constexpr uint32 HOOK_TOCR_DESCENT = 68;
++}
++
++// Trial of the Crusader (649) — SEVEN events: five anchored holds, the Barrett
++// driver and the descent. See TrialOfTheCrusaderEvents.cpp.
++void RegisterTrialOfTheCrusaderEvents(std::vector<DungeonEvent>& out);
++
++// The 28 faction champion entries and the two twins: what the Barrett driver
++// pulls when their stage is in progress and nothing has come.
++std::vector<uint32> const& TocRaidPullEntries();
++
+ // --- The Oculus (map 578) ---------------------------------------------------
+ //
+ // Four rings stacked in open air. Only the entrance floor is reachable on foot;
+@@ -5971,6 +6139,10 @@ void RegisterOculusRoster(std::vector<BossRosterPatch>& t);
+ // spawn), skips Chess and Prince, and replaces Barnes and the Nightbane perch
+ // with the event anchors that summon them. See KarazhanEvents.cpp.
+ void RegisterKarazhanRoster(std::vector<BossRosterPatch>& t);
++// Trial of the Crusader (649) — FIVE objectives in the arena, one per stage,
++// and a boss row for Anub'arak in the chamber below. Every boss is a summon, so
++// the derived roster is empty; see TrialOfTheCrusaderEvents.cpp.
++void RegisterTrialOfTheCrusaderRoster(std::vector<BossRosterPatch>& t);
+ 
+ // --- wing layouts (one appender per split map) ---------------------------
+ // Records which boss credit-entries belong to which wing of a multi-wing map;
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/TrialOfTheCrusaderEvents.cpp b/src/Ai/Dungeon/DungeonClear/Data/Events/TrialOfTheCrusaderEvents.cpp
+new file mode 100644
+index 0000000..586c444
+--- /dev/null
++++ b/src/Ai/Dungeon/DungeonClear/Data/Events/TrialOfTheCrusaderEvents.cpp
+@@ -0,0 +1,229 @@
++/*
++ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
++ * and/or modify it under version 3 of the License, or (at your option), any later version.
++ */
++
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonRosterBuilders.h"
++
++#include <iterator>
++#include <vector>
++
++#include "Group.h"
++#include "InstanceScript.h"
++#include "Player.h"
++#include "PlayerbotAI.h"
++#include "Playerbots.h"
++#include "SharedDefines.h"
++
++#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcTargeting.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcTocRaidDecision.h"
++
++// --- Trial of the Crusader (map 649) -----------------------------------------
++//
++// The constants, and the reasoning behind them, live in namespace
++// DcTrialOfTheCrusader in DungeonEventTables.h. This file is the authored shape:
++// five anchored holds in the arena, two conditional drivers, one roster patch.
++//
++// THE SHAPE IS TRIAL OF THE CHAMPION'S. Each stage is an objective whose event
++// walks the tank to the stage and holds there until the script's slot for that
++// stage reads DONE. The holds do nothing else — they do not talk to Barrett, pull
++// or muster. That is the Barrett driver's job, and it outranks them (EventDue 31 >
++// AtObjective 30) whenever it claims the tick.
++//
++// A WIPE NEEDS NOTHING FROM THE HOLDS. InstanceCleanup fails the stage, despawns
++// what it summoned and summons Barrett again with his "another shot" option; the
++// hold keeps holding (its slot never read DONE), and the driver clicks him again.
++
++namespace
++{
++    using namespace DcTrialOfTheCrusader;
++
++    // --- event 6's gate: the arena is ours until the floor goes ------------------
++    //
++    // DUE for the whole arena part of the run, as Trial of the Champion's driver
++    // is: every actor the driver deals with stands inside the bowl, and it owns its
++    // own movement.
++    bool TocRaidDriverDue(Player* bot, AiObjectContext* /*context*/)
++    {
++        if (!bot || bot->GetMapId() != MAP_ID)
++            return false;
++
++        InstanceScript* inst = DcTargeting::GetInstanceScript(bot);
++        return inst && inst->GetData(TYPE_INSTANCE_PROGRESS) < PROGRESS_ANUB_ARAK;
++    }
++
++    // --- event 7's gate: a bot left at arena level once the floor is down ----------
++    bool TocRaidDescentDue(Player* bot, AiObjectContext* /*context*/)
++    {
++        if (!bot || bot->GetMapId() != MAP_ID)
++            return false;
++
++        InstanceScript* inst = DcTargeting::GetInstanceScript(bot);
++        if (!inst)
++            return false;
++
++        uint32 above = 0;
++        auto const count = [&](Player* m)
++        {
++            if (m && m->IsInWorld() && m->IsAlive() && m->GetMapId() == bot->GetMapId() &&
++                GET_PLAYERBOT_AI(m) && !DcPlayerbotCompat::IsHumanControlled(m) && !m->GetVehicle() &&
++                DcTocRaid::AboveSplit(m->GetPositionZ()))
++                ++above;
++        };
++        if (Group* group = bot->GetGroup())
++        {
++            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
++                count(ref->GetSource());
++        }
++        else
++            count(bot);
++
++        return DcTocRaid::DescentDue(inst->GetData(TYPE_INSTANCE_PROGRESS), bot->IsAlive(), above);
++    }
++
++    // One arena hold: walk onto the stage, then garrison it until `slot` reads DONE.
++    // The leading MoveTo is the sticky-at-step-1 rule (a persistent anchored event
++    // only lets the tank leave its anchor once its front step is a MoveTo, and the
++    // fights range across the bowl). The garrison re-parks the tank after each
++    // fight and, once arrived, yields to NeedsRest when the raid is short.
++    DungeonEvent StageHold(uint32 eventId, char const* name, uint32 order, uint32 slot)
++    {
++        return EventBuilder(MAP_ID, eventId, name)
++            .Anchored(order)
++            .Persistent()
++            .MoveTo(STAGE_X, STAGE_Y, STAGE_Z, OBJ_ARRIVE)
++            .MoveToHoldUntilBossState(STAGE_X, STAGE_Y, STAGE_Z, HOLD_RADIUS, slot, DcBossStateBit(DONE))
++                .Timeout(STAGE_TIMEOUT_MS)
++            .Build();
++    }
++}
++
++std::vector<uint32> const& TocRaidPullEntries()
++{
++    static std::vector<uint32> const kEntries = []
++    {
++        std::vector<uint32> v(std::begin(NPC_CHAMPIONS), std::end(NPC_CHAMPIONS));
++        v.push_back(NPC_LIGHTBANE);
++        v.push_back(NPC_DARKBANE);
++        return v;
++    }();
++    return kEntries;
++}
++
++void RegisterTrialOfTheCrusaderEvents(std::vector<DungeonEvent>& out)
++{
++    // (1)-(4) THE ARENA STAGES — anchored on OBJ(1..4), each held until its slot
++    // reads DONE. Out of combat only; the driver claims every tick it needs above
++    // them.
++    out.push_back(StageHold(EVENT_BEASTS, "The Northrend Beasts", ORDER_BEASTS, BOSS_NORTHREND_BEASTS));
++    out.push_back(StageHold(EVENT_JARAXXUS, "Lord Jaraxxus", ORDER_JARAXXUS, BOSS_JARAXXUS));
++    out.push_back(StageHold(EVENT_CHAMPIONS, "The Faction Champions", ORDER_CHAMPIONS, BOSS_FACTION_CHAMPIONS));
++    out.push_back(StageHold(EVENT_VALKYR, "The Twin Val'kyr", ORDER_VALKYR, BOSS_TWIN_VALKYR));
++
++    // (5) THE LICH KING — the last arena hold. After the twins a fifth Barrett
++    // offers his gossip (the script also starts the scene by itself 60s later);
++    // the scene ends with the floor broken and progress 9, which is this hold's
++    // gate and its objective's done signal (doneInstanceData). From there the
++    // descent and Anub'arak's row take over.
++    out.push_back(
++        EventBuilder(MAP_ID, EVENT_LICH_KING, "The Lich King")
++            .Anchored(ORDER_LICH_KING)
++            .Persistent()
++            .MoveTo(STAGE_X, STAGE_Y, STAGE_Z, OBJ_ARRIVE)
++            .MoveToHoldUntilInstanceData(STAGE_X, STAGE_Y, STAGE_Z, HOLD_RADIUS,
++                                         TYPE_INSTANCE_PROGRESS, PROGRESS_ANUB_ARAK)
++                .Timeout(STAGE_TIMEOUT_MS)
++            .Build());
++
++    // (6) BARRETT RAMSEY — the conditional driver.
++    //
++    // ONE Custom step for the reason Trial of the Champion's driver is one: what
++    // the arena needs is a standing preference re-decided every tick from live
++    // state (is Barrett offering? is a stage in progress with nothing engaged?),
++    // not a sequence a wipe would leave half-run.
++    //
++    // ENCOUNTER ACTIVE so it still drives while the raid boss stand-down holds:
++    // a stage reads IN_PROGRESS from the moment its bosses are released, and the
++    // champions and twins wait out of combat in exactly that window. It never
++    // steers under fire (no DrivesInCombat): every fight is the stock engine's.
++    //
++    // STEPS OWN MOVEMENT because it walks the tank to Barrett itself, and because
++    // that is what makes a Done return YIELD the tick.
++    //
++    // OWNS THE PULL: the arena has no trash, only stages.
++    //
++    // REPEATABLE because it never completes — the predicate going false at
++    // progress 9 is what ends it — and so that its step timeout re-arms rather
++    // than skips. PERSISTENT so a combat gap cannot rewind it.
++    out.push_back(
++        EventBuilder(MAP_ID, EVENT_DRIVER, "Barrett Ramsey")
++            .Conditional(&TocRaidDriverDue)
++            .Repeatable()
++            .Persistent()
++            .Optional()
++            .OwnsThePull()
++            .EncounterActive()
++            .StepsOwnMovement()
++            .Custom(HOOK_TOCR_DRIVER)
++                .Timeout(DRIVER_TIMEOUT_MS)
++            .Build());
++
++    // (7) THE DESCENT — conditional: due while the floor is down and a bot of the
++    // party is still at arena level. ENCOUNTER ACTIVE so a straggler is brought
++    // down even while Anub'arak's fight holds the stand-down.
++    out.push_back(
++        EventBuilder(MAP_ID, EVENT_DESCENT, "Into Anub'arak's chamber")
++            .Conditional(&TocRaidDescentDue)
++            .Repeatable()
++            .Optional()
++            .EncounterActive()
++            .StepsOwnMovement()
++            .Custom(HOOK_TOCR_DESCENT)
++            .Build());
++}
++
++// --- the roster: five objectives and Anub'arak -------------------------------------
++//
++// The objectives' encounterIndex is an ordering hint only (objectives never read
++// the completed mask); the order is orderOverride, and each one is finished by the
++// script's own slot (doneBossStateIndex), read live, so a re-entered instance
++// skips the stages already won. The Lich King's is also finished while progress
++// reads 9 (doneInstanceData): from then on the arena is behind the raid.
++//
++// Anub'arak is the one real boss row: his kill credit (34564, bit 4) is a creature
++// kill, and he stands still in his chamber, so the ordinary approach, raid muster
++// and engage take him. He is NON_ATTACKABLE until a player comes within 80yd.
++void RegisterTrialOfTheCrusaderRoster(std::vector<BossRosterPatch>& t)
++{
++    using namespace DcRoster;
++
++    auto stage = [](uint32 eventId, char const* name, uint32 order, int32 slot)
++    {
++        DungeonBossInfo o = MakeObjective(OBJ(eventId), /*encounterIndex*/ 0, MAP_ID, name,
++                                          STAGE_X, STAGE_Y, STAGE_Z, OBJ_ARRIVE,
++                                          /*gateEntry*/ 0, /*hook*/ 0, eventId,
++                                          static_cast<int32>(order));
++        o.doneBossStateIndex = slot;
++        return o;
++    };
++
++    BossRosterPatch p;
++    p.mapId = MAP_ID;
++    p.add = {
++        stage(EVENT_BEASTS, "The Northrend Beasts", ORDER_BEASTS, BOSS_NORTHREND_BEASTS),
++        stage(EVENT_JARAXXUS, "Lord Jaraxxus", ORDER_JARAXXUS, BOSS_JARAXXUS),
++        stage(EVENT_CHAMPIONS, "The Faction Champions", ORDER_CHAMPIONS, BOSS_FACTION_CHAMPIONS),
++        stage(EVENT_VALKYR, "The Twin Val'kyr", ORDER_VALKYR, BOSS_TWIN_VALKYR),
++    };
++
++    DungeonBossInfo lichKing = stage(EVENT_LICH_KING, "The Lich King", ORDER_LICH_KING, BOSS_ANUBARAK);
++    lichKing.doneInstanceDataId = static_cast<int32>(TYPE_INSTANCE_PROGRESS);
++    lichKing.doneInstanceDataValue = PROGRESS_ANUB_ARAK;
++    p.add.push_back(lichKing);
++
++    p.add.push_back(MakeBossWithBit(NPC_ANUBARAK, MAP_ID, "Anub'arak", ANUB_X, ANUB_Y, ANUB_Z,
++                                    BOSS_ANUBARAK, static_cast<int32>(ORDER_ANUBARAK)));
++    t.push_back(std::move(p));
++}
+diff --git a/src/Ai/Dungeon/DungeonClear/DcCapabilities.h b/src/Ai/Dungeon/DungeonClear/DcCapabilities.h
+new file mode 100644
+index 0000000..b677b67
+--- /dev/null
++++ b/src/Ai/Dungeon/DungeonClear/DcCapabilities.h
+@@ -0,0 +1,20 @@
++/*
++ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
++ * and/or modify it under version 3 of the License, or (at your option), any later version.
++ */
++
++#ifndef _PLAYERBOT_DCCAPABILITIES_H
++#define _PLAYERBOT_DCCAPABILITIES_H
++
++// What this build of dungeon clear can run beyond the baseline, for the modules
++// that build beside it and drive it (a guild runner that plans raids for bots,
++// say). Each is a plain 0/1 macro so a consumer can probe this file at configure
++// time, or test it with __has_include and #if, without linking anything new.
++// A row is added when the support lands and is never renamed.
++
++// Trial of the Crusader (map 649): Barrett Ramsey's five stages, the pulls of the
++// faction champions and the twins, the descent into Anub'arak's chamber.
++// Data/Events/TrialOfTheCrusaderEvents.cpp.
++#define DC_CAPABILITY_RAID_TRIAL_OF_THE_CRUSADER 1
++
++#endif  // _PLAYERBOT_DCCAPABILITIES_H
+diff --git a/src/Ai/Dungeon/DungeonClear/DcRunState.h b/src/Ai/Dungeon/DungeonClear/DcRunState.h
+index 5f104c2..7c0ec90 100644
+--- a/src/Ai/Dungeon/DungeonClear/DcRunState.h
++++ b/src/Ai/Dungeon/DungeonClear/DcRunState.h
+@@ -472,6 +472,16 @@ struct DcRunState
+     uint32 tocStrandSinceMs = 0;       // progress 8, no Knight and no announcer, since
+     uint32 tocLastProgress = 0xFFFFFFFFu;  // the progress the telemetry last reported
+ 
++    // --- Trial of the Crusader: the Barrett driver (map 649) ------------------
++    //
++    // Two "since when" clocks the kernel round-trips (DcTocRaid::Decide), the
++    // state and the progress the telemetry last reported. No latch: Barrett's
++    // gossip flag is the live signal, re-offered by the script after every wipe.
++    uint8  tocrState = 0;                   // DcTocRaid::State last logged
++    uint32 tocrLootSinceMs = 0;             // the last kill's loot pending since
++    uint32 tocrClickSinceMs = 0;            // first click on Barrett's current offer
++    uint32 tocrLastProgress = 0xFFFFFFFFu;  // the progress the telemetry last reported
++
+     // --- The Oculus: the party plan (map 578, on the RUN OWNER) ----------------
+     //
+     // The driver kernel's verdict, memoised for PLAN_MEMO_MS and read by every
+@@ -783,6 +793,20 @@ struct DcRunState
+         ClearThrottle(DcThrottle::TocClick);
+     }
+ 
++    // Drop the Trial of the Crusader block once the floor is down: the driver is
++    // Repeatable, and a re-entered instance starts its telemetry afresh.
++    void ClearTocRaid()
++    {
++        tocrState = 0;
++        tocrLootSinceMs = 0;
++        tocrClickSinceMs = 0;
++        tocrLastProgress = 0xFFFFFFFFu;
++        ClearThrottle(DcThrottle::TocrLog);
++        ClearThrottle(DcThrottle::TocrMoveIssue);
++        ClearThrottle(DcThrottle::TocrWarn);
++        ClearThrottle(DcThrottle::TocrClick);
++    }
++
+     // Drop this member's drake leg: a new leg, a dismount, or a mount on a
+     // different drake all start from where the drake is, never from a stale cursor.
+     void ClearOcLeg()
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp b/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp
+index 6c31b3e..93be67e 100644
+--- a/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp
+@@ -75,6 +75,7 @@ namespace
+             RegisterHallsOfReflectionRoster(t);
+             RegisterCullingOfStratholmeRoster(t);
+             RegisterTrialOfTheChampionRoster(t);
++            RegisterTrialOfTheCrusaderRoster(t);
+             RegisterOculusRoster(t);
+             RegisterKarazhanRoster(t);
+             return t;
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp
+index f326a20..a50ca88 100644
+--- a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.cpp
+@@ -846,6 +846,7 @@ namespace
+             RegisterHallsOfReflectionHooks(t);
+             RegisterCullingOfStratholmeHooks(t);
+             RegisterTrialOfTheChampionHooks(t);
++            RegisterTrialOfTheCrusaderHooks(t);
+             RegisterOculusHooks(t);
+             RegisterKarazhanChessHooks(t);
+             RegisterKarazhanHooks(t);
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h
+index b1e7135..3e70011 100644
+--- a/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h
+@@ -195,6 +195,12 @@ void RegisterCullingOfStratholmeHooks(ObjectiveHookRegistry::HookTable& out);
+ // Util/DcTocDriverDecision.h; the joust itself is mod-playerbots' `wotlk-toc`.
+ void RegisterTrialOfTheChampionHooks(ObjectiveHookRegistry::HookTable& out);
+ 
++// Trial of the Crusader (map 649) — the Barrett driver (67: his clicks, and the
++// pulls of the champions and twins) and the descent (68: the bots into
++// Anub'arak's chamber once the floor is down). See TrialOfTheCrusaderDriver.cpp;
++// its decisions are the pure kernel Util/DcTocRaidDecision.h.
++void RegisterTrialOfTheCrusaderHooks(ObjectiveHookRegistry::HookTable& out);
++
+ // The Oculus (map 578) — the flight driver (38: muster, fly, land, Eregos) and the
+ // Eregos hold's telemetry (39). See OculusDriver.cpp. Its decisions are the pure
+ // kernel Util/DcOculusDriverDecision.h; each member flies its own drake from the
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/TrialOfTheCrusaderDriver.cpp b/src/Ai/Dungeon/DungeonClear/Overrides/TrialOfTheCrusaderDriver.cpp
+new file mode 100644
+index 0000000..f796cab
+--- /dev/null
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/TrialOfTheCrusaderDriver.cpp
+@@ -0,0 +1,402 @@
++/*
++ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
++ * and/or modify it under version 3 of the License, or (at your option), any later version.
++ */
++
++#include "ObjectiveHookRegistry.h"
++
++#include <cmath>
++#include <list>
++#include <vector>
++
++#include "Creature.h"
++#include "Group.h"
++#include "InstanceScript.h"
++#include "Log.h"
++#include "ObjectAccessor.h"
++#include "Player.h"
++#include "PlayerbotAI.h"
++#include "Playerbots.h"
++#include "ServerFacade.h"
++#include "SharedDefines.h"
++#include "Timer.h"
++#include "Util/DcPlayerbotsConfig.h"
++
++#include "Ai/Dungeon/DungeonClear/Data/DungeonBossInfo.h"
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
++#include "Ai/Dungeon/DungeonClear/DcValueKeys.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcCombatFlag.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcMovement.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcPartyState.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcTargeting.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcThrottle.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcTocRaidDecision.h"
++#include "Ai/Dungeon/DungeonClear/Util/DungeonEventExecutor.h"
++
++// --- Trial of the Crusader (map 649) — the imperative half -------------------
++//
++// TWO hooks:
++//
++//   67  TocRaidDrive  — Barrett's clicks, and the pulls of the champions and twins
++//   68  TocRaidDescend — the bots into Anub'arak's chamber once the floor is down
++//
++// THE DECISIONS ARE NOT HERE. They are the pure kernels in
++// Util/DcTocRaidDecision.h, tested without a map in t/TestTrialOfTheCrusader.cpp;
++// this file is the censuses, the moves, the click, the force-pull, the teleport
++// and the telemetry. Trial of the Champion's driver (map 650) is the model: the
++// same announcer-click and force-pull halves, without the joust.
++//
++// THE RETURN CONTRACT is the module's:
++//
++//   Running => "I am steering." Claims the tick.
++//   Done    => "Nothing to steer." YIELDS the tick (the stepsOwnMovement branch in
++//              DcRunEventAction): to the combat engine, or out of combat to the
++//              anchored hold, which re-parks the tank at the stage and rests the raid.
++
++namespace
++{
++    using namespace DcTrialOfTheCrusader;
++
++    bool Attackable(Player* bot, Unit* u)
++    {
++        return bot && u && u->IsAlive() && bot->IsValidAttackTarget(u);
++    }
++
++    bool StageInProgress(InstanceScript* inst)
++    {
++        for (uint32 slot = 0; slot < BOSS_COUNT; ++slot)
++            if (inst->GetBossState(slot) == IN_PROGRESS)
++                return true;
++        return false;
++    }
++
++    Creature* Barrett(Player* bot, InstanceScript* inst)
++    {
++        ObjectGuid const guid = inst->GetGuidData(DATA_BARRETT);
++        if (guid.IsEmpty())
++            return nullptr;
++        Creature* c = ObjectAccessor::GetCreature(*bot, guid);
++        return c && c->IsAlive() ? c : nullptr;
++    }
++
++    // --- the census -------------------------------------------------------------
++
++    struct PullCensus
++    {
++        uint32    idle = 0;          // alive, attackable by this bot, out of combat
++        bool      engaged = false;   // any of them in combat
++        Creature* nearest = nullptr; // the nearest idle one
++    };
++
++    PullCensus CountPullTargets(Player* bot)
++    {
++        PullCensus c;
++        std::list<Creature*> found;
++        bot->GetCreatureListWithEntryInGrid(found, TocRaidPullEntries(), ARENA_SCAN);
++        float best = -1.0f;
++        for (Creature* cr : found)
++        {
++            if (!cr || !cr->IsAlive())
++                continue;
++            if (cr->IsInCombat())
++            {
++                c.engaged = true;
++                continue;
++            }
++            if (!Attackable(bot, cr))
++                continue;
++            ++c.idle;
++            float const d = bot->GetExactDist(cr);
++            if (best < 0.0f || d < best)
++            {
++                best = d;
++                c.nearest = cr;
++            }
++        }
++        return c;
++    }
++
++    bool LootPending(Player* bot, AiObjectContext* context)
++    {
++        return context->GetValue<bool>(DcKey::Stock::HasAvailableLoot)->Get() ||
++               context->GetValue<bool>(DcKey::Stock::CanLoot)->Get() ||
++               DcPartyState::IsAnyPartyMemberLooting(bot);
++    }
++
++    // --- the mover ---------------------------------------------------------------
++    //
++    // A point move for the tank. Pathfinding is off on this map, so this is a
++    // straight line whatever it is asked for; every leg in the bowl is under 70yd.
++    bool TocRaidMoveTo(Player* bot, PlayerbotAI* botAI, DcRunState& st, float x, float y, float z)
++    {
++        if (!DcMovement::DcMovementAllowed(botAI))
++            return false;
++        if (st.ThrottledIssue(DcThrottle::TocrMoveIssue, x, y, z, /*epsilon*/ 1.0f, MOVE_REISSUE_MS))
++            return true;
++
++        DcMovement::ResolveEscortConflict(bot);
++        MotionMaster* mm = bot->GetMotionMaster();
++        if (!mm)
++            return false;
++        mm->Clear();
++        mm->MovePoint(/*id*/ 0, x, y, z, FORCED_MOVEMENT_NONE, /*speed*/ 0.0f,
++                      /*orientation*/ 0.0f, /*generatePath*/ true, /*forceDestination*/ false);
++        return true;
++    }
++
++    // --- the pull ---------------------------------------------------------------
++    //
++    // Trial of the Champion's TocForcePull: make the creature attack the bot, then
++    // make the bot attack it and flip it onto the combat engine (engine transitions
++    // are action-driven, so a force-attacked bot left on the non-combat engine has
++    // no rotation to run).
++    void TocRaidForcePull(Player* bot, AiObjectContext* context, PlayerbotAI* botAI, Creature* c)
++    {
++        if (!c || !c->IsAlive())
++            return;
++
++        if (!c->IsInCombat())
++        {
++            if (c->IsInEvadeMode())
++                c->ClearUnitState(UNIT_STATE_EVADE);
++            c->EngageWithTarget(bot);
++            if (c->AI())
++                c->AI()->AttackStart(bot);
++        }
++
++        if (bot->GetVictim() != c)
++        {
++            bot->SetSelection(c->GetGUID());
++            if (!bot->HasInArc(CAST_ANGLE_IN_FRONT, c))
++                ServerFacade::instance().SetFacingTo(bot, c);
++            context->GetValue<Unit*>(DcKey::Stock::CurrentTarget)->Set(c);
++            bot->Attack(c, botAI->IsMelee(bot));
++        }
++
++        if (botAI->GetState() != BOT_STATE_COMBAT)
++        {
++            botAI->ChangeEngine(BOT_STATE_COMBAT);
++            botAI->SetNextCheckDelay(DC_PB_CONFIG(ReactDelay, reactDelay));
++        }
++    }
++
++    // --- telemetry ---------------------------------------------------------------
++    //
++    // `DcTocRaid progress=<n> barrett=<up|offering|gone> ...` on every progress
++    // change and every TELEMETRY_MS, at INFO so tools/dc_test_run.py sees it by
++    // default; plus one line per state change.
++    void TocRaidTelemetry(Player* bot, DcRunState& st, DcTocRaid::Inputs const& in,
++                          DcTocRaid::Verdict const& v)
++    {
++        bool const changed = in.progress != st.tocrLastProgress;
++        bool const due = !st.Throttled(DcThrottle::TocrLog, TELEMETRY_MS);
++        if (changed || due)
++        {
++            st.tocrLastProgress = in.progress;
++            LOG_INFO("playerbots.dungeonclear",
++                     "[DC:{}] DcTocRaid progress={} barrett={} dist={:.1f} encounter={} idle={}{} — {}{}",
++                     bot->GetName(), in.progress,
++                     !in.barrettPresent ? "gone" : in.barrettFlagged ? "offering" : "up",
++                     in.barrettDist, in.encounterInProgress ? 1 : 0, in.idleTargets,
++                     in.targetsEngaged ? " (engaged)" : "", DcTocRaid::StateName(v.state),
++                     in.partyInCombat ? " (in combat)" : "");
++        }
++
++        if (st.tocrState != static_cast<uint8>(v.state))
++        {
++            st.tocrState = static_cast<uint8>(v.state);
++            LOG_INFO("playerbots.dungeonclear", "[DC:{}] ToC raid — {} (progress {})",
++                     bot->GetName(), DcTocRaid::StateName(v.state), in.progress);
++        }
++    }
++
++    // --- hook 67: BARRETT RAMSEY ----------------------------------------------------
++    ObjectiveArriveResult TocRaidDrive(Player* bot, AiObjectContext* context, DungeonBossInfo const& info)
++    {
++        if (!bot || !context || bot->GetMapId() != MAP_ID)
++            return ObjectiveArriveResult::Done;
++
++        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
++        if (!botAI)
++            return ObjectiveArriveResult::Done;
++
++        InstanceScript* inst = DcTargeting::GetInstanceScript(bot);
++        if (!inst)
++            return ObjectiveArriveResult::Done;
++
++        DcRunState& st = DcRun::Of(context);
++        Creature* const barrett = Barrett(bot, inst);
++
++        DcTocRaid::Inputs in;
++        in.progress = inst->GetData(TYPE_INSTANCE_PROGRESS);
++        in.alive = bot->IsAlive();
++        in.partyInCombat = DcCombatFlag::AnyPartyEngagement(bot);
++        in.encounterInProgress = StageInProgress(inst);
++
++        PullCensus pulls;
++        if (in.encounterInProgress)
++            pulls = CountPullTargets(bot);
++        in.idleTargets = pulls.idle;
++        in.targetsEngaged = pulls.engaged;
++
++        in.lootPending = !in.partyInCombat && !in.encounterInProgress && LootPending(bot, context);
++        in.barrettPresent = barrett != nullptr;
++        in.barrettFlagged = barrett && barrett->HasNpcFlag(UNIT_NPC_FLAG_GOSSIP);
++        in.barrettDist = barrett ? bot->GetExactDist(barrett) : -1.0f;
++
++        in.nowMs = getMSTime();
++        in.lootSinceMs = st.tocrLootSinceMs;
++        in.clickSinceMs = st.tocrClickSinceMs;
++
++        DcTocRaid::Verdict v = DcTocRaid::Decide(in);
++        if (v.action == DcTocRaid::Action::Gossip)
++        {
++            // The raid muster (stage on the tank, top off, rebuff; bounded by its own
++            // ceiling) before every stage, as Karazhan's Opera runs it before Barnes.
++            in.musterHolds = ObjectiveHookRegistry::Run(DC_HOOK_RAID_MUSTER, bot, context, info) ==
++                             ObjectiveArriveResult::Running;
++            if (in.musterHolds)
++                v = DcTocRaid::Decide(in);
++        }
++
++        st.tocrLootSinceMs = v.lootSinceMs;
++        st.tocrClickSinceMs = v.clickSinceMs;
++
++        if (v.complete)
++        {
++            st.ClearTocRaid();
++            return ObjectiveArriveResult::Done;
++        }
++
++        TocRaidTelemetry(bot, st, in, v);
++
++        if (v.clickStuck && !st.Throttled(DcThrottle::TocrWarn, WARN_THROTTLE_MS))
++            LOG_WARN("playerbots.dungeonclear",
++                     "[DC:{}] ToC raid — Barrett Ramsey has kept offering his gossip for {}s of clicks "
++                     "(progress {}). On heroic his first option needs the Call of the Crusade "
++                     "achievement on the clicker; otherwise his menu is not answering.",
++                     bot->GetName(), (in.nowMs - v.clickSinceMs) / 1000, in.progress);
++
++        switch (v.action)
++        {
++            case DcTocRaid::Action::ApproachBarrett:
++            {
++                if (!barrett)
++                    return ObjectiveArriveResult::Done;
++                // GOSSIP_STANDOFF short of him on our own bearing, at his z.
++                float const ax = barrett->GetPositionX(), ay = barrett->GetPositionY();
++                float dx = bot->GetPositionX() - ax, dy = bot->GetPositionY() - ay;
++                float const d = std::hypot(dx, dy);
++                if (d > 0.1f)
++                {
++                    dx /= d;
++                    dy /= d;
++                }
++                else
++                {
++                    dx = 0.0f;
++                    dy = 1.0f;  // north, into the bowl
++                }
++                return TocRaidMoveTo(bot, botAI, st, ax + dx * GOSSIP_STANDOFF, ay + dy * GOSSIP_STANDOFF,
++                                     barrett->GetPositionZ())
++                           ? ObjectiveArriveResult::Running
++                           : ObjectiveArriveResult::Done;
++            }
++
++            case DcTocRaid::Action::Gossip:
++            {
++                if (!barrett)
++                    return ObjectiveArriveResult::Running;
++                if (st.Throttled(DcThrottle::TocrClick, CLICK_RETRY_MS))
++                    return ObjectiveArriveResult::Running;
++
++                // Option 0 of his menu opens the stage's action menu; SelectGossip's
++                // drill-down then takes its first visible option, the one his SmartAI
++                // answers. Both are the first VISIBLE option, which the boss-state
++                // conditions make "start" on a fresh stage and "another shot" on a
++                // failed one.
++                bool const sent = DungeonEventExecutor::SelectGossip(bot, barrett, /*option*/ 0);
++                LOG_INFO("playerbots.dungeonclear",
++                         "[DC:{}] ToC raid — progress {}: {} {} ({}) from {:.1f}yd",
++                         bot->GetName(), in.progress, sent ? "talked to" : "could not talk to",
++                         barrett->GetName(), barrett->GetEntry(), in.barrettDist);
++                return ObjectiveArriveResult::Running;
++            }
++
++            case DcTocRaid::Action::Engage:
++                if (!pulls.nearest)
++                    return ObjectiveArriveResult::Running;
++                LOG_INFO("playerbots.dungeonclear",
++                         "[DC:{}] ToC raid — {} idle and nobody engaged: pulling {} at {:.1f}yd",
++                         bot->GetName(), pulls.idle, pulls.nearest->GetName(),
++                         bot->GetExactDist(pulls.nearest));
++                TocRaidForcePull(bot, context, botAI, pulls.nearest);
++                return ObjectiveArriveResult::Running;
++
++            case DcTocRaid::Action::Hold:
++                return ObjectiveArriveResult::Running;
++
++            case DcTocRaid::Action::Yield:
++            default:
++                return ObjectiveArriveResult::Done;
++        }
++    }
++
++    // --- hook 68: THE DESCENT -------------------------------------------------------
++    //
++    // Every bot of the party still at arena level, alive and not riding anything,
++    // onto the chamber floor around the landing (fanned so they do not stack, as
++    // the module's other party teleports are). Synchronous, so always Done.
++    ObjectiveArriveResult TocRaidDescend(Player* bot, AiObjectContext* /*context*/,
++                                         DungeonBossInfo const& /*info*/)
++    {
++        if (!bot || bot->GetMapId() != MAP_ID)
++            return ObjectiveArriveResult::Done;
++
++        std::vector<Player*> members;
++        if (Group* group = bot->GetGroup())
++        {
++            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
++                if (Player* m = ref->GetSource())
++                    members.push_back(m);
++        }
++        else
++            members.push_back(bot);
++
++        uint32 idx = 0;
++        for (Player* m : members)
++        {
++            if (!m->IsInWorld() || !m->IsAlive() || m->GetMapId() != bot->GetMapId())
++                continue;
++            if (!GET_PLAYERBOT_AI(m) || DcPlayerbotCompat::IsHumanControlled(m))
++                continue;  // a person falls on their own
++            if (m->GetVehicle() || m->IsBeingTeleported() || !DcTocRaid::AboveSplit(m->GetPositionZ()))
++                continue;
++
++            float const angle = static_cast<float>(idx) * 0.7f;
++            float const off = 1.5f + 0.5f * static_cast<float>(idx);
++            m->GetMotionMaster()->Clear();
++            // Facing east, at Anub'arak.
++            m->NearTeleportTo(LANDING_X + std::cos(angle) * off, LANDING_Y + std::sin(angle) * off, LANDING_Z,
++                              /*orientation*/ 0.0f, /*casting*/ false, /*vehicle*/ false, /*withPet*/ true);
++            ++idx;
++        }
++
++        if (idx)
++            LOG_INFO("playerbots.dungeonclear",
++                     "[DC:{}] ToC raid — the floor is down: {} bot(s) put on Anub'arak's chamber floor "
++                     "(a bot has no client to fall with)",
++                     bot->GetName(), idx);
++        return ObjectiveArriveResult::Done;
++    }
++}
++
++// Ids 67 and 68 (one flat space across every dungeon; AddHook LOG_ERRORs a
++// collision rather than silently dropping one).
++void RegisterTrialOfTheCrusaderHooks(ObjectiveHookRegistry::HookTable& out)
++{
++    ObjectiveHookRegistry::AddHook(out, DcTrialOfTheCrusader::HOOK_TOCR_DRIVER, &TocRaidDrive);
++    ObjectiveHookRegistry::AddHook(out, DcTrialOfTheCrusader::HOOK_TOCR_DESCENT, &TocRaidDescend);
++}
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcEncounterChests.h b/src/Ai/Dungeon/DungeonClear/Util/DcEncounterChests.h
+index 6e1d09a..d6dea76 100644
+--- a/src/Ai/Dungeon/DungeonClear/Util/DcEncounterChests.h
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcEncounterChests.h
+@@ -23,7 +23,7 @@
+ // Dust Covered Chest itself, so neither is listed.
+ namespace DcEncounterChests
+ {
+-    inline constexpr std::array<uint32_t, 7> ENTRIES = {
++    inline constexpr std::array<uint32_t, 19> ENTRIES = {
+         169243,  // Chest of The Seven — BRD Tomb of the Seven, respawned on TYPE_TOMB_OF_SEVEN DONE (lock 57)
+         190663,  // Dark Runed Chest — CoS Mal'ganis, normal (lock 1634)
+         193597,  // Dark Runed Chest — CoS Mal'ganis, heroic
+@@ -31,6 +31,13 @@ namespace DcEncounterChests
+         193603,  // Cache of Eregos — Oculus, heroic
+         190586,  // Tribunal Chest — Halls of Stone, normal (lock 1634)
+         193996,  // Tribunal Chest — Halls of Stone, heroic
++        // Trial of the Crusader: the Faction Champions' reward, summoned at the
++        // arena's centre on their DONE (lock 1634), 10 / 25 / 10H / 25H.
++        195631, 195632, 195633, 195635,  // Champions' Cache
++        // ...and heroic's Tribute Chest by Tirion after Anub'arak, one entry per
++        // attempts band and raid size (lock 1634).
++        195665, 195666, 195667, 195668,  // Argent Crusade Tribute Chest, 10H
++        195669, 195670, 195671, 195672,  // Argent Crusade Tribute Chest, 25H
+     };
+ 
+     inline constexpr bool IsEncounterChest(uint32_t goEntry)
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h b/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
+index 9801b25..9a8cb6d 100644
+--- a/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
+@@ -50,6 +50,7 @@ enum class DcThrottle : uint8
+     IronHallHopIssue,    // the BRD Iron Hall's hop to a fire-free stop
+     LyceumCloseUpIssue,  // the BRD Lyceum close-up walk back to the tank
+     TocMoveIssue,        // the ToC driver's point move (the horse, or the tank on foot)
++    TocrMoveIssue,       // the Trial of the Crusader driver's walk to Barrett
+     OcMoveIssue,         // the Oculus rider's drake move (the vehicle base) and its giver walk
+     ChessMoveIssue,      // a Karazhan chess member's walk (sideline, a piece, Echo, the chest)
+ 
+@@ -86,6 +87,9 @@ enum class DcThrottle : uint8
+     TocTelemetryLog,     // the ToC driver's `DcToc progress=...` line
+     TocWarn,             // the ToC driver's never-mounted / Knight-strand WARNs
+     TocClick,            // the ToC driver's announcer click (and its log line)
++    TocrLog,             // the Trial of the Crusader driver's `DcTocRaid progress=...` line
++    TocrWarn,            // the Trial of the Crusader driver's "Barrett keeps offering" WARN
++    TocrClick,           // the Trial of the Crusader driver's Barrett click (and its log line)
+     OcTelemetryLog,      // the Oculus driver's `DcOc ring=...` line
+     OcWarn,              // the Oculus WARNs (blocked chord, stalled leg, fabricated essence)
+     OcGossip,            // the Oculus rider's giver click (and its log line)
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcTocRaidDecision.h b/src/Ai/Dungeon/DungeonClear/Util/DcTocRaidDecision.h
+new file mode 100644
+index 0000000..634e653
+--- /dev/null
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcTocRaidDecision.h
+@@ -0,0 +1,247 @@
++/*
++ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
++ * and/or modify it under version 3 of the License, or (at your option), any later version.
++ */
++
++#ifndef _PLAYERBOT_DCTOCRAIDDECISION_H
++#define _PLAYERBOT_DCTOCRAIDDECISION_H
++
++#include <cstdint>
++
++#include "Define.h"
++
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
++
++// PURE kernels for the Trial of the Crusader (map 649): everything hook 67 (the
++// Barrett driver) and hook 68 (the descent) decide each tick, lifted out of the
++// world so they can be tested without a map. The glue (the censuses, the moves,
++// the click, the force-pull, the teleport and the telemetry) lives in
++// Overrides/TrialOfTheCrusaderDriver.cpp.
++//
++// WHAT THE DRIVER IS FOR. The five arena objectives only HOLD the raid at the
++// stage until the script's boss slot reads DONE. Nothing in the ordinary clear
++// can start a stage, because nothing in it is a boss until a stage has started.
++// Two things do, and they are this driver's whole job:
++//
++//   * THE CLICK. Barrett offers his gossip exactly when the script will start the
++//     next stage (or the failed one again): summoned a few seconds after each
++//     kill and after every wipe's cleanup. So the rule is a pure function of live
++//     state with no latch: he is up and offering, the raid is out of combat, the
++//     last kill's loot is taken (bounded), the raid muster is ready -> talk to him.
++//   * THE PULLS. The faction champions and the twins are released aggressive and
++//     attackable but 25-45yd from the stage, and nothing brings them in. While a
++//     stage is IN_PROGRESS and nothing of it is engaged, pull the nearest idle
++//     one; the first champion engaged brings the rest (TYPE_FACTION_CHAMPIONS_START)
++//     and either twin her sister.
++//
++// AND ONE THING IT MUST NOT DO: hand an IN_PROGRESS stage's out-of-combat ticks
++// to the ladder. The twins are released 3.25s after their slot goes IN_PROGRESS;
++// in that window the raid HOLDS where it stands.
++//
++// From progress 9 (the floor is down) the driver is done: the descent puts the
++// bots into the chamber below, and Anub'arak is an ordinary boss row.
++//
++// THE RETURN CONTRACT is the module's: Yield is "Done" (hand the tick back: the
++// anchored hold re-parks the tank at the stage and rests the raid), everything
++// else is "Running" (claim it). Blocked is never returned.
++namespace DcTocRaid
++{
++    enum class State : uint8
++    {
++        Complete = 0,  // progress 9+: the floor is down
++        Down,          // the leader is dead
++        Fighting,      // somebody in the party is engaged
++        Pulling,       // a stage is IN_PROGRESS and a champion / twin waits: pull it
++        Holding,       // a stage is IN_PROGRESS with nothing to pull yet: stand still
++        Looting,       // the last kill's loot is still being taken
++        AwaitBarrett,  // Barrett is not up, or not offering (an intro, an outro)
++        Approach,      // walking to Barrett
++        Muster,        // at Barrett, the raid muster holds the click
++        Click,         // talking to Barrett
++    };
++
++    inline char const* StateName(State s)
++    {
++        switch (s)
++        {
++            case State::Down:         return "leader down";
++            case State::Fighting:     return "fighting";
++            case State::Pulling:      return "pulling an idle champion / twin";
++            case State::Holding:      return "holding: the stage is in progress";
++            case State::Looting:      return "waiting for the loot";
++            case State::AwaitBarrett: return "waiting for Barrett Ramsey";
++            case State::Approach:     return "walking to Barrett Ramsey";
++            case State::Muster:       return "mustering the raid at Barrett Ramsey";
++            case State::Click:        return "talking to Barrett Ramsey";
++            case State::Complete:
++            default:                  return "complete";
++        }
++    }
++
++    enum class Action : uint8
++    {
++        Yield,            // Done: hand the tick back
++        Hold,             // Running: issue nothing
++        ApproachBarrett,  // point-move to GOSSIP_STANDOFF of Barrett
++        Gossip,           // SelectGossip(Barrett, option 0) — the drill-down does the rest
++        Engage,           // force-pull the nearest idle attackable champion / twin
++    };
++
++    struct Inputs
++    {
++        uint32 progress = 0;            // GetData(TYPE_INSTANCE_PROGRESS)
++        bool   alive = true;            // the leader itself
++        bool   partyInCombat = false;   // engagement, not the raw flag
++        bool   encounterInProgress = false;  // a stage's boss slot reads IN_PROGRESS
++
++        // --- the pulls (censused only while a stage is in progress) ---------------
++        uint32 idleTargets = 0;         // champions / twins alive, attackable, not in combat
++        bool   targetsEngaged = false;  // any of them in combat
++
++        // --- the click ---------------------------------------------------------------
++        bool   lootPending = false;     // the stock loot flags, or a member still looting
++        bool   barrettPresent = false;  // GetGuidData(DATA_BARRETT) resolves, alive
++        bool   barrettFlagged = false;  // UNIT_NPC_FLAG_GOSSIP
++        float  barrettDist = -1.0f;
++        // DC_HOOK_RAID_MUSTER says hold. The glue evaluates it only once the kernel
++        // has decided to click (it advances a phase machine), then decides again.
++        bool   musterHolds = false;
++
++        // --- clocks the kernel round-trips (getMSTime()) ----------------------------
++        uint32 nowMs = 0;
++        uint32 lootSinceMs = 0;   // loot pending since (0 = not pending)
++        uint32 clickSinceMs = 0;  // first click on this offer (0 = none)
++    };
++
++    struct Verdict
++    {
++        State  state = State::AwaitBarrett;
++        Action action = Action::Yield;
++        bool   complete = false;
++        uint32 lootSinceMs = 0;
++        uint32 clickSinceMs = 0;
++        // Barrett has kept offering CLICK_WARN_MS past the first click: the clicks
++        // are not landing (a heroic Barrett whose first option is the "I have not
++        // completed the Trial" dead end for a clicker without the achievement).
++        bool   clickStuck = false;
++    };
++
++    inline Verdict Decide(Inputs const& in)
++    {
++        using namespace DcTrialOfTheCrusader;
++
++        Verdict v;
++        v.lootSinceMs = in.lootSinceMs;
++        v.clickSinceMs = in.clickSinceMs;
++
++        if (in.progress >= PROGRESS_ANUB_ARAK)
++        {
++            v.state = State::Complete;
++            v.complete = true;
++            v.lootSinceMs = 0;
++            v.clickSinceMs = 0;
++            return v;
++        }
++
++        if (!in.alive)
++        {
++            v.state = State::Down;
++            return v;
++        }
++
++        // The click clock measures one offer: it stops the moment he is gone or
++        // stops offering (a click that landed does exactly that).
++        bool const offering = in.barrettPresent && in.barrettFlagged;
++        if (!offering)
++            v.clickSinceMs = 0;
++
++        if (in.partyInCombat)
++        {
++            v.state = State::Fighting;
++            v.lootSinceMs = 0;  // the loot after this fight is a fresh wait
++            return v;
++        }
++
++        if (in.encounterInProgress)
++        {
++            v.lootSinceMs = 0;
++            if (in.idleTargets > 0 && !in.targetsEngaged)
++            {
++                v.state = State::Pulling;
++                v.action = Action::Engage;
++                return v;
++            }
++            v.state = State::Holding;
++            v.action = Action::Hold;
++            return v;
++        }
++
++        if (in.lootPending)
++        {
++            if (!v.lootSinceMs)
++                v.lootSinceMs = in.nowMs ? in.nowMs : 1;
++            if (in.nowMs - v.lootSinceMs < LOOT_WAIT_MS)
++            {
++                v.state = State::Looting;
++                return v;
++            }
++            // Past the cap: the loot is not finishing (a roll nobody answers, full
++            // bags). Go on as if there were none; the clock stays expired.
++        }
++        else
++            v.lootSinceMs = 0;
++
++        if (!offering)
++        {
++            v.state = State::AwaitBarrett;
++            return v;
++        }
++
++        if (in.barrettDist < 0.0f || in.barrettDist > GOSSIP_REACH)
++        {
++            v.state = State::Approach;
++            v.action = Action::ApproachBarrett;
++            return v;
++        }
++
++        if (in.musterHolds)
++        {
++            v.state = State::Muster;
++            v.action = Action::Hold;
++            return v;
++        }
++
++        v.state = State::Click;
++        v.action = Action::Gossip;
++        if (!v.clickSinceMs)
++            v.clickSinceMs = in.nowMs ? in.nowMs : 1;
++        v.clickStuck = in.nowMs - v.clickSinceMs >= CLICK_WARN_MS;
++        return v;
++    }
++
++    // --- the descent (hook 68) ------------------------------------------------------
++    //
++    // At progress 9 the Lich King breaks the arena floor (GO 195527 DAMAGED) and
++    // knocks everyone up; a player falls into Anub'arak's chamber, 250yd below. A
++    // bot has no client to fall with: it stays where it stood, over a floor that is
++    // no longer there. So once the floor is down, every bot still at arena level is
++    // put on the chamber floor — the module's TeleportParty answer to a one-way drop
++    // a bot cannot make (the Azjol-Nerub and Gundrak pattern). A person in the party
++    // falls on their own and is never moved.
++    //
++    // Due while the floor is down and any bot of the party is still up there: that
++    // covers the descent itself and every later straggler (a member the offline
++    // raid's restart or recall puts back at the entrance).
++    inline bool DescentDue(uint32 progress, bool leaderAlive, uint32 botsAboveSplit)
++    {
++        return progress >= DcTrialOfTheCrusader::PROGRESS_ANUB_ARAK && leaderAlive && botsAboveSplit > 0;
++    }
++
++    // Is a member at z still at arena level?
++    inline bool AboveSplit(float z)
++    {
++        return z > DcTrialOfTheCrusader::SPLIT_Z;
++    }
++}
++
++#endif
+diff --git a/t/TestEventRegistry.cpp b/t/TestEventRegistry.cpp
+index 6c08874..916518c 100644
+--- a/t/TestEventRegistry.cpp
++++ b/t/TestEventRegistry.cpp
+@@ -352,6 +352,22 @@ namespace
+             // to island, which no arrival step can express — so Done is its yield.
+             // Repeatable: it never completes; the predicate going false ends it.
+             {578, 9},
++            // Trial of the Crusader "Barrett Ramsey": TocRaidDriverDue is true for the
++            // whole arena part of the run (progress < 9), and that is sound for Trial of
++            // the Champion's reason: the map IS the arena. The raid lands at its south gate,
++            // 59yd from the centre of one open bowl, and every actor the driver touches
++            // (Barrett, the champions, the twins) stands inside it. Its lone step (hook 67,
++            // TocRaidDrive) owns its own movement — it walks the tank to Barrett — so an
++            // arrival step would add nothing, and Done is its yield. Repeatable: it never
++            // completes; the predicate going false (the floor down) ends it.
++            {649, 6},
++            // Trial of the Crusader "Into Anub'arak's chamber": a POSITION is the gate —
++            // TocRaidDescentDue reads true only once the floor is down (progress 9, which
++            // the Lich King scene sets with the party in the arena) and only while a bot of
++            // the party is still at arena level — and its lone step (hook 68,
++            // TocRaidDescend) teleports exactly those bots down and reports Done.
++            // Repeatable: never latched, a straggler put back at the entrance re-fires it.
++            {649, 7},
+             // Blackfathom Deeps "Climb out of the Forgotten Pool": a POSITION is
+             // the gate — ForgottenPoolExitDue reads true only while the tank is
+             // over deep water inside the pool box — and its lone step (hook 63,
+@@ -1452,6 +1468,14 @@ TEST(DungeonEventIntegrityTest, StepsOwnMovementIsConfinedToVettedEvents)
+         // tank while they happen.) And Done has to yield: every island clear,
+         // Varos and Urom are ground fights for the objectives and the stock engine.
+         {578, 9},
++        // Trial of the Crusader "Barrett Ramsey": hook 67 walks the tank to Barrett
++        // itself, which the per-tick hold would cancel. And Done has to yield: every
++        // stage is a stock-engine fight, and between stages the arena holds re-park
++        // the tank and rest the raid.
++        {649, 6},
++        // Trial of the Crusader "Into Anub'arak's chamber": hook 68 teleports the bots
++        // still at arena level onto the chamber floor; there is no anchor to hold.
++        {649, 7},
+         // Blackfathom Deeps "Climb out of the Forgotten Pool": hook 63 swims the
+         // fallen tank along the pool floor and up the ramp with its own raw
+         // spline; the per-tick hold would pin it in the water it has to leave.
+@@ -2364,6 +2388,11 @@ TEST(DungeonEventIntegrityTest, PullOwningEventsAreVetted)
+         // drag-back camp would be stamped off the edge or on another island, and a
+         // scout-lagged tank is fifteen yards of rim nobody can stand on.
+         {578, 9},
++        // Trial of the Crusader "Barrett Ramsey". There is no trash in the arena —
++        // every hostile is a stage summon — and the one pull the raid makes, an idle
++        // champion or twin, the driver makes itself. The advanced pull's drag-back
++        // camp would walk the raid away from the stage the holds keep it on.
++        {649, 6},
+     };
+ 
+     for (DungeonEvent const& ev : DungeonEventRegistry::AllEvents())
+diff --git a/t/TestTrialOfTheCrusader.cpp b/t/TestTrialOfTheCrusader.cpp
+new file mode 100644
+index 0000000..f492631
+--- /dev/null
++++ b/t/TestTrialOfTheCrusader.cpp
+@@ -0,0 +1,601 @@
++/*
++ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
++ * and/or modify it under version 3 of the License, or (at your option), any later version.
++ */
++
++// Trial of the Crusader (map 649).
++//
++// Two halves, the module's usual split:
++//
++//   1. THE KERNELS (DcTocRaid::Decide, DcTocRaid::DescentDue) — the whole of hook
++//      67's and hook 68's per-tick reasoning, exercised without a map: the click
++//      and what holds it, the pulls, the hold while a stage is in progress, the
++//      wipe retry, the descent.
++//
++//   2. THE AUTHORED DATA — five objectives and Anub'arak's row, the seven event
++//      rows and their flags, and the pins hand-copied out of
++//      trial_of_the_crusader.h.
++//
++// THE MOST IMPORTANT ASSERTIONS are the pins. Every hold on this map is a
++// comparison against a boss slot or TYPE_INSTANCE_PROGRESS, and a wrong value is
++// a silent permanent hold.
++
++#include "gtest/gtest.h"
++
++#include <algorithm>
++#include <cmath>
++#include <iterator>
++#include <set>
++#include <vector>
++
++#include "InstanceScript.h"
++
++#include "Ai/Dungeon/DungeonClear/Data/DungeonBossInfo.h"
++#include "Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
++#include "Ai/Dungeon/DungeonClear/DcCapabilities.h"
++#include "Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcEncounterChests.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcTocRaidDecision.h"
++
++using namespace DcTrialOfTheCrusader;
++using DcTocRaid::Action;
++using DcTocRaid::State;
++
++namespace
++{
++    constexpr uint32 NOW = 1'000'000;
++
++    // Progress 2 (the beasts dead), Barrett up, offering and 3yd away, nobody in
++    // combat, no stage in progress, nothing to loot. Each test breaks one thing.
++    DcTocRaid::Inputs AtClick()
++    {
++        DcTocRaid::Inputs in;
++        in.progress = PROGRESS_BEASTS_DEAD;
++        in.alive = true;
++        in.barrettPresent = true;
++        in.barrettFlagged = true;
++        in.barrettDist = 3.0f;
++        in.nowMs = NOW;
++        return in;
++    }
++
++    // The champions' stage released: IN_PROGRESS, out of combat, Barrett gone.
++    DcTocRaid::Inputs ChampionsReleased()
++    {
++        DcTocRaid::Inputs in = AtClick();
++        in.progress = PROGRESS_JARAXXUS_DEAD;
++        in.encounterInProgress = true;
++        in.barrettPresent = false;
++        in.barrettFlagged = false;
++        in.barrettDist = -1.0f;
++        in.idleTargets = 6;
++        return in;
++    }
++
++    DungeonEvent const* Ev(uint32 id) { return DungeonEventRegistry::Find(MAP_ID, id); }
++
++    BossRosterPatch const* Patch()
++    {
++        for (BossRosterPatch const& p : BossRosterRegistry::AllPatches())
++            if (p.mapId == MAP_ID)
++                return &p;
++        return nullptr;
++    }
++
++    DungeonBossInfo const* Row(BossRosterPatch const& p, uint32 entry)
++    {
++        for (DungeonBossInfo const& b : p.add)
++            if (b.entry == entry)
++                return &b;
++        return nullptr;
++    }
++}
++
++// ===========================================================================
++//  1. THE PINS — hand-copied from trial_of_the_crusader.h
++// ===========================================================================
++
++TEST(TrialOfTheCrusader, InstanceDataAndProgressValuesMatchTheCore)
++{
++    // enum TrialOfTheCrusaderBossIds, "matching DungeonEncounter.dbc encounter indexes".
++    EXPECT_EQ(BOSS_NORTHREND_BEASTS, 0u);
++    EXPECT_EQ(BOSS_JARAXXUS, 1u);
++    EXPECT_EQ(BOSS_FACTION_CHAMPIONS, 2u);
++    EXPECT_EQ(BOSS_TWIN_VALKYR, 3u);
++    EXPECT_EQ(BOSS_ANUBARAK, 4u);
++    EXPECT_EQ(BOSS_COUNT, 5u);
++
++    // enum DataTypes: TYPE_NONE, TYPE_INSTANCE_PROGRESS, ... — GetData answers only it.
++    EXPECT_EQ(TYPE_INSTANCE_PROGRESS, 1u);
++    // enum TrialOfTheCrusaderObjectData starts at DATA_BARRETT.
++    EXPECT_EQ(DATA_BARRETT, 0u);
++
++    // enum Progress, with its two explicit values.
++    EXPECT_EQ(PROGRESS_INITIAL, 0u);
++    EXPECT_EQ(PROGRESS_INTRO_DONE, 1u);
++    EXPECT_EQ(PROGRESS_BEASTS_DEAD, 2u);
++    EXPECT_EQ(PROGRESS_JARAXXUS_INTRO_DONE, 3u);
++    EXPECT_EQ(PROGRESS_JARAXXUS_DEAD, 4u);
++    EXPECT_EQ(PROGRESS_CHAMPIONS_DEAD, 6u);
++    EXPECT_EQ(PROGRESS_VALKYR_DEAD, 8u);
++    EXPECT_EQ(PROGRESS_ANUB_ARAK, 9u);
++    EXPECT_EQ(PROGRESS_DONE, 10u);
++
++    EXPECT_EQ(NPC_ANUBARAK, 34564u);
++    EXPECT_EQ(NPC_LIGHTBANE, 34497u);
++    EXPECT_EQ(NPC_DARKBANE, 34496u);
++}
++
++TEST(TrialOfTheCrusader, CapabilityIsAdvertised)
++{
++    EXPECT_EQ(DC_CAPABILITY_RAID_TRIAL_OF_THE_CRUSADER, 1);
++}
++
++// ===========================================================================
++//  2. THE BARRETT DRIVER KERNEL
++// ===========================================================================
++
++TEST(TrialOfTheCrusader, KernelIsCompleteOnceTheFloorIsDown)
++{
++    for (uint32 progress : { PROGRESS_ANUB_ARAK, PROGRESS_DONE })
++    {
++        DcTocRaid::Inputs in = AtClick();
++        in.progress = progress;
++        in.lootSinceMs = NOW - 1000;
++        in.clickSinceMs = NOW - 1000;
++        DcTocRaid::Verdict const v = DcTocRaid::Decide(in);
++        EXPECT_TRUE(v.complete) << progress;
++        EXPECT_EQ(v.state, State::Complete);
++        EXPECT_EQ(v.action, Action::Yield);
++        EXPECT_EQ(v.lootSinceMs, 0u);
++        EXPECT_EQ(v.clickSinceMs, 0u);
++    }
++    DcTocRaid::Inputs in = AtClick();
++    in.progress = PROGRESS_VALKYR_DEAD;
++    EXPECT_FALSE(DcTocRaid::Decide(in).complete) << "the Lich King's Barrett is still a click";
++}
++
++TEST(TrialOfTheCrusader, KernelClicksAnOfferingBarrettInReach)
++{
++    DcTocRaid::Verdict const v = DcTocRaid::Decide(AtClick());
++    EXPECT_EQ(v.state, State::Click);
++    EXPECT_EQ(v.action, Action::Gossip);
++    EXPECT_EQ(v.clickSinceMs, NOW);
++    EXPECT_FALSE(v.clickStuck);
++}
++
++// Every stage's Barrett, including the beasts' retry point and Jaraxxus'.
++TEST(TrialOfTheCrusader, KernelClicksAtEveryStageValue)
++{
++    for (uint32 progress : { PROGRESS_INITIAL, PROGRESS_INTRO_DONE, PROGRESS_BEASTS_DEAD,
++                             PROGRESS_JARAXXUS_INTRO_DONE, PROGRESS_JARAXXUS_DEAD,
++                             PROGRESS_CHAMPIONS_DEAD, PROGRESS_VALKYR_DEAD })
++    {
++        DcTocRaid::Inputs in = AtClick();
++        in.progress = progress;
++        EXPECT_EQ(DcTocRaid::Decide(in).action, Action::Gossip) << progress;
++    }
++}
++
++TEST(TrialOfTheCrusader, KernelWalksToAFarBarrett)
++{
++    DcTocRaid::Inputs in = AtClick();
++    in.barrettDist = 38.0f;
++    DcTocRaid::Verdict const v = DcTocRaid::Decide(in);
++    EXPECT_EQ(v.state, State::Approach);
++    EXPECT_EQ(v.action, Action::ApproachBarrett);
++
++    in.barrettDist = GOSSIP_REACH;
++    EXPECT_EQ(DcTocRaid::Decide(in).action, Action::Gossip) << "the reach is inclusive";
++
++    in.barrettDist = -1.0f;
++    EXPECT_EQ(DcTocRaid::Decide(in).action, Action::ApproachBarrett) << "an unknown distance is not reach";
++}
++
++TEST(TrialOfTheCrusader, KernelWaitsWhileBarrettIsGoneOrNotOffering)
++{
++    DcTocRaid::Inputs in = AtClick();
++    in.barrettFlagged = false;  // clicked: he is walking out
++    in.clickSinceMs = NOW - 3000;
++    DcTocRaid::Verdict v = DcTocRaid::Decide(in);
++    EXPECT_EQ(v.state, State::AwaitBarrett);
++    EXPECT_EQ(v.action, Action::Yield);
++    EXPECT_EQ(v.clickSinceMs, 0u) << "an offer that ended ends its click clock";
++
++    in = AtClick();
++    in.barrettPresent = false;  // an intro or outro: not summoned yet
++    in.barrettFlagged = false;
++    v = DcTocRaid::Decide(in);
++    EXPECT_EQ(v.state, State::AwaitBarrett);
++    EXPECT_EQ(v.action, Action::Yield);
++}
++
++TEST(TrialOfTheCrusader, KernelLetsTheMusterHoldTheClick)
++{
++    DcTocRaid::Inputs in = AtClick();
++    in.musterHolds = true;
++    DcTocRaid::Verdict const v = DcTocRaid::Decide(in);
++    EXPECT_EQ(v.state, State::Muster);
++    EXPECT_EQ(v.action, Action::Hold) << "the raid is gathering on the tank at Barrett: stand still";
++    EXPECT_EQ(v.clickSinceMs, 0u) << "no click went out";
++}
++
++TEST(TrialOfTheCrusader, KernelReportsClicksThatDoNotLand)
++{
++    DcTocRaid::Inputs in = AtClick();
++    in.clickSinceMs = NOW - (CLICK_WARN_MS - 1);
++    EXPECT_FALSE(DcTocRaid::Decide(in).clickStuck);
++    in.clickSinceMs = NOW - CLICK_WARN_MS;
++    DcTocRaid::Verdict const v = DcTocRaid::Decide(in);
++    EXPECT_TRUE(v.clickStuck);
++    EXPECT_EQ(v.action, Action::Gossip) << "it keeps trying; the WARN is the report";
++    EXPECT_EQ(v.clickSinceMs, NOW - CLICK_WARN_MS) << "the clock is not restarted by a retry";
++}
++
++TEST(TrialOfTheCrusader, KernelYieldsForADeadLeaderAndInCombat)
++{
++    DcTocRaid::Inputs in = AtClick();
++    in.alive = false;
++    EXPECT_EQ(DcTocRaid::Decide(in).state, State::Down);
++    EXPECT_EQ(DcTocRaid::Decide(in).action, Action::Yield);
++
++    in = AtClick();
++    in.partyInCombat = true;
++    in.lootSinceMs = NOW - 5000;
++    DcTocRaid::Verdict const v = DcTocRaid::Decide(in);
++    EXPECT_EQ(v.state, State::Fighting);
++    EXPECT_EQ(v.action, Action::Yield) << "every fight is the stock engine's";
++    EXPECT_EQ(v.lootSinceMs, 0u) << "the loot after this fight is a fresh wait";
++
++    in = ChampionsReleased();
++    in.partyInCombat = true;
++    EXPECT_EQ(DcTocRaid::Decide(in).action, Action::Yield) << "never pulls into a fight";
++}
++
++TEST(TrialOfTheCrusader, KernelPullsAnIdleChampionOrTwinOnlyWhileNothingIsEngaged)
++{
++    DcTocRaid::Verdict v = DcTocRaid::Decide(ChampionsReleased());
++    EXPECT_EQ(v.state, State::Pulling);
++    EXPECT_EQ(v.action, Action::Engage);
++
++    DcTocRaid::Inputs in = ChampionsReleased();
++    in.targetsEngaged = true;  // one is already on its way in
++    v = DcTocRaid::Decide(in);
++    EXPECT_EQ(v.state, State::Holding);
++    EXPECT_EQ(v.action, Action::Hold);
++
++    in = ChampionsReleased();
++    in.idleTargets = 0;  // the twins' 3.25s before they turn attackable
++    v = DcTocRaid::Decide(in);
++    EXPECT_EQ(v.state, State::Holding);
++    EXPECT_EQ(v.action, Action::Hold) << "an in-progress stage's ticks are never handed to the ladder";
++}
++
++TEST(TrialOfTheCrusader, KernelNeverClicksWhileAStageIsInProgress)
++{
++    DcTocRaid::Inputs in = ChampionsReleased();
++    in.idleTargets = 0;
++    in.barrettPresent = true;  // the Lich King's Barrett, say, while the twins fight
++    in.barrettFlagged = true;
++    in.barrettDist = 2.0f;
++    EXPECT_NE(DcTocRaid::Decide(in).action, Action::Gossip);
++}
++
++TEST(TrialOfTheCrusader, KernelWaitsForLootThenGivesUp)
++{
++    DcTocRaid::Inputs in = AtClick();
++    in.lootPending = true;
++    DcTocRaid::Verdict v = DcTocRaid::Decide(in);
++    EXPECT_EQ(v.state, State::Looting);
++    EXPECT_EQ(v.action, Action::Yield);
++    EXPECT_EQ(v.lootSinceMs, NOW);
++
++    in.lootSinceMs = NOW - (LOOT_WAIT_MS - 1);
++    EXPECT_EQ(DcTocRaid::Decide(in).state, State::Looting);
++
++    in.lootSinceMs = NOW - LOOT_WAIT_MS;
++    v = DcTocRaid::Decide(in);
++    EXPECT_EQ(v.action, Action::Gossip) << "loot that never finishes must not hold the raid";
++    EXPECT_EQ(v.lootSinceMs, NOW - LOOT_WAIT_MS) << "the expired clock stays expired";
++
++    in.lootPending = false;
++    EXPECT_EQ(DcTocRaid::Decide(in).lootSinceMs, 0u);
++}
++
++// A wipe needs no memory: InstanceCleanup summons Barrett again at the same
++// progress, and the same live inputs give the same click.
++TEST(TrialOfTheCrusader, WipeRetryIsTheSameClick)
++{
++    for (uint32 progress : { PROGRESS_INTRO_DONE, PROGRESS_JARAXXUS_INTRO_DONE, PROGRESS_JARAXXUS_DEAD,
++                             PROGRESS_CHAMPIONS_DEAD })
++    {
++        DcTocRaid::Inputs in = AtClick();
++        in.progress = progress;
++        in.barrettDist = 30.0f;
++        EXPECT_EQ(DcTocRaid::Decide(in).action, Action::ApproachBarrett) << progress;
++        in.barrettDist = 2.0f;
++        EXPECT_EQ(DcTocRaid::Decide(in).action, Action::Gossip) << progress;
++    }
++}
++
++TEST(TrialOfTheCrusader, VerdictStateAndActionAgree)
++{
++    std::vector<DcTocRaid::Inputs> cases;
++    for (bool combat : { false, true })
++        for (bool inProgress : { false, true })
++            for (uint32 idle : { 0u, 3u })
++                for (bool engaged : { false, true })
++                    for (bool flagged : { false, true })
++                        for (float dist : { -1.0f, 2.0f, 30.0f })
++                            for (bool muster : { false, true })
++                                for (bool loot : { false, true })
++                                {
++                                    DcTocRaid::Inputs in = AtClick();
++                                    in.partyInCombat = combat;
++                                    in.encounterInProgress = inProgress;
++                                    in.idleTargets = idle;
++                                    in.targetsEngaged = engaged;
++                                    in.barrettFlagged = flagged;
++                                    in.barrettDist = dist;
++                                    in.musterHolds = muster;
++                                    in.lootPending = loot;
++                                    cases.push_back(in);
++                                }
++
++    for (DcTocRaid::Inputs const& in : cases)
++    {
++        DcTocRaid::Verdict const v = DcTocRaid::Decide(in);
++        switch (v.state)
++        {
++            case State::Click:    EXPECT_EQ(v.action, Action::Gossip); break;
++            case State::Approach: EXPECT_EQ(v.action, Action::ApproachBarrett); break;
++            case State::Pulling:  EXPECT_EQ(v.action, Action::Engage); break;
++            case State::Holding:
++            case State::Muster:   EXPECT_EQ(v.action, Action::Hold); break;
++            default:              EXPECT_EQ(v.action, Action::Yield); break;
++        }
++        if (v.action == Action::Gossip)
++        {
++            EXPECT_FALSE(in.partyInCombat);
++            EXPECT_FALSE(in.encounterInProgress);
++            EXPECT_TRUE(in.barrettFlagged);
++            EXPECT_FALSE(in.musterHolds);
++        }
++        if (v.action == Action::Engage)
++        {
++            EXPECT_TRUE(in.encounterInProgress);
++            EXPECT_FALSE(in.targetsEngaged);
++            EXPECT_GT(in.idleTargets, 0u);
++        }
++    }
++}
++
++// ===========================================================================
++//  3. THE DESCENT KERNEL
++// ===========================================================================
++
++TEST(TrialOfTheCrusader, DescentIsDueOnlyOnceTheFloorIsDownWithABotUpThere)
++{
++    EXPECT_TRUE(DcTocRaid::DescentDue(PROGRESS_ANUB_ARAK, true, 1));
++    EXPECT_TRUE(DcTocRaid::DescentDue(PROGRESS_DONE, true, 3)) << "stragglers after his kill still join the raid";
++    EXPECT_FALSE(DcTocRaid::DescentDue(PROGRESS_VALKYR_DEAD, true, 25)) << "the floor is still there";
++    EXPECT_FALSE(DcTocRaid::DescentDue(PROGRESS_ANUB_ARAK, true, 0)) << "everyone is down already";
++    EXPECT_FALSE(DcTocRaid::DescentDue(PROGRESS_ANUB_ARAK, false, 5));
++
++    EXPECT_TRUE(DcTocRaid::AboveSplit(394.3f)) << "the arena floor";
++    EXPECT_TRUE(DcTocRaid::AboveSplit(395.2f)) << "the entrance";
++    EXPECT_FALSE(DcTocRaid::AboveSplit(142.0f)) << "the chamber floor";
++    EXPECT_FALSE(DcTocRaid::AboveSplit(LANDING_Z));
++    EXPECT_FALSE(DcTocRaid::AboveSplit(ANUB_Z));
++}
++
++// ===========================================================================
++//  4. THE AUTHORED DATA
++// ===========================================================================
++
++TEST(TrialOfTheCrusader, RosterIsFiveObjectivesAndAnubarak)
++{
++    BossRosterPatch const* p = Patch();
++    ASSERT_NE(p, nullptr) << "map 649 has no roster patch — every run fails at setup: "
++                             "dc on refuses a map with no bosses";
++    EXPECT_EQ(p->gate, DcDifficultyGate::Any);
++    EXPECT_TRUE(p->remove.empty()) << "the derived list is EMPTY: every boss is a summon";
++    EXPECT_TRUE(p->reorder.empty());
++    EXPECT_TRUE(p->skipByDesign.empty());
++    ASSERT_EQ(p->add.size(), 6u);
++
++    uint32 patches = 0;
++    for (BossRosterPatch const& q : BossRosterRegistry::AllPatches())
++        if (q.mapId == MAP_ID)
++            ++patches;
++    EXPECT_EQ(patches, 1u);
++
++    // Applied to the empty derived list, in clear order.
++    std::vector<DungeonBossInfo> const roster = BossRosterRegistry::ApplyPatch(*p, {});
++    ASSERT_EQ(roster.size(), 6u);
++    std::vector<uint32> const expectEntries = {
++        BossRosterRegistry::ObjectiveEntry(EVENT_BEASTS), BossRosterRegistry::ObjectiveEntry(EVENT_JARAXXUS),
++        BossRosterRegistry::ObjectiveEntry(EVENT_CHAMPIONS), BossRosterRegistry::ObjectiveEntry(EVENT_VALKYR),
++        BossRosterRegistry::ObjectiveEntry(EVENT_LICH_KING), NPC_ANUBARAK,
++    };
++    for (size_t i = 0; i < roster.size(); ++i)
++        EXPECT_EQ(roster[i].entry, expectEntries[i]) << "slot " << i << " is " << roster[i].name;
++}
++
++TEST(TrialOfTheCrusader, StageObjectivesAreDoneByTheirOwnSlot)
++{
++    BossRosterPatch const* p = Patch();
++    ASSERT_NE(p, nullptr);
++
++    struct Expect { uint32 event; uint32 order; int32 slot; };
++    static constexpr Expect kRows[] = {
++        { EVENT_BEASTS,    ORDER_BEASTS,    BOSS_NORTHREND_BEASTS },
++        { EVENT_JARAXXUS,  ORDER_JARAXXUS,  BOSS_JARAXXUS },
++        { EVENT_CHAMPIONS, ORDER_CHAMPIONS, BOSS_FACTION_CHAMPIONS },
++        { EVENT_VALKYR,    ORDER_VALKYR,    BOSS_TWIN_VALKYR },
++        { EVENT_LICH_KING, ORDER_LICH_KING, BOSS_ANUBARAK },
++    };
++    for (Expect const& r : kRows)
++    {
++        DungeonBossInfo const* o = Row(*p, BossRosterRegistry::ObjectiveEntry(r.event));
++        ASSERT_NE(o, nullptr) << "event " << r.event;
++        EXPECT_EQ(o->kind, DungeonAnchorKind::Objective) << o->name;
++        EXPECT_EQ(o->mapId, MAP_ID);
++        EXPECT_EQ(o->eventId, r.event) << o->name;
++        EXPECT_EQ(o->orderOverride, static_cast<int32>(r.order)) << o->name;
++        EXPECT_EQ(o->doneBossStateIndex, r.slot)
++            << o->name << ": read live, so a re-entered instance skips the stages already won";
++        EXPECT_EQ(o->onArriveHook, 0u);
++        EXPECT_NEAR(o->x, STAGE_X, 0.01f);
++        EXPECT_NEAR(o->y, STAGE_Y, 0.01f);
++        EXPECT_NEAR(o->z, STAGE_Z, 0.01f);
++        EXPECT_FLOAT_EQ(o->arriveRadius, OBJ_ARRIVE);
++    }
++
++    DungeonBossInfo const* lk = Row(*p, BossRosterRegistry::ObjectiveEntry(EVENT_LICH_KING));
++    ASSERT_NE(lk, nullptr);
++    EXPECT_EQ(lk->doneInstanceDataId, static_cast<int32>(TYPE_INSTANCE_PROGRESS))
++        << "the Lich King's hold must drop out the moment the floor is down, or the clear "
++           "would walk the raid back up to the arena from Anub'arak's chamber";
++    EXPECT_EQ(lk->doneInstanceDataValue, PROGRESS_ANUB_ARAK);
++    EXPECT_EQ(AnchorDoneByInstanceValues(*lk, /*bossState*/ 0, PROGRESS_ANUB_ARAK), DcAnchorDoneVia::InstanceData);
++    EXPECT_EQ(AnchorDoneByInstanceValues(*lk, /*bossState*/ 3, PROGRESS_DONE), DcAnchorDoneVia::BossState);
++    EXPECT_EQ(AnchorDoneByInstanceValues(*lk, /*bossState*/ 0, PROGRESS_VALKYR_DEAD), DcAnchorDoneVia::None);
++}
++
++TEST(TrialOfTheCrusader, AnubarakIsARealBossRowInHisChamber)
++{
++    BossRosterPatch const* p = Patch();
++    ASSERT_NE(p, nullptr);
++    DungeonBossInfo const* anub = Row(*p, NPC_ANUBARAK);
++    ASSERT_NE(anub, nullptr);
++    EXPECT_EQ(anub->kind, DungeonAnchorKind::Boss);
++    EXPECT_EQ(anub->encounterIndex, BOSS_ANUBARAK) << "his kill credit is bit 4 (instance_encounters 645-648)";
++    EXPECT_EQ(anub->orderOverride, static_cast<int32>(ORDER_ANUBARAK));
++    EXPECT_FALSE(DcTocRaid::AboveSplit(anub->z)) << "he is in the chamber below the arena";
++    EXPECT_LT(std::hypot(anub->x - 785.9f, anub->y - 133.42f), 0.01f);
++    EXPECT_GT(ORDER_ANUBARAK, ORDER_LICH_KING);
++}
++
++TEST(TrialOfTheCrusader, PlacesAreWhereTheScriptPutsThings)
++{
++    // The stage, Barrett and the entrance are all on the arena floor, in the bowl
++    // around Locs[LOC_CENTER].
++    float const cx = 563.67f, cy = 139.57f;
++    EXPECT_LT(std::hypot(STAGE_X - cx, STAGE_Y - cy), 30.0f);
++    // Jaraxxus is summoned at the centre and walks to (cx, cy - 10) for his intro.
++    EXPECT_GT(std::hypot(STAGE_X - cx, STAGE_Y - (cy - 10.0f)), 10.0f);
++    EXPECT_GT(STAGE_Y, BARRETT_Y + 20.0f) << "the stage is in the bowl, not at Barrett";
++    EXPECT_LT(std::hypot(BARRETT_X - cx, BARRETT_Y - cy), 60.0f);
++    EXPECT_GT(ARENA_SCAN, std::hypot(563.61f - cx, 80.68f - cy) + 60.0f)
++        << "the census covers the far wall from the entrance";
++    for (float z : { STAGE_Z, BARRETT_Z })
++        EXPECT_TRUE(DcTocRaid::AboveSplit(z));
++
++    // The landing is in the chamber, west of the Web Door (661.6, 144.7), so it is
++    // reachable while he is not engaged, and east of the corpses the script moves
++    // down (x 604-635).
++    EXPECT_FALSE(DcTocRaid::AboveSplit(LANDING_Z));
++    EXPECT_LT(LANDING_X, 661.6f);
++    EXPECT_GT(LANDING_X, 635.0f);
++    EXPECT_GT(GOSSIP_REACH, GOSSIP_STANDOFF);
++    EXPECT_LT(GOSSIP_REACH, 5.5f) << "INTERACTION_DISTANCE";
++}
++
++TEST(TrialOfTheCrusader, EventFlagsAreAsAuthored)
++{
++    for (uint32 id = EVENT_BEASTS; id <= EVENT_DESCENT; ++id)
++        ASSERT_NE(Ev(id), nullptr) << "event " << id << " is missing";
++
++    struct Hold { uint32 id; uint32 slot; };
++    for (Hold const& h : { Hold{ EVENT_BEASTS, BOSS_NORTHREND_BEASTS }, Hold{ EVENT_JARAXXUS, BOSS_JARAXXUS },
++                           Hold{ EVENT_CHAMPIONS, BOSS_FACTION_CHAMPIONS }, Hold{ EVENT_VALKYR, BOSS_TWIN_VALKYR } })
++    {
++        DungeonEvent const* ev = Ev(h.id);
++        EXPECT_EQ(ev->activation, EventActivation::Anchored) << "event " << h.id;
++        EXPECT_TRUE(ev->persistent) << "event " << h.id << ": every stage spans fights";
++        EXPECT_TRUE(ev->required) << "event " << h.id;
++        EXPECT_FALSE(ev->repeatable);
++        EXPECT_FALSE(ev->drivesInCombat);
++        EXPECT_FALSE(ev->stepsOwnMovement);
++        EXPECT_FALSE(ev->encounterActive) << "event " << h.id << ": the stand-down owns the fight";
++        ASSERT_EQ(ev->steps.size(), 2u) << "event " << h.id;
++
++        EventStep const& lead = ev->steps[0];
++        EXPECT_EQ(lead.kind, EventStepKind::MoveTo) << "the sticky-at-step-1 rule";
++        EXPECT_LT(lead.bossStateId, 0) << "the lead is a plain MoveTo";
++
++        EventStep const& hold = ev->steps[1];
++        EXPECT_EQ(hold.kind, EventStepKind::MoveTo);
++        EXPECT_EQ(hold.bossStateId, static_cast<int32>(h.slot)) << "event " << h.id;
++        EXPECT_EQ(hold.bossStateClearMask, DcBossStateBit(DONE)) << "event " << h.id;
++        EXPECT_EQ(hold.restartOnBossStateMask, 0u)
++            << "event " << h.id << ": a wipe needs no rewind — Barrett is clicked again";
++        EXPECT_FLOAT_EQ(hold.radius, HOLD_RADIUS);
++        EXPECT_EQ(hold.timeoutMs, STAGE_TIMEOUT_MS);
++        EXPECT_FLOAT_EQ(hold.x, STAGE_X);
++    }
++
++    DungeonEvent const* lk = Ev(EVENT_LICH_KING);
++    EXPECT_EQ(lk->activation, EventActivation::Anchored);
++    EXPECT_TRUE(lk->persistent);
++    ASSERT_EQ(lk->steps.size(), 2u);
++    EXPECT_EQ(lk->steps[0].kind, EventStepKind::MoveTo);
++    EXPECT_EQ(lk->steps[1].instanceDataId, static_cast<int32>(TYPE_INSTANCE_PROGRESS));
++    EXPECT_EQ(lk->steps[1].instanceDataMin, PROGRESS_ANUB_ARAK);
++
++    DungeonEvent const* d = Ev(EVENT_DRIVER);
++    EXPECT_EQ(d->activation, EventActivation::Conditional);
++    EXPECT_TRUE(d->condition);
++    EXPECT_TRUE(d->repeatable);
++    EXPECT_TRUE(d->persistent);
++    EXPECT_FALSE(d->required);
++    EXPECT_TRUE(d->ownsThePull);
++    EXPECT_TRUE(d->encounterActive) << "the champions and twins wait out of combat in an IN_PROGRESS "
++                                       "stage, which is exactly when the stand-down holds";
++    EXPECT_FALSE(d->drivesInCombat) << "it never steers under fire";
++    EXPECT_TRUE(d->stepsOwnMovement);
++    ASSERT_EQ(d->steps.size(), 1u);
++    EXPECT_EQ(d->steps[0].kind, EventStepKind::Custom);
++    EXPECT_EQ(d->steps[0].hookId, HOOK_TOCR_DRIVER);
++    EXPECT_EQ(d->steps[0].timeoutMs, DRIVER_TIMEOUT_MS);
++
++    DungeonEvent const* down = Ev(EVENT_DESCENT);
++    EXPECT_EQ(down->activation, EventActivation::Conditional);
++    EXPECT_TRUE(down->condition);
++    EXPECT_TRUE(down->repeatable);
++    EXPECT_FALSE(down->required);
++    EXPECT_TRUE(down->encounterActive);
++    EXPECT_FALSE(down->drivesInCombat);
++    EXPECT_TRUE(down->stepsOwnMovement);
++    ASSERT_EQ(down->steps.size(), 1u);
++    EXPECT_EQ(down->steps[0].kind, EventStepKind::Custom);
++    EXPECT_EQ(down->steps[0].hookId, HOOK_TOCR_DESCENT);
++
++    for (uint32 hook : { HOOK_TOCR_DRIVER, HOOK_TOCR_DESCENT })
++        EXPECT_TRUE(ObjectiveHookRegistry::Has(hook)) << "hook " << hook << " is not registered";
++}
++
++TEST(TrialOfTheCrusader, PullListIsEveryChampionAndBothTwins)
++{
++    std::vector<uint32> const& v = TocRaidPullEntries();
++    std::set<uint32> const unique(v.begin(), v.end());
++    EXPECT_EQ(v.size(), 30u);
++    EXPECT_EQ(unique.size(), v.size()) << "an entry is listed twice";
++    EXPECT_EQ(std::size(NPC_CHAMPIONS), 28u) << "14 per faction (trial_of_the_crusader.h NPCs)";
++    EXPECT_TRUE(unique.count(NPC_LIGHTBANE));
++    EXPECT_TRUE(unique.count(NPC_DARKBANE));
++    // Barrett and the bosses that come on their own are not pulled.
++    for (uint32 entry : { NPC_BARRETT_BEASTS, NPC_BARRETT_LICH_KING, NPC_JARAXXUS, NPC_ICEHOWL, NPC_ANUBARAK })
++        EXPECT_FALSE(unique.count(entry)) << entry;
++}
++
++TEST(TrialOfTheCrusader, TheCrusadersRewardChestsAreLooted)
++{
++    for (uint32 cache : { 195631u, 195632u, 195633u, 195635u })
++        EXPECT_TRUE(DcEncounterChests::IsEncounterChest(cache)) << "Champions' Cache " << cache;
++    for (uint32 tribute = 195665; tribute <= 195672; ++tribute)
++        EXPECT_TRUE(DcEncounterChests::IsEncounterChest(tribute)) << "Tribute Chest " << tribute;
++}
+diff --git a/t/run_tests.sh b/t/run_tests.sh
+index 6b1d3fc..b3aafe7 100755
+--- a/t/run_tests.sh
++++ b/t/run_tests.sh
+@@ -32,7 +32,7 @@ cmake --build build --target dungeon_clear_tests -j$(nproc)
+ # mmaps/ for the map, so listing one costs nothing when the navmesh is absent.
+ echo "Running unit tests..."
+ cd "${BUILD_DIR}"
+-./dungeon_clear_tests --gtest_filter='*DungeonClear*:Dc*:RoomAggro*:BossRoster*:DungeonEvent*:EventBuilder*:CullingOfStratholme*:TrialOfTheChampion*:Oculus*:BlackMorassRouteProbe*'
++./dungeon_clear_tests --gtest_filter='*DungeonClear*:Dc*:RoomAggro*:BossRoster*:DungeonEvent*:EventBuilder*:CullingOfStratholme*:TrialOfTheChampion*:TrialOfTheCrusader*:Oculus*:BlackMorassRouteProbe*'
+ 
+ echo "----------------------------------------------------------"
+ echo "Tests completed successfully!"

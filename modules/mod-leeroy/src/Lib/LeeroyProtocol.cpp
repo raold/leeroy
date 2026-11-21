@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "LeeroyProtocol.h"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <limits>
@@ -345,7 +346,8 @@ std::string DumpLine(json const& j)
     return j.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
-std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid, std::int64_t startedMs, bool memberBankMail, bool trainingOn, bool bankRestock)
+std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t humanGuid, std::int64_t startedMs,
+    std::vector<std::string> const& extra, bool memberBankMail, bool trainingOn, bool bankRestock)
 {
     json j = Envelope(ts, "hello");
     j["server"] = "mod-leeroy";
@@ -360,6 +362,9 @@ std::string EncodeHello(std::int64_t ts, std::uint32_t guildId, std::uint32_t hu
     if (bankRestock) j["features"].push_back("bank_stock_target");
     if (memberBankMail) j["features"].push_back("member_bank_mail");
     if (trainingOn) j["features"].push_back("training_enabled");
+    for (std::string const& feature : extra)
+        if (!feature.empty() && std::find(j["features"].begin(), j["features"].end(), feature) == j["features"].end())
+            j["features"].push_back(feature);
     return DumpLine(j);
 }
 

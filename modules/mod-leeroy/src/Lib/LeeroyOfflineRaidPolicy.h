@@ -66,8 +66,19 @@ struct DcHold
 
 // Instance-script boss indices dungeon-clear cannot reach on a map. Naxxramas (533): Sapphiron (13)
 // and Kel'Thuzad (14) are reached only by the hub's teleporter after the four wings, and dungeon-clear
-// does not use teleporters (its route stalls there with the run still enabled).
+// does not use teleporters (its route stalls there with the run still enabled). Ulduar (603), with the
+// Leviathan pass (patches/mod-dungeon-clear): Flame Leviathan (0) is passed, never fought; the Assembly
+// of Iron (4), Hodir (7), Thorim (8), Freya (9) and Algalon (13) are spell-credit encounters its roster
+// never lists; Mimiron (10) is on the far side of the tram, Vezax (11) behind the Keepers' gate and
+// Yogg-Saron (12) below him. What it clears is Ignis, Razorscale, XT-002, Kologarn and Auriaya.
 std::vector<std::uint32_t> DcUnreachableBosses(std::uint32_t mapId);
+
+// The hello features (dc_toc, dc_ulduar) for the raids the dungeon-clear this build carries can run for an
+// offline raid beyond its baseline: Trial of the Crusader, whose bosses its baseline roster cannot find (all are
+// summons), and Ulduar, whose Flame Leviathan gate it cannot pass. The mind plans neither without its feature.
+inline constexpr char const* OfflineDcTocFeature = "dc_toc";
+inline constexpr char const* OfflineDcUlduarFeature = "dc_ulduar";
+std::vector<std::string> DcRaidFeatures(bool trialOfTheCrusader, bool ulduar);
 // Every boss dungeon-clear can reach is done and some boss it cannot reach is not: the run ends as
 // cleared_reachable instead of idling until the stall watchdog or the timeout. Empty states, an
 // empty table, an out-of-range index or an "unreachable" boss that is in progress, failed or in a

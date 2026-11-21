@@ -1,8 +1,8 @@
-From 20a05a6fde6e2b252ea7104f145b50d0219380d5 Mon Sep 17 00:00:00 2001
+From 00a33e8d75ee71920987e994f6bc54b0614ce837 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 14 Nov 2026 08:26:51 -0500
-Subject: [PATCH] Let other modules move bots out of a boss mechanic as it is
- cast
+Subject: [PATCH 12/12] Let other modules move bots out of a boss mechanic as
+ it is cast
 
 A module may install a PlayerbotMechanicGuard. Every combat strategy then
 has a "mechanic move" trigger and action: while the guard has a mechanic
@@ -268,6 +268,3 @@ index cc725af7..c1ee9f44 100644
      static Trigger* combat_long_stuck(PlayerbotAI* botAI) { return new CombatLongStuckTrigger(botAI); }
      static Trigger* player_wants_in_bg(PlayerbotAI* botAI) { return new PlayerWantsInBattlegroundTrigger(botAI); }
      static Trigger* petition_signed(PlayerbotAI* botAI) { return new PetitionTurnInTrigger(botAI); }
--- 
-2.56.0.windows.2
-
