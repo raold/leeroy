@@ -101,7 +101,7 @@ def test_reserved_slot_blocks_other_member_and_release_spends_nothing(tmp_path):
     finally:app.store.close()
 
 
-@pytest.mark.parametrize('reason',['pick','looks','nsfw','missing','phase','dial','stopped','parent'])
+@pytest.mark.parametrize('reason',['pick','looks','missing','phase','dial','stopped','parent'])
 def test_revalidation_rejects_changed_state_and_keeps_files(tmp_path,reason):
     app=setup(tmp_path);sid=stock(app,phases=('evening',))
     try:
@@ -110,7 +110,7 @@ def test_revalidation_rejects_changed_state_and_keeps_files(tmp_path,reason):
         if reason=='looks':
             p=app.personas.get(101)
             app.personas.get=lambda guid:replace(p,appearance=replace(p.appearance,hair_colour='different'))
-        if reason=='nsfw':app.selfies.cfg=replace(app.selfies.cfg,nsfw_max=.005)
+
         if reason=='missing':files.snap(app.data_dir,101,sid).rename(files.snap(app.data_dir,101,sid).with_suffix('.kept'))
         if reason=='phase':
             app.clock._t += 12*3600
@@ -118,7 +118,7 @@ def test_revalidation_rejects_changed_state_and_keeps_files(tmp_path,reason):
         if reason=='stopped':app._stopping=True
         if reason=='parent':dstore.delete(app.store,meta.discord.reply_to,author=app.human_guid,now=app.clock.now())
         assert not photo.valid()
-        ended={'pick':'photo_changed','looks':'looks_changed','nsfw':'flagged','missing':'missing'}.get(reason)
+        ended={'pick':'photo_changed','looks':'looks_changed','missing':'missing'}.get(reason)
         assert tuple(app.store.conn.execute('SELECT status,ended FROM selfie_snap WHERE id=?',(sid,)).fetchone())==(
             ('expired',ended) if ended else ('ready',None))
         photo.release()

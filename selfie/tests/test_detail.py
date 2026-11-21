@@ -323,7 +323,7 @@ def test_a_detector_that_raises_is_unavailable():
 def line(tmp_path, **over):
     d = {"id": "r1", "op": "render", "phrases": [["a woman", 0]], "negative": [["blurry", 1]],
          "seed": 7, "steps": 30, "cfg": 5, "size": 1024, "out": str(tmp_path / "a.jpg"),
-         "thumb": str(tmp_path / "t.jpg"), "thumb_size": 256, "nsfw_max": 0.2}
+         "thumb": str(tmp_path / "t.jpg"), "thumb_size": 256}
     d.update(over)
     return json.dumps(d).encode()
 
@@ -332,7 +332,7 @@ def test_a_render_without_the_keys_has_no_pass_and_is_the_request_it_always_was(
     r = parse(line(tmp_path))
     assert r.detail is None
     assert r == Render("r1", (("a woman", 0),), (("blurry", 1),), 7, 30, 5.0, 1024,
-                       str(tmp_path / "a.jpg"), str(tmp_path / "t.jpg"), 256, 0.2)
+                       str(tmp_path / "a.jpg"), str(tmp_path / "t.jpg"), 256)
     assert parse(line(tmp_path, detail_faces=False, detail_hands=False)).detail is None
 
 
@@ -365,7 +365,7 @@ def test_a_bad_detail_key_is_a_bad_request(tmp_path, over):
 def request(tmp_path, **over):
     d = dict(id="r", phrases=(("a woman", 0), ("smiling", 3)), negative=(("blurry", 1),),
              seed=42, steps=20, cfg=6.0, size=1024, out=str(tmp_path / "o.jpg"),
-             thumb=str(tmp_path / "t.jpg"), thumb_size=200, nsfw_max=0.2)
+             thumb=str(tmp_path / "t.jpg"), thumb_size=200)
     d.update(over)
     return Render(**d)
 
@@ -399,7 +399,7 @@ def gated(tmp_path, monkeypatch, scores, *, changed=True):
     torch = make_torch()
     scored = []
     r = make_renderer(torch)
-    r.processor = lambda images, return_tensors: scored.append(images) or {}
+    r.gate.processor = lambda images, return_tensors: scored.append(images) or {}
     torch.softmax = lambda logits, dim: {(0, 1): scores[len(scored) - 1]}
     answer = r.render(request(tmp_path, detail=Detail(True, True)))
     return answer, r.pipe.image, after, scored, len(ran)
@@ -415,15 +415,15 @@ def test_a_render_with_a_pass_is_scored_before_and_after_and_the_image_after_is_
 
 
 def test_a_flagged_render_gets_no_pass_and_is_flagged_as_ever(tmp_path, monkeypatch):
-    answer, base, after, scored, ran = gated(tmp_path, monkeypatch, [0.6, 0.01])
+    answer, base, after, scored, ran = gated(tmp_path, monkeypatch, [0.95, 0.01])
     assert ran == 0 and scored == [base]  # the pass can never clear it
-    assert (answer["flagged"], answer["nsfw"], answer["detail_code"]) == (True, 0.6, "nsfw_base")
+    assert (answer["flagged"], answer["nsfw"], answer["detail_code"]) == (True, 0.95, "nsfw_base")
     assert (answer["detail_faces"], answer["detail_hands"]) == (0, 0)
     assert not base.saved and not after.saved and not (tmp_path / "o.jpg").exists()
 
 
 def test_a_pass_the_gate_flags_is_never_written_and_the_clean_render_is(tmp_path, monkeypatch):
-    answer, base, after, scored, ran = gated(tmp_path, monkeypatch, [0.05, 0.6])
+    answer, base, after, scored, ran = gated(tmp_path, monkeypatch, [0.05, 0.95])
     assert ran == 1 and scored == [base, after]
     assert not after.saved  # the flagged image never reaches the disk
     assert base.saved == [(str(tmp_path / "o.jpg.tmp"), "JPEG", 92)]
@@ -433,7 +433,7 @@ def test_a_pass_the_gate_flags_is_never_written_and_the_clean_render_is(tmp_path
 
 
 def test_a_pass_that_changed_nothing_is_not_scored_twice(tmp_path, monkeypatch):
-    answer, base, _, scored, ran = gated(tmp_path, monkeypatch, [0.05, 0.9], changed=False)
+    answer, base, _, scored, ran = gated(tmp_path, monkeypatch, [0.05, 0.95], changed=False)
     assert ran == 1 and scored == [base] and answer["flagged"] is False and base.saved
 
 

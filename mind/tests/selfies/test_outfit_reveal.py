@@ -35,7 +35,7 @@ def test_setting_is_omitted_by_default_and_requires_integer_one_to_five(tmp_path
     for level in range(1, 6):
         path.write_text(f"[selfies]\noutfit_reveal = {level}\n")
         cfg = load_selfie_config(path)
-        assert cfg.outfit_reveal == level and cfg.nsfw_max == .2
+        assert cfg.outfit_reveal == level
         assert not cfg.romance_styling and not cfg.enabled
     for bad in ("0", "6", "-1", "true", '"5"', "2.5"):
         path.write_text(f"[selfies]\noutfit_reveal = {bad}\n")

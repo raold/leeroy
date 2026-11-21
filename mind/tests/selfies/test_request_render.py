@@ -116,8 +116,8 @@ def test_identity_worker_renders_portrait_with_profile_crop_and_request_seed(app
     assert result.start_ms > 0 and result.render_ms > 0
     assert room.timings == {"start_ms": result.start_ms, "render_ms": result.render_ms}
     req, = seen
-    assert (req.size, req.shape, req.thumb_size, req.steps, req.cfg, req.nsfw_max) == (
-        1024, "portrait", 384, app.selfies.cfg.steps, app.selfies.cfg.guidance, None)
+    assert (req.size, req.shape, req.thumb_size, req.steps, req.cfg) == (
+        1024, "portrait", 384, app.selfies.cfg.steps, app.selfies.cfg.guidance)
     # the reference's crop is her cover's framing; the scale is the scene's (a waist-up scene:
     # WIDE_SCALE of identity_scale, render.scene_scale)
     assert scene_from(snap.scene).framing == "upper_body" and app.selfies.cfg.identity_scale == 0.6

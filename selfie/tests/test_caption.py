@@ -8,6 +8,8 @@ from leeroy_selfie.protocol import Caption, RenderFailed, parse
 from leeroy_selfie.render import Renderer
 from leeroy_selfie.worker import serve
 
+from fakes import make_gate
+
 
 def chars(text, size):  # a stand-in measure: every character half the font size wide
     return len(text) * size // 2
@@ -15,20 +17,20 @@ def chars(text, size):  # a stand-in measure: every character half the font size
 
 def line(tmp_path, **over):
     d = {"id": "m1", "op": "caption", "base_path": str(tmp_path / "base.jpg"), "top": "WHEN THE TANK",
-         "bottom": "PULLS EARLY", "out_path": str(tmp_path / "meme.jpg"), "nsfw_max": 0.2}
+         "bottom": "PULLS EARLY", "out_path": str(tmp_path / "meme.jpg")}
     d.update(over)
     return json.dumps(d).encode()
 
 
 def test_a_caption_request_parses_in_its_one_strict_form(tmp_path):
     assert parse(line(tmp_path)) == Caption("m1", str(tmp_path / "base.jpg"), "WHEN THE TANK",
-                                            "PULLS EARLY", str(tmp_path / "meme.jpg"), 0.2)
+                                            "PULLS EARLY", str(tmp_path / "meme.jpg"))
     assert parse(line(tmp_path, bottom="")).bottom == ""
 
 
 @pytest.mark.parametrize("over", [
     {"top": "", "bottom": ""}, {"top": "x" * 61}, {"top": " padded"}, {"top": "tab\there"},
-    {"bottom": 5}, {"base_path": "rel.jpg"}, {"out_path": "/abs/meme.png"}, {"nsfw_max": 0.95},
+    {"bottom": 5}, {"base_path": "rel.jpg"}, {"out_path": "/abs/meme.png"}, {"nsfw_max": 0.2},
     {"extra": 1}, {"out_path": None},
 ])
 def test_bad_caption_requests_are_refused(tmp_path, over):
@@ -73,22 +75,19 @@ def test_caption_draws_both_lines_within_width(tmp_path):
 
 
 class Scored:
-    """A renderer with only its classifier stubbed: the real caption path otherwise."""
+    """A renderer with only its classifier stubbed: the real caption path and gate otherwise."""
 
     def __init__(self, nsfw):
-        self.nsfw = nsfw
+        self.gate = make_gate(nsfw=nsfw)
 
     caption = Renderer.caption
-
-    def score(self, image):
-        return self.nsfw
 
 
 def test_the_captioned_image_is_scored_and_a_flagged_one_is_never_written(tmp_path):
     Image = pytest.importorskip("PIL.Image")
     Image.new("RGB", (512, 512), (40, 90, 60)).save(tmp_path / "base.jpg", format="JPEG")
     req = parse(line(tmp_path))
-    flagged = Scored(0.5).caption(req)
+    flagged = Scored(0.95).caption(req)
     assert flagged["flagged"] is True and not (tmp_path / "meme.jpg").exists()
     ok = Scored(0.01).caption(req)
     assert ok["flagged"] is False and (ok["width"], ok["height"]) == (512, 512) and ok["lines"] == 2
@@ -98,17 +97,6 @@ def test_the_captioned_image_is_scored_and_a_flagged_one_is_never_written(tmp_pa
     with pytest.raises(RenderFailed, match="missing_base"):
         Scored(0.01).caption(parse(line(tmp_path, base_path=str(tmp_path / "gone.jpg"))))
 
-
-def test_caption_without_cutoff_is_still_screened_by_worker_default(tmp_path):
-    Image = pytest.importorskip('PIL.Image')
-    Image.new('RGB', (512, 512)).save(tmp_path/'base.jpg', format='JPEG')
-    data = json.loads(line(tmp_path))
-    del data['nsfw_max']
-    req = parse(json.dumps(data).encode())
-    assert req.nsfw_max == 0.2
-    assert Scored(0.25).caption(req)['flagged'] is True
-    assert not (tmp_path/'meme.jpg').exists()
-    assert parse(json.dumps(data).encode(), nsfw_max=0.1).nsfw_max == 0.1
 
 
 class Fake:

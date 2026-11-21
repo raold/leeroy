@@ -1,4 +1,4 @@
-"""The renderer: RealVisXL on the GPU, the NSFW classifier on the CPU, and for an identity worker
+"""The renderer: RealVisXL on the GPU, the NSFW gate (nsfw.py) on the CPU, and for an identity worker
 the IP-Adapter Plus Face with its image encoder (and, when fetched, the YuNet face detector that
 cuts the reference tight around her face: face.py). torch, diffusers, transformers and Pillow are
 imported inside the functions that need them, so the CLI and the default test suite never load
@@ -8,7 +8,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from . import caption, critic, detail, face, grid, jpeg, models, similarity
+from . import caption, critic, detail, face, grid, jpeg, models, nsfw, similarity
 from .fit import fit
 from .protocol import PORTRAIT_SIZE, Caption, Critic, Grid, Identity, Render, RenderFailed
 
@@ -51,12 +51,10 @@ class Renderer:
     `face_ref` (face.FaceRef, or None) cuts the reference tight around her face. `data` is the
     data dir whose fetched detectors the critic loads at its first request."""
 
-    def __init__(self, pipe, processor, classifier, nsfw_index: int, torch, info: dict,
+    def __init__(self, pipe, gate: nsfw.Gate, torch, info: dict,
                  identity: bool = False, face_ref=None, data: Path | None = None):
         self.pipe = pipe
-        self.processor = processor
-        self.classifier = classifier
-        self.nsfw_index = nsfw_index
+        self.gate = gate
         self.torch = torch
         self.info = info
         self.identity = identity
@@ -74,27 +72,20 @@ class Renderer:
     def _fit(self, phrases):
         return fit(phrases, self._count, self.pipe.tokenizer.model_max_length - 2)
 
-    def score(self, image) -> float:
-        torch = self.torch
-        with torch.no_grad():
-            logits = self.classifier(**self.processor(images=image, return_tensors="pt")).logits
-        return float(torch.softmax(logits, dim=-1)[0, self.nsfw_index])
-
     def render(self, req: Render) -> dict:
         """One image, a square of the requested `size` (768, 896 or 1024) or PORTRAIT for shape
         "portrait", after the detailer's pass when the request asks for one (detail.py: its
         detail_ fields are in the answer then), saved as is to `out`, and a thumbnail with its long side `thumb_size` to
-        `thumb`; neither when the NSFW score reaches nsfw_max. A render with an identity is
+        `thumb`; neither when the NSFW gate flags it (nsfw.py). A render with an identity is
         conditioned on the face in its reference crop, at its scale; one without, on an
         identity pipeline, carries a blank reference at scale 0, which adds nothing. RenderFailed:
         oom, missing_ref (the reference is gone or not a JPEG), identity_unavailable (a reference
         without the adapter).
 
-        With a pass the NSFW check reads the image before and after it. A render that scores
-        nsfw_max or more gets no pass and is flagged as ever (detail_code nsfw_base). An image
-        the pass made that scores nsfw_max or more is never written: the render as it was is
-        (detail_code nsfw_reverted, the counts 0, the score the render's own), so the pass
-        never flags a clean render and never clears a flagged one."""
+        With a pass the gate reads the image before and after it. A flagged render gets no pass
+        (detail_code nsfw_base). An image the pass made that the gate flags is never written:
+        the render as it was is (detail_code nsfw_reverted, the counts 0, the score the
+        render's own), so the pass never flags a clean render and never clears a flagged one."""
         if req.identity is not None and not self.identity:
             raise RenderFailed("identity_unavailable")
         torch = self.torch
@@ -118,9 +109,9 @@ class Renderer:
                               **adapter_kw).images[0]
         except torch.cuda.OutOfMemoryError as e:
             raise RenderFailed("oom") from e
-        nsfw = self.score(image)
+        flagged, score = self.gate.check(image)
         detailed = {}
-        if req.detail is not None and nsfw >= req.nsfw_max:
+        if req.detail is not None and flagged:
             detailed = {"detail_faces": 0, "detail_hands": 0, "detail_skipped": 0,
                         "detail_reverted": 0, "detail_ms": 0, "detail_code": "nsfw_base"}
         elif req.detail is not None:
@@ -132,19 +123,18 @@ class Renderer:
                 hand_prompt=self._fit(hand)[0],
                 negative=negative, identity=req.identity)
             if refined is not image:
-                after = self.score(refined)
-                if after >= req.nsfw_max:  # never written; the render as it was is
+                refined_flagged, refined_score = self.gate.check(refined)
+                if refined_flagged:  # never written; the render as it was is
                     detailed = {**detailed, "detail_faces": 0, "detail_hands": 0,
                                 "detail_code": "nsfw_reverted"}
                 else:
-                    image, nsfw = refined, after
-        flagged = nsfw >= req.nsfw_max
+                    image, score = refined, refined_score
         if not flagged:
             from PIL import Image
             jpeg.write(image, req.out, 92)
             jpeg.write(image.resize(jpeg.thumb_size(width, height, req.thumb_size),
                                     Image.LANCZOS), req.thumb, 85)
-        return {"flagged": flagged, "nsfw": round(nsfw, 4), "prompt": prompt,
+        return {"flagged": flagged, "nsfw": round(score, 4), "prompt": prompt,
                 "dropped": list(dropped), "tokens": self._count(prompt),
                 "seconds": round(time.perf_counter() - started, 2),
                 "peak_gib": round(torch.cuda.max_memory_allocated() / 2**30, 2),
@@ -303,21 +293,20 @@ class Renderer:
         return critic.answer(self._detectors, req, encode)
 
     def caption(self, req: Caption) -> dict:
-        """A meme: the caption drawn over the base JPEG (caption.draw), scored by the NSFW
-        classifier like every render, and written to out_path (quality 92) only when it scores
-        under nsfw_max. RenderFailed("missing_base") when the base is gone or not a JPEG."""
+        """A meme: the caption drawn over the base JPEG (caption.draw), checked by the NSFW
+        gate like every render, and written to out_path (quality 92) only when it passes.
+        RenderFailed("missing_base") when the base is gone or not a JPEG."""
         started = time.perf_counter()
         try:
             img = jpeg.open_rgb(req.base_path)
         except Exception as e:  # Pillow's errors share no narrower base: the base is there or not
             raise RenderFailed("missing_base") from e
         img, boxes = caption.draw(img, req.top, req.bottom)
-        nsfw = self.score(img)
-        flagged = nsfw >= req.nsfw_max
+        flagged, score = self.gate.check(img)
         if not flagged:
             jpeg.write(img, req.out_path, 92)
         width, height = img.size
-        return {"flagged": flagged, "nsfw": round(nsfw, 4), "width": width, "height": height,
+        return {"flagged": flagged, "nsfw": round(score, 4), "width": width, "height": height,
                 "lines": len(boxes), "seconds": round(time.perf_counter() - started, 2)}
 
     def grid(self, req: Grid) -> dict:
@@ -343,7 +332,8 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
          identity: bool = False, backend: str = "realvisxl",
          lora: Path | None = None, lora_scale: float = 1.0) -> Renderer:
     """A ready Renderer, or ReadyError: cuda (no torch or no CUDA), model (a file missing, from
-    another revision or without its download record, a load that failed, no `nsfw` label),
+    another revision or without its download record, a load that failed, a classifier without
+    an `nsfw` label),
     vram (less than min_free_gib free just before the pipeline moves to the GPU, or CUDA out of
     memory while it does). The weights load to the CPU first, so another process holding VRAM
     reads as vram, not model; a vram refusal keeps them there for its `retry`. The models are
@@ -374,7 +364,6 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
     try:
         import diffusers
         from diffusers import DPMSolverMultistepScheduler, StableDiffusionXLPipeline
-        from transformers import AutoImageProcessor, AutoModelForImageClassification
         adapter = {}
         if identity:
             from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
@@ -393,18 +382,12 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
             pipe.load_ip_adapter(str(ip_dir), subfolder="sdxl_models",
                                  weight_name=ADAPTER_WEIGHTS, image_encoder_folder=None,
                                  local_files_only=True)
-        nsfw_dir = models.model_dir(data, "nsfw")
-        processor = AutoImageProcessor.from_pretrained(nsfw_dir, local_files_only=True)
-        classifier = AutoModelForImageClassification.from_pretrained(
-            nsfw_dir, local_files_only=True).eval()
+        gate = nsfw.load(data)
     except Exception as e:
         raise ReadyError("model", fields={"check_ms": _ms(checked - started),
                                           "load_ms": _ms(time.perf_counter() - checked)}) from e
-    labels = {str(v).lower(): int(k) for k, v in classifier.config.id2label.items()}
     timings = {"check_ms": _ms(checked - started), "load_ms": _ms(time.perf_counter() - checked)}
-    if "nsfw" not in labels:
-        raise ReadyError("model", fields=timings)
-    loaded = _OnCpu(pipe, processor, classifier, labels["nsfw"], torch,
+    loaded = _OnCpu(pipe, gate, torch,
                     {"torch": torch.__version__, "diffusers": diffusers.__version__}, identity,
                     _face_ref(data) if identity else None, data)
     return _to_gpu(loaded, min_free_gib, timings, wait_s=0.0)
@@ -413,10 +396,9 @@ def load(data: Path, *, min_free_gib: float, device: str = "cuda",
 class _OnCpu:
     """What a start loaded before its VRAM check, kept for a retry after a vram refusal."""
 
-    def __init__(self, pipe, processor, classifier, nsfw_index: int, torch, versions: dict,
+    def __init__(self, pipe, gate: nsfw.Gate, torch, versions: dict,
                  identity: bool, face_ref=None, data: Path | None = None):
-        self.pipe, self.processor, self.classifier = pipe, processor, classifier
-        self.nsfw_index, self.torch, self.versions = nsfw_index, torch, versions
+        self.pipe, self.gate, self.torch, self.versions = pipe, gate, torch, versions
         self.identity, self.face_ref, self.data = identity, face_ref, data
 
 
@@ -468,5 +450,5 @@ def _to_gpu(c: _OnCpu, min_free_gib: float, timings: dict, *, wait_s: float) -> 
         raise ReadyError("model", fields=fields) from e
     info = {"device": "cuda", "free_gib": round(free_gib, 1), "versions": dict(c.versions),
             **timings}
-    return Renderer(pipe, c.processor, c.classifier, c.nsfw_index, torch, info, c.identity,
+    return Renderer(pipe, c.gate, torch, info, c.identity,
                     c.face_ref, c.data)

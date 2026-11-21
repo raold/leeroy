@@ -90,7 +90,7 @@ def request(tmp_path: Path, **over) -> RenderRequest:
                  ("standing in a sunlit kitchen", 3)),
         negative=(("child, teenager", 0), ("blurry", 1)),
         seed=1234, steps=30, cfg=5.0, size=1024, out=tmp_path / "c0.jpg",
-        thumb=tmp_path / "c0.thumb.jpg", thumb_size=512, nsfw_max=0.2)
+        thumb=tmp_path / "c0.thumb.jpg", thumb_size=512)
     return replace(req, **over)
 
 

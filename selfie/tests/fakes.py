@@ -132,12 +132,19 @@ class FakePipe:
         self.scales.append(scale)
 
 
+def make_gate(torch=None, *, nsfw=0.0):
+    """The real nsfw.Gate over a stub classifier: its score is make_torch's `nsfw`."""
+    from leeroy_selfie.nsfw import Gate
+    torch = torch or make_torch(nsfw=nsfw)
+    processor = lambda images, return_tensors: {}  # noqa: E731
+    classifier = lambda **kw: types.SimpleNamespace(logits=None)  # noqa: E731
+    return Gate(processor, classifier, 1, torch)
+
+
 def make_renderer(torch=None, *, identity=False, **pipe_kw):
     from leeroy_selfie.render import Renderer
     torch = torch or make_torch()
-    processor = lambda images, return_tensors: {}  # noqa: E731
-    classifier = lambda **kw: types.SimpleNamespace(logits=None)  # noqa: E731
-    return Renderer(FakePipe(torch, **pipe_kw), processor, classifier, 1, torch,
+    return Renderer(FakePipe(torch, **pipe_kw), make_gate(torch), torch,
                     {"device": "cuda"}, identity=identity)
 
 
