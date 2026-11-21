@@ -94,7 +94,36 @@ def test_every_table_is_bounded_and_fits_one_bridge_line():
                                              "duration", "landing"}
         for rule in wire["mechanics"]:                     # entries only for a nearest area, which needs them
             assert ("entries" in rule) == (rule["area"] == "nearest")
-    assert sum(len(rules) for rules in found.values()) == 106  # 43 mechanics over the difficulties they exist in
+    assert sum(len(rules) for rules in found.values()) == 114  # 47 mechanics over their difficulties
+
+
+def test_naxx_responses_use_actual_cover_clouds_and_the_injected_member():
+    for difficulty, poison, chill in ((0, 28241, 28547), (1, 54363, 55699)):
+        rules = {r.id: r for r in actionable(raidplay.load(), 533, difficulty)}
+        ice = rules['naxx.sapphiron.frost_breath']
+        assert (ice.area, ice.radius, ice.range_, ice.duration, ice.spells) == ('ice_block', 2, 10, 9, (30101,))
+        cloud = rules['naxx.grobbulus.poison_pool']
+        assert (cloud.area, cloud.spells, cloud.radius) == ('caster_reach', (28158, poison), 2)
+        assert rules['naxx.grobbulus.mutating_injection'].area == 'target'
+        assert rules['naxx.sapphiron.blizzard'].spells == (chill,)
+        assert rules['naxx.sapphiron.blizzard'].area == 'caster'
+
+
+@pytest.mark.parametrize('nearest', [False, True])
+@pytest.mark.parametrize('naxx', [False, True])
+def test_new_naxx_areas_are_never_sent_to_an_older_native(nearest, naxx):
+    async def go():
+        app = _App()
+        feed = MechanicFeed(app, raidplay.load())
+        features = ['mechanics'] + ([respond.FEATURE_NEAREST] if nearest else []) + ([respond.FEATURE_NAXX] if naxx else [])
+        await feed.connection(True)
+        await feed.event(_hello(features))
+        await _drain(feed)
+        areas = {r.area for c in app.sent for r in c.mechanics}
+        assert ('ice_block' in areas) is naxx
+        assert ('caster_reach' in areas) is naxx
+        assert ('nearest' in areas) is nearest
+    asyncio.run(go())
 
 
 def test_ruby_sanctum_moves_bodies_out_of_the_fire_only():

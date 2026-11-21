@@ -61,8 +61,10 @@ kind = "run_out_debuff"
 roles = ["healer", "melee", "ranged"]
 spells = [28169]
 hits = [28206]
-handled_by = "playerbots"
+handled_by = "partial"
 playerbots = ["grobbulus move away", "grobbulus go behind the boss"]
+handled_note = "stock moves relative to the boss, not the raid; the responder keeps the injected member clear of every other member"
+respond_roles = ["healer", "melee", "ranged"]
 radius = 20
 explain = "An injected player walks away from the raid before it bursts into a poison cloud."
 check = "naxx.grobbulus.check_avoid"
@@ -82,6 +84,25 @@ explain = "The tank drags him around the room's rim so his poison clouds trail b
 check = "naxx.grobbulus.check_avoid"
 first = 15
 every = 15
+
+[[boss.mechanic]]
+id = "naxx.grobbulus.poison_pool"
+name = "Growing Poison Cloud"
+kind = "avoid_ground"
+roles = ["tank", "healer", "melee", "ranged"]
+# The cloud starts 28158 one second after spawning, then emits Poison from itself.
+# Its script grows combat reach by .00025 yards/ms; the hit filter uses that reach.
+spells = { "10" = [28158, 28241], "25" = [28158, 54363] }
+hits = { "10" = [28241], "25" = [54363] }
+handled_by = "partial"
+playerbots = ["rotate grobbulus"]
+handled_note = "stock rotates the tank but leaves the other members inside growing clouds; the responder follows each live cloud's actual reach"
+respond_roles = ["tank", "healer", "melee", "ranged"]
+area = "caster_reach"
+radius = 2
+duration = 3
+explain = "Step clear of each growing poison cloud; keep the route around the rim open for the tank."
+check = "naxx.grobbulus.check_avoid"
 
 [[boss.mechanic]]
 id = "naxx.grobbulus.slime_spray"
@@ -952,9 +973,14 @@ phase = "air"
 roles = ["tank", "healer", "melee", "ranged"]
 spells = [30101]
 hits = [28524]
-handled_by = "playerbots"
+handled_by = "partial"
 playerbots = ["sapphiron flight position"]
-radius = 100
+handled_note = "stock approaches an icebolted member but may resume ordinary movement or stop on the exposed side; the responder keeps a validated spot in the frozen player's shelter until the breath has landed"
+respond_roles = ["tank", "healer", "melee", "ranged"]
+area = "ice_block"
+radius = 2
+range = 10
+duration = 9
 explain = "In the air he entombs players in ice; everyone hides behind an ice block before his breath lands."
 check = "naxx.sapphiron.check_avoid"
 
@@ -979,11 +1005,15 @@ name = "Chill"
 kind = "avoid_ground"
 phase = "ground"
 roles = ["tank", "healer", "melee", "ranged"]
-spells = [28560]
+spells = { "10" = [28547], "25" = [55699] }
 hits = { "10" = [28547], "25" = [55699] }
-handled_by = "playerbots"
+handled_by = "partial"
 playerbots = ["sapphiron ground position"]
+handled_note = "stock asks the victim aura for a dynamic-object owner, but Chill is cast by a moving blizzard creature; the responder follows the creature's active aura instead"
+respond_roles = ["tank", "healer", "melee", "ranged"]
+area = "caster"
 radius = 3
+duration = 16
 explain = "Blizzards drift across the floor; step out of them."
 check = "naxx.sapphiron.check_avoid"
 first = 17
