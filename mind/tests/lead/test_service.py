@@ -490,6 +490,31 @@ def test_a_newer_dungeon_lead_is_never_stopped_by_an_older_handover(app, monkeyp
     run(main())
 
 
+def test_a_stop_waiting_on_an_older_start_never_ends_a_newer_one(app):
+    gate = asyncio.Event()
+
+    class Slow(Wire):
+        async def send(self, cmd, *, preserve_id=False):
+            if isinstance(cmd, LeadDo) and cmd.action == "start" and cmd.guid == 101:
+                await gate.wait()
+            return await super().send(cmd, preserve_id=preserve_id)
+
+    async def main():
+        app.bridge = Slow(app)
+        app.leading.claims(chat("Arkon, you lead"), 566)
+        await asyncio.sleep(0)
+        app.leading.claims(chat("stop leading"), 567)
+        await asyncio.sleep(0)
+        app.leading.claims(chat("Belra, you lead"), 568)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        gate.set()
+        await settle(app)
+        assert not [c for c in app.bridge.sent if c.action == "end"]
+        assert app.leading.active is not None and app.leading.active.guid == 102
+    run(main())
+
+
 def test_follow_me_ends_it_and_still_is_playerbots(app):
     async def main():
         app.leading.claims(chat("you lead"), 520)

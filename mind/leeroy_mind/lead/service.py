@@ -82,6 +82,7 @@ class Asked:
     told: bool = False           # her answer's instruction has been written
     cancelled: bool = False      # his end came while it was being carried out
     gen: int = 0                 # world, dc: its place among the asks that reached the bridge
+    upto: int = 0                # end: his asks to lead made before it (LeadService._requests)
     ready: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -121,6 +122,8 @@ class LeadService:
         self._gen = 0
         # the handover his end cancelled (its lead's id): a run it started meanwhile is stopped again
         self._cancelled: str | None = None
+        # his asks to lead (world, dc), counted as he makes them: an end acts only on those before it
+        self._requests = 0
         # the start in flight (its command id) and a "lead ended" native sent before its ack
         self._starting: str | None = None
         self._early: object = None
@@ -293,6 +296,7 @@ class LeadService:
         log_event("lead_read", line=line_id, activity=start.activity, who=start.who, where=where,
                   guid=leader, kind=asked.kind, code=asked.code or "-")
         if asked.kind in ("world", "dc"):
+            self._requests += 1
             self._pending = asked
             self._spawn(self._start(asked) if asked.kind == "world" else self._dc_on(asked))
         return "lead"
@@ -315,7 +319,7 @@ class LeadService:
             except Exception as exc:
                 log_event("lead_failed", level=logging.WARNING, error=type(exc).__name__)
         channel = "raid" if ev.channel == "raid_warning" else ev.channel
-        asked = Asked(line_id, channel, leader, "end")
+        asked = Asked(line_id, channel, leader, "end", upto=self._requests)
         self._keep(asked)
         log_event("lead_read", line=line_id, activity="end", who="-", where="-", guid=leader,
                   kind="end", code="-")
@@ -370,7 +374,11 @@ class LeadService:
                     await asyncio.wait_for(pending.ready.wait(), PENDING_WAIT_S)
                 except TimeoutError:
                     pass
-            if self.active is not None:
+            if self._requests != asked.upto:
+                # he asked someone to lead again after this end: that newer lead is his, and what
+                # this end was for is replaced by it in the game; nothing is sent
+                outcome, code = "done", ""
+            elif self.active is not None:
                 from .protocol import LeadDo
                 active = self.active
                 outcome, code = await self._send(LeadDo(id=uuid.uuid4().hex, action="end",
