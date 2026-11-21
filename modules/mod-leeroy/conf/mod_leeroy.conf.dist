@@ -88,6 +88,10 @@ Leeroy.Mechanics.Enable = 0
 # and seats it added.
 Leeroy.Strings.Enable = 0
 
+# Allow five consenting members to run a level-80 heroic while their owner is away.
+# .reload config applies the switch. Exact-start cleanup continues while starts are off.
+Leeroy.MemberDungeon.Enable = 0
+
 # The owner's invitations in game ("come to the inn", "meet me at the bank", "let's go fishing in Dalaran"), read by
 # the mind ([talk] invites) and sent as string_do marked "via": "invite": come_to_me, join_group, follow and sit as
 # above, plus go_to (to one of the meeting spots compiled into the module: Dalaran's fountain, Krasus' Landing, inns

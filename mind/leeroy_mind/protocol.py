@@ -469,7 +469,11 @@ def encode_command(cmd, ts_ms: int) -> bytes:
         if not body.get("day_check") or body.get("day_prepared"):
             raise ValueError("driver preparation requires an original offline raid check")
         type_name = "day_prepare_offline_driver"
-    elif type_name in {"string_do", "clear_lockout", "form_raid", "start_offline_raid"} and body.get("day_check"):
+    elif type_name == "start_member_dungeon" and (body.get("dungeon_inspect") or body.get("dungeon_driver_ticket")):
+        if not body.get("day_check") or body.get("day_prepared"):
+            raise ValueError("driver preparation requires the bound heroic check")
+        type_name = "member_dungeon_prepare_driver" if body.get("dungeon_driver_ticket") else "member_dungeon_inspect"
+    elif type_name in {"string_do", "clear_lockout", "form_raid", "summon", "start_offline_raid", "start_member_dungeon"} and body.get("day_check"):
         type_name = "day_check_" + type_name
     if isinstance(cmd, (Say, HumanSay)) and cmd.channel not in SAY_CHANNELS:
         raise ValueError(f"channel not allowed: {cmd.channel!r}")

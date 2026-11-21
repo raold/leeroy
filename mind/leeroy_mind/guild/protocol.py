@@ -19,6 +19,8 @@ class DayOwnerCheck:
     request_id: str
     origins: tuple[str, ...]
     expires_ms: int
+    heroic_start: str = field(default="", metadata={"omit_default": True})
+    owner_guid: int = field(default=0, metadata={"omit_default": True})
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +45,8 @@ class Summon:
     where: str = "entrance"
     summon_human: bool = False
     summoner_guid: int = 0
+    day_check: DayOwnerCheck | None = field(default=None, kw_only=True, metadata={"omit_none": True})
+    day_prepared: str = field(default="", kw_only=True, metadata={"omit_default": True})
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +196,38 @@ class GuildAddRoster:
 
 
 @dataclass(frozen=True, slots=True)
+class StartMemberDungeon:
+    id: str
+    leader_guid: int
+    members: tuple[int, ...]
+    map_id: int
+    day_check: DayOwnerCheck | None = field(default=None, kw_only=True, metadata={"omit_none": True})
+    day_prepared: str = field(default="", kw_only=True, metadata={"omit_default": True})
+    dungeon_inspect: bool = field(default=False, kw_only=True, metadata={"omit_default": True})
+    dungeon_driver_ticket: str = field(default="", kw_only=True, metadata={"omit_default": True})
+
+
+@dataclass(frozen=True, slots=True)
+class MemberDungeonCapability:
+    ts: int
+    enabled: bool
+    guild: int
+    human: int
+
+
+@dataclass(frozen=True, slots=True)
+class StopMemberDungeon:
+    id: str
+    start_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class MemberDungeonStatus:
+    id: str
+    start_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class JobSkip:
     guid: int
     reason: str
@@ -222,6 +258,9 @@ class Job:
     dc_state: str | None = None
     # A capped gear-up's progress: slots that kept an item above the cap (nothing capped could fill them).
     kept: int | None = None
+    map_id: int | None = None
+    returned: bool | None = None
+    revision: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +297,9 @@ COMMANDS: dict[str, type] = {
     "set_loot_master": SetLootMaster,
     "give_loot": GiveLoot,
     "start_offline_raid": StartOfflineRaid,
+    "start_member_dungeon": StartMemberDungeon,
+    "member_dungeon_stop": StopMemberDungeon,
+    "member_dungeon_status": MemberDungeonStatus,
     "offline_raid_stop": StopOfflineRaid,
     "gear_up": GearUp,
     "raid_control": RaidControl,
@@ -276,3 +318,4 @@ def register() -> None:
         register_command(name, cls)
     register_event("job", Job)
     register_event("guild_group", GuildGroup)
+    register_event("member_dungeon_capability", MemberDungeonCapability)

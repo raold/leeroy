@@ -135,6 +135,30 @@ private:
 };
 }
 
+std::optional<OfflineRaidCmd> ParseMemberDungeon(json const& j, std::string& error)
+{
+    Fields fields(j, error);
+    OfflineRaidCmd party;
+    fields.Number("map_id", party.mapId);
+    fields.Number("leader_guid", party.leaderGuid);
+    fields.List("members", party.members, 4, 4);
+    fields.Require(!Contains(party.members, party.leaderGuid), "members");
+    party.size = party.minMembers = 5;
+    party.lootMasterGuid = party.leaderGuid;
+    party.heroic = true;
+    return fields.Result(std::move(party));
+}
+
+std::optional<std::string> ParseDungeonTarget(json const& j, std::string& error)
+{
+    Fields fields(j,error);
+    std::string target;
+    fields.String("start_id",target);
+    fields.Require(!target.empty() && target.size() <= 128 &&
+        std::none_of(target.begin(),target.end(),[](unsigned char c){return c < 32 || c == 127;}), "start_id");
+    return fields.Result(std::move(target));
+}
+
 std::optional<FormRaidCmd> ParseFormRaid(json const& j, std::string& error)
 {
     Fields f(j, error);

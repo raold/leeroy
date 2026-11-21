@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "Strings.h"
+#include "MemberDungeonJob.h"
 #include "LeeroyOwnerFight.h"
 #include "Realm/DayPlans.h"
 #include "GuildAdd.h"
@@ -245,7 +246,8 @@ bool AtFishSpot(std::uint32_t guid, Player* bot)
         && bot->GetDistance(spot.x, spot.y, spot.z) <= kInviteSpotYards;
 }
 
-StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot, std::string const& dayToken = {})
+StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot, std::string const& dayToken = {},
+    std::string const& dungeon = {})
 {
     StringFacts f;
     LeeroyModule& module = LeeroyModule::Instance();
@@ -303,8 +305,13 @@ StringFacts ReadFacts(StringDoCmd const& cmd, Player* human, Player* bot, std::s
     f.groupSpecial = his && (his->isLFGGroup() || his->isBGGroup() || his->isBFGroup());
     f.groupRaid = his && his->isRaidGroup();
     f.groupMembers = his ? his->GetMembersCount() : 0;
+    if (!dungeon.empty() && CanProjectDungeonBody(dungeon,guid))
+    {
+        f.otherGroup = f.instance = f.combat = f.dead = false;
+        f.fence.clear();
+    }
     if (cmd.kind == StringKind::JoinGroup)
-        f.joinRefusal = GuildAddJoinRefusal(human, bot, dayToken);
+        f.joinRefusal = GuildAddJoinRefusal(human, bot, dayToken, dungeon);
     if (cmd.kind == StringKind::Fish)
     {
         f.fishing = bot->GetSkillValue(SKILL_FISHING) > 0;
@@ -570,7 +577,10 @@ LeeroyCommandResult HandleStringDo(nlohmann::json const& message)
     auto token = check.Token(cmd->guid);
     Player* bot = cmd->guid == HumanGuid() ? nullptr : FindOnline(cmd->guid);
     if (!bot && !token.empty()) bot = ObjectAccessor::FindConnectedPlayer(Realm::PlayerGuid(cmd->guid));
-    std::string why = StringRefusal(cmd->kind, ReadFacts(*cmd, human, bot, token));
+    auto dungeon = MemberDungeonFor(cmd->guid);
+    if (!dungeon.empty() && (!check.ProjectsDungeon(cmd->guid) || cmd->invite ||
+        (cmd->kind != StringKind::JoinGroup && cmd->kind != StringKind::ComeToMe))) return {false,"busy:member_dungeon"};
+    std::string why = StringRefusal(cmd->kind, ReadFacts(*cmd, human, bot, token, dungeon));
     if (check.Checking()) return why.empty() ? check.Accept() : LeeroyCommandResult{false, why};
     std::string outcome;
     if (why.empty())

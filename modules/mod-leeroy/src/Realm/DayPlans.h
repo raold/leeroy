@@ -12,21 +12,26 @@ class DayOwnerCheck
 public:
     DayOwnerCheck(nlohmann::json const& message, std::vector<std::uint32_t> members, std::string reason);
     bool Checking() const { return checking; }
+    bool InspectingDungeon() const { return inspectingDungeon; }
+    bool ProjectsDungeon(std::uint32_t guid) const;
     std::string Token(std::uint32_t guid) const;
     bool DriverPreparationCurrent() const;
     bool PreparingDriver() const { return preparingDriver; }
     LeeroyCommandResult Accept(bool coldDriver = false) const;
     std::string error;
 private:
-    bool checking = false, preparingDriver = false;
+    bool checking = false, preparingDriver = false, inspectingDungeon = false;
     std::int64_t expires = 0;
     nlohmann::json original, binding;
-    std::string checkId, why;
+    std::string checkId, why, heroic;
+    std::vector<std::uint32_t> heroicMembers;
     std::vector<std::uint32_t> targets;
     std::set<std::string> tokens;
 };
 void RegisterDayPlans();
 void InvalidateDayOwnerChecks();
+bool HasPreparedOwner(std::uint32_t guid);
+void CancelPreparedDungeon(std::vector<std::uint32_t> const& picks);
 void RegisterDayOwnerCheck(std::string const& originalType, LeeroyCommandHandler handler);
 void TickDayPlans();
 std::string CheckDayStep(Queued const& entry);

@@ -9,7 +9,7 @@
 namespace Leeroy::Realm { class DayOwnerCheck; }
 namespace Leeroy::Guild
 {
-enum class RaidJobMode { Offline, Benchmark };
+enum class RaidJobMode { Offline, Benchmark, MemberDungeon };
 LeeroyCommandResult StartRaidJob(std::string const& id, OfflineRaidCmd const&, RaidJobMode,
     std::vector<std::uint32_t> const& bosses = {}, Realm::DayOwnerCheck const* check = nullptr);
 LeeroyCommandResult HandleStartOfflineRaid(nlohmann::json const& message);
