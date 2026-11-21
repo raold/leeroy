@@ -392,6 +392,16 @@ LEEROY_TEST(MemberDungeonIoReadCompletedBetweenRecoveryPassesIsConsumedOnce)
     CHECK_EQ(CharacterDatabase.queries.size(),2u);
 }
 
+LEEROY_TEST(MemberDungeonIoCompletedReadSurvivesABoundedFullRecoverySweep)
+{
+    Fresh();CHECK(!Read("SELECT delayed",5000));Answer(Result({"1"}));PollIo();
+    // Four of 128 receipts per five seconds: the next turn can be 160 seconds away.
+    receiptClock+=165000;PollIo();
+    CHECK(Read("SELECT delayed",5000)!=nullptr);
+    CHECK_EQ(CharacterDatabase.queries.size(),1u);
+    receiptClock+=60000;PollIo();CHECK(reads.empty());
+}
+
 LEEROY_TEST(MemberDungeonIoPartialStoreSnapshotRetainsDiscoveredOwners)
 {
     Fresh();auto data=Accepted().data;

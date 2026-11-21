@@ -106,7 +106,11 @@ void PollIo()
         if (!write.state->committed.has_value()) write.callback->InvokeIfReady();
     std::erase_if(reads,[](auto const& item)
     {
-        return item.second.state->ready && NowUnixMs()-item.second.state->finished >= 60000;
+        // A full 128-row recovery sweep takes 160 seconds. Keep a completed,
+        // unconsumed result through that sweep; expiring it after one minute
+        // would continually restart slow/backlogged recovery without reading it.
+        auto const& state = *item.second.state;
+        return state.ready && NowUnixMs()-state.finished >= (state.consumed ? 60000 : 600000);
     });
 }
 
