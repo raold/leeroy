@@ -74,6 +74,12 @@ bool ValidDungeonReceipt(nlohmann::json const& data)
             if (data.contains(key) && !UInt(data.at(key),key==std::string_view("kills") ? 4 : UINT32_MAX)) return false;
         if ((data.contains("recovery_authorized") && !data.at("recovery_authorized").is_boolean()) ||
             (data.contains("effect") && (!data.at("effect").is_string() || data.at("effect").get_ref<std::string const&>().size()>32))) return false;
+        if (data.contains("effect"))
+        {
+            static std::set<std::string> const effects{"observe","create_group","group_created","add_group","group_formed",
+                "enter_leader","enter_follower","disband","return_member","return_roster","returned"};
+            if (!effects.contains(data.at("effect").get_ref<std::string const&>())) return false;
+        }
         if (data.contains("return_scope") && !DungeonReturnAuthorized(data)) return false;
         auto const& terminal = data.at("terminal");
         if (!terminal.is_null())
@@ -92,6 +98,9 @@ bool ValidDungeonReceipt(nlohmann::json const& data)
         if (roster.size()!=5 || ids.contains(data.at("human").get<std::uint32_t>()) || data.at("leader")!=roster.front()) return false;
         auto const& bodies = data.at("bodies");
         if (!bodies.is_array() || (!bodies.empty() && bodies.size() != 5)) return false;
+        auto proofs = data.find("handbacks");
+        if (proofs != data.end() && (!proofs->is_object() || proofs->size()>bodies.size())) return false;
+        std::size_t proved = 0;
         for (auto const& body : bodies)
         {
             if (!GuidValue(body.at("guid")) || !ids.erase(body.at("guid").get<std::uint32_t>()) || !body.at("leader").is_boolean() ||
@@ -100,8 +109,13 @@ bool ValidDungeonReceipt(nlohmann::json const& data)
                 !UInt(body.at("dungeon"),1) || !UInt(body.at("raid"),3)) return false;
             for (auto field : {"x","y","z","o"})
                 if (!body.at(field).is_number() || !std::isfinite(body.at(field).get<float>())) return false;
+            if (proofs != data.end() && proofs->contains(std::to_string(body.at("guid").get<std::uint32_t>())))
+            {
+                if (body.at("changed")!=true || body.at("returned")!=true || body.at("abandoned")!=false) return false;
+                ++proved;
+            }
         }
-        return true;
+        return proofs==data.end() || proofs->size()==proved;
     }
     catch (nlohmann::json::exception const&) { return false; }
 }
@@ -111,6 +125,13 @@ bool DungeonStoredEvidence(std::string const& id, std::uint64_t revision, std::u
 {
     if (!revision || slot>1 || settled>1 || !ValidDungeonReceipt(data) ||
         data.at("slot")!=(slot==1) || data.at("settled")!=(settled==1)) return false;
+    if (auto proofs=data.find("handbacks"); proofs!=data.end())
+    {
+        for (auto const& start : *proofs) if (start!=id) return false;
+        if (settled)
+            for (auto const& body : data.at("bodies"))
+                if (body.at("changed")==true && !DungeonHandbackRecorded(data,id,body.at("guid"))) return false;
+    }
     auto const& terminal = data.at("terminal");
     if (terminal.is_null()) return slot && !settled;
     return terminal.at("id")==id && !(slot && settled);
@@ -141,7 +162,8 @@ std::optional<std::uint64_t> DungeonFailureAge(Json const& verified, std::int64_
     return now>=at ? std::uint64_t(now-at) : 0;
 }
 
-bool DungeonWriteAllowed(std::string const& id, std::uint64_t revision, Json const& verified, Json const& next, std::int64_t now)
+bool DungeonWriteAllowed(std::string const& id, std::uint64_t revision, Json const& verified, Json const& next,
+    std::int64_t now, std::uint32_t handbackGuid)
 {
     if (!revision || revision==UINT64_MAX || !next.contains("slot") || !next.at("slot").is_boolean() ||
         !next.contains("settled") || !next.at("settled").is_boolean() ||
@@ -153,6 +175,22 @@ bool DungeonWriteAllowed(std::string const& id, std::uint64_t revision, Json con
         (!CleanupFailureTerminal(verified) || next.at("failure_verified_ms")!=now)) return false;
     if ((verified.at("settled")==true && next.at("settled")==false) ||
         (verified.at("slot")==false && next.at("slot")==true)) return false;
+    auto const previous = verified.find("handbacks"), proposed = next.find("handbacks");
+    if (previous!=verified.end())
+    {
+        if (proposed==next.end()) return false;
+        for (auto const& [guid,start] : previous->items())
+            if (!proposed->contains(guid) || proposed->at(guid)!=start) return false;
+    }
+    if (proposed!=next.end())
+        for (auto const& [guid,start] : proposed->items())
+            if ((previous==verified.end() || !previous->contains(guid)) && guid!=std::to_string(handbackGuid)) return false;
+    if (verified.at("settled")==false && next.at("settled")==true)
+    {
+        if (next.at("bodies")!=verified.at("bodies")) return false;
+        for (auto const& body : verified.at("bodies"))
+            if (body.at("changed")==true && !DungeonHandbackRecorded(verified,id,body.at("guid"))) return false;
+    }
     if (verified.at("slot")==true && next.at("slot")==false && next.at("settled")==false)
     {
         auto age = DungeonFailureAge(verified,now);
@@ -183,6 +221,13 @@ bool DungeonBeforeMutation(nlohmann::json const& data)
     auto stage = data.value("stage",std::string{});
     return data.at("bodies").empty() && !data.value("group",0u) && !data.value("instance",0u) &&
         (stage == "accepted" || (stage == "grouping" && data.value("effect",std::string{}) == "observe"));
+}
+
+bool DungeonHandbackRecorded(Json const& data, std::string const& start, std::uint32_t guid)
+{
+    auto proofs = data.find("handbacks");
+    auto key = std::to_string(guid);
+    return proofs!=data.end() && proofs->contains(key) && proofs->at(key)==start;
 }
 
 void ProjectDungeonAddBody(GuildAddBody& body, bool exactOwner)

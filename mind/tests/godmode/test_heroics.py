@@ -221,6 +221,65 @@ def test_final_check_and_start_once_then_positive_receipts(tmp_path, store, cloc
     asyncio.run(go())
 
 
+@pytest.mark.parametrize("witnesses", [(11, 12, 13, 14, 15), (12, 14)])
+@pytest.mark.parametrize("prior_kills", [0, 1])
+def test_witnessed_wipe_survives_restart_before_next_heartbeat(tmp_path, store, clock, witnesses, prior_kills):
+    import asyncio
+    import json
+    from leeroy_mind.protocol import Boss
+
+    async def go():
+        rig = Rig(tmp_path, store, clock)
+        await rig.connect()
+        await rig.agree()
+        await rig.h.tick()
+        await rig.app.event(rig.event("progress", stage="running", instance_id=47))
+        neighbor = heroics.offer(store, propose(store), day="neighbor", now=clock.now(), guild=3, human=1)
+        store.conn.execute("UPDATE member_heroic SET phase='running',sent=?,instance=48 WHERE id=?",
+                           (clock.now(), neighbor))
+        await clock.advance(1, 1)
+        wipe = Boss(int(clock.now() * 1000), 602, 47, 2, "Loken", "wiped", witnesses)
+        await rig.app.event(wipe)
+        await rig.app.event(wipe)
+        await rig.app.event(replace(wipe, instance_id=48, boss_id=0))
+        await rig.app.event(replace(wipe, boss_id=1, members=(11, 99)))
+        assert store.conn.execute("SELECT COUNT(*) FROM member_heroic_encounter").fetchone()[0] == 2
+        await clock.advance(1, 1)
+        await rig.app.event(replace(wipe, ts=int(clock.now()*1000), state="killed", boss_id=1))
+
+        resumed = Rig(tmp_path, store, clock)
+        await resumed.connect()
+        resumed.ident = rig.ident
+        terminal = replace(resumed.event("failed", reason="cleanup_failed:world_restart", instance_id=47, kills=prior_kills,
+                                         map_id=602, revision=18, returned=False), ts=wipe.ts)
+        await resumed.app.event(terminal)
+        await resumed.app.event(terminal)
+        await resumed.app.event(replace(terminal, wipes=1, revision=19, returned=True))
+        assert not resumed.h.row(rig.ident)["returned"]  # Conflicting native terminal.
+        await resumed.app.event(replace(terminal, revision=20, returned=True))
+        row = resumed.h.row(rig.ident)
+        assert (row["terminal"], row["wipes"], row["returned"]) == ("failed", 0, 1)
+        memories = list(store.conn.execute("SELECT owner,text FROM memory WHERE key=? ORDER BY owner",
+                                           ("heroic:" + rig.ident,)))
+        assert [m["owner"] for m in memories] == (list(range(11, 16)) if prior_kills else list(witnesses))
+        for m in memories:
+            if m["owner"] in witnesses:
+                assert "1 wipe" in m["text"] and "Loken" in m["text"]
+            else:
+                assert "1 boss kill and 0 wipes" in m["text"] and "Loken" not in m["text"]
+        (event,) = store.conn.execute("SELECT guid,payload FROM game_event WHERE type='member_dungeon'")
+        payload = json.loads(event["payload"])
+        assert (payload["start"], payload["instance"], payload["kills"], payload["wipes"]) == (rig.ident, 47, prior_kills, 1)
+        assert event["guid"] == min(witnesses) and payload["witnesses"] == list(witnesses)
+        facts = {s.key: s for s in heroics.seeds(store.conn, clock.now(), 3, 1)}
+        assert "1 wipe" in facts["heroic:" + rig.ident].fact
+        assert set(facts["heroic:" + rig.ident].witnesses) == set(witnesses)
+        assert "heroic:" + neighbor not in facts
+        assert not any(":1:killed:" in key for key in facts)
+
+    asyncio.run(go())
+
+
 def test_midnight_preserves_a_still_valid_single_proposal(tmp_path, store, clock):
     import asyncio
     from datetime import timedelta

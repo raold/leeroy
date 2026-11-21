@@ -22,7 +22,7 @@ nlohmann::json DungeonTerminalUpdate(nlohmann::json const& verified, nlohmann::j
     bool returned, std::int64_t now);
 std::optional<std::uint64_t> DungeonFailureAge(nlohmann::json const& verified, std::int64_t now);
 bool DungeonWriteAllowed(std::string const& id, std::uint64_t revision, nlohmann::json const& verified,
-    nlohmann::json const& next, std::int64_t now);
+    nlohmann::json const& next, std::int64_t now, std::uint32_t handbackGuid = 0);
 enum class DungeonLocation { Foreign, Origin, Copy };
 DungeonLocation DungeonLocationOf(nlohmann::json const& body, std::uint32_t savedInstance,
     std::uint32_t map, std::uint32_t instance, float x, float y, float z);
@@ -36,14 +36,14 @@ public:
     {
         if (!_started) _started = save("return_roster");
         if (!_started) return false;
-        if (!_recorded && world()) _recorded = save("returned");
-        if (!_recorded) return false;
-        if (!_proved && now >= _nextCheck)
+        bool const justFinished = !_recorded && world() && save("returned");
+        if (justFinished) _recorded = true;
+        if (justFinished || ((!_recorded || !_proved) && now >= _nextCheck))
         {
             _nextCheck = now + std::chrono::seconds(1);
             _proved = store();
         }
-        return _proved;
+        return _recorded && _proved;
     }
 private:
     bool _started = false, _recorded = false, _proved = false;
@@ -57,6 +57,7 @@ struct DungeonWriteProof
     DungeonWriteRead Observe(std::uint64_t seenRevision, nlohmann::json const* seen) const;
 };
 bool DungeonBeforeMutation(nlohmann::json const& data);
+bool DungeonHandbackRecorded(nlohmann::json const& data, std::string const& start, std::uint32_t guid);
 void ProjectDungeonAddBody(GuildAddBody& body, bool exactOwner);
 bool DungeonEntrySource(bool exactOrigin, bool fighting, bool owned);
 bool DungeonHandback(bool changed, bool proved, bool abandoned);

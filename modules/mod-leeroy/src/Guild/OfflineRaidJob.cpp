@@ -1495,9 +1495,10 @@ bool Teardown(Job& job)
     Group* group = FindGroup(job);
     if (!pendingTransfer && OwnsGroup(job, group, !Benchmark(job) && !Dungeon(job)))
     {
-        if (Dungeon(job) && group->GetMembersCount() == job.members.size())
+        if (Dungeon(job))
         {
-            bool const exact = group->GetLeaderGUID() == Guid(job.command.leaderGuid) &&
+            bool const exact = group->GetMembersCount() == job.members.size() &&
+                group->GetLeaderGUID() == Guid(job.command.leaderGuid) &&
                 std::all_of(job.members.begin(),job.members.end(),[&](Member const& m) {
                     auto* p = FindOnline(m.guid);
                     if (!Controlled(job,p) || p->GetGroup()!=group || p->IsBeingTeleported() ||
@@ -1627,12 +1628,8 @@ bool Teardown(Job& job)
             }
             if (Dungeon(job))
             {
-                member.handbackProved = AtOrigin(member,player) && !player->GetGroup() && !ai->GetMaster() &&
-                    player->GetDungeonDifficulty()==member.originalDungeonDifficulty &&
-                    player->GetRaidDifficulty()==member.originalDifficulty &&
-                    (member.guid!=job.command.leaderGuid || player->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER)==member.originalLeaderFlag);
+                member.handbackProved = ObserveDungeonHandback(job.receipt,*player);
                 if (!member.handbackProved) { CleanupFailure(job,member,"handback_unproved",true); continue; }
-                player->SaveToDB(false,false);
             }
             member.finished = true;
             continue;
@@ -2126,11 +2123,12 @@ LeeroyCommandResult StopMemberDungeon([[maybe_unused]] std::string const& start,
     return {false,"unknown_dungeon"};
 }
 
-bool OfflineRaidOwns([[maybe_unused]] uint32 guid)
+bool OfflineRaidOwns(uint32 guid)
 {
+    if (DungeonRecoveryConflicts({guid}, false)) return true;
 #if LEEROY_HAS_DUNGEON_CLEAR
-    return DungeonRecoveryConflicts({guid}, false) || (active && (active->command.leaderGuid == guid
-        || std::find(active->command.members.begin(), active->command.members.end(), guid) != active->command.members.end()));
+    return active && (active->command.leaderGuid == guid
+        || std::find(active->command.members.begin(), active->command.members.end(), guid) != active->command.members.end());
 #else
     return false;
 #endif

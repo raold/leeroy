@@ -4,6 +4,8 @@
 #include "LeeroyCommands.h"
 #include <vector>
 
+class Player;
+
 namespace Leeroy::Guild
 {
 struct DungeonReceipt
@@ -18,7 +20,8 @@ bool BeginDungeonReceipt(DungeonReceipt&, std::string const& id, std::uint32_t g
 bool SaveDungeonReceipt(DungeonReceipt&, nlohmann::json const& next, std::int64_t now = NowUnixMs());
 bool DungeonRecoveryConflicts(std::vector<std::uint32_t> const& guids, bool requiresSlot);
 bool DungeonReturned(std::string const& id, std::vector<std::uint32_t> const& guids);
-bool DungeonReturnsPersisted(DungeonReceipt const& receipt);
+bool ObserveDungeonHandback(DungeonReceipt& receipt, Player& player);
+bool DungeonReturnsPersisted(DungeonReceipt& receipt);
 void TickDungeonRecovery(std::uint32_t diff);
 LeeroyCommandResult PublishDungeonReceipt(std::string const& id);
 }

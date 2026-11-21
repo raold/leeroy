@@ -216,8 +216,18 @@ DayOwnerCheck::DayOwnerCheck(Json const& message, std::vector<std::uint32_t> mem
         { error = "day_owner_changed"; return; }
         if (!saved.tokens.empty() && DayGuildAddProgress(saved.tokens, saved.expires) != DayHandoff::Ready)
         { error = "day_cleanup_unresolved"; return; }
-        if (!saved.heroic.empty() && !Guild::DungeonReturned(saved.heroic,saved.heroicMembers))
-        { error = "dungeon_cleanup_unresolved"; return; }
+        if (!saved.heroic.empty())
+        {
+            if (!Guild::DungeonReturned(saved.heroic,saved.heroicMembers))
+            { error = "dungeon_cleanup_unresolved"; return; }
+            auto* human = FindOnline(saved.human);
+            if (!human || Guild::HisFight(human))
+            {
+                saved.consumed = true;
+                error = "dungeon_owner_scope";
+                return;
+            }
+        }
         saved.consumed = true; // Keep the check ID fenced through its original deadline.
         return;
     }

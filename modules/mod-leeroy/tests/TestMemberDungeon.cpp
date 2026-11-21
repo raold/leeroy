@@ -168,16 +168,56 @@ LEEROY_TEST(MemberDungeonDelayedCharacterSaveDoesNotRewriteTheReturnTransition)
     using namespace std::chrono;
     std::vector<std::string> writes;
     unsigned worldChecks=0, storeChecks=0;
+    bool checkedWhileReturning=false;
     auto save=[&](auto effect) { writes.push_back(effect); return true; };
     for (unsigned ms=0; ms<65000; ms+=10)
     {
         bool ready = proof.Observe(steady_clock::time_point{}+milliseconds(ms),save,
-            [&]{ ++worldChecks; return ms>=100; },[&]{ ++storeChecks; return ms>=62000; });
+            [&]{ ++worldChecks; return ms>=100; },[&]{
+                ++storeChecks;
+                if (ms<100) checkedWhileReturning=true;
+                return ms>=62000;
+            });
         CHECK(ready==(ms>=62100));
     }
     CHECK((writes==std::vector<std::string>{"return_roster","returned"}));
     CHECK_EQ(worldChecks,11u);
-    CHECK_EQ(storeChecks,63u);
+    CHECK(checkedWhileReturning);
+    CHECK_EQ(storeChecks,64u);
+}
+
+LEEROY_TEST(MemberDungeonHandbacksBelongToOneStartAndSurviveOnlyAsVerifiedEvidence)
+{
+    using Json=nlohmann::json;
+    Json row={{"version",1},{"map",602},{"difficulty",1},{"stage","tearing_down"},{"slot",true},
+        {"settled",false},{"guild",21},{"human",1},{"leader",101},{"roster",{101,102,103,104,105}},
+        {"bodies",Json::array()},{"group",90},{"instance",47},{"issued_ms",1},{"terminal",nullptr}};
+    for (unsigned guid=101; guid<=105; ++guid)
+        row["bodies"].push_back({{"guid",guid},{"map",1},{"x",10},{"y",2},{"z",8},{"o",0},
+            {"raid",0},{"dungeon",0},{"leader",false},{"changed",true},{"moved",true},
+            {"returned",false},{"abandoned",false}});
+    auto next=row;
+    next["bodies"][0]["returned"]=true; // World observation alone is insufficient.
+    CHECK(!DungeonHandbackRecorded(next,"original",101));
+    next["handbacks"]["101"]="original";
+    CHECK(DungeonHandbackRecorded(next,"original",101));
+    CHECK(!DungeonWriteAllowed("original",10,row,next,100));
+    CHECK(!DungeonWriteAllowed("original",10,row,next,100,102));
+    CHECK(DungeonWriteAllowed("original",10,row,next,100,101));
+    CHECK(!DungeonStoredEvidence("other",11,1,0,next));
+    CHECK(!DungeonWriteAllowed("original",11,next,row,101));
+    for (auto field : {"returned","abandoned"})
+    {
+        auto skipped=next;
+        skipped["bodies"][0][field] = std::string_view(field)=="abandoned";
+        CHECK(!DungeonStoredEvidence("original",11,1,0,skipped));
+    }
+    auto terminal=Json{{"type","job"},{"id","original"},{"kind","member_dungeon"},{"state","failed"},
+        {"reason","world_restart"},{"guids",row["roster"]},{"instance_id",47},{"kills",0},{"wipes",0}};
+    CHECK(!DungeonWriteAllowed("original",11,next,DungeonTerminalUpdate(next,terminal,true,101),101));
+    auto unknown=row;
+    unknown["effect"]="unknown_operation";
+    CHECK(!DungeonStoredEvidence("original",10,1,0,unknown));
 }
 
 LEEROY_TEST(MemberDungeonFailedTerminalMustBeVerifiedBeforeItsSlotClockStarts)

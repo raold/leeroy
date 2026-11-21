@@ -168,18 +168,33 @@ def overlapping(conn, members, guild, human):
     )
 
 
-def result_fact(row, conn):
-    kills, wipes = row["kills"], row["wipes"]
-    summary = f"{'Cleared' if row['terminal'] == 'done' and kills == 4 else 'Ran'} {NAME} heroic with {kills} boss kills and {wipes} wipe{'s' if wipes != 1 else ''}"
-    names = [
-        BOSSES[b]
-        for (b,) in conn.execute(
-            "SELECT DISTINCT boss FROM member_heroic_encounter WHERE start=? AND state='wiped' ORDER BY boss",
-            (row["id"],),
-        )
-        if b in BOSSES
-    ]
-    return summary + "." + (f" We wiped on {', '.join(names)}." if wipes and names else "")
+def _encounters(row, conn):
+    terminal_ms = round(row["result_at"] * 1000)
+    return [(boss, state, frozenset(json.loads(witnesses))) for boss, state, witnesses in conn.execute(
+        "SELECT boss,state,witnesses FROM member_heroic_encounter WHERE start=? AND ts<=?", (row["id"], terminal_ms)
+    ) if boss in BOSSES and state in ("killed", "wiped")]
+
+
+def _result(row, encounters):
+    # The two sources can describe the same encounter. The journal also survives a native
+    # restart between heartbeats. Keep the native terminal fields immutable for later status.
+    kills = max(row["kills"], len({boss for boss, state, _ in encounters if state == "killed"}))
+    wiped = [boss for boss, state, _ in encounters if state == "wiped"]
+    wipes = max(row["wipes"], len(wiped))
+    outcome = "Cleared" if row["terminal"] == "done" and kills == 4 else "Ran"
+    summary = f"{outcome} {NAME} heroic with {kills} boss kill{'s' if kills != 1 else ''} and {wipes} wipe{'s' if wipes != 1 else ''}"
+    names = [BOSSES[b] for b in sorted(set(wiped))]
+    return kills, wipes, summary + "." + (f" We wiped on {', '.join(names)}." if names else "")
+
+
+def _results(row, conn):
+    encounters = _encounters(row, conn)
+    personal = {}
+    for guid in json.loads(row["roster"]):
+        result = _result(row, [entry for entry in encounters if guid in entry[2]])
+        if result[0] or result[1]:
+            personal[guid] = result
+    return _result(row, encounters), personal
 
 
 def seeds(conn, now, guild, human):
@@ -201,19 +216,27 @@ def seeds(conn, now, guild, human):
                 weight=8.0,
                 witnesses=members,
             )
-        elif r["kills"] or r["wipes"]:
+        else:
+            result, personal = _results(r, conn)
+            witnesses = tuple(guid for guid, known in personal.items() if known == result)
+            if not witnesses:
+                # Individual encounter seeds below still have their own witnesses.
+                if not (r["kills"] or r["wipes"]):
+                    continue
+                result, witnesses = _result(r, ()), members
             yield Seed(
                 "heroic:" + r["id"],
                 "heroic_result",
                 (CHANNEL, "general"),
-                result_fact(r, conn),
+                result[2],
                 members,
-                witnesses=members,
+                witnesses=witnesses,
             )
     for ident, boss, state, ts, witnesses in conn.execute(
         "SELECT e.start,e.boss,e.state,e.ts,e.witnesses "
         "FROM member_heroic_encounter e JOIN member_heroic h ON h.id=e.start WHERE h.guild=? AND h.human=? "
-        "AND e.ts BETWEEN ? AND ? ORDER BY e.ts DESC LIMIT 64",
+        "AND e.ts BETWEEN ? AND ? AND (h.result_at IS NULL OR e.ts<=ROUND(h.result_at*1000)) "
+        "ORDER BY e.ts DESC LIMIT 64",
         (guild, human, (now - 86400) * 1000, now * 1000),
     ):
         party = tuple(json.loads(witnesses))
@@ -598,15 +621,17 @@ class Heroics:
 
     def boss(self, ev):
         if (
-            ev.map != MAP
+            self.realm._delivery_epoch(ev) != self.realm._transport_epoch
+            or ev.map != MAP
             or ev.boss_id not in BOSSES
             or ev.state not in ("killed", "wiped")
             or not ev.instance_id
         ):
             return
         guild, human = self.context()
+        matches = []
         for r in self.conn.execute(
-            "SELECT * FROM member_heroic WHERE phase='running' AND guild=? AND human=? AND instance=?",
+            "SELECT * FROM member_heroic WHERE phase='running' AND sent IS NOT NULL AND guild=? AND human=? AND instance=?",
             (guild, human, ev.instance_id),
         ):
             members = set(json.loads(r["roster"]))
@@ -616,15 +641,16 @@ class Heroics:
                 or not r["sent"] * 1000 <= ev.ts <= self.app.clock.now() * 1000 + 1000
             ):
                 continue
-            if self.conn.execute(
-                "SELECT 1 FROM member_heroic_encounter WHERE start=? AND boss=? AND state='killed'",
-                (r["id"], ev.boss_id),
-            ).fetchone():
-                continue
-            self.write(
-                "INSERT OR IGNORE INTO member_heroic_encounter VALUES(?,?,?,?,?)",
-                (r["id"], ev.boss_id, ev.state, ev.ts, json.dumps(sorted(set(ev.members)))),
-            )
+            matches.append(r["id"])
+        if len(matches) != 1:
+            return
+        start = matches[0]
+        self.write(
+            "INSERT OR IGNORE INTO member_heroic_encounter "
+            "SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM member_heroic_encounter "
+            "WHERE start=? AND boss=? AND state='killed')",
+            (start, ev.boss_id, ev.state, ev.ts, json.dumps(sorted(set(ev.members))), start, ev.boss_id),
+        )
 
     def job(self, ev):
         if ev.kind != OWNER or self.realm._delivery_epoch(ev) != self.realm._transport_epoch:
@@ -717,38 +743,46 @@ class Heroics:
                     ev.id,
                 ),
             )
-            if not r["terminal"] and (ev.kills or ev.wipes):
-                from leeroy_mind.nightly.attraction import reflection_row
-
-                fact = result_fact(self.row(ev.id), self.conn)
-                event = self.conn.execute(
-                    "INSERT INTO game_event(ts,type,guid,payload) VALUES(?,'member_dungeon',?,?)",
-                    (
-                        ev.ts / 1000,
-                        min(members),
-                        json.dumps(
-                            dict(
-                                start=ev.id,
-                                map=MAP,
-                                instance=ev.instance_id,
-                                kills=ev.kills,
-                                wipes=ev.wipes,
-                                members=sorted(members),
-                            )
-                        ),
-                    ),
-                ).lastrowid
-                for guid in members:
-                    memory = reflection_row(
-                        guid,
-                        fact,
-                        now=now,
-                        event=ev.ts / 1000,
-                        actors=members,
-                        evidence=(f"event:{event}",),
-                        key=f"heroic:{ev.id}",
-                        importance=4,
-                        valence=0.4 if ev.kills else -0.2,
-                    )
-                    self.app.writer.put(replace(memory, kind="event", source="game", place=NAME))
+            if not r["terminal"]:
+                self.remember_result(ev, members, now)
         self.realm.parts["day"].changed()
+
+    def remember_result(self, ev, members, now):
+        from leeroy_mind.nightly.attraction import reflection_row
+
+        result, personal = _results(self.row(ev.id), self.conn)
+        if not personal:
+            return
+        kills, wipes, _ = result
+        witnesses = sorted(guid for guid, known in personal.items() if known == result)
+        event = self.conn.execute(
+            "INSERT INTO game_event(ts,type,guid,payload) VALUES(?,'member_dungeon',?,?)",
+            (
+                ev.ts / 1000,
+                min(witnesses or personal),
+                json.dumps(
+                    dict(
+                        start=ev.id,
+                        map=MAP,
+                        instance=ev.instance_id,
+                        kills=kills,
+                        wipes=wipes,
+                        members=sorted(members),
+                        witnesses=witnesses,
+                    )
+                ),
+            ),
+        ).lastrowid
+        for guid, (personal_kills, _, fact) in personal.items():
+            memory = reflection_row(
+                guid,
+                fact,
+                now=now,
+                event=ev.ts / 1000,
+                actors=members,
+                evidence=(f"event:{event}",),
+                key=f"heroic:{ev.id}",
+                importance=4,
+                valence=0.4 if personal_kills else -0.2,
+            )
+            self.app.writer.put(replace(memory, kind="event", source="game", place=NAME))
