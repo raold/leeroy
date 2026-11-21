@@ -66,6 +66,8 @@ Four changes ship without the switch:
   nights of their breakup, or a woman he has pursued in the past three days (including a
   quiet drift that wrote no breakup). A current partner disclosed in her persona also counts
   as taken; remarriage and partnered households are recognized, past and business partners excluded.
+  A disclosure must explicitly describe her current relationship: a past marriage, a late partner,
+  or a relative's relationship does not override a single, divorced or widowed household.
   Their relationship rows climb notices, banter, whispers (a crush), late_nights (dating),
   confession (together) through their scenes: each warm scene adds 8 attraction both ways and may
   take one step once both rows meet the step's gate and its nights have passed; a cold scene

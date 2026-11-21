@@ -768,6 +768,42 @@ def test_a_current_partner_in_a_disclosure_keeps_her_taken():
     assert not couples.taken(p)
 
 
+@pytest.mark.parametrize('household,text,expected', [
+    ('Divorced, lives alone', 'I was married for ten years before the divorce.', False),
+    ('Single mum', 'I used to have a boyfriend.', False),
+    ('Lives alone', 'I do not have a partner.', False),
+    ('Lives alone', "I don't have a boyfriend.", False),
+    ('Single', 'My partner and I split up last month.', False),
+    ('Single', 'My partner and I are separated.', False),
+    ('Single', 'I divorced my husband last year.', False),
+    ('Widowed', 'I lost my husband two years ago.', False),
+    ('Widowed', 'My husband died two years ago.', False),
+    ('Widowed', 'My late husband liked cats.', False),
+    ('Single', 'My sister is married.', False),
+    ('Single', "My sister's husband works nights.", False),
+    ('Single', "I've been married before.", False),
+    ('Single', 'I have been engaged before.', False),
+    ('Single', 'I am engaged in a difficult project at work.', False),
+    ('Single', "When I'm married, I want a small ceremony.", False),
+    ('Single mum', 'My partner works nights.', True),
+    ('Lives alone', 'I have a boyfriend.', True),
+    ('Lives alone', 'I have been married for ten years.', True),
+    ('Divorced', 'I was married once; now I have a partner.', True),
+    ('Widowed', 'I have remarried.', True),
+    ('Divorced', "I'm remarried now.", True),
+    ('Divorced', 'I am now married.', True),
+    ('Divorced', 'I now have a boyfriend.', True),
+    ('Widowed', 'I have now remarried.', True),
+    ('Divorced', 'My partner and I split up, but I have a new partner now.', True),
+    ('Divorced', "I've been married before, but now I'm remarried.", True),
+    ('Married', 'I was married before too.', True),
+])
+def test_only_a_current_own_disclosure_marks_a_free_household_taken(household, text, expected):
+    p = SimpleNamespace(real_life=SimpleNamespace(household=household),
+                        disclosures=(SimpleNamespace(text=text),))
+    assert couples.taken(p) is expected
+
+
 def test_public_cards_omit_member_romance_without_losing_friendship(monkeypatch):
     monkeypatch.setattr(drama_config, '_PINNED', True)
     rel = Relationship(a=101, b=102, romance_stage='late_nights', affinity=30)

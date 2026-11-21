@@ -154,6 +154,35 @@ _SINGLE = re.compile(
     r"|\b(?:no|not|never|without)\s+(?:a\s+)?(?:married|spouse|partner|husband|wife|boyfriend|"
     r"girlfriend)\b", re.IGNORECASE)
 TAKEN_STATUSES = frozenset({"married", "engaged", "partnered"})
+# Disclosures are stories, unlike a household summary. Require an explicit current first-person
+# relationship; "I was married" and another person's marriage do not override a free household.
+_DISCLOSURE_CURRENT = re.compile(
+    rf"\bmy\s+(?:(?:new|current)\s+)?{_SPOUSES}\b"
+    r"|\b(?:I\s+am|I['’]m|I\s+have\s+been|I['’]ve\s+been)\s+"
+    r"(?:(?:now|still|happily|recently|newly)\s+)*(?:remarried|married|partnered|engaged(?!\s+(?:in|with)\b))\b"
+    rf"|\b(?:I\s+(?:now\s+)?have|I['’]ve(?:\s+got)?)\s+(?:a\s+)?(?:(?:new|current|steady)\s+)?{_SPOUSES}\b"
+    r"|\bI\s+(?:have\s+)?(?:now\s+)?remarried\b", re.IGNORECASE)
+_DISCLOSURE_ENDED = re.compile(
+    rf"\b(?:my\s+{_SPOUSES}\s+and\s+I|we)\s+(?:(?:have|had|are|were)\s+)?"
+    r"(?:split\s+up|broke\s+up|separated|divorced)\b"
+    rf"|\bI\s+(?:lost|divorced|left|separated\s+from|split\s+up\s+with)\s+my\s+{_SPOUSES}\b"
+    rf"|\bmy\s+{_SPOUSES}\s+left\s+me\b", re.IGNORECASE)
+_DISCLOSURE_HISTORY = re.compile(
+    r"\b(?:I\s+have|I['’]ve)\s+been\s+(?:remarried|married|engaged|partnered)\b"
+    r"[^.;!?]*\b(?:before|previously|in\s+the\s+past)\b"
+    r"|\b(?:when|if)\s+(?:I['’]m|I\s+am)\s+(?:(?:ever|finally)\s+)?"
+    r"(?:remarried|married|engaged|partnered)\b", re.IGNORECASE)
+
+
+def disclosure_taken(text: str) -> bool:
+    for clause in re.split(r"[.;!?]|\bbut\b|\bnow(?=\s+I(?:\b|['’]))", text or "", flags=re.IGNORECASE):
+        if _DISCLOSURE_ENDED.search(clause) or _DISCLOSURE_HISTORY.search(clause):
+            continue
+        own = _NOT_HERS.sub(" ", clause)
+        current = _UNTAKEN.sub(" ", _GONE.sub(" ", _NOT_ENGAGED.sub(" ", own)))
+        if _DISCLOSURE_CURRENT.search(current):
+            return True
+    return False
 
 
 def household_status(household: str | None) -> str | None:
@@ -179,7 +208,7 @@ def taken(p) -> bool:
     to outsiders): such a member never starts a member romance. "No partner", an ex, a
     separated or late spouse and a relative's do not count."""
     return (household_status(p.real_life.household) in TAKEN_STATUSES or any(
-        household_status(d.text) in TAKEN_STATUSES for d in getattr(p, "disclosures", ())))
+        disclosure_taken(d.text) for d in getattr(p, "disclosures", ())))
 
 
 def _rel(store, a, b):
