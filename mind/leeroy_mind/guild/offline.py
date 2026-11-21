@@ -119,6 +119,25 @@ def setup_retry_after(reason: str) -> int | None:
     return BUSY_RETRY_S if parts[2] == "too_few" or retry_after(parts[2]) is not None else None
 
 
+SKIP_CODE_LIMIT = 40
+
+
+def setup_skips(skipped, plan: RaidPlan) -> dict:
+    """Why native left planned members out, as codes and counts, and the code of each lead (the tank,
+    the loot master) it left out: a grouping too_few is a lead it could not use as often as a roster
+    under the minimum (2026-11-19: the loot master in flight, 22 of 25 usable). Never a name."""
+    counts, leads = {}, {}
+    for skip in skipped:
+        code = str(skip.reason)[:SKIP_CODE_LIMIT]
+        if code.startswith("cleanup:"):
+            continue
+        counts[code] = counts.get(code, 0) + 1
+        for lead, guid in (("tank", plan.tank_guid), ("loot", plan.loot_guid)):
+            if skip.guid == guid:
+                leads[lead] = code
+    return dict(skipped=dict(sorted(counts.items())), leads=dict(sorted(leads.items())))
+
+
 # Native start refusals that name one requested body by guid (StartRaidJob, InstanceConflict).
 MEMBER_REFUSALS = ("in_instance:", "busy:realm_owner:", "busy:realm_group:", "not_cast:")
 
@@ -488,10 +507,16 @@ class OfflineRaids:
         if ev.state == "failed":
             # The day receipt outlives both the next day's job and the server log. It is a
             # diagnostic only: terminal handling above is already saved and queued.
-            log.info("offline_raid_failed reason=%s", str(ev.reason)[:REASON_LIMIT])
+            skips = setup_skips(ev.skipped, RaidPlan(**self._owned["plan"]))
+            log.info("offline_raid_failed reason=%s skipped=%s leads=%s", str(ev.reason)[:REASON_LIMIT],
+                     ",".join(f"{code}:{n}" for code, n in skips["skipped"].items()) or "-",
+                     ",".join(f"{lead}:{code}" for lead, code in skips["leads"].items()) or "-")
             try:
                 if self._owned.get("day"):
-                    self._update_day(failed=str(ev.reason)[:REASON_LIMIT])
+                    changes = dict(failed=str(ev.reason)[:REASON_LIMIT])
+                    if skips["skipped"]:
+                        changes["setup_skips"] = skips
+                    self._update_day(**changes)
             except Exception:
                 log.warning("offline raid failure reason was not stored")
 

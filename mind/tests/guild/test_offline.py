@@ -164,6 +164,25 @@ async def test_setup_failure_reason_stays_in_the_day_receipt(setup):
 
 
 @_run_async
+async def test_a_setup_failure_keeps_why_members_were_skipped_and_which_lead(setup, caplog):
+    """2026-11-19: setup:grouping:too_few with 22 of 25 usable, because the loot master was in flight.
+    Only the owned receipt said so; the log line and day receipt now name it in codes and counts."""
+    ports, armory, controller = setup
+    await start(setup)
+    plan = controller._owned["plan"]
+    others = [g for g in plan["members"] if g not in {plan["tank_guid"], plan["loot_guid"]}][:2]
+    skipped = (JobSkip(plan["loot_guid"], "in_flight"), *(JobSkip(g, "in_combat") for g in others))
+    with caplog.at_level("INFO"):
+        await controller.on_job(event(controller, state="failed", stage="", reason="setup:grouping:too_few",
+                                      guids=(), instance=0, skipped=skipped))
+    assert any("offline_raid_failed reason=setup:grouping:too_few skipped=in_combat:2,in_flight:1 leads=loot:in_flight"
+               in r.message for r in caplog.records)
+    day = OfflineRaids(ports, controller.cfg, armory, random.Random(7))._day_state()
+    assert day["failed"] == "setup:grouping:too_few"
+    assert day["setup_skips"] == {"skipped": {"in_combat": 2, "in_flight": 1}, "leads": {"loot": "in_flight"}}
+
+
+@_run_async
 async def test_actual_participants_exclude_skipped_and_away_members(setup):
     ports, _, controller = setup
     ports.away_set = {130}
