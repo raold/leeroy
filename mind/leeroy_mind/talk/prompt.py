@@ -674,7 +674,8 @@ def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
                       is_guild_master: bool = False,
                       forms: tuple[str, str, str] = THEY_FORMS, attitude: str = "",
                       speaker: str = "", friendship_only: bool = False,
-                      pronoun: str = "", realism: bool = False, far: bool = False) -> str:
+                      pronoun: str = "", realism: bool = False, far: bool = False,
+                      show_member_romance: bool = True) -> str:
     """How the speaker feels about one person, in a few words. Only the warm side of trust
     and respect is shown: a low score usually just means "not yet". The human is tagged "(the
     guild master)" when he is one (HumanIdentity.is_guild_master) and referred to by `forms`
@@ -693,7 +694,7 @@ def relationship_card(name: str, r: Relationship | None, *, is_human: bool,
     bits = []
     if not friendship_only and not is_human and r.label.strip() in LABEL_TEXT:
         bits.append(LABEL_TEXT[r.label.strip()])
-    if (not friendship_only and not is_human and r.romance_stage in MEMBER_ROMANCE_TEXT
+    if (show_member_romance and not friendship_only and not is_human and r.romance_stage in MEMBER_ROMANCE_TEXT
             and member_romance_pinned()):
         bits.append(MEMBER_ROMANCE_TEXT[r.romance_stage])  # a member romance (drama.couples)
     band = attraction_band(r, attitude) if is_human and not friendship_only else ""

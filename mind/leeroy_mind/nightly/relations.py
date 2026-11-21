@@ -64,6 +64,7 @@ ROMANCE_BETWEEN_MEMBERS = "romance between members"  # Task 6's reason for the s
 ROMANCE_WITHOUT_ATTITUDE = "romance without an attitude"  # toward him from a man, or stance none
 
 _OPEN_WITH = ("SELECT id FROM memory WHERE owner = ? AND status = 'active' AND scope = 'open' "
+              "AND source != 'offscreen' "
               "AND id IN (SELECT memory_id FROM memory_actor WHERE guid = ?) "
               "ORDER BY {order} LIMIT ?")
 _NEWEST_OPEN = _OPEN_WITH.format(order="t_created DESC, id DESC")

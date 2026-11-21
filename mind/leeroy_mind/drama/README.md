@@ -18,6 +18,10 @@ when the mind starts and pinned until it restarts: every night keeps the startup
 `[learn] enabled` does, `nightly/wiring.py`), the `couples` stage is attached only when it was on
 and itself does nothing on a night whose switch is off, and live talk's cards read the same
 pinned value (`drama.config.pinned`). Editing `mind.toml` without a restart changes nothing.
+The explicit `nightly run` command attaches the same couples stage and pins its configured
+value for that command's context, then restores the prior process value, including on failure.
+Each draw-away and spark commits separately. A bad pair does not roll back other pairs;
+resuming does not repeat erosion or exceed the two-spark nightly cap.
 Off, no night stage runs, the storyteller forms no `flirt` or jealousy confrontation, encounter
 prompts keep "no romance or flirting between them", jealousy writes no resentment or envy words,
 and cards never mention a member romance.
@@ -34,16 +38,17 @@ Four changes ship without the switch:
   and its two memories are fiction, so their batch has its own system line, question and schema
   (`FICTION_SYSTEM`, `FICTION_ASK`, `FICTION_SCHEMA`, overlay `prompts/nightly_judge_scene.txt`):
   "is it contradicted by its evidence?", `contradicted: true` rejects, and so does a broken rule.
-  Invented detail the evidence does not mention passes. The people the scene prompt lists as
-  "might be around" are really around, so the scene may name them (an `around:<encounter>`
-  grounding item that the memories never cite). Every privacy rule, the deterministic name
+  Invented detail the evidence does not mention passes. A person offered as "might be around"
+  grounds a new name only if the scene also reports a valid observation for them; that person
+  then receives the corresponding knowledge. The `around:<encounter>` grounding item never
+  enters memory evidence. Offscreen scene memories do not become relationship-note evidence
+  or third-party gossip (including gossip through a derived memory). Every privacy rule, the deterministic name
   checks against anyone not around, and the one memory per participant rule are unchanged.
-- **Rumours are third-person claims.** The scene's gossip must carry a `claim`; a new rumour's
-  canonical text (what the Social tab shows) is that claim, else the retelling only when it was
-  told plainly (operation `level`), and only when it names its subject, quotes nobody and says
-  no I or we (`gossip.third_person`). A telling with neither still reaches its hearer, with no
-  rumour row. A correction still tells the source memory's own words, never a model's claim.
-  Existing live rumours are left to fade.
+- **Rumours retain their source account.** A model's separate `claim` field remains accepted
+  for schema compatibility but never becomes truth. New canonical text is the source memory's
+  own words; altered retellings stay in the versions. Social and correction prompts also read
+  the source for old rows, without rewriting history. Breakup accounts remain code-built.
+  An unavailable original is labelled as such rather than displaying an unjudged claim.
 - **Jealousy no longer feeds on itself.** Its own memories (keys `jealousy:` and `envy:`) are not
   observations, so a saturated level comes down by `DECAY` a night when nothing new happens.
 - **Breakup rumours never take a live-rumour slot** (`gossip.organic_rumors`); they exist only
@@ -58,7 +63,9 @@ Four changes ship without the switch:
   the console's relationship status shows; a relative's or a friend's, and a separated or late
   spouse, do not count), someone already in a member romance, a woman whose
   romance with him has begun (banter or later), a pair with an open feud, or two exes within 30
-  nights of their breakup.
+  nights of their breakup, or a woman he has pursued in the past three days (including a
+  quiet drift that wrote no breakup). A current partner disclosed in her persona also counts
+  as taken; remarriage and partnered households are recognized, past and business partners excluded.
   Their relationship rows climb notices, banter, whispers (a crush), late_nights (dating),
   confession (together) through their scenes: each warm scene adds 8 attraction both ways and may
   take one step once both rows meet the step's gate and its nights have passed; a cold scene
@@ -70,14 +77,15 @@ Four changes ship without the switch:
   her. Raid or party time with her and his guild-chat replies never count. While he pursues her,
   her warm scenes with her partner add nothing on her side and take no step, and each night her
   attraction to the partner erodes by 10. Once her attraction to him is 10 over her partner's
-  (plus 10 dating, 20 together) she leaves, so steady pursuit breaks even a couple who are
-  together within about two weeks. From a crush on that is a breakup: `breakup` row, both rows
+  (plus 10 dating, 20 together) she leaves. Flirts can raise her attraction to him; ordinary
+  private conversation erodes the old tie without itself raising that attraction. From a crush on that is a breakup: `breakup` row, both rows
   `ex`, the partner's hurt memory and distress, capped affinity and trust loss, a live rumour
   about her spread by the partner, and by the partner's traits a feud with her. The split is
-  public. Why she left is public only when some of his pursuit was public (a guild, party, raid,
-  say or yell line, a public Discord channel, or an emote in the game): then the partner's
+  public. Why she left is public only when some of his pursuit reached the whole guild (a
+  guild line or public Discord channel): then the partner's
   memory, his resentment and envy of the owner (85 or more), the feud cause and the rumour ("X
-  left Y for him") name him. When all of it was in whispers or DMs, the partner's memory says
+  left Y for him") name him. Private voice, party, raid, say, yell and local emotes do not grant
+  that permission. Without guild-wide evidence, the partner's memory says
   only that she has been distant, the rumour and feud cause only that they split, and her own
   memory of leaving for him is private with him. Before a crush she just drifts away. A woman
   whose stance toward him is none is never drawn away. A member never draws away a woman who is
@@ -87,8 +95,10 @@ Four changes ship without the switch:
   confrontation that goes bad sours her by up to -8 and the rival by half, under the night cap. A
   blow-up opens a feud once her own affinity is at -30 or below. Envy at 70 or more, fed tonight,
   writes the envious man a weekly memory that he means to tell the owner so (`envy:` key).
-- **Live talk.** A card between two members shows their romance ("you're dating", "you broke
-  up"), never on group turns.
+- **Live talk.** Member-romance stages appear on relationship cards only in pair turns,
+  never public or group turns. Other relationship information is unchanged. Social evaluation's
+  `romance_moves` counts the owner's arcs alone. Feud cycles after renewed jealousy remain
+  governed by the existing five-day make-up and jealousy decay; no new cooldown is introduced.
 
 Logs: `member_romance_night couples= sparks= breakups= drifted=`, `member_romance_step a= b=
 stage=`, `member_romance_fizzled`, `member_breakup id= woman= partner= stage= public= feud=

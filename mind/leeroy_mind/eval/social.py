@@ -61,7 +61,7 @@ def texture(store, bounds, *, human, speed):
     caps = _rows(store, "SELECT * FROM rel_cap WHERE night>=? AND night<=?", (first, last))
     return {"pairs": len(ties), "non_neutral_share": _ratio(sum(abs(r["affinity"]) >= 15 for r in ties), len(ties)),
         "negative_ties": sum(r["affinity"] <= -15 for r in ties),
-        "romance_moves": sum(r["dim"] == "romance_stage" for r in deltas),
+        "romance_moves": sum(r["dim"] == "romance_stage" and human in (r["a"], r["b"]) for r in deltas),
         "unexplained_deltas": sum(not _json(r["evidence"], []) for r in deltas),
         "cap_breaches": sum(abs(r["used"]) > speed + 1e-9 for r in caps)}
 

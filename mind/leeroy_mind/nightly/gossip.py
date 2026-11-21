@@ -93,6 +93,8 @@ def _disclosable(ctx, memory, teller, *, state=None, historical=False) -> bool:
     if not complete or memory.status not in statuses or secret:
         return False
     ancestors = ctx.store.get_memories([ident for ident, _, _ in scopes if ident != memory.id])
+    if memory.source == "offscreen" or any(m.source == "offscreen" for m in ancestors):
+        return False  # invented scene detail stays with its participants, not third-party hearsay
     if any(m.status not in {"active", "superseded"} for m in ancestors):
         return False
     if any(scope == "secret" for _, scope, _ in scopes):
@@ -220,7 +222,9 @@ def rumor_offer(ctx, enc):
     op = ("correct" if kind == "correct" else choose_op(
         _traits(ctx, teller), store.get_relationship(hearer, rumor["about"]).affinity))
     rumor, version = dict(rumor), dict(version)
-    rumor["canonical"] = clean_memory_text(rumor["canonical"], ctx.ident)
+    source = next(m for m in sources if m.id == rumor["source"])
+    rumor["canonical"] = clean_memory_text(rumor["canonical"] if rumor["root"].startswith(BREAKUP_ROOT)
+                                          else source.text, ctx.ident)
     version["text"] = clean_memory_text(version["text"], ctx.ident)
     return {"rumor": rumor, "version": version, "state": dict(state),
             "sources": sources, "teller": teller, "hearer": hearer,
@@ -321,14 +325,9 @@ def after_gossip(store, ctx, enc, gossip, shown, *, now):
         if rumor is None:
             if len(organic_rumors(store)) >= ctx.settings.live_rumors:
                 return None
-            name = ctx.name(about)
-            claim = " ".join(strip_wow_markup(gossip.get("claim") or "").split())
-            # The retelling is the canonical only when it was told plainly, never sharpened or
-            # bent toward the hearer (the operation the scene prompt asked for).
-            told = choose_op(_traits(ctx, teller), store.get_relationship(hearer, about).affinity)
-            canonical = next((clean_memory_text(t, ctx.ident)
-                              for t in (claim, text if told == "level" else "")
-                              if third_person(t, name)), None)
+            # A model's separately supplied claim is unjudged. The authoritative account is
+            # the stored source's exact words; the retelling lives only in rumor_version.
+            canonical = clean_memory_text(source.text, ctx.ident)
             if canonical is not None and _check(ctx, teller, canonical, source, about, now=now):
                 ident = store.conn.execute("INSERT INTO rumor(root,about,canonical,source,created,last_told) "
                     "VALUES (?,?,?,?,?,?)", (root, about, canonical, source.id, now, now)).lastrowid

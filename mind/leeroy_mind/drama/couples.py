@@ -4,7 +4,7 @@ A man and a woman of the cast who like each other may start a romance; it climbs
 of the stored romance ladder through their nightly scenes, and the owner can draw the woman away.
 
 - **Who.** A man and a woman (identity.player_gender): personas carry no orientation. Neither
-  may be taken at home (her household names a spouse or partner, `taken`), already in a member
+  may be taken at home (her household or disclosures name a spouse or partner, `taken`), already in a member
   romance, or a woman whose own romance with him has begun (banter or later): his romances are
   never broken by members. A woman drawn to or lusting after him (her stance) starts one at
   DRAWN_FACTOR of the usual chance. Exes rest EX_COOLDOWN_DAYS and a feuding pair never sparks.
@@ -27,14 +27,14 @@ of the stored romance ladder through their nightly scenes, and the owner can dra
   with him. Earlier stages just end. A woman whose stance toward him is none is never drawn
   away: his acts do not move her.
 
-The nightly unit and the scene hook only write inside the caller's transaction, and only with
-the night's switch on (pinned at mind start). Logs carry ids, counts and codes, never text.
+Each nightly pair unit and the scene hook write inside the caller's transaction, and only with
+the night's switch on (pinned at service or CLI startup). Logs carry ids, counts and codes, never text.
 """
 import json
 import re
 from dataclasses import replace
 
-from leeroy_mind.discord.channels import is_public, private_sql
+from leeroy_mind.discord.channels import is_local_channel, is_public, private_sql
 from leeroy_mind.logs import log
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly import knowledge
@@ -95,12 +95,12 @@ _UNTAKEN = re.compile(
     r"|\bun-?married\b|\bex-?\s?(?:husband|wife|partner|boyfriend|girlfriend|fianc\w*)\b"
     r"|\b(?:late|former|dead|deceased|estranged|divorced|separated)\s+(?:husband|wife|partner|spouse)\b",
     re.IGNORECASE)
-_TAKEN = re.compile(r"\b(?:married|husband|wife|spouse|partner|boyfriend|girlfriend|fianc[eé]e?)\b",
+_TAKEN = re.compile(r"\b(?:remarried|married|husbands?|wi(?:fe|ves)|spouses?|partner(?:ed)?|boyfriend|girlfriend|fianc[eé]e?)\b",
                     re.IGNORECASE)
 # What else a household sentence says of her (the console's relationship status, owner
 # 2026-11-15). First what is someone else's (_NOT_HERS), then what is over (_GONE, _UNTAKEN:
 # "no partner", the exes, the late, separated and dead spouses), then the words.
-_STATUSES = r"(?:married|widowed|divorced|separated|engaged|single)"
+_STATUSES = r"(?:remarried|married|partnered|widowed|divorced|separated|engaged|single)"
 _MODS = r"(?:(?:older|younger|big|little|elder|twin|step-?|new|late|ex-?|former|second)\s+)?"
 _PARENTS = (r"(?:mothers?|mums?|moms?|mommy|mummy|dads?|daddy|fathers?|parents?|grandmas?|"
             r"grandmothers?|grand-?dads?|grandfathers?|grandparents?|nans?|nanas?|grans?|granny)")
@@ -126,10 +126,10 @@ _NOT_HERS = re.compile(
     r"writing|duo|study)\s+partners?\b", re.IGNORECASE)
 # a partner who is gone: "separated from her husband", "husband died", "lost her husband"
 _GONE = re.compile(
-    rf"\bseparated\s+from\s+(?:her|his|their)?\s*{_SPOUSES}\b"
+    rf"\b(?:divorced|separated)\s+from\s+(?:her|his|their)?\s*{_SPOUSES}\b"
     rf"|\b{_SPOUSES}\s+(?:died|passed(?:\s+(?:away|on))?|was\s+killed)\b"
     rf"|\b(?:lost|losing)\s+(?:her|his)\s+{_SPOUSES}\b", re.IGNORECASE)
-_MARRIED = re.compile(r"\b(?:married|husband|wife|spouse)\b", re.IGNORECASE)
+_MARRIED = re.compile(r"\b(?:remarried|married|husbands?|wi(?:fe|ves)|spouses?)\b", re.IGNORECASE)
 _ENGAGED = re.compile(r"\bfianc[eé]e?\b|\bengaged\b(?!\s+(?:in|with)\b)", re.IGNORECASE)
 _NOT_ENGAGED = re.compile(r"\b(?:no|not|never|without)\s+(?:a\s+)?(?:engaged|fianc\w*)\b",
                           re.IGNORECASE)
@@ -174,7 +174,8 @@ def taken(p) -> bool:
     """Her household names a spouse, a fiancé or a partner of her own (as with the women married
     to outsiders): such a member never starts a member romance. "No partner", an ex, a
     separated or late spouse and a relative's do not count."""
-    return household_status(p.real_life.household) in TAKEN_STATUSES
+    return (household_status(p.real_life.household) in TAKEN_STATUSES or any(
+        household_status(d.text) in TAKEN_STATUSES for d in getattr(p, "disclosures", ())))
 
 
 def _rel(store, a, b):
@@ -347,16 +348,15 @@ def after_scene(store, ctx, enc, *, total: float, valence: float) -> str | None:
 # -- the night's unit ------------------------------------------------------------------------
 
 def _public_ref(store, ref: str) -> bool:
-    """Whether an act of his was public: a line on a channel the whole guild may read (guild,
-    party, raid, say, yell, a public Discord channel) or a text emote in the game. Anything
+    """Whether an act of his was public: a line the whole guild may read (guild or a public
+    Discord channel). Game-local and voice audiences do not authorize guild-wide disclosure. Anything
     else (a whisper, a DM, an officers' or unknown line) is not."""
     if ref.startswith("event:"):
-        row = store.conn.execute("SELECT type FROM game_event WHERE id=?",
-                                 (int(ref[6:]) if ref[6:].isdecimal() else -1,)).fetchone()
-        return row is not None and row["type"] == "text_emote"
+        return False  # text emotes have a local audience, not the whole guild
     if ref.startswith("chat:") and ref[5:].isdecimal():
         row = store.conn.execute("SELECT channel FROM chat_line WHERE id=?", (int(ref[5:]),)).fetchone()
-        return row is not None and is_public(row["channel"])
+        return (row is not None and (row["channel"] == "guild" or row["channel"].startswith("discord:"))
+                and is_public(row["channel"]) and not is_local_channel(row["channel"]))
     return False
 
 
@@ -468,10 +468,10 @@ def breakup(store, ctx, woman: int, jilted: int, stage: str, now: float, *,
     return ident
 
 
-def _draw_away(store, ctx, members, now) -> tuple[int, int]:
+def _draw_away(store, ctx, members, now, *, pairs=None) -> tuple[int, int]:
     """His pursuit against each woman's member partner. Returns (breakups, quiet ends)."""
     breakups = quiet = 0
-    for a, b, stage in active(store, members, ctx.human):
+    for a, b, stage in active(store, members, ctx.human) if pairs is None else pairs:
         woman = next((g for g in (a, b) if _gender(ctx, g) == "female"), None)
         if woman is None:
             continue
@@ -495,9 +495,17 @@ def _draw_away(store, ctx, members, now) -> tuple[int, int]:
     return breakups, quiet
 
 
-def _sparks(store, ctx, members) -> int:
+def _sparks(store, ctx, members, *, separate=False) -> int:
     attitudes = ctx.attitudes()
-    eligible = sorted(g for g in members if free(ctx, g))
+    eligible = []
+    for g in sorted(members):
+        try:
+            if free(ctx, g):
+                eligible.append(g)
+        except Exception as exc:
+            if not separate:
+                raise
+            ctx.fail(STAGE, f"candidate:{g}", exc)
     women = [g for g in eligible if _gender(ctx, g) == "female"]
     men = [g for g in eligible if _gender(ctx, g) == "male"]
     now = ctx.clock.now()
@@ -508,6 +516,8 @@ def _sparks(store, ctx, members) -> int:
         "SELECT a,b FROM feud WHERE ended IS NULL")}
     pairs = []
     for w in women:
+        if _pursuit(store, w, ctx.human, now):
+            continue  # a quiet drift must not restart as another spark while he is pursuing her
         for m in men:
             if frozenset((w, m)) in barred:
                 continue
@@ -515,48 +525,70 @@ def _sparks(store, ctx, members) -> int:
             if low >= SPARK_AFFINITY:
                 pairs.append((-low, w, m))
     used, sparks = set(), 0
+    already = store.conn.execute("SELECT count(*) FROM night_step WHERE night=? AND stage=? "
+                                 "AND unit LIKE 'spark:%'", (ctx.night, STAGE)).fetchone()[0] if separate else 0
     for _, w, m in sorted(pairs):
-        if sparks >= SPARKS_PER_NIGHT:
+        if sparks + already >= SPARKS_PER_NIGHT:
             break
         if w in used or m in used:
             continue
         chance = SPARK_P * (DRAWN_FACTOR if attitudes.get(w) in DRAWN else 1.0)
         if ctx.rng(STAGE, "spark", w, m).random() >= chance:
             continue
-        for x, y in ((w, m), (m, w)):
-            rel = _rel(store, x, y)
-            if rel.attraction < SPARK_ATTRACTION:
-                _attraction(store, x, y, SPARK_ATTRACTION - rel.attraction, "member:spark",
-                            [f"rule:spark:{min(w, m)}:{max(w, m)}"], now)
-        _set_stage(store, w, m, _rel(store, w, m).romance_stage, "notices",
-                   [f"rule:spark:{min(w, m)}:{max(w, m)}"], now)
+        def write(store):
+            for x, y in ((w, m), (m, w)):
+                rel = _rel(store, x, y)
+                if rel.attraction < SPARK_ATTRACTION:
+                    _attraction(store, x, y, SPARK_ATTRACTION - rel.attraction, "member:spark",
+                                [f"rule:spark:{min(w, m)}:{max(w, m)}"], now)
+            _set_stage(store, w, m, _rel(store, w, m).romance_stage, "notices",
+                       [f"rule:spark:{min(w, m)}:{max(w, m)}"], now)
+        unit = f"spark:{min(w, m)}:{max(w, m)}"
+        if separate:
+            if ctx.done(STAGE, unit) or not ctx.commit(STAGE, unit, write):
+                continue
+        else:
+            write(store)
         used.update((w, m))
         sparks += 1
     return sparks
 
 
 async def stage_couples(ctx) -> None:
-    """The night's deterministic unit: his pull against each partner first, then new sparks.
+    """Independent pair units: his pull against each partner first, then new sparks.
     Nothing at all while the night's switch is off."""
     from leeroy_mind.drama.config import member_romance
     if not member_romance(ctx) or ctx.done(STAGE, "all"):
         return
 
-    def write(store):
-        members = ctx.members()
-        now = ctx.clock.now()
-        breakups, quiet = _draw_away(store, ctx, members, now)
-        sparks = _sparks(store, ctx, members)
-        log("member_romance_night", couples=len(active(store, members, ctx.human)),
-            sparks=sparks, breakups=breakups, drifted=quiet)
-
-    ctx.commit(STAGE, "all", write)
+    members, now = ctx.members(), ctx.clock.now()
+    failed_before = ctx.failures.get(STAGE, 0)
+    counts = [0, 0]
+    for a, b, stage in active(ctx.store, members, ctx.human):
+        unit = f"draw:{a}:{b}"
+        if ctx.done(STAGE, unit):
+            continue
+        result = [0, 0]
+        def write(store):
+            result[:] = _draw_away(store, ctx, members, now, pairs=[(a, b, stage)])
+        if ctx.commit(STAGE, unit, write):
+            counts = [x + y for x, y in zip(counts, result)]
+    sparks = _sparks(ctx.store, ctx, members, separate=True)
+    log("member_romance_night", couples=len(active(ctx.store, members, ctx.human)),
+        sparks=sparks, breakups=counts[0], drifted=counts[1])
+    if ctx.failures.get(STAGE, 0) == failed_before:
+        ctx.skip(STAGE, "all")
 
 
 def attach(app):
     """Startup only: with the switch off nothing is added."""
     from leeroy_mind.drama.config import load_drama_config
-    if not load_drama_config(app.data_dir / "mind.toml").member_romance:
+    return attach_night(app.night_runner, load_drama_config(app.data_dir / "mind.toml").member_romance)
+
+
+def attach_night(runner, enabled):
+    """The same stage for the service and the explicit nightly command."""
+    if not enabled:
         return None
-    app.night_runner.add_stage(STAGE, stage_couples, after="romance", model=None)
+    runner.add_stage(STAGE, stage_couples, after="romance", model=None)
     return True

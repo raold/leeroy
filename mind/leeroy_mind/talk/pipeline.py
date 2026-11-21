@@ -2886,6 +2886,7 @@ class Pipeline:
                                    attitude=attitude if g == hg else "",
                                    speaker=p.identity.player_gender,
                                    friendship_only=is_group(turn.channel),
+                                   show_member_romance=is_private(turn.channel),
                                    pronoun=pronouns.get(("card", g), ""),
                                    realism=realism and g == hg, far=apart and g == hg)
                  for g in people]

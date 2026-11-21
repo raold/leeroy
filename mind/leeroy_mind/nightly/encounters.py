@@ -538,13 +538,25 @@ async def run_encounter(ctx, row):
              "of the people around who noticed, and what they noticed. Give exactly one memory "
              "for a and one for b.")
     reply = await ctx.reasoner.json(system, user, ENCOUNTER_SCHEMA, temperature=0.8)
-    # Grounding only: the people who might be around are really around, so the scene may name
-    # them (rule 5). The memories keep citing `refs` alone.
+    # Merely offered candidates have not witnessed anything. Only a valid reported observer
+    # can ground newly named participants; that observer gets the corresponding knowledge below.
     checked = refs
-    if candidates:
+    witnesses = []
+    candidate_names = {ctx.name(g).casefold(): g for g in candidates}
+    for observer in reply["bystanders"]:
+        g = candidate_names.get(_text(observer["who"]).casefold())
+        if g is None:
+            continue
+        local = Evidence()
+        local.add(Item(root, row["setting"], frozenset({a, b, g}), ctx.clock.now()))
+        claim = Claim("bystander", g, _text(observer["noticed"]), [root])
+        if (check(claim, local, facts).ok and not any(
+                guid not in {a, b, g} and has_word(claim.text, name) for name, guid in facts.names.items())):
+            witnesses.append(g)
+    if witnesses:
         ev.add(Item(f"around:{row['id']}", "People around: "
-                    + ", ".join(ctx.name(g) for g in candidates) + ".",
-                    frozenset(candidates), ctx.clock.now()))
+                    + ", ".join(ctx.name(g) for g in witnesses) + ".",
+                    frozenset(witnesses), ctx.clock.now()))
         checked = [*refs, f"around:{row['id']}"]
     memories = {m["who"]: m for m in reply["memories"]}
     scene = Claim("scene", a, _text(reply["scene"]), checked)
