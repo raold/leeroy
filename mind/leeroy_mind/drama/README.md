@@ -77,8 +77,16 @@ Four changes ship without the switch:
   her. Raid or party time with her and his guild-chat replies never count. While he pursues her,
   her warm scenes with her partner add nothing on her side and take no step, and each night her
   attraction to the partner erodes by 10. Once her attraction to him is 10 over her partner's
-  (plus 10 dating, 20 together) she leaves. Flirts can raise her attraction to him; ordinary
-  private conversation erodes the old tie without itself raising that attraction. From a crush on that is a breakup: `breakup` row, both rows
+  (plus 10 dating, 20 together) she leaves. Sustained ordinary private conversation is enough;
+  flirting is not required (owner ruling 2026-11-21). When he has answered her private lines
+  on at least two local nights within the last three days, a fresh answer this night can add
+  the ordinary +3 `answered` attraction gain. Each answer must be within five minutes, in the
+  same medium and between that pair. A night with any attraction gain or hurt already recorded,
+  an already credited line, a one-sided message, or a rude exchange adds nothing. The local
+  06:00-to-06:00 night boundary matches the existing curve; the gain is at most once per night,
+  honors the 100 cap and stance bands, and resumes with the pair's transaction. A current
+  `none` stance prevents both this gain and draw-away, even if a stale attraction score remains.
+  From a crush on that is a breakup: `breakup` row, both rows
   `ex`, the partner's hurt memory and distress, capped affinity and trust loss, a live rumour
   about her spread by the partner, and by the partner's traits a feud with her. The split is
   public. Why she left is public only when some of his pursuit reached the whole guild (a

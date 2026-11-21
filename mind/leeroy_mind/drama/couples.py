@@ -19,7 +19,9 @@ of the stored romance ladder through their nightly scenes, and the owner can dra
   never raid or party time together nor his guild-chat replies. While he pursued her within
   PURSUIT_DAYS, her warm scenes with her partner add nothing on her side, and each night her
   pull toward her partner erodes by EROSION; once her pull to him outweighs it (MARGIN over her
-  partner's pull plus HOLD), she leaves, so steady pursuit wins. From a crush on (BREAKS) that
+  partner's pull plus HOLD), she leaves, so steady pursuit wins. Sustained private conversation
+  supplies an ordinary answered gain on nights that have not already earned attraction: flirting
+  is not required (owner ruling 2026-11-21). From a crush on (BREAKS) that
   is a breakup: the split is public, the partner is hurt (memory, distress, capped affinity and
   trust loss), may open a feud with her (by his traits), and the guild hears it as a rumour
   about her. That she left for him is told (the partner's memory and envy, the feud cause, the
@@ -34,7 +36,7 @@ import json
 import re
 from dataclasses import replace
 
-from leeroy_mind.discord.channels import is_local_channel, is_public, private_sql
+from leeroy_mind.discord.channels import is_discord, is_local_channel, is_public, private_sql
 from leeroy_mind.logs import log
 from leeroy_mind.memory.writer import clean_memory_text
 from leeroy_mind.nightly import knowledge
@@ -81,6 +83,8 @@ PURSUIT_ACTS = ("flirt", "public_compliment")
 MARGIN = 10.0
 HOLD = {"whispers": 0.0, "late_nights": 10.0, "confession": 20.0}
 EROSION = 10.0  # her pull toward her partner, a night he pursues her: more than a scene adds
+CONVERSATION_NIGHTS = 2  # reciprocal private exchanges on distinct local nights within PURSUIT_DAYS
+CONVERSATION_GAIN = 3.0  # an uncredited sustained conversation: one ordinary answered gain per night
 EX_COOLDOWN_DAYS = 30.0  # nights before two exes may spark again
 BREAKUP_LOSS = -10.0  # the jilted partner's affinity and trust toward her, under the night cap
 ENVY_SPIKE = 85.0
@@ -321,7 +325,7 @@ def after_scene(store, ctx, enc, *, total: float, valence: float) -> str | None:
         # While he pursues her, her warm scenes with her partner add nothing on her side and
         # take no step: his romance wins if he keeps at it.
         woman = next((g for g in (a, b) if _gender(ctx, g) == "female"), None)
-        drawn = woman is not None and bool(_pursuit(store, woman, ctx.human, now))
+        drawn = woman in ctx.attitudes() and bool(_pursuit(store, woman, ctx.human, now))
         for x, y in ((a, b), (b, a)):
             if not (drawn and x == woman):
                 _attraction(store, x, y, FLIRT_GAIN, "member:scene", ref, now)
@@ -374,6 +378,63 @@ def _pursuit(store, woman, human, now) -> list[tuple[str, bool]]:
             f"AND {private_sql()} AND ts>? AND ts<=? ORDER BY ts, id", (human, woman, since, now)):
         out.setdefault(f"chat:{r['id']}", False)
     return list(out.items())
+
+
+def _private_attention(store, ctx, woman, now) -> bool:
+    """Credit sustained private conversation, once per night, using the ordinary attraction curve.
+
+    His answer must follow her private line in the same medium, and another such exchange must
+    exist on a different local night. Existing gains or hurt this night suppress this fallback;
+    reused lines never gain again. The caller commits it with this pair's draw-away unit.
+    Returns whether the stored persona changed band, for cache invalidation after commit.
+    """
+    from leeroy_mind.nightly import attraction
+    from leeroy_mind.nightly.reactions import WHISPER_BACK_S
+    from leeroy_mind.nightly.settings import night_of_ts
+
+    if woman not in ctx.attitudes():
+        return False
+    start, end = ctx.window
+    end = min(end, now + .001)
+    if start >= end or store.conn.execute(
+            "SELECT 1 FROM attraction_act WHERE guid=? AND ts>=? AND ts<? "
+            "AND (gain>0 OR act='hurt') LIMIT 1", (woman, start, end)).fetchone():
+        return False
+    rows = store.conn.execute(
+        f"SELECT id,ts,from_guid,origin,channel,text FROM chat_line WHERE {private_sql()} "
+        "AND ts>=? AND ts<? AND ((from_guid=? AND to_guid=? AND origin='human') "
+        "OR (from_guid=? AND to_guid=? AND origin='mind')) ORDER BY ts,id",
+        (end - PURSUIT_DAYS * DAY_S, end, ctx.human, woman, woman, ctx.human)).fetchall()
+    previous, nights, fresh = {}, set(), []
+    for row in rows:
+        medium = is_discord(row["channel"])
+        prior = previous.get(medium)
+        previous[medium] = row
+        if (row["origin"] != "human" or prior is None or prior["origin"] != "mind"
+                or row["ts"] - prior["ts"] > WHISPER_BACK_S
+                or attraction.HURT_RE.search(row["text"]) or attraction.HURT_RE.search(prior["text"])):
+            continue
+        nights.add(night_of_ts(row["ts"], ctx.tz))
+        if row["ts"] >= start:
+            fresh.append((prior["id"], row["ts"]))
+    if len(nights) < CONVERSATION_NIGHTS:
+        return False
+    for line_id, ts in reversed(fresh):
+        ref = f"chat:{line_id}"
+        if store.conn.execute("SELECT 1 FROM attraction_act WHERE guid=? AND ref=? LIMIT 1",
+                              (woman, ref)).fetchone():
+            continue
+        reconciled = attraction.reconcile(store, woman, now=now)
+        if reconciled is None:
+            return False
+        stance, _ = reconciled
+        amount = min(CONVERSATION_GAIN, attraction.CAP - _rel(store, woman, ctx.human).attraction)
+        if amount <= 0:
+            return False
+        return attraction.apply_act(store, human=ctx.human, guid=woman, act="answered",
+                                    amount=amount, mult=1., ref=ref, ts=ts, live=False,
+                                    stance=stance, now=now) is not None
+    return False
 
 
 def _feud_chance(ctx, guid) -> float:
@@ -473,7 +534,7 @@ def _draw_away(store, ctx, members, now, *, pairs=None) -> tuple[int, int]:
     breakups = quiet = 0
     for a, b, stage in active(store, members, ctx.human) if pairs is None else pairs:
         woman = next((g for g in (a, b) if _gender(ctx, g) == "female"), None)
-        if woman is None:
+        if woman is None or woman not in ctx.attitudes():
             continue
         other = b if woman == a else a
         acts = _pursuit(store, woman, ctx.human, now)
@@ -516,7 +577,7 @@ def _sparks(store, ctx, members, *, separate=False) -> int:
         "SELECT a,b FROM feud WHERE ended IS NULL")}
     pairs = []
     for w in women:
-        if _pursuit(store, w, ctx.human, now):
+        if w in attitudes and _pursuit(store, w, ctx.human, now):
             continue  # a quiet drift must not restart as another spark while he is pursuing her
         for m in men:
             if frozenset((w, m)) in barred:
@@ -564,15 +625,22 @@ async def stage_couples(ctx) -> None:
     members, now = ctx.members(), ctx.clock.now()
     failed_before = ctx.failures.get(STAGE, 0)
     counts = [0, 0]
+    changed = False
     for a, b, stage in active(ctx.store, members, ctx.human):
         unit = f"draw:{a}:{b}"
         if ctx.done(STAGE, unit):
             continue
         result = [0, 0]
+        moved = [False]
         def write(store):
+            woman = next((g for g in (a, b) if _gender(ctx, g) == "female"), None)
+            moved[0] = woman is not None and _private_attention(store, ctx, woman, now)
             result[:] = _draw_away(store, ctx, members, now, pairs=[(a, b, stage)])
         if ctx.commit(STAGE, unit, write):
             counts = [x + y for x, y in zip(counts, result)]
+            changed |= moved[0]
+    if changed:
+        ctx.attitudes(fresh=True)
     sparks = _sparks(ctx.store, ctx, members, separate=True)
     log("member_romance_night", couples=len(active(ctx.store, members, ctx.human)),
         sparks=sparks, breakups=counts[0], drifted=counts[1])

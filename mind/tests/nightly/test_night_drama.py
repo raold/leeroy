@@ -170,6 +170,20 @@ def test_offered_but_unaware_observer_cannot_ground_the_scene(h, bystanders):
     assert not h.store.conn.execute("SELECT 1 FROM knows WHERE root='encounter:1' AND guid=103").fetchone()
 
 
+def test_a_valid_second_notice_still_gives_the_observer_knowledge(h):
+    drama_on(h)
+    h.persona(103, outside_raids=['idling'])
+    data = reply(scene="Arkon and Belra argued while Coros watched.", bystanders=[
+        {'who': 'Coros', 'noticed': 'Ebbo watched them.'},
+        {'who': 'Coros', 'noticed': 'Arkon and Belra argued about kiting.'}])
+    ctx = seeded(h, data)
+    run(enc.stage_encounters(ctx))
+    row = encounter(h)
+    assert row['status'] == 'done'
+    assert h.store.conn.execute('SELECT 1 FROM knows WHERE root=? AND guid=103',
+                                (f"encounter:{row['id']}",)).fetchone()
+
+
 def test_the_couple_rule_swaps_only_the_romance_sentence(h):
     plain = system_prompt("encounter", "x", h.settings.data_dir, human=h.ident)
     assert plain.endswith(INVARIANTS.format(human=h.ident.called))
@@ -562,6 +576,112 @@ def test_his_pursuit_always_wins_if_he_keeps_at_it(h, monkeypatch):
     assert nights is not None and nights <= 14
 
 
+def _private_exchange(h, t, *, channel='whisper', reply_channel=None, reply_to=102, gap=30):
+    now = h.clock.now()
+    hers = h.say(t, 102, 'How was your day?', channel=channel, to=1)
+    h.say(t + gap, 1, 'I caught up with an old friend.', channel=reply_channel or channel, to=reply_to)
+    h.clock.set(now)
+    return hers
+
+
+@pytest.mark.parametrize('channel', ['whisper', 'dm:102'])
+def test_sustained_private_conversation_can_draw_away_a_fond_partner(h, monkeypatch, channel):
+    from leeroy_mind.nightly.settings import night_of_ts
+    monkeypatch.setattr(couples, '_feud_chance', lambda ctx, guid: 0.)
+    _dating(h, 'confession', pull=20., held=64.)
+    _private_exchange(h, h.clock.now() - DAY - 600, channel=channel)
+    for n in range(14):
+        _private_exchange(h, h.clock.now() - 600, channel=channel)
+        ctx = h.ctx(night=night_of_ts(h.clock.now(), h.clock.local().tzinfo))
+        run(couples.stage_couples(ctx))
+        if h.count('breakup'):
+            break
+        h.clock.advance(DAY)
+    assert stage(h, 101, 102) == ('ex', 'ex')
+    assert h.store.conn.execute('SELECT public FROM breakup').fetchone()[0] == 0
+    acts = h.store.conn.execute("SELECT * FROM attraction_act WHERE act='answered'").fetchall()
+    assert acts and all(r['gain'] == 3. and not r['live'] for r in acts)
+    assert h.store.get_relationship(102, 1).attraction >= 30.
+
+
+@pytest.mark.parametrize('case', ['one_night', 'one_sided', 'different_medium', 'other_target',
+                                  'public', 'stale_reply', 'no_fresh_exchange', 'hurt', 'none_stance'])
+def test_stray_or_ineligible_conversation_gains_nothing(h, case):
+    _dating(h, 'confession', pull=20., held=64.)
+    now = h.clock.now()
+    if case != 'one_night':
+        _private_exchange(h, now - DAY - 600)
+    if case == 'one_sided':
+        h.say(now - 600, 1, 'How was your day?', channel='whisper', to=102)
+        h.clock.set(now)
+    elif case != 'no_fresh_exchange':
+        _private_exchange(h, now - 600,
+                          channel='guild' if case == 'public' else 'whisper',
+                          reply_channel='dm:102' if case == 'different_medium' else None,
+                          reply_to=104 if case == 'other_target' else 102,
+                          gap=500 if case == 'stale_reply' else 30)
+    if case == 'hurt':
+        h.store.conn.execute("UPDATE chat_line SET text='leave me alone' WHERE from_guid=1 AND ts>?", (now - DAY,))
+    if case == 'none_stance':
+        woman(h, 102, 'none')
+        h.rel(102, 1, attraction=99.)  # a stale score must not override an explicit stance change
+    run(couples.stage_couples(h.ctx()))
+    assert h.store.conn.execute("SELECT count(*) FROM attraction_act").fetchone()[0] == 0
+    assert stage(h, 101, 102) == ('confession', 'confession')
+
+
+@pytest.mark.parametrize('act', ['flirt', 'answered', 'hurt'])
+def test_conversation_credit_does_not_stack_on_live_credit_or_hurt(h, act):
+    _dating(h, 'confession', pull=20., held=64.)
+    now = h.clock.now()
+    _private_exchange(h, now - DAY - 600)
+    ref = _private_exchange(h, now - 600)
+    h.store.conn.execute('INSERT INTO attraction_act(guid,act,gain,mult,ref,ts,live) VALUES (?,?,?,1,?,?,1)',
+                         (102, act, 0 if act == 'hurt' else 3, f'chat:{ref}', now - 570))
+    run(couples.stage_couples(h.ctx()))
+    assert h.store.conn.execute('SELECT count(*) FROM attraction_act').fetchone()[0] == 1
+    assert h.store.get_relationship(102, 1).attraction == 20.
+
+
+def test_conversation_credit_resumes_once_and_respects_the_attraction_cap(h):
+    from leeroy_mind.nightly import attraction
+    _dating(h, 'confession', pull=20., held=100.)
+    now = h.clock.now()
+    _private_exchange(h, now - DAY - 600)
+    _private_exchange(h, now - 600)
+    attraction.reconcile(h.store, 102, now=now)
+    h.rel(102, 1, attraction=99.)
+    ctx = h.ctx()
+    run(couples.stage_couples(ctx))
+    run(couples.stage_couples(h.ctx()))
+    assert h.store.get_relationship(102, 1).attraction == 100.
+    assert h.store.conn.execute("SELECT count(*) FROM attraction_act WHERE act='answered'").fetchone()[0] == 1
+    assert ctx.persona(102).romance.stance == 'lust'
+    assert h.store.get_relationship(102, 101).attraction == 90.
+
+
+def test_conversation_uses_the_local_six_am_night_not_midnight(h, monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from leeroy_mind.nightly.settings import night_bounds
+    _dating(h, 'confession', pull=20., held=100.)
+    tz = ZoneInfo('America/New_York')
+    now = datetime(2026, 10, 30, 0, 30, tzinfo=tz).timestamp()
+    h.clock.set(now)
+    monkeypatch.setattr(h.clock, 'local', lambda: datetime.fromtimestamp(h.clock.now(), tz))
+    # Across local midnight, but both within the same local night: not yet sustained.
+    _private_exchange(h, now - 3600)
+    _private_exchange(h, now - 600)
+    ctx = h.ctx(night='2026-10-29', window=night_bounds('2026-10-29', tz))
+    with h.store.transaction():
+        couples._private_attention(h.store, ctx, 102, now)
+    assert h.store.get_relationship(102, 1).attraction == 20.
+    _private_exchange(h, now - DAY - 600)
+    with h.store.transaction():
+        couples._private_attention(h.store, ctx, 102, now)
+    assert h.store.get_relationship(102, 1).attraction == 23.
+
+
 def test_while_he_pursues_her_their_scenes_do_not_warm_her(h):
     _dating(h, "late_nights", pull=20.0, held=40.0)
     pursue(h, 102)
@@ -667,7 +787,6 @@ def test_scene_fiction_stays_out_of_notes_and_derived_gossip(h):
     ctx = h.ctx()
     assert not gossip.source_allowed(ctx, scene, 101, 102)
     assert not gossip.source_allowed(ctx, h.store.get_memories([heard_id])[0], 101, 102)
-    h.store.conn.execute("UPDATE memory SET status='archived' WHERE id=?", (heard_id,))
     run(relations.rewrite_notes(ctx, 101, 103))
     assert not ctx.reasoner.llm.calls
     assert h.store.get_relationship(101, 103).pinned == ()
@@ -680,6 +799,11 @@ def test_a_woman_with_no_stance_toward_him_is_never_drawn_away(h):
     pursue(h, 102)
     run(couples.stage_couples(h.ctx()))
     assert stage(h, 101, 102) == ("late_nights", "late_nights")
+    before = h.store.get_relationship(102, 101).attraction
+    with h.store.transaction():
+        assert couples.after_scene(h.store, h.ctx(), {'a': 101, 'b': 102, 'id': 1},
+                                   total=2., valence=.5) != 'distracted'
+    assert h.store.get_relationship(102, 101).attraction == before + couples.FLIRT_GAIN
 
 
 # -- 4. jealousy becomes drama --------------------------------------------------------------

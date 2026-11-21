@@ -318,7 +318,10 @@ def _open_ids(store: Store, sql: str, owner: int, about: int, limit: int) -> lis
     """The first `limit` ids `sql` gives, leaving out any memory resting on a restricted Discord
     line at any depth (privacy.restricted_channels; ruling R10), which a note shown in every
     prompt must never carry. The writer already stores those private; this also holds for a row
-    stored open by another path."""
+    stored open by another path. Offscreen fiction, including through derived memories, is
+    not notes or pin evidence; an incomplete ancestor graph is ineligible too."""
+    from leeroy_mind.nightly.encounters import _privacy
+
     out: list[int] = []
     with store.transaction():
         cursor = store.conn.execute(sql, (owner, about, -1))
@@ -332,6 +335,11 @@ def _open_ids(store: Store, sql: str, owner: int, about: int, limit: int) -> lis
                 r["id"] for r in rows if _everyday_slang(r["key"])}
             # open by its evidence too, at any depth (privacy.resolve), not only as stored
             hidden |= {i for i, s in effective_scopes(store.conn, ids).items() if s[0] != "open"}
+            for memory in store.get_memories([i for i in ids if i not in hidden]):
+                complete, scopes, _, _, _ = _privacy(store, memory)
+                ancestors = store.get_memories([i for i, _, _ in scopes])
+                if not complete or any(m.source == 'offscreen' for m in ancestors):
+                    hidden.add(memory.id)
             out += [i for i in ids if i not in hidden]
     return out[:limit]
 

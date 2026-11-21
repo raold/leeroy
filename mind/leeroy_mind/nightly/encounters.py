@@ -550,7 +550,7 @@ async def run_encounter(ctx, row):
         local = Evidence()
         local.add(Item(root, row["setting"], frozenset({a, b, g}), ctx.clock.now()))
         claim = Claim("bystander", g, _text(observer["noticed"]), [root])
-        if (check(claim, local, facts).ok and not any(
+        if (g not in witnesses and check(claim, local, facts).ok and not any(
                 guid not in {a, b, g} and has_word(claim.text, name) for name, guid in facts.names.items())):
             witnesses.append(g)
     if witnesses:
@@ -594,7 +594,6 @@ async def run_encounter(ctx, row):
                 continue
             if g in seen:
                 continue
-            seen.add(g)
             local = Evidence()
             local.add(Item(root, row["setting"], frozenset({a, b, g}), ctx.clock.now()))
             verdict = check(claim, local, facts)
@@ -604,6 +603,7 @@ async def run_encounter(ctx, row):
                 verdict = Verdict(False, "deterministic", "bystander name not in scene")
             pairs.append((claim, verdict))
             if verdict.ok:
+                seen.add(g)
                 text = truncate_words(f"Noticed {ctx.name(a)} and {ctx.name(b)}: {claim.text}", 200)
                 around.append((g, claim, text))
     texts = [claim.text for claim in claims] + [text for _, _, text in around] if accepted else []
