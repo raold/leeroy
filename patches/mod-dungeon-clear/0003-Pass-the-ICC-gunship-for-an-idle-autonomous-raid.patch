@@ -1,4 +1,4 @@
-From ed2a1c4c6d22927997364fb4a14091c9a82dd59c Mon Sep 17 00:00:00 2001
+From 827505403b38dd32e530f7edaa58731de6c7980f Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 21 Nov 2026 07:47:55 -0500
 Subject: [PATCH 3/3] Pass the ICC gunship for an idle autonomous raid
@@ -13,18 +13,19 @@ Subject: [PATCH 3/3] Pass the ICC gunship for an idle autonomous raid
  .../Overrides/ObjectiveHookRegistry.h         |   1 +
  .../Util/DcIcecrownPassDecision.h             |  34 ++++
  src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h |   2 +
- t/TestIcecrown.cpp                            |  50 ++++++
+ t/TestEventRegistry.cpp                       |  17 ++
+ t/TestIcecrown.cpp                            |  54 ++++++
  t/run_tests.sh                                |   2 +-
- 11 files changed, 269 insertions(+), 1 deletion(-)
+ 12 files changed, 290 insertions(+), 1 deletion(-)
  create mode 100644 src/Ai/Dungeon/DungeonClear/Data/Events/IcecrownCitadelEvents.cpp
  create mode 100644 src/Ai/Dungeon/DungeonClear/Util/DcIcecrownPassDecision.h
  create mode 100644 t/TestIcecrown.cpp
 
 diff --git a/README.md b/README.md
-index b514ba6..17e0ff1 100644
+index bced14e..c623054 100644
 --- a/README.md
 +++ b/README.md
-@@ -205,3 +205,18 @@ handed to testers without shell access.
+@@ -219,3 +219,18 @@ handed to testers without shell access.
  ## License
  
  AGPL-3.0-or-later (inherited from mod-playerbots). See `LICENSE`.
@@ -68,10 +69,10 @@ index 3dd4605..9a62ebf 100644
              RegisterKarazhanEvents(t);
              return t;
 diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h b/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
-index 1d5bba8..6236e10 100644
+index e931b1a..69dfde3 100644
 --- a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
 +++ b/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
-@@ -5415,6 +5415,7 @@ namespace DcUlduar
+@@ -5416,6 +5416,7 @@ namespace DcUlduar
  // Ulduar (603) — TWO events: the Leviathan pass (conditional) and Razorscale's
  // commander (anchored). See UlduarEvents.cpp.
  void RegisterUlduarEvents(std::vector<DungeonEvent>& out);
@@ -324,12 +325,47 @@ index cc48de4..3ec983f 100644
      Count
  };
  
+diff --git a/t/TestEventRegistry.cpp b/t/TestEventRegistry.cpp
+index 80224b6..3dea468 100644
+--- a/t/TestEventRegistry.cpp
++++ b/t/TestEventRegistry.cpp
+@@ -374,6 +374,16 @@ namespace
+             // UlduarPassLeviathan) moves exactly those bots past it and reports Done.
+             // Repeatable: never latched, a straggler put back at the entrance re-fires it.
+             {603, 1},
++            // ICC "Gunship pass and Saurfang intro": this hook IS the arrival,
++            // like Ulduar's pass, rather than an action that may finish remotely.
++            // PassDue requires Marrowgar and Deathwhisper DONE, idle Saurfang,
++            // the entire living idle bot raid in this copy, no human in the map,
++            // and no pending loot. It settles progression and moves only bots
++            // outside the Rise's x/y/z box. Once all are inside that box, only
++            // the visible faction captain's gossip can keep it due; the hook
++            // approaches him and clicks only within 4yd. Repeatable: Done yields
++            // rather than latching success at a distant entrance after a wipe.
++            {631, 1},
+             // Blackfathom Deeps "Climb out of the Forgotten Pool": a POSITION is
+             // the gate — ForgottenPoolExitDue reads true only while the tank is
+             // over deep water inside the pool box — and its lone step (hook 63,
+@@ -1485,6 +1495,13 @@ TEST(DungeonEventIntegrityTest, StepsOwnMovementIsConfinedToVettedEvents)
+         // Ulduar "Flame Leviathan: the Ulduar Teleporter": hook 69 teleports the bots
+         // outside the gate to the Colossal Forge; there is no anchor to hold.
+         {603, 1},
++        // ICC "Gunship pass and Saurfang intro": hook 70 owns the bot-only
++        // teleport to the Rise and the final approach to its faction captain.
++        // A per-tick anchor hold would cancel that approach. The hook rechecks
++        // the full party/instance/combat/loot fence before either move, and Done
++        // yields to normal boss movement/combat once it has no work. Its exact
++        // map/event registration and hook are covered by TestIcecrown.
++        {631, 1},
+         // Blackfathom Deeps "Climb out of the Forgotten Pool": hook 63 swims the
+         // fallen tank along the pool floor and up the ramp with its own raw
+         // spline; the per-tick hold would pin it in the water it has to leave.
 diff --git a/t/TestIcecrown.cpp b/t/TestIcecrown.cpp
 new file mode 100644
-index 0000000..5a78ade
+index 0000000..86d6b21
 --- /dev/null
 +++ b/t/TestIcecrown.cpp
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,54 @@
 +#include "gtest/gtest.h"
 +#include "Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.h"
 +#include "Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h"
@@ -365,12 +401,16 @@ index 0000000..5a78ade
 +    ASSERT_NE(event, nullptr);
 +    EXPECT_TRUE(event->repeatable);
 +    EXPECT_FALSE(event->required);
-+    EXPECT_TRUE(event->condition);
++    ASSERT_TRUE(event->condition);
++    EXPECT_FALSE(event->condition(nullptr, nullptr));
++    EXPECT_EQ(event->activation, EventActivation::Conditional);
 +    EXPECT_FALSE(event->encounterActive);
 +    EXPECT_FALSE(event->drivesInCombat);
 +    EXPECT_TRUE(ObjectiveHookRegistry::Has(Hook));
 +    EXPECT_TRUE(event->stepsOwnMovement);
 +    ASSERT_EQ(event->steps.size(), 1u);
++    EXPECT_EQ(event->steps[0].kind, EventStepKind::Custom);
++    EXPECT_EQ(event->steps[0].hookId, Hook);
 +}
 +
 +TEST(Icecrown, RelocksBothFactionsAndAllSizesWithoutTouchingOtherLoot)
