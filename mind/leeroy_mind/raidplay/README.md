@@ -236,6 +236,45 @@ Lash (a rear cone; native's cones point forward), the breaths, the Twilight Cutt
 Combustion and Soul Consumption with the fire they leave (nowhere known at a cast start; the hazard scan
 measures it), Enervating Brand, Conflagration, the adds.
 
+## Naxxramas cover and growing clouds
+
+The responder advertises `mechanics_naxx` after a native rebuild. The mind withholds
+`ice_block` and `caster_reach` rules from an older worldserver; the existing responder
+switches still apply. No migration or new activation switch is needed.
+
+Sapphiron's breath uses frozen players, not collision against the visible ice-block
+gameobjects. `ice_block` finds living raid members with his Icebolt aura in this
+instance and phase, then chooses a reachable point behind one. The block must be
+between Sapphiron and that point, within two yards of the sight line and ten yards
+of the destination. Cached destinations are checked again; ordinary movement cannot
+walk back into the breath. Frozen players themselves stay put. If no reachable cover
+exists, the responder reports no move rather than inventing protection. This rule
+starts at the breath visual and lasts nine seconds (the script hits after 8.5).
+
+Grobbulus's `caster_reach` cloud rule reads each living cloud's growing combat reach
+on every movement check, starting with its aura and refreshed by its poison pulses.
+Injected members also receive the existing run-out duty, which separates them from
+the raid rather than merely from the boss. This does not delay dispels. Sapphiron's
+Chill watches the real moving blizzard creature's aura instead of an unused summon
+spell. These use the existing movement/navmesh checks and yield rules; they do not
+change the hazard scanner, boss scripts, loot, or encounter completion.
+
+The 2026-11-21 25-player raid supplied the baseline: Sapphiron's Frost Breath hit
+11 members and was the recorded spell for 10 deaths; Grobbulus's Poison hit 15
+members (192 hits), Mutating Explosion 14 (37 hits), and Sapphiron's Chill nine
+(16 hits). Heigan recorded no Eruption hits; Kel'Thuzad had no pull in that run.
+Those two remain unchanged. The larger Disease Cloud total was not attributed to
+Grobbulus's Poison spell, so it is not claimed as fixed by this pass.
+
+After release, repeat a real pull and compare `training debrief --raid ID` with
+`training hurt --context '533:*:1' --last 1 --kind his` (use `:0` for ten-player).
+The latter selects the latest pull **per boss**, which may belong to an older raid:
+check its timestamps against the debrief. Verify breath cover, cloud exits, injection
+spacing and Chill movement, then compare deaths and hit counts. Damage amounts are
+requested pre-AI values with best-effort spell attribution, not health actually lost.
+Debrief logs can be incomplete; absent log lines are not proof that no action ran.
+Unit tests and compilation do not establish that these encounters now clear safely.
+
 ## Training
 
 `training/mechanics.py` builds its `Mechanic` rows from the boss checks. By default it uses only

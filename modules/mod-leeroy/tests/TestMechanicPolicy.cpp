@@ -807,3 +807,99 @@ LEEROY_TEST(Mechanic_BigBangGathersInTheHoleThenLeavesIt)
     for (auto const& spot : MechanicSpots({41, 1, 0}, {*leave}, {}, {}, kReach, 3, nullptr))
         CHECK(Dist(spot, {40, 0, 0}) >= 6 + kReach + kMechanicMarginYards);
 }
+
+LEEROY_TEST(Mechanic_NaxxRulesRequireTheRightGeometry)
+{
+    json ice = Rule("naxx.sapphiron.frost_breath", "los", "ice_block");
+    ice["radius"] = 2;
+    ice["range"] = 10;
+    ice["spells"] = json::array({30101});
+    CHECK_EQ(Refused(Table(json::array({ice}))), std::string("accepted"));
+    auto invalid = ice;
+    invalid["range"] = 0;
+    CHECK(Refused(Table(json::array({invalid}))) != "accepted");
+    invalid = ice;
+    invalid["kind"] = "stack";
+    CHECK(Refused(Table(json::array({invalid}))) != "accepted");
+    json cloud = Rule("naxx.grobbulus.poison_pool", "avoid_ground", "caster_reach");
+    CHECK_EQ(Refused(Table(json::array({cloud}))), std::string("accepted"));
+    cloud["kind"] = "los";
+    CHECK(Refused(Table(json::array({cloud}))) != "accepted");
+}
+
+LEEROY_TEST(Mechanic_IceCoverIsBehindAndCloseToTheFrozenPlayer)
+{
+    HazardPoint boss{0, 0, 0}, block{20, 0, 0};
+    CHECK(MechanicIceCover(boss, block, {23, 0, 0}, 2, 10));
+    CHECK(!MechanicIceCover(boss, block, {17, 0, 0}, 2, 10));
+    CHECK(!MechanicIceCover(boss, block, {23, 5, 0}, 2, 10));
+    CHECK(!MechanicIceCover(boss, block, {31, 0, 0}, 2, 10));
+    CHECK(!MechanicIceCover(boss, block, {23, 0, 20}, 2, 10));
+    CHECK(!MechanicIceCover(boss, block, block, 2, 10));
+    CHECK(!MechanicIceCover(boss, block, boss, 2, 10));
+    // Rotate the room: the chosen spots must satisfy the core's actual between test,
+    // including its vertical-line special case, not just our own helper.
+    for (int degrees = 0; degrees < 360; ++degrees)
+    {
+        float a = degrees * kPi / 180.0f;
+        block = {20 * std::cos(a), 20 * std::sin(a), 0};
+        for (auto const& at : MechanicIceSpots(boss, {block}, 10))
+        {
+            CHECK(MechanicIceCover(boss, block, at, 2, 10));
+            float pdist = at.x * at.x + at.y * at.y + 1.0f;
+            CHECK(block.x * block.x + block.y * block.y < pdist);
+            CHECK(Dist(block, at) * Dist(block, at) < pdist);
+            CHECK(Dist(block, at) < 10.0f);
+            if (std::fabs(at.x) < .00001f)
+                CHECK(std::fabs(block.x) <= 2.0f);
+            else
+            {
+                float slope = at.y / at.x;
+                CHECK(std::fabs(slope * block.x - block.y) / std::sqrt(slope * slope + 1) <= 2.0f);
+            }
+        }
+    }
+}
+
+LEEROY_TEST(Mechanic_IceCoverRechecksAChangedOrMissingBlock)
+{
+    HazardPoint boss{0, 0, 0}, block{20, 0, 0};
+    std::vector<HazardPoint> blocks{block};
+    auto hidden = [&](HazardPoint at)
+    {
+        return !blocks.empty() && MechanicIceCover(boss, blocks[0], at, 2, 10);
+    };
+    MechanicDuty duty;
+    duty.hide = true;
+    HazardPoint at{17, 3, 0};
+    auto spots = MechanicSpots(at, {duty}, {}, {}, kReach, 6, hidden, MechanicIceSpots(boss, blocks, 10));
+    CHECK(!spots.empty());
+    HazardPoint safe = spots.front();
+    CHECK(MechanicKept(safe, {duty}, {}, {}, kReach, hidden));
+    CHECK(MechanicRefusesMove(safe, {17, 0, 0}, {duty}, {}, kReach, hidden));
+    CHECK(!MechanicRefusesMove(safe, {25, 0, 0}, {duty}, {}, kReach, hidden));
+    blocks.clear();
+    CHECK(!MechanicKept(safe, {duty}, {}, {}, kReach, hidden));
+    CHECK(MechanicSpots(at, {duty}, {}, {}, kReach, 6, hidden).empty());
+    blocks.push_back({0, 20, 0});
+    CHECK(!MechanicKept(safe, {duty}, {}, {}, kReach, hidden));
+}
+
+LEEROY_TEST(Mechanic_GrowingCloudTracksItsCurrentReachAndPosition)
+{
+    auto cloud = Make(MechanicKind::AvoidGround, MechanicArea::CasterReach, 2);
+    auto cast = CastAt({0, 0, 0});
+    cast.casterReach = 2;
+    auto first = MechanicDutyFor(cloud, cast, {0, 0, 0}, std::nullopt);
+    CHECK(MechanicKept({10, 0, 0}, {*first}, {}, {}, kReach, nullptr));
+    cast.casterReach = 17;
+    auto grown = MechanicDutyFor(cloud, cast, {0, 0, 0}, std::nullopt);
+    CHECK(!MechanicKept({10, 0, 0}, {*grown}, {}, {}, kReach, nullptr));
+    for (auto const& spot : MechanicSpots({10, 0, 0}, {*grown}, {}, {}, kReach, 6, nullptr))
+        CHECK(Dist(spot, {0, 0, 0}) >= 17 + kReach + kMechanicMarginYards);
+    auto moved = MechanicDutyFor(cloud, cast, {50, 0, 0}, std::nullopt);
+    CHECK(MechanicKept({10, 0, 0}, {*moved}, {}, {}, kReach, nullptr));
+    // Existing fixed-radius caster rules keep their own radius.
+    cloud.area = MechanicArea::Caster;
+    CHECK_EQ(MechanicDutyFor(cloud, cast, {0, 0, 0}, std::nullopt)->leave->radius, 2.0f);
+}

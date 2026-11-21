@@ -395,6 +395,12 @@ constexpr float kMemoYards = 0.5f;
 constexpr std::uint64_t kRetryMs = 1000; // a failed search is tried again this soon: the others and targets move
 
 // Map thread: what the mechanics in force ask of one bot now.
+struct IceCover
+{
+    HazardPoint boss;
+    std::vector<HazardPoint> blocks;
+    float width = 0, range = 0;
+};
 struct Plan
 {
     std::vector<MechanicDuty> duties;
@@ -402,6 +408,8 @@ struct Plan
     std::vector<HazardPoint> others;
     std::vector<HazardZone> hazards;
     std::vector<Creature*> sightCasters;
+    std::vector<IceCover> covers;
+    std::vector<HazardPoint> preferred;
     std::uint64_t version = 0;
 };
 
@@ -477,8 +485,30 @@ bool Resolve(Player* bot, bool full, Plan& plan)
             if (!cast.nearest)
                 continue; // no refuge within reach: nothing to do
         }
-        if (rule.area == MechanicArea::Caster && !caster)
+        if ((rule.area == MechanicArea::Caster || rule.area == MechanicArea::CasterReach
+                || rule.area == MechanicArea::IceBlock) && !caster)
             continue; // a whirl or a hellfire ends with its caster
+        if (rule.area == MechanicArea::CasterReach)
+            cast.casterReach = caster->GetCombatReach();
+        if (rule.area == MechanicArea::IceBlock)
+        {
+            // The core's breath checks frozen PLAYERS, not the visual gameobjects or map LOS.
+            // Only this encounter's own Icebolt in this instance/phase supplies cover.
+            if (bot->GetMapId() != 533 || caster->GetEntry() != 15989 || bot->HasAura(28522))
+                continue;
+            IceCover cover{PointOf(caster), {}, rule.radius, rule.range};
+            for (std::uint32_t other : instance->second.party)
+            {
+                Player* player = ObjectAccessor::GetPlayer(bot->GetMap(), ObjectGuid::Create<HighGuid::Player>(other));
+                if (player && player->IsInWorld() && player->IsAlive() && player->InSamePhase(bot)
+                    && player->GetInstanceId() == bot->GetInstanceId()
+                    && player->GetAura(28522, caster->GetGUID()))
+                    cover.blocks.push_back(PointOf(player));
+            }
+            auto spots = MechanicIceSpots(cover.boss, cover.blocks, cover.range);
+            plan.preferred.insert(plan.preferred.end(), spots.begin(), spots.end());
+            plan.covers.push_back(std::move(cover));
+        }
         Unit* target = !event.target.IsEmpty() ? ObjectAccessor::GetUnit(*bot, event.target) : nullptr;
         std::optional<HazardPoint> targetNow;
         if (target && target->IsInWorld() && target->IsAlive())
@@ -486,7 +516,7 @@ bool Resolve(Player* bot, bool full, Plan& plan)
         auto duty = MechanicDutyFor(rule, cast, caster ? PointOf(caster) : event.cast.caster, targetNow);
         if (!duty || !MechanicDutyReaches(*duty, PointOf(bot)))
             continue; // nothing to do, or a stack whose point lies where another fight is
-        if (duty->hide && caster)
+        if (duty->hide && caster && rule.area != MechanicArea::IceBlock)
             plan.sightCasters.push_back(caster);
         spacing = spacing || duty->spacing > 0;
         plan.duties.push_back(*duty);
@@ -511,13 +541,18 @@ bool Resolve(Player* bot, bool full, Plan& plan)
 
 MechanicSightFn SightOf(Plan const& plan)
 {
-    if (plan.sightCasters.empty())
+    if (plan.sightCasters.empty() && plan.covers.empty())
         return nullptr;
     std::vector<Creature*> const casters = plan.sightCasters;
-    return [casters](HazardPoint p)
+    std::vector<IceCover> const covers = plan.covers;
+    return [casters, covers](HazardPoint p)
     {
         for (Creature* caster : casters)
             if (caster->IsWithinLOS(p.x, p.y, p.z + 2.0f))
+                return false;
+        for (IceCover const& cover : covers)
+            if (std::none_of(cover.blocks.begin(), cover.blocks.end(), [&](HazardPoint block)
+                { return MechanicIceCover(cover.boss, block, p, cover.width, cover.range); }))
                 return false;
         return true;
     };
@@ -575,7 +610,7 @@ public:
                     && std::hypot(memo.asked.x - at.x, memo.asked.y - at.y) < kMemoYards)
                     return false; // nothing reachable a moment ago
                 if (memo.found && std::hypot(memo.spot.x - at.x, memo.spot.y - at.y) <= kMechanicMaxShiftYards
-                    && MechanicKept(memo.spot, plan.duties, plan.others, plan.hazards, reach, nullptr)
+                    && MechanicKept(memo.spot, plan.duties, plan.others, plan.hazards, reach, hidden)
                     && HazardClear(memo.spot, plan.hazards, reach))
                 {
                     x = memo.spot.x; // keep walking to the spot already chosen: no new path every tick
@@ -587,7 +622,7 @@ public:
         }
         Memo memo{plan.version, NowMs(), at, false, at};
         for (HazardPoint const& candidate :
-             MechanicSpots(at, plan.duties, plan.others, plan.hazards, reach, kCandidates, hidden))
+             MechanicSpots(at, plan.duties, plan.others, plan.hazards, reach, kCandidates, hidden, plan.preferred))
         {
             float cx = candidate.x;
             float cy = candidate.y;
@@ -633,7 +668,7 @@ public:
     {
         Plan plan;
         return Resolve(bot, true, plan) && MechanicRefusesMove(PointOf(bot), HazardPoint{x, y, z}, plan.duties,
-            plan.hazards, bot->GetCombatReach());
+            plan.hazards, bot->GetCombatReach(), SightOf(plan));
     }
 };
 #endif

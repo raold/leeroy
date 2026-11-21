@@ -73,6 +73,8 @@ enum class MechanicArea : std::uint8_t
     // black hole at Big Bang), avoid_ground leaves it. It binds the bot whatever the caster's phase: the refuge's
     // own phase hides the bot from the caster.
     Nearest,
+    CasterReach, // a growing cloud: use its current combat reach, with radius as a minimum
+    IceBlock,   // Sapphiron's frozen players shield a narrow strip behind them, not ordinary map LOS
 };
 
 inline constexpr std::uint8_t kMechanicTank = 1;
@@ -156,6 +158,7 @@ struct MechanicCast
     std::uint32_t castMs = 0;
     std::uint32_t spellDurationMs = 0;
     std::optional<HazardPoint> nearest; // for one bot: its `nearest` area's anchor, when one is within reach
+    float casterReach = 0;
 };
 
 std::uint32_t MechanicLifetimeMs(MechanicRule const& rule, std::uint32_t castMs, std::uint32_t spellDurationMs);
@@ -222,8 +225,13 @@ std::optional<MechanicDuty> MechanicDutyFor(MechanicRule const& rule, MechanicCa
 // kMechanicNearestYards for a `nearest` area).
 bool MechanicDutyReaches(MechanicDuty const& duty, HazardPoint at);
 
-// True when the point is hidden from the caster (los duties); a refusal never asks it.
+// True when the point is sheltered from the caster (map LOS or encounter-specific cover).
 using MechanicSightFn = std::function<bool(HazardPoint)>;
+
+// Conservative counterpart of Sapphiron's IsValidExplosionTarget: a frozen player must lie
+// between boss and destination, within width of that line and within range of the destination.
+bool MechanicIceCover(HazardPoint boss, HazardPoint block, HazardPoint at, float width, float range);
+std::vector<HazardPoint> MechanicIceSpots(HazardPoint boss, std::vector<HazardPoint> const& blocks, float range);
 
 // The bot at `at` keeps every duty and stands in none of the known ground hazards: it need not move. `others`: the
 // other members on its map.
@@ -234,11 +242,11 @@ bool MechanicKept(HazardPoint at, std::vector<MechanicDuty> const& duties, std::
 // kMechanicMaxShiftYards. Empty when the bot keeps them already or nothing near does.
 std::vector<HazardPoint> MechanicSpots(HazardPoint at, std::vector<MechanicDuty> const& duties,
     std::vector<HazardPoint> const& others, std::vector<HazardZone> const& hazards, float reach, std::size_t limit,
-    MechanicSightFn const& hidden);
-// An ordinary move from `at` to `to` would take the bot into an area it leaves. Never while it stands in a known
+    MechanicSightFn const& hidden, std::vector<HazardPoint> const& preferred = {});
+// An ordinary move from `at` to `to` would enter danger or leave required cover. Never while it stands in a known
 // ground hazard (stock's own way out comes first), and never for spacing or a gather: the mechanic move serves those.
 bool MechanicRefusesMove(HazardPoint at, HazardPoint to, std::vector<MechanicDuty> const& duties,
-    std::vector<HazardZone> const& hazards, float reach);
+    std::vector<HazardZone> const& hazards, float reach, MechanicSightFn const& hidden = nullptr);
 }
 
 #endif

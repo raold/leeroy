@@ -211,3 +211,15 @@ def test_a_nearest_area_names_its_creatures():
             load_files(_doc(kind="stack", extra=extra))
     with pytest.raises(PlaybookError):                                 # a cone has no nearest area
         load_files(_doc(kind="move_out_cone", extra='area = "nearest"\nanchors = [1]'))
+
+
+def test_cover_and_growing_cloud_areas_have_distinct_geometry():
+    cover = load_files(_doc(kind="los", extra='area = "ice_block"\nrange = 10'))
+    assert cover.mechanic("toc.anubarak.thing").area == "ice_block"
+    cloud = load_files(_doc(extra='area = "caster_reach"'))
+    assert cloud.mechanic("toc.anubarak.thing").area == "caster_reach"
+    for kind, extra in (("los", 'area = "ice_block"'),
+                        ("avoid_ground", 'area = "ice_block"\nrange = 10'),
+                        ("los", 'area = "caster_reach"')):
+        with pytest.raises(PlaybookError):
+            load_files(_doc(kind=kind, extra=extra))
