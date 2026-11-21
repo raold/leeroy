@@ -1,0 +1,1006 @@
+From 0b560903062afa70d073b042c9b017adffc9e25e Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 09:45:55 -0500
+Subject: [PATCH] Fix interactive Twin and Valithria raid mechanics
+
+---
+ conf/playerbots.conf.dist                     |   5 +
+ src/Ai/Raid/ICC/Action/ICCActions_VT.cpp      | 160 +++++++++---------
+ src/Ai/Raid/ICC/ICCShared.cpp                 |  88 ++++------
+ src/Ai/Raid/ICC/ICCShared.h                   |   1 +
+ src/Ai/Raid/ICC/ICCTriggers.cpp               |  19 +--
+ src/Ai/Raid/RaidInteractionPolicy.h           | 108 ++++++++++++
+ src/Ai/Raid/RaidStrategyContext.h             |   3 +
+ src/Ai/Raid/TOC/RaidTocStrategy.h             |  56 ++++++
+ src/Ai/Raid/TOC/TocStrategy.cpp               | 116 +++++++++++++
+ src/Bot/Engine/BuildSharedActionContexts.cpp  |   2 +
+ src/Bot/Engine/BuildSharedTriggerContexts.cpp |   2 +
+ src/Bot/PlayerbotAI.cpp                       |   5 +-
+ src/PlayerbotAIConfig.cpp                     |   1 +
+ src/PlayerbotAIConfig.h                       |   1 +
+ tests/raid_interactions_test.cpp              | 111 ++++++++++++
+ 15 files changed, 532 insertions(+), 146 deletions(-)
+ create mode 100644 src/Ai/Raid/RaidInteractionPolicy.h
+ create mode 100644 src/Ai/Raid/TOC/RaidTocStrategy.h
+ create mode 100644 src/Ai/Raid/TOC/TocStrategy.cpp
+ create mode 100644 tests/raid_interactions_test.cpp
+
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index 3c212e40..18c47d30 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -485,6 +485,11 @@ Playerbots.DropObsoleteQuests = 1
+ # Auto add dungeon/raid strategies when entering the instance if implemented
+ Playerbots.ApplyInstanceStrategies = 1
+ 
++# Trial of the Crusader: take an essence and swap colour for Twin Val'kyr vortexes/touches.
++# Uses the real essence NPC's gossip within reach; never grants a spell or encounter credit.
++# Requires ApplyInstanceStrategies (or the toc strategy added explicitly). Default: 0.
++Playerbots.TwinValkyrInteractions = 0
++
+ # Enable auto avoid aoe strategy
+ # Default: 1 (enabled)
+ Playerbots.AutoAvoidAoe = 1
+diff --git a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
+index 36de887e..c7f1140c 100644
+--- a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
++++ b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
+@@ -4,6 +4,9 @@
+  * or (at your option) any later version.
+  */
+ 
++#include <unordered_map>
++#include <unordered_set>
++
+ #include "GenericSpellActions.h"
+ #include "ICCActions.h"
+ #include "ICCTriggers.h"
+@@ -11,10 +14,9 @@
+ #include "NearestNpcsValue.h"
+ #include "ObjectAccessor.h"
+ #include "Playerbots.h"
++#include "RaidInteractionPolicy.h"
+ #include "RtiValue.h"
+ #include "Vehicle.h"
+-#include <unordered_map>
+-#include <unordered_set>
+ 
+ namespace
+ {
+@@ -705,8 +707,16 @@ bool IccValithriaGroupAction::Handle10ManGroupLogic()
+ 
+ bool IccValithriaPortalAction::Execute(Event /*event*/)
+ {
+-    if (!PlayerbotAI::IsHeal(bot) || bot->HasAura(SPELL_DREAM_STATE))
++    if (bot->GetMapId() != 631)
++        return false;
++    uint32 const instanceId = bot->GetMap()->GetInstanceId();
++    auto& claims = IcecrownHelpers::IccState(instanceId).vtPortalClaim;
++    if (!bot->IsAlive() || !PlayerbotAI::IsHeal(bot) || bot->HasAura(SPELL_DREAM_STATE) ||
++        !IccValithriaCanUsePortal(bot) || !bot->FindNearestCreature(NPC_VALITHRIA_DREAMWALKER, 100.0f))
++    {
++        claims.erase(bot->GetGUID());
+         return false;
++    }
+ 
+     // Healer just dropped Dream State - if still airborne (portal exit leaves
+     // bots above the floor) snap to floor Z immediately so they don't fall and die.
+@@ -726,9 +736,6 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+     // Evict stale claims BEFORE early-return so claims don't leak after fight.
+     // Scope eviction to this instance only - other ICC instances have their
+     // own portal GUID universes and we must not erase their claims.
+-    uint32 const instanceId = bot->GetMap()->GetInstanceId();
+-    auto& claims = IcecrownHelpers::IccState(instanceId).vtPortalClaim;
+-
+     std::unordered_set<ObjectGuid> livePortalGuids;
+     for (Creature* p : preEffectPortals)
+         if (p)
+@@ -739,7 +746,10 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+ 
+     for (auto it = claims.begin(); it != claims.end();)
+     {
+-        if (!livePortalGuids.count(it->second))
++        Player* owner = ObjectAccessor::GetPlayer(*bot, it->first);
++        if (!livePortalGuids.count(it->second) || !owner || !owner->IsInWorld() || !owner->IsAlive() ||
++            owner->GetMap() != bot->GetMap() || owner->HasAura(SPELL_DREAM_STATE) || owner->IsBeingTeleported() ||
++            !IccValithriaCanUsePortal(owner))
+             it = claims.erase(it);
+         else
+             ++it;
+@@ -774,42 +784,21 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+         return best;
+     };
+ 
+-    // Prefer pre-effect (claim early so others see it). Fall through to real
+-    // portal if no pre-effect available.
+-    Creature* assigned = nullptr;
+-    if (!preEffectPortals.empty())
+-        assigned = pickClosestUnreserved(preEffectPortals);
+-    if (!assigned && !realPortals.empty())
+-        assigned = pickClosestUnreserved(realPortals);
+-
+-    // If everything reserved (more healers than portals), fall back to nearest
+-    // overall so this healer still does something useful.
++    // Use an available real portal before waiting on a later pre-effect.
++    Creature* assigned = pickClosestUnreserved(realPortals);
+     if (!assigned)
+-    {
+-        std::vector<Creature*> const& pool = !preEffectPortals.empty() ? preEffectPortals : realPortals;
+-        float bestDist = FLT_MAX;
+-        for (Creature* p : pool)
+-        {
+-            if (!p)
+-                continue;
+-            float const d = bot->GetExactDist2d(p);
+-            if (d < bestDist)
+-            {
+-                bestDist = d;
+-                assigned = p;
+-            }
+-        }
+-    }
++        assigned = pickClosestUnreserved(preEffectPortals);
+ 
+     if (!assigned)
+         return false;
+ 
+     claims[bot->GetGUID()] = assigned->GetGUID();
+ 
++    bool moved = false;
+     if (bot->GetDistance2d(assigned->GetPositionX(), assigned->GetPositionY()) > 0.5f)
+     {
+-        MoveTo(assigned->GetMapId(), assigned->GetPositionX(), assigned->GetPositionY(), assigned->GetPositionZ(),
+-               false, false, false, true, MovementPriority::MOVEMENT_NORMAL);
++        moved = MoveTo(assigned->GetMapId(), assigned->GetPositionX(), assigned->GetPositionY(),
++                       assigned->GetPositionZ(), false, false, false, true, MovementPriority::MOVEMENT_NORMAL);
+     }
+ 
+     botAI->RemoveShapeshift();
+@@ -820,9 +809,10 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+     float minDist = FLT_MAX;
+     for (Creature* portal : realPortals)
+     {
+-        if (!portal)
++        if (!portal || reservedPortals.count(portal->GetGUID()) || !portal->HasNpcFlag(UNIT_NPC_FLAG_SPELLCLICK) ||
++            !portal->InSamePhase(bot))
+             continue;
+-        float const d = bot->GetDistance2d(portal);
++        float const d = bot->GetDistance(portal);
+         if (d < 3.0f && d < minDist)
+         {
+             clickTarget = portal;
+@@ -840,12 +830,17 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+         return true;
+     }
+ 
+-    return false;
++    return moved || (bot->isMoving() &&
++                     IsDuplicateMove(assigned->GetPositionX(), assigned->GetPositionY(), assigned->GetPositionZ()));
+ }
+ 
+ bool IccValithriaHealAction::Execute(Event /*event*/)
+ {
+-    if (!PlayerbotAI::IsHeal(bot))
++    if (bot->GetMapId() != 631 || !bot->IsAlive() || !PlayerbotAI::IsHeal(bot) || bot->HasAura(SPELL_DREAM_STATE))
++        return false;
++    Creature* valithria = bot->FindNearestCreature(NPC_VALITHRIA_DREAMWALKER, 100.0f);
++    auto const raidHealer = IccValithriaShouldHealRaid(bot);
++    if (!valithria || !raidHealer.has_value() || *raidHealer)
+         return false;
+ 
+     // Snap to floor Z first - healer may have just dropped Dream State and be
+@@ -866,57 +861,64 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+         bot->SetSpeed(MOVE_FLIGHT, NORMAL_SPEED, true);
+     }
+ 
+-    Creature* valithria = bot->FindNearestCreature(NPC_VALITHRIA_DREAMWALKER, 100.0f);
+-    if (!valithria)
++    if (bot->HasAura(SPELL_DREAM_STATE) || !valithria->IsAlive() || valithria->IsFullHealth())
+         return false;
++    if (!bot->IsWithinLOSInMap(valithria))
++        return MoveToLOS(valithria, true);
++    if (!bot->IsWithinDistInMap(valithria, 30.0f))
++        return MoveNear(valithria, 25.0f);
++    if (bot->isMoving())
++        bot->StopMoving();
+ 
++    std::vector<uint32> choices;
++    auto offer = [&](char const* name, uint8 stacks = 0)
++    {
++        uint32 const spell = context->GetValue<uint32>("spell id", name)->Get();
++        if (!spell)
++            return;
++        Aura* aura = valithria->GetAura(spell, bot->GetGUID());
++        if (!stacks || !aura || aura->GetStackAmount() < stacks)
++            choices.push_back(spell);
++    };
+     switch (bot->getClass())
+     {
+         case CLASS_DRUID:
+-        {
+-            constexpr uint32 SPELL_REJUVENATION = 48441;
+-            constexpr uint32 SPELL_REGROWTH = 48443;
+-            constexpr uint32 SPELL_LIFEBLOOM = 48451;
+-            constexpr uint32 SPELL_WILD_GROWTH = 53251;
+-            constexpr uint8 LIFEBLOOM_MAX = 3;
+-
+-            if (!valithria->HasAura(SPELL_REJUVENATION, bot->GetGUID()))
+-                return botAI->CastSpell(SPELL_REJUVENATION, valithria);
+-
+-            if (!valithria->HasAura(SPELL_REGROWTH, bot->GetGUID()))
+-                return botAI->CastSpell(SPELL_REGROWTH, valithria);
+-
+-            Aura* lb = valithria->GetAura(SPELL_LIFEBLOOM, bot->GetGUID());
+-            if (!lb || lb->GetStackAmount() < LIFEBLOOM_MAX)
+-                return botAI->CastSpell(SPELL_LIFEBLOOM, valithria);
+-
+-            return botAI->CastSpell(SPELL_WILD_GROWTH, valithria);
+-        }
++            offer("rejuvenation", 1);
++            offer("regrowth", 1);
++            offer("lifebloom", 3);
++            offer("nourish");
++            offer("healing touch");
++            break;
+         case CLASS_SHAMAN:
+-        {
+-            constexpr uint32 SPELL_RIPTIDE = 61301;
+-            constexpr uint32 SPELL_HEALING_WAVE = 49273;
+-            return valithria->HasAura(SPELL_RIPTIDE, bot->GetGUID()) ? botAI->CastSpell(SPELL_HEALING_WAVE, valithria)
+-                                                                     : botAI->CastSpell(SPELL_RIPTIDE, valithria);
+-        }
++            offer("riptide", 1);
++            offer("healing wave");
++            break;
+         case CLASS_PRIEST:
+-        {
+-            constexpr uint32 SPELL_RENEW = 48068;
+-            constexpr uint32 SPELL_GREATER_HEAL = 48063;
+-            return valithria->HasAura(SPELL_RENEW, bot->GetGUID()) ? botAI->CastSpell(SPELL_GREATER_HEAL, valithria)
+-                                                                   : botAI->CastSpell(SPELL_RENEW, valithria);
+-        }
++            offer("renew", 1);
++            offer("greater heal");
++            offer("flash heal");
++            break;
+         case CLASS_PALADIN:
+-        {
+-            constexpr uint32 SPELL_BEACON = 53563;
+-            constexpr uint32 SPELL_HOLY_LIGHT = 48782;
+-            return valithria->HasAura(SPELL_BEACON, bot->GetGUID()) ? botAI->CastSpell(SPELL_HOLY_LIGHT, valithria)
+-                                                                    : botAI->CastSpell(SPELL_BEACON, valithria);
+-        }
+-        default:
++            offer("beacon of light", 1);
++            offer("holy light");
++            offer("flash of light");
+             break;
++        default:
++            return false;
+     }
+-    return false;
++    uint32 const spell = RaidInteractions::FirstReadyHeal(
++        choices,
++        [&](uint32 candidate)
++        {
++            // CanCastSpell deliberately probes with IGNORE_POWER: check affordability
++            // here so a costly heal cannot starve a cheaper, usable fallback.
++            SpellInfo const* info = sSpellMgr->GetSpellInfo(candidate);
++            return info && info->PowerType == POWER_MANA &&
++                   RaidInteractions::AffordableHeal(info->CalcPowerCost(bot, info->GetSchoolMask()),
++                                                    bot->GetPower(POWER_MANA)) &&
++                   botAI->CanCastSpell(candidate, valithria, true);
++        });
++    return spell && botAI->CastSpell(spell, valithria);
+ }
+ 
+ bool IccValithriaDreamCloudAction::Execute(Event /*event*/)
+diff --git a/src/Ai/Raid/ICC/ICCShared.cpp b/src/Ai/Raid/ICC/ICCShared.cpp
+index 98a622bd..79ef001d 100644
+--- a/src/Ai/Raid/ICC/ICCShared.cpp
++++ b/src/Ai/Raid/ICC/ICCShared.cpp
+@@ -5,14 +5,17 @@
+  */
+ 
+ #include "ICCShared.h"
++
++#include <algorithm>
++#include <map>
++
+ #include "ICCActions.h"
+ #include "ICCScripts.h"
+ #include "ICCTriggers.h"
+ #include "Playerbots.h"
++#include "RaidInteractionPolicy.h"
+ #include "ThreatManager.h"
+ #include "Timer.h"
+-#include <algorithm>
+-#include <map>
+ 
+ namespace
+ {
+@@ -237,63 +240,46 @@ bool IccAnyBloodPrincePresent(PlayerbotAI* botAI)
+            AI_VALUE2(Unit*, "find target", "prince keleseth");
+ }
+ 
+-std::optional<bool> IccValithriaShouldHealRaid(Player* bot)
++namespace
+ {
++std::vector<RaidInteractions::Healer> ValithriaHealers(Player* bot)
++{
++    std::vector<RaidInteractions::Healer> healers;
+     Group* group = bot->GetGroup();
+     if (!group)
+-        return std::nullopt;
+-
+-    std::vector<ObjectGuid> healerGuids;
+-    std::vector<ObjectGuid> druidGuids;
+-    int healerCount = 0;
+-
+-    for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
++        return healers;
++    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+     {
+-        Player* member = itr->GetSource();
+-        if (!member || !member->IsAlive() || IsSelfBot(bot))
++        Player* member = ref->GetSource();
++        if (!member || !member->IsInWorld() || !member->IsAlive() || member->GetMap() != bot->GetMap() ||
++            IsSelfBot(member) || !PlayerbotAI::IsHeal(member))
+             continue;
+-
+-        if (PlayerbotAI::IsHeal(member) && !IsSelfBot(bot))
+-        {
+-            healerCount++;
+-            healerGuids.push_back(member->GetGUID());
+-            if (member->getClass() == CLASS_DRUID)
+-                druidGuids.push_back(member->GetGUID());
+-        }
++        // Dream healers remain in the allocation while in the other phase.
++        healers.push_back({member->GetGUID().GetRawValue(), member->getClass() == CLASS_DRUID});
+     }
++    return healers;
++}
++}  // namespace
+ 
+-    std::sort(healerGuids.begin(), healerGuids.end());
+-    std::sort(druidGuids.begin(), druidGuids.end());
+-
+-    auto botGuidPos = std::find(healerGuids.begin(), healerGuids.end(), bot->GetGUID());
+-    if (botGuidPos == healerGuids.end())
+-        return std::nullopt;
+-
+-    int healerIndex = std::distance(healerGuids.begin(), botGuidPos);
+-    bool isDruid = (bot->getClass() == CLASS_DRUID);
+-
+-    bool shouldHealRaid = false;
+-    int druidCount = druidGuids.size();
+-
+-    if (druidCount > 0)
+-    {
+-        if (isDruid)
+-        {
+-            int raidHealersNeeded = healerCount > 3 ? 2 : 1;
+-            int druidIndex =
+-                std::distance(druidGuids.begin(), std::find(druidGuids.begin(), druidGuids.end(), bot->GetGUID()));
+-            shouldHealRaid = (druidIndex < raidHealersNeeded);
+-        }
+-        else if (healerCount > 3 && druidCount == 1)
++std::optional<bool> IccValithriaShouldHealRaid(Player* bot)
++{
++    auto const healers = ValithriaHealers(bot);
++    bool partyNeedsHelp = false;
++    if (healers.size() == 1)
++        for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
+         {
+-            if (healerIndex == (healerCount - 1))
+-                shouldHealRaid = true;
++            Player* member = ref->GetSource();
++            if (member && member->IsAlive() && member->HealthBelowPct(60) && member->InSamePhase(bot) &&
++                bot->IsWithinDistInMap(member, 40.0f))
++            {
++                partyNeedsHelp = true;
++                break;
++            }
+         }
+-    }
+-    else if (healerCount > 3)
+-        shouldHealRaid = (healerIndex >= (healerCount - 2));
+-    else
+-        shouldHealRaid = (healerIndex == (healerCount - 1));
++    return RaidInteractions::HealRaid(bot->GetGUID().GetRawValue(), healers, partyNeedsHelp);
++}
+ 
+-    return shouldHealRaid;
++bool IccValithriaCanUsePortal(Player* bot)
++{
++    return RaidInteractions::CanUsePortal(bot->GetGUID().GetRawValue(), ValithriaHealers(bot));
+ }
+diff --git a/src/Ai/Raid/ICC/ICCShared.h b/src/Ai/Raid/ICC/ICCShared.h
+index e0f93611..647a8fa4 100644
+--- a/src/Ai/Raid/ICC/ICCShared.h
++++ b/src/Ai/Raid/ICC/ICCShared.h
+@@ -94,6 +94,7 @@ bool IccBossCastingRemorselessWinter(Unit* boss);
+ bool IccAnyGroupMemberHasAura(Player* bot, uint32 spellId);
+ bool IccAnyBloodPrincePresent(PlayerbotAI* botAI);
+ std::optional<bool> IccValithriaShouldHealRaid(Player* bot);
++bool IccValithriaCanUsePortal(Player* bot);
+ std::vector<Creature*> IccGetCreaturesByEntries(WorldObject* searcher, std::initializer_list<uint32> entries,
+                                                 float range);
+ 
+diff --git a/src/Ai/Raid/ICC/ICCTriggers.cpp b/src/Ai/Raid/ICC/ICCTriggers.cpp
+index 383d410a..2fb7b3a3 100644
+--- a/src/Ai/Raid/ICC/ICCTriggers.cpp
++++ b/src/Ai/Raid/ICC/ICCTriggers.cpp
+@@ -693,8 +693,8 @@ bool IccValithriaPortalTrigger::IsActive()
+     if (aura && aura->GetStackAmount() >= 25)
+         return false;
+ 
+-    // Only healers should use portals
+-    if (!PlayerbotAI::IsHeal(bot) || bot->HasAura(SPELL_DREAM_STATE))
++    // Keep a healer outside, including when deaths reduce the available roster.
++    if (!PlayerbotAI::IsHeal(bot) || bot->HasAura(SPELL_DREAM_STATE) || !IccValithriaCanUsePortal(bot))
+         return false;
+ 
+     Creature* worm = bot->FindNearestCreature(NPC_ROT_WORM, 100.0f);
+@@ -703,10 +703,6 @@ bool IccValithriaPortalTrigger::IsActive()
+     if ((worm && worm->GetVictim() == bot) || (zombie && zombie->GetVictim() == bot))
+         return false;
+ 
+-    auto const shouldHealRaid = IccValithriaShouldHealRaid(bot);
+-    if (!shouldHealRaid.has_value() || *shouldHealRaid)
+-        return false;
+-
+     // Find the nearest portal creature
+     Creature* portal1 = bot->FindNearestCreature(NPC_DREAM_PORTAL, 100.0f);
+     if (!portal1)
+@@ -742,15 +738,8 @@ bool IccValithriaHealTrigger::IsActive()
+     if (bot->GetHealthPct() < 50.0f)
+         return false;
+ 
+-    // For Valithria healers, check portal logic
+-    // If no portal is found within 100 yards, we should heal
+-    if (!bot->FindNearestCreature(NPC_DREAM_PORTAL, 100.0f) && !bot->FindNearestCreature(NPC_NIGHTMARE_PORTAL, 100.0f))
+-        return true;
+-
+-    if (bot->FindNearestCreature(NPC_DREAM_PORTAL, 10.0f) || bot->FindNearestCreature(NPC_NIGHTMARE_PORTAL, 10.0f))
+-        return false;
+-
+-    // If portal is far but within 100 yards, heal while moving to it
++    // The higher-priority portal action owns travel/clicks. A portal reserved
++    // by another healer must not stop this healer from healing the dragon.
+     return true;
+ }
+ 
+diff --git a/src/Ai/Raid/RaidInteractionPolicy.h b/src/Ai/Raid/RaidInteractionPolicy.h
+new file mode 100644
+index 00000000..202e7572
+--- /dev/null
++++ b/src/Ai/Raid/RaidInteractionPolicy.h
+@@ -0,0 +1,108 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++
++#ifndef PLAYERBOTS_RAIDINTERACTIONPOLICY_H
++#define PLAYERBOTS_RAIDINTERACTIONPOLICY_H
++
++#include <algorithm>
++#include <array>
++#include <cstdint>
++#include <optional>
++#include <vector>
++
++namespace RaidInteractions
++{
++enum class Colour
++{
++    None,
++    Light,
++    Dark
++};
++
++inline constexpr std::array<std::uint32_t, 4> LightEssence = {65686, 67222, 67223, 67224};
++inline constexpr std::array<std::uint32_t, 4> DarkEssence = {65684, 67176, 67177, 67178};
++inline constexpr std::array<std::uint32_t, 4> LightTouch = {65950, 67296, 67297, 67298};
++inline constexpr std::array<std::uint32_t, 4> DarkTouch = {66001, 67281, 67282, 67283};
++inline constexpr std::array<std::uint32_t, 4> LightVortex = {66046, 67206, 67207, 67208};
++inline constexpr std::array<std::uint32_t, 4> DarkVortex = {66058, 67182, 67183, 67184};
++
++inline Colour VortexColour(std::uint32_t spell)
++{
++    switch (spell)
++    {
++        case 66046:
++        case 67206:
++        case 67207:
++        case 67208:
++            return Colour::Light;
++        case 66058:
++        case 67182:
++        case 67183:
++        case 67184:
++            return Colour::Dark;
++        default:
++            return Colour::None;
++    }
++}
++
++inline Colour WantedEssence(Colour current, std::uint32_t targetEntry, Colour vortex, Colour touch)
++{
++    if (vortex != Colour::None)
++        return vortex;
++    if (touch != Colour::None)
++        return touch;
++    // Absorb the vortex's colour, but damage the opposite-colour twin.
++    if (targetEntry == 34497)
++        return Colour::Dark;
++    if (targetEntry == 34496)
++        return Colour::Light;
++    return current == Colour::None ? Colour::Light : current;
++}
++
++struct Healer
++{
++    std::uint64_t guid;
++    bool druid;
++};
++
++inline std::optional<bool> HealRaid(std::uint64_t guid, std::vector<Healer> healers, bool partyNeedsHelp = false)
++{
++    std::sort(healers.begin(), healers.end(), [](Healer const& left, Healer const& right)
++              { return left.druid != right.druid ? left.druid : left.guid < right.guid; });
++    auto const found =
++        std::find_if(healers.begin(), healers.end(), [guid](Healer const& healer) { return healer.guid == guid; });
++    if (found == healers.end())
++        return std::nullopt;
++    if (healers.size() == 1)
++        return partyNeedsHelp;
++    // Even a reduced roster needs a dragon healer. With one healer, ordinary
++    // emergency healing still wins and portals must be left alone.
++    std::size_t const reserve = std::min(healers.size() - 1, healers.size() > 3 ? std::size_t{2} : std::size_t{1});
++    return static_cast<std::size_t>(found - healers.begin()) < reserve;
++}
++
++inline bool CanUsePortal(std::uint64_t guid, std::vector<Healer> const& healers)
++{
++    auto const raidHealer = HealRaid(guid, healers);
++    return healers.size() > 1 && raidHealer.has_value() && !*raidHealer;
++}
++
++inline bool AffordableHeal(std::int32_t cost, std::uint32_t mana)
++{
++    return cost >= 0 && static_cast<std::uint32_t>(cost) <= mana;
++}
++
++template <class Ready>
++std::uint32_t FirstReadyHeal(std::vector<std::uint32_t> const& choices, Ready ready)
++{
++    for (std::uint32_t spell : choices)
++        if (spell && ready(spell))
++            return spell;
++    return 0;
++}
++}  // namespace RaidInteractions
++
++#endif
+diff --git a/src/Ai/Raid/RaidStrategyContext.h b/src/Ai/Raid/RaidStrategyContext.h
+index 4d236f0f..65b024c3 100644
+--- a/src/Ai/Raid/RaidStrategyContext.h
++++ b/src/Ai/Raid/RaidStrategyContext.h
+@@ -21,6 +21,7 @@
+ #include "OSStrategy.h"
+ #include "OnyStrategy.h"
+ #include "RSStrategy.h"
++#include "RaidTocStrategy.h"
+ #include "SSCStrategy.h"
+ #include "Strategy.h"
+ #include "TKStrategy.h"
+@@ -53,6 +54,7 @@ public:
+         creators["ulduar"] = &RaidStrategyContext::ulduar;
+         creators["onyxia"] = &RaidStrategyContext::onyxia;
+         creators["icc"] = &RaidStrategyContext::icc;
++        creators["toc"] = &RaidStrategyContext::toc;
+         creators["rs"] = &RaidStrategyContext::rs;
+     }
+ 
+@@ -76,6 +78,7 @@ private:
+     static Strategy* onyxia(PlayerbotAI* botAI) { return new RaidOnyxiaStrategy(botAI); }
+     static Strategy* ulduar(PlayerbotAI* botAI) { return new RaidUlduarStrategy(botAI); }
+     static Strategy* icc(PlayerbotAI* botAI) { return new RaidIccStrategy(botAI); }
++    static Strategy* toc(PlayerbotAI* botAI) { return new RaidTocStrategy(botAI); }
+     static Strategy* rs(PlayerbotAI* botAI) { return new RaidRsStrategy(botAI); }
+ };
+ 
+diff --git a/src/Ai/Raid/TOC/RaidTocStrategy.h b/src/Ai/Raid/TOC/RaidTocStrategy.h
+new file mode 100644
+index 00000000..941fa1c4
+--- /dev/null
++++ b/src/Ai/Raid/TOC/RaidTocStrategy.h
+@@ -0,0 +1,56 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++
++#ifndef PLAYERBOTS_RAIDTOCSTRATEGY_H
++#define PLAYERBOTS_RAIDTOCSTRATEGY_H
++
++#include "MovementActions.h"
++#include "NamedObjectContext.h"
++#include "Strategy.h"
++#include "Trigger.h"
++
++class RaidTocStrategy : public Strategy
++{
++public:
++    RaidTocStrategy(PlayerbotAI* botAI) : Strategy(botAI) {}
++    std::string const getName() override { return "toc"; }
++    void InitTriggers(std::vector<TriggerNode*>& triggers) override;
++};
++
++class TocEssenceTrigger : public Trigger
++{
++public:
++    TocEssenceTrigger(PlayerbotAI* botAI) : Trigger(botAI, "toc twin essence") {}
++    bool IsActive() override;
++};
++
++class TocEssenceAction : public MovementAction
++{
++public:
++    TocEssenceAction(PlayerbotAI* botAI) : MovementAction(botAI, "toc twin essence") {}
++    bool isUseful() override;
++    bool Execute(Event event) override;
++};
++
++class RaidTocActionContext : public NamedObjectContext<Action>
++{
++public:
++    RaidTocActionContext() { creators["toc twin essence"] = &RaidTocActionContext::Essence; }
++
++private:
++    static Action* Essence(PlayerbotAI* botAI) { return new TocEssenceAction(botAI); }
++};
++
++class RaidTocTriggerContext : public NamedObjectContext<Trigger>
++{
++public:
++    RaidTocTriggerContext() { creators["toc twin essence"] = &RaidTocTriggerContext::Essence; }
++
++private:
++    static Trigger* Essence(PlayerbotAI* botAI) { return new TocEssenceTrigger(botAI); }
++};
++
++#endif
+diff --git a/src/Ai/Raid/TOC/TocStrategy.cpp b/src/Ai/Raid/TOC/TocStrategy.cpp
+new file mode 100644
+index 00000000..3ee12e72
+--- /dev/null
++++ b/src/Ai/Raid/TOC/TocStrategy.cpp
+@@ -0,0 +1,116 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++
++#include "Creature.h"
++#include "Group.h"
++#include "InstanceScript.h"
++#include "Map.h"
++#include "Playerbots.h"
++#include "RaidInteractionPolicy.h"
++#include "RaidTocStrategy.h"
++#include "Spell.h"
++#include "WorldSession.h"
++
++namespace
++{
++using RaidInteractions::Colour;
++constexpr uint32 MAP_TRIAL_OF_THE_CRUSADER = 649;
++constexpr uint32 BOSS_TWINS = 3;
++constexpr uint32 DATA_LIGHTBANE = 11;
++constexpr uint32 DATA_DARKBANE = 12;
++constexpr uint32 NPC_LIGHT_ESSENCE = 34568;
++constexpr uint32 NPC_DARK_ESSENCE = 34567;
++constexpr float ESSENCE_SEARCH_RANGE = 120.0f;
++constexpr float ESSENCE_CLICK_RANGE = 4.0f;
++
++Colour CastingVortex(Creature* twin)
++{
++    if (!twin || !twin->IsAlive())
++        return Colour::None;
++    // The cast is followed by a five-second periodic aura. Keep that colour
++    // until the final pulse rather than switching back at cast completion.
++    for (uint32 spell : RaidInteractions::LightVortex)
++        if (twin->HasAura(spell))
++            return Colour::Light;
++    for (uint32 spell : RaidInteractions::DarkVortex)
++        if (twin->HasAura(spell))
++            return Colour::Dark;
++    for (CurrentSpellTypes slot : {CURRENT_GENERIC_SPELL, CURRENT_CHANNELED_SPELL})
++        if (Spell* spell = twin->GetCurrentSpell(slot))
++            if (Colour const colour = RaidInteractions::VortexColour(spell->GetSpellInfo()->Id); colour != Colour::None)
++                return colour;
++    return Colour::None;
++}
++
++Colour NeededEssence(PlayerbotAI* ai)
++{
++    Player* bot = ai->GetBot();
++    if (!sPlayerbotAIConfig.TwinValkyrInteractions || bot->GetMapId() != MAP_TRIAL_OF_THE_CRUSADER || !bot->IsAlive() ||
++        IsSelfBot(bot) || !bot->GetGroup() || !bot->GetGroup()->isRaidGroup() || bot->IsBeingTeleported() ||
++        bot->GetVehicle() || bot->GetTransport() || ai->HasStrategy("stay", BOT_STATE_COMBAT) ||
++        ai->HasStrategy("passive", BOT_STATE_COMBAT))
++        return Colour::None;
++    InstanceScript* instance = bot->GetInstanceScript();
++    if (!instance ||
++        (instance->GetBossState(BOSS_TWINS) != NOT_STARTED && instance->GetBossState(BOSS_TWINS) != IN_PROGRESS))
++        return Colour::None;
++    uint32 const difficulty = bot->GetMap()->GetDifficulty();
++    if (difficulty >= RaidInteractions::LightEssence.size())
++        return Colour::None;
++    Creature* light = bot->GetMap()->GetCreature(instance->GetGuidData(DATA_LIGHTBANE));
++    Creature* dark = bot->GetMap()->GetCreature(instance->GetGuidData(DATA_DARKBANE));
++    if ((!light || !light->IsAlive() || !bot->IsWithinDistInMap(light, ESSENCE_SEARCH_RANGE)) &&
++        (!dark || !dark->IsAlive() || !bot->IsWithinDistInMap(dark, ESSENCE_SEARCH_RANGE)))
++        return Colour::None;
++    Colour const current = bot->HasAura(RaidInteractions::LightEssence[difficulty])  ? Colour::Light
++                           : bot->HasAura(RaidInteractions::DarkEssence[difficulty]) ? Colour::Dark
++                                                                                     : Colour::None;
++    Colour const touch = bot->HasAura(RaidInteractions::LightTouch[difficulty])  ? Colour::Light
++                         : bot->HasAura(RaidInteractions::DarkTouch[difficulty]) ? Colour::Dark
++                                                                                 : Colour::None;
++    Colour vortex = CastingVortex(light);
++    if (vortex == Colour::None)
++        vortex = CastingVortex(dark);
++    Unit* target = ai->GetAiObjectContext()->GetValue<Unit*>("current target")->Get();
++    Colour const wanted = RaidInteractions::WantedEssence(current, target ? target->GetEntry() : 0, vortex, touch);
++    return wanted == current ? Colour::None : wanted;
++}
++}  // namespace
++
++void RaidTocStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
++{
++    triggers.push_back(new TriggerNode("toc twin essence", {NextAction("toc twin essence", ACTION_RAID + 8)}));
++}
++
++bool TocEssenceTrigger::IsActive() { return NeededEssence(botAI) != Colour::None; }
++
++bool TocEssenceAction::isUseful() { return NeededEssence(botAI) != Colour::None; }
++
++bool TocEssenceAction::Execute(Event /*event*/)
++{
++    Colour const wanted = NeededEssence(botAI);
++    if (wanted == Colour::None)
++        return false;
++    Creature* essence =
++        bot->FindNearestCreature(wanted == Colour::Light ? NPC_LIGHT_ESSENCE : NPC_DARK_ESSENCE, ESSENCE_SEARCH_RANGE);
++    if (!essence || !essence->HasNpcFlag(UNIT_NPC_FLAG_GOSSIP) || !essence->InSamePhase(bot))
++        return false;
++    if (!bot->IsWithinDistInMap(essence, ESSENCE_CLICK_RANGE) || !bot->IsWithinLOSInMap(essence))
++    {
++        if (bot->isMoving() &&
++            IsDuplicateMove(essence->GetPositionX(), essence->GetPositionY(), essence->GetPositionZ()))
++            return true;
++        return MoveTo(bot->GetMapId(), essence->GetPositionX(), essence->GetPositionY(), essence->GetPositionZ(), false,
++                      false, false, false, MovementPriority::MOVEMENT_FORCED);
++    }
++    bot->InterruptNonMeleeSpells(false);
++    bot->StopMoving();
++    bot->SetFacingToObject(essence);
++    WorldPacket hello(CMSG_GOSSIP_HELLO);
++    hello << essence->GetGUID();
++    bot->GetSession()->HandleGossipHelloOpcode(hello);
++    return true;
++}
+diff --git a/src/Bot/Engine/BuildSharedActionContexts.cpp b/src/Bot/Engine/BuildSharedActionContexts.cpp
+index 5532c7d2..60046748 100644
+--- a/src/Bot/Engine/BuildSharedActionContexts.cpp
++++ b/src/Bot/Engine/BuildSharedActionContexts.cpp
+@@ -21,6 +21,7 @@
+ #include "OSActionContext.h"
+ #include "OnyActionContext.h"
+ #include "RSActionContext.h"
++#include "RaidTocStrategy.h"
+ #include "SSCActionContext.h"
+ #include "TKActionContext.h"
+ #include "TbcDungeonActionContext.h"
+@@ -54,6 +55,7 @@ void AiObjectContext::BuildSharedActionContexts(
+     actionContexts.Add(new RaidUlduarActionContext());
+     actionContexts.Add(new RaidOnyxiaActionContext());
+     actionContexts.Add(new RaidIccActionContext());
++    actionContexts.Add(new RaidTocActionContext());
+     actionContexts.Add(new RaidRsActionContext());
+     actionContexts.Add(new TbcDungeonAuchenaiCryptsActionContext());
+     actionContexts.Add(new TbcDungeonSethekkHallsActionContext());
+diff --git a/src/Bot/Engine/BuildSharedTriggerContexts.cpp b/src/Bot/Engine/BuildSharedTriggerContexts.cpp
+index 1d376560..d9fdb587 100644
+--- a/src/Bot/Engine/BuildSharedTriggerContexts.cpp
++++ b/src/Bot/Engine/BuildSharedTriggerContexts.cpp
+@@ -20,6 +20,7 @@
+ #include "OSTriggerContext.h"
+ #include "OnyTriggerContext.h"
+ #include "RSTriggerContext.h"
++#include "RaidTocStrategy.h"
+ #include "SSCTriggerContext.h"
+ #include "TKTriggerContext.h"
+ #include "TbcDungeonTriggerContext.h"
+@@ -54,6 +55,7 @@ void AiObjectContext::BuildSharedTriggerContexts(
+     triggerContexts.Add(new RaidUlduarTriggerContext());
+     triggerContexts.Add(new RaidOnyxiaTriggerContext());
+     triggerContexts.Add(new RaidIccTriggerContext());
++    triggerContexts.Add(new RaidTocTriggerContext());
+     triggerContexts.Add(new RaidRsTriggerContext());
+     triggerContexts.Add(new TbcDungeonAuchenaiCryptsTriggerContext());
+     triggerContexts.Add(new TbcDungeonSethekkHallsTriggerContext());
+diff --git a/src/Bot/PlayerbotAI.cpp b/src/Bot/PlayerbotAI.cpp
+index 774ccbcf..222c425f 100644
+--- a/src/Bot/PlayerbotAI.cpp
++++ b/src/Bot/PlayerbotAI.cpp
+@@ -1745,7 +1745,7 @@ void PlayerbotAI::ApplyInstanceStrategies(uint32 mapId, bool tellMaster)
+         "tbc-seth", "tbc-ub", "tempestkeep", "ulduar", "voa", "wotlk-an", "wotlk-cos", "wotlk-dtk",
+         "wotlk-eoe", "wotlk-fos", "wotlk-gd", "wotlk-hol", "wotlk-hos", "wotlk-nex", "wotlk-occ",
+         "wotlk-ok", "wotlk-os", "wotlk-pos", "wotlk-toc", "wotlk-uk", "wotlk-up", "wotlk-vh",
+-        "zulaman", "zulgurub"
++        "zulaman", "zulgurub", "toc"
+     };
+ 
+     for (std::string const& strat : allInstanceStrategies)
+@@ -1871,6 +1871,9 @@ void PlayerbotAI::ApplyInstanceStrategies(uint32 mapId, bool tellMaster)
+         case 632:
+             strategyName = "wotlk-fos";  // The Forge of Souls
+             break;
++        case 649:
++            strategyName = "toc";  // Trial of the Crusader
++            break;
+         case 650:
+             strategyName = "wotlk-toc";  // Trial of the Champion
+             break;
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index b5eef950..fa47b42e 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -310,6 +310,7 @@ bool PlayerbotAIConfig::Initialize()
+     //////////////////////////// ICC
+ 
+     EnableICCBuffs = sConfigMgr->GetOption<bool>("Playerbots.EnableICCBuffs", true);
++    TwinValkyrInteractions = sConfigMgr->GetOption<bool>("Playerbots.TwinValkyrInteractions", false);
+ 
+     //////////////////////////// Professions
+     ClassMatchingProfessionChance =
+diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
+index 7b21b072..45ed9eaa 100644
+--- a/src/PlayerbotAIConfig.h
++++ b/src/PlayerbotAIConfig.h
+@@ -107,6 +107,7 @@ public:
+     bool Enabled;
+     bool DisabledWithoutRealPlayer;
+     bool EnableICCBuffs;
++    bool TwinValkyrInteractions;
+     bool AllowAccountBots, AllowGuildBots, AllowTrustedAccountBots;
+     bool RandomBotGuildNearby, RandomBotInvitePlayer, InviteChat;
+     uint32 GlobalCoolDown, ReactDelay, MaxWaitForMove, DisableMoveSplinePath, MaxMovementSearchTime, ExpireActionTime,
+diff --git a/tests/raid_interactions_test.cpp b/tests/raid_interactions_test.cpp
+new file mode 100644
+index 00000000..8caf2fa6
+--- /dev/null
++++ b/tests/raid_interactions_test.cpp
+@@ -0,0 +1,111 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++
++#include <iostream>
++
++#include "../src/Ai/Raid/RaidInteractionPolicy.h"
++
++namespace
++{
++int checks = 0;
++int failures = 0;
++void Check(bool success, int line)
++{
++    ++checks;
++    if (!success)
++    {
++        ++failures;
++        std::cerr << "Failed at line " << line << '\n';
++    }
++}
++}  // namespace
++
++#define CHECK(expression) Check(static_cast<bool>(expression), __LINE__)
++
++int main()
++{
++    using namespace RaidInteractions;
++    for (std::size_t difficulty = 0; difficulty < 4; ++difficulty)
++    {
++        CHECK(VortexColour(LightVortex[difficulty]) == Colour::Light);
++        CHECK(VortexColour(DarkVortex[difficulty]) == Colour::Dark);
++        CHECK(LightEssence[difficulty] != DarkEssence[difficulty]);
++        CHECK(LightTouch[difficulty] != DarkTouch[difficulty]);
++    }
++    CHECK(VortexColour(0) == Colour::None);
++    CHECK(VortexColour(66048) == Colour::None);  // A pulse is not a new casting window.
++    for (Colour current : {Colour::None, Colour::Light, Colour::Dark})
++        for (Colour touch : {Colour::None, Colour::Light, Colour::Dark})
++            for (std::uint32_t target : {0u, 34496u, 34497u})
++            {
++                CHECK(WantedEssence(current, target, Colour::Light, touch) == Colour::Light);
++                CHECK(WantedEssence(current, target, Colour::Dark, touch) == Colour::Dark);
++            }
++    CHECK(WantedEssence(Colour::None, 34497, Colour::None, Colour::None) == Colour::Dark);
++    CHECK(WantedEssence(Colour::None, 34496, Colour::None, Colour::None) == Colour::Light);
++    CHECK(WantedEssence(Colour::None, 0, Colour::None, Colour::None) == Colour::Light);
++    CHECK(WantedEssence(Colour::Dark, 0, Colour::None, Colour::None) == Colour::Dark);
++    CHECK(WantedEssence(Colour::Dark, 34497, Colour::None, Colour::Light) == Colour::Light);
++    CHECK(WantedEssence(Colour::Light, 34496, Colour::None, Colour::Dark) == Colour::Dark);
++    CHECK(!HealRaid(101, {}).has_value());
++    CHECK(!CanUsePortal(101, {}));
++    CHECK(HealRaid(101, {{101, true}}) == false);
++    CHECK(HealRaid(101, {{101, true}}, true) == true);
++    CHECK(HealRaid(101, {{101, true}}, false) == false);
++    CHECK(!CanUsePortal(101, {{101, true}}));
++    CHECK(HealRaid(101, {{101, true}, {102, false}}) == true);
++    CHECK(HealRaid(102, {{101, true}, {102, false}}) == false);
++
++    // Every roster/class mix retains a dragon healer and a surface healer;
++    // input traversal order and the portal phase do not change assignments.
++    for (std::uint64_t count = 1; count <= 5; ++count)
++        for (std::uint32_t druids = 0; druids < (1u << count); ++druids)
++        {
++            std::vector<Healer> roster;
++            for (std::uint64_t index = 0; index < count; ++index)
++                roster.push_back({101 + index, (druids & (1u << index)) != 0});
++            std::size_t surface = 0;
++            std::size_t portal = 0;
++            for (Healer const& healer : roster)
++            {
++                auto const assignment = HealRaid(healer.guid, roster);
++                CHECK(assignment.has_value());
++                surface += *assignment;
++                portal += CanUsePortal(healer.guid, roster);
++                auto reversed = roster;
++                std::reverse(reversed.begin(), reversed.end());
++                CHECK(HealRaid(healer.guid, reversed) == assignment);
++            }
++            CHECK(surface == (count == 1 ? 0u : count > 3 ? 2u : 1u));
++            CHECK(surface < count);
++            CHECK(count == 1 ? portal == 0 : portal + surface == count);
++            CHECK(!HealRaid(1, roster).has_value());
++            CHECK(!CanUsePortal(1, roster));
++        }
++
++    // An absent talent, unknown rank or cooldown cannot swallow a usable heal.
++    for (std::uint32_t readiness = 0; readiness < 8; ++readiness)
++    {
++        std::vector<std::uint32_t> inspected;
++        auto const chosen = FirstReadyHeal({0, 1001, 1002, 1003},
++                                           [&](std::uint32_t spell)
++                                           {
++                                               inspected.push_back(spell);
++                                               return (readiness & (1u << (spell - 1001))) != 0;
++                                           });
++        std::uint32_t const expected = readiness & 1 ? 1001 : readiness & 2 ? 1002 : readiness & 4 ? 1003 : 0;
++        CHECK(chosen == expected);
++        CHECK(inspected.size() == (expected ? expected - 1000 : 3));
++    }
++    CHECK(AffordableHeal(0, 0));
++    CHECK(AffordableHeal(40, 40));
++    CHECK(!AffordableHeal(41, 40));
++    CHECK(!AffordableHeal(-1, 40));
++    CHECK(FirstReadyHeal({1001, 1002},
++                         [](std::uint32_t spell) { return AffordableHeal(spell == 1001 ? 130 : 40, 50); }) == 1002);
++    std::cout << checks - failures << " checks passed, " << failures << " failed\n";
++    return failures ? 1 : 0;
++}
+-- 
+2.56.0.windows.2
+

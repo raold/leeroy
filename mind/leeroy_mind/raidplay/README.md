@@ -11,6 +11,37 @@ bodies do and what the training ground scores are the same thing:
 
 Nothing here calls a model, opens `mind.db` or talks to the bridge.
 
+## Interactive raid mechanics
+
+The local playerbots patch adds the `toc` instance strategy for map 649. Its
+`toc twin essence` action is gated by **`Playerbots.TwinValkyrInteractions = 0`**
+in the playerbots configuration template. It defaults off. With the setting on
+and instance strategies enabled, bots approach the real essence NPC and use its
+gossip within four yards. They take the opposite colour to their current twin
+target for damage, switch to the vortex colour through its cast and five-second
+pulse aura, and remove heroic Touch with the matching essence. Missing NPCs,
+dead bots, another map, an ended encounter, vehicles, transports, teleports and
+explicit stay/passive commands prevent the action. It never grants an aura,
+kill, loot, achievement or encounter state directly.
+
+Valithria keeps the existing `icc` strategy and real spell/portal actions. The
+patch fixes their healer allocation, reachable spell selection and movement:
+one surface healer remains (two with four or more healers), while the others
+heal the dragon and use available portals. A lone surviving healer stays out of
+portals and yields dragon healing when a nearby party member is below 60 percent
+health. Only living healers in the same instance count; dream-phase healers
+keep their assignment. Healing uses known, currently castable spell ranks and
+falls back from an unavailable talent to a basic heal. A healer already moving
+to its portal keeps that action, and a portal reserved by someone else no
+longer blocks healing. Existing dream-cloud collection is unchanged.
+
+These changes require applying the playerbots patch and rebuilding native code
+at a release; publishing the playbook does not activate the Twin action. Check
+a real pull before calling either encounter verified: essence aura and vortex
+survival for Twins; dragon health rising, a surface healer, real portal entries,
+cloud buffs and a legitimate completion for Valithria. Automatic checks cover
+decision cases and compile the adapters; they do not establish a live clear.
+
 ## Coverage
 
 | Raid | Map | Key | Difficulties | Bosses |
