@@ -17,7 +17,7 @@ namespace Leeroy::Realm
 using Queued = ActionQueue::Entry;
 // Skipped: a leave's or a rearm's member that nothing in the job touched stays as it is; Tick ends
 // only its lease (AcceptsMemberSkip) and the job goes on with the others.
-enum class StepState { Complete, Refused, Pending, Unknown, Detached, Skipped };
+enum class StepState { Complete, Refused, Deferred, Pending, Unknown, Detached, Skipped };
 struct RealmStep
 {
     StepState state = StepState::Refused;
@@ -32,6 +32,21 @@ struct RealmStep
     // earlier Pending ticks. Refused alone only promises no outstanding work.
     bool unchanged = false;
 };
+
+// A duel has no native receipt until the first challenge. Recheck authority on every
+// attempt and leave the queue untouched when the target cannot be charged this tick.
+template<class Authority, class Charge>
+std::optional<RealmStep> BeforeDuelChallenge(Queued const& entry, Authority authority, Charge charge)
+{
+    bool const day = entry.payload.contains("day_permit");
+    if (day)
+        if (auto why = authority(entry); !why.empty())
+            return RealmStep{StepState::Refused, std::move(why), 0, {}, true};
+    auto why = charge();
+    if (why == "busy:tick_budget") return RealmStep{day ? StepState::Deferred : StepState::Pending};
+    if (!why.empty()) return RealmStep{StepState::Refused, std::move(why)};
+    return std::nullopt;
+}
 
 // The native adapter owns the lock represented by this guard. It must hold its
 // inbox/revision lock from final proof through reservation release. No native

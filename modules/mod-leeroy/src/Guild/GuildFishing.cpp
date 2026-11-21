@@ -2,6 +2,7 @@
 #include "GuildFishing.h"
 #include "GuildPorts.h"
 #include "Realm/RealmModule.h"
+#include "Realm/DayPlans.h"
 #include "Realm/RealmPorts.h"
 #include "LeeroyGuildFishingProof.h"
 #include "Action.h"
@@ -84,7 +85,8 @@ struct Attempt
 };
 struct Job
 {
-    std::string token, id;
+    std::string token;
+    std::optional<Queued> dayStep;
     std::vector<std::shared_ptr<Attempt>> attempts;
     std::size_t cursor = 0;
 };
@@ -250,7 +252,7 @@ RealmStep Begin(Queued& entry, uint32)
     std::string error;
     auto& module = RealmModule::Instance();
     auto job = std::make_shared<Job>();
-    job->id = entry.id;
+    if (entry.payload.contains("day_permit")) job->dayStep = entry;
     for (auto guid : entry.guids)
     {
         auto* bot = Guild::FindOnline(guid);
@@ -432,6 +434,14 @@ PvpContinuationStep Step(PvpOwner const& owner)
         switch (value->phase)
         {
             case Phase::Fence:
+                // Preparation captured the bodies on an earlier tick. The engine fence is the
+                // first physical action, so its tagged cohort and destination must still match.
+                if (job->dayStep)
+                    if (auto why = DayMutationRefusal(*job->dayStep); !why.empty())
+                    {
+                        value->failure = why;
+                        return {PvpStage::Cleaning, std::move(why)};
+                    }
                 if (auto why = Ready(bot); !why.empty()) { value->failure = why; value->phase = Phase::Ended; break; }
                 EngineBarrier(ai, value, true); value->fenced = true; value->phase = Phase::Spot; break;
             case Phase::Spot:

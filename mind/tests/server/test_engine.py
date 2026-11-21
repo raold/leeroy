@@ -591,3 +591,24 @@ def test_a_fault_that_stays_is_counted_once_an_hour(app, monkeypatch, caplog):
     lines = [r.getMessage() for r in caplog.records if 'server_tick_failed' in r.getMessage()]
     assert 3 <= len(lines) <= 5 and lines[0] == 'server_tick_failed code=ValueError failures=1 unreported=0'
     assert all('private' not in line for line in lines) and 'unreported=10' in lines[1] and 'unreported=5' in lines[2]
+
+
+def test_captured_day_opener_rechecks_life_switch_before_posting(app):
+    path = app.data_dir / "mind.toml"
+    config = path.read_text()
+    def switch(on):
+        path.write_text(config + f"\n[life]\nday_plans={str(on).lower()}\n")
+        app._reload_config()
+    now = app.clock.now()
+    with app.store.transaction():
+        event = app.store.conn.execute("INSERT INTO game_event(ts,type,guid,payload) VALUES(?,'day_activity',101,'{}')",
+                                       (now,)).lastrowid
+        plan = app.store.conn.execute("INSERT INTO day_plan(night,member,starts,ends,activity,place,status,phase,evidence) "
+            "VALUES('2026-10-28',101,?,?,'inn','org_inn','done','arrival',?)", (now-1, now+1, event)).lastrowid
+    seed = Seed(f"day:{plan}", "day", ("general",), "Arrived at org inn.", (101,))
+    conversation = se.Conversation("day", "general", seed, [101,102], now, 5)
+    switch(True)
+    assert app.server.engine._valid(conversation, 101)
+    switch(False)
+    assert not app.server.engine._valid(conversation, 101)
+    assert conversation.reason == "day_ended" and not app.turns

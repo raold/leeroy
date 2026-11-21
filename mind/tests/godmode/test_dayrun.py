@@ -751,3 +751,101 @@ def test_verifying_terminal_settles_plan_listener_and_seed_but_preserves_proved_
         assert memory() == facts
         await rig.realm.close()
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("end", ["local", "native"])
+def test_expiry_settles_each_participant_from_her_own_evidence(tmp_path, store, clock, end):
+    import asyncio
+    from leeroy_mind.realm.protocol import RealmJob
+
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        first = await rig.begin(activity="inn", place="org_inn", members=(101,102))
+        rig.released.append(first.id)
+        await rig.app.event(RealmJob(0, first.id, "realm_move", "done", "", 101, 0))
+        await rig.app.event(rig.receipt())
+        await rig.tick()
+        moves = [c.id for c in rig.app.sent if isinstance(c, RealmMove)]
+        assert len(moves) == 2 and moves[0] == first.id
+        await clock.advance(rig.day.rows(1)[0]["ends"] - clock.now(), step=86400)
+        if end == "local":
+            await rig.tick()
+        else:
+            await rig.app.event(rig.receipt("revoking", "ended"))
+        assert [(r["member"], r["status"], r["phase"]) for r in rig.day.rows(1)] == [
+            (101, "done", "arrival"), (102, "skipped", None)]
+        assert [tuple(r) for r in store.conn.execute("SELECT owner,text FROM memory")] == [(101, "Arrived at org inn.")]
+        assert rig.realm.action_store.holds() and not rig.day.listeners
+        await rig.app.event(rig.receipt("closed", "ended", released=tuple(moves)))
+        assert rig.day.permit(1)["state"] == "closed" and not rig.realm.action_store.holds()
+        await rig.realm.close()
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("boundary", ["begin", "queued_move", "issued_move"])
+def test_disabling_stops_new_writes_and_reconciles_the_entered_command(tmp_path, store, clock, boundary):
+    import asyncio
+
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        await rig.connect()
+        rig.plan()
+        await rig.day.tick()  # Opening row, before the spawned begin enters BridgeClient.send.
+        if boundary != "begin":
+            await rig.tick()
+            await rig.app.event(rig.receipt())
+            await rig.day.tick()
+            rig.realm.queue.tick()  # Select the enrolled move.
+        if boundary == "issued_move":
+            await rig.tick()
+        rig.realm.configure_day_plans(False)
+        await rig.tick()
+        moves = [cmd.id for cmd in rig.app.sent if isinstance(cmd, RealmMove)]
+        assert len(moves) == int(boundary == "issued_move")
+        if boundary == "begin":
+            assert not any(isinstance(cmd, dayrun.DayBegin) for cmd in rig.app.sent)
+        else:
+            ident, = store.conn.execute("SELECT id FROM day_step").fetchone()
+            if not moves:
+                assert rig.realm.action_store.get(ident).state == "not_sent"
+            else:
+                assert rig.realm.action_store.holds()
+            await rig.app.event(rig.receipt("closed", "context_changed", released=tuple(moves), succeeded=()))
+        assert rig.day.permit(1)["state"] == "closed" and not rig.realm.action_store.holds()
+        assert all(r["status"] == "skipped" for r in rig.day.rows(1))
+        await rig.realm.close()
+    asyncio.run(go())
+
+
+def test_enabling_after_authenticated_greeting_uses_the_current_connection(tmp_path, store, clock):
+    import asyncio
+    from conftest import seed_test_cast
+    from leeroy_mind.protocol import Hello
+    from leeroy_mind.realm.service import attach_realm
+    from realm.fakes import RealmApp
+
+    async def go():
+        (tmp_path / "mind.toml").write_text("[realm]\nenabled=true\n")
+        seed_test_cast(store)
+        app = RealmApp(tmp_path, store, clock)
+        app.world.group = app.guild = None
+        app.raid = SimpleNamespace(phase=lambda now: "idle")
+        realm = app.realm = attach_realm(app)
+        await app.connection(True)
+        await app.event(Hello(0, "test", "1", 21, 1, (dayrun.FEATURE,), 1234))
+        assert "day" not in realm.parts
+        realm.configure_day_plans(True)
+        day = realm.parts["day"]
+        assert day.context_valid() and (day.boot, day.epoch) == (1234, app.transport_state.epoch)
+        start, end = dayrun.slots_for(store.conn, "2026-10-28")["16"]
+        store.conn.execute("INSERT INTO day_plan(night,member,starts,ends,activity,place,status) "
+                           "VALUES('2026-10-28',101,?,?,'inn','org_inn','planned')", (start,end))
+        await day.tick()
+        for _ in range(4):
+            await asyncio.sleep(0)
+        assert len([c for c in app.sent if isinstance(c, dayrun.DayBegin)]) == 1
+        await app.connection(False)
+        await app.connection(True)
+        assert not day.context_valid()  # No greeting for the replacement writer.
+        await realm.close()
+    asyncio.run(go())

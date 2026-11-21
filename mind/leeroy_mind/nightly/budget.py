@@ -373,6 +373,8 @@ async def plan_night(ctx: "NightContext", *, stages: frozenset[str] | None = Non
             "steps": steps, "units": units}
     if stages is not None:
         plan["extensions"] = sorted(stages & EXTENSION_STAGES)
+    if units.get("day_plans"):
+        plan["day_calls"] = 0
     ctx.plan = plan
     set_run_plan(ctx.store, ctx.night, plan)
     log("nightly_budget", night=ctx.night, **plan)
@@ -460,11 +462,18 @@ def _critic(ctx: "NightContext") -> int:
     return count_pending(ctx)
 
 
+def _day_plans(ctx):
+    if not ctx.settings.day_plans:
+        return 0
+    from leeroy_mind.godmode.dayplan import remaining_schedule
+    return len(remaining_schedule(ctx)[1])
+
+
 register_counter("reflect", _reflect)
 register_counter("reflect_small", _reflect_small)
 register_counter("encounters", _scenes)
 register_counter("notes", _notes)
-register_counter("day_plans", lambda ctx: len(ctx.members()) if ctx.settings.day_plans else 0)
+register_counter("day_plans", _day_plans)
 register_counter("wowlife", _wow_lines)
 register_counter("stories", _stories)
 register_counter("recap", _recap)

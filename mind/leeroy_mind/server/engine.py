@@ -299,7 +299,8 @@ class ServerEngine:
             return False
         if conversation.seed.kind == 'day' and not conversation.messages:
             from leeroy_mind.godmode.dayrun import seed_valid
-            if not seed_valid(self.app.store.conn, conversation.seed.key, self.app.clock.now()):
+            if (not self.app.cfg.life.day_plans or
+                    not seed_valid(self.app.store.conn, conversation.seed.key, self.app.clock.now())):
                 conversation.reason = 'day_ended'
                 return False
         if parent is not None:

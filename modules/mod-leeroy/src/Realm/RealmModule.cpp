@@ -1089,7 +1089,7 @@ void RealmModule::Tick(std::uint32_t diff)
         bool const pending = reservation.pending.contains(guid);
         // Under the world-thread queue lockstep no executor can run after this refusal.
         if (entry.payload.is_object() && entry.payload.contains("day_permit")
-            && !entry.payload.contains("step") && !pending && entry.cursor == 0)
+            && !entry.payload.contains("step") && entry.cursor == 0 && entry.kind != "duel")
         {
             if (auto refusal = DayMutationRefusal(entry); !refusal.empty())
                 return finish(std::move(refusal), false, true, true);
@@ -1242,6 +1242,8 @@ void RealmModule::Tick(std::uint32_t diff)
             return finish("operation_transition_unknown", true);
         if (result.state == StepState::Unknown)
             return finish(result.reason.empty() ? "native_cleanup_unproved" : result.reason, true);
+        // A deferred first challenge has no native effect or scope to observe.
+        if (result.state == StepState::Deferred) return false;
         if (result.state == StepState::Pending)
         {
             reservation.pending[guid] = std::move(expectedScopes);

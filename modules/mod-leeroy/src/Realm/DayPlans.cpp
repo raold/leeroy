@@ -286,11 +286,9 @@ LeeroyCommandResult DayOwnerCheck::Accept(bool coldDriver) const
                           expires, owner, OwnerGroup(owner), tokens, false, coldDriver ? binding : Json(nullptr), {}};
     for (auto guid : targets)
         request.bodies.emplace(guid, std::pair{Identity(guid, true), module.BodyGeneration(guid)});
-    if (!prepared.emplace(checkId, std::move(request)).second) return {false, "day_owner_scope"};
-    if (coldDriver) return {false, "day_driver_required"};
-    for (auto const& token : tokens)
-        RevokeDay(token, why); // Same world-thread turn as the original typed request's complete admission.
-    return {true, {}};
+    auto refusal = StoreDayOwnerRequest(prepared, checkId, std::move(request), coldDriver,
+                                        [&](auto const& token) { RevokeDay(token, why); });
+    return {refusal.empty(), refusal};
 }
 
 std::string DayForMember(std::uint32_t guid)
@@ -364,16 +362,14 @@ std::string CheckDayStep(Queued const& entry)
 }
 std::string DayMutationRefusal(Queued const& entry)
 {
+    if (!entry.payload.contains("day_permit")) return {};
     auto* permit = Tagged(entry);
     if (!permit)
         return "day_unknown";
     auto& bridge = LeeroyModule::Instance().Bridge();
-    if (!Enabled() || !permit->reason.empty() || permit->epoch != RealmModule::Instance().Epoch() ||
-        !bridge.Connected() || bridge.ConnectionSerial() != permit->serial ||
-        permit->ends <= static_cast<std::uint64_t>(NowUnixMs()))
-        return "day_revoked";
-    if (Guild::HisFight(FindOnline(HumanGuid())))
-        return "busy:combat";
+    if (auto why = permit->MutationRefusal(Enabled(), RealmModule::Instance().Epoch(), bridge.Connected(),
+            bridge.ConnectionSerial(), NowUnixMs(), Guild::HisFight(FindOnline(HumanGuid()))); !why.empty())
+        return why;
     auto const& places = RealmModule::Instance().Places();
     if (std::none_of(places.begin(), places.end(), [&](auto const& p) { return permit->LocationMatches(p); }))
         return "day_place_changed";

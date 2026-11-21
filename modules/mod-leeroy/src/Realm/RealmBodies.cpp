@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "RealmBodies.h"
 #include "DayPlans.h"
+#include "LeeroyDayPlan.h"
 #include "RealmCleanup.h"
 #include "RealmPorts.h"
 #include "LeeroyEvents.h"
@@ -580,20 +581,14 @@ RealmStep Duel(Queued& entry, std::uint32_t guid)
             Duels.erase(it);
             return Done(entry);
         }
-        if (!receipt.ended && (!bot->duel || !other->duel || bot->duel.get() != receipt.sourceDuel
-            || other->duel.get() != receipt.targetDuel)) return Unproved(state, "duel_changed_without_end");
-        if (!receipt.ended && DayRevoking(entry))
+        if (!receipt.ended)
         {
-            if (bot->duel->Opponent != other || other->duel->Opponent != bot ||
-                bot->duel->Initiator != bot || other->duel->Initiator != bot)
-                return Unproved(state, "duel_receipt_missing");
-            if (!OnlyDuelCombat(bot, other) || !OnlyDuelCombat(other, bot))
-                return Unproved(state, "foreign_combat");
-            auto why = module.ChargeAffectedBodies(entry.id,{source,target});
-            if (why == "busy:tick_budget") return Pending(state);
-            if (!why.empty()) return Unproved(state,why);
-            lock.unlock(); // DuelComplete synchronously calls EndedDuel.
-            bot->DuelComplete(DUEL_INTERRUPTED);
+            auto why = ObserveIssuedDuel(bot, other, receipt, [&] { return DayRevoking(entry); }, OnlyDuelCombat,
+                [&] { return module.ChargeAffectedBodies(entry.id, {source, target}); }, [&] {
+                    lock.unlock(); // DuelComplete synchronously calls EndedDuel.
+                    bot->DuelComplete(DUEL_INTERRUPTED);
+                });
+            if (!why.empty() && why != "busy:tick_budget") return Unproved(state, why);
         }
         // A long duel remains owned; elapsed time is not cancellation proof.
         return Pending(state);
@@ -604,9 +599,9 @@ RealmStep Duel(Queued& entry, std::uint32_t guid)
     auto* other = FindOnline(target);
     if (bot->duel || other->duel) return Refuse("busy:duel");
     if (!bot->IsWithinDistInMap(other, 30.0f)) return Refuse("too_far");
-    auto budget = module.ChargeAffectedBodies(entry.id, {source, target});
-    if (budget == "busy:tick_budget") return {StepState::Pending};
-    if (!budget.empty()) return Refuse(budget);
+    if (auto stopped = BeforeDuelChallenge(entry, DayMutationRefusal,
+            [&] { return module.ChargeAffectedBodies(entry.id, {source, target}); }))
+        return *stopped;
     {
         std::lock_guard lock(DuelMutex);
         if (Duels.contains(source) || Duels.size() >= ActionQueue::Capacity) return Refuse("busy:duel_receipt");

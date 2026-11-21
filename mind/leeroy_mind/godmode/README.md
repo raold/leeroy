@@ -152,7 +152,9 @@ key, Origin and `--no-control` gates as Board replies.
 
 Enable `[life] day_plans = true` for the nightly reflection stage and `[realm] enabled = true` for execution.
 The native worldserver also needs `Leeroy.DayPlans.Enable = 1` and `Leeroy.Realm.Enable = 1`. The day switches
-default off and work independently of godmode edits. The native key reloads with `.reload config`. A fresh
+default off and work independently of godmode edits. The mind applies `life.day_plans` on its normal nightly
+and presence configuration reload. Disabling it stops new schedules, body commands and day projections.
+Previously journaled work still reconciles. The native key reloads with `.reload config`. A fresh
 bridge greeting advertises `day_plan_handoff_v1` for admission.
 
 The night selects two to four blocks for the following server-calendar day between 08:00 and 02:00 in
@@ -173,9 +175,13 @@ The handoff entry point for a higher-priority mind caller is `app.realm.parts["d
 reason, valid, send)`. Supply the original typed command with its reserved ID, its full intended roster, a
 synchronous revalidation callback and the async original send. The send accepts the command and the optional
 `expected_epoch` writer guard. The day runner journals the owner request. Overlapping permits require a
-read-only native check specific to the original command type. Only a successful check revokes them.
-The actual owner command keeps its ID and ordinary acknowledgement. Its check ID, arguments, native session,
-body lifetimes, current bridge writer and deadline must still match.
+native admission check for the original command type. Successful admission stores the request and revokes
+its overlapping day permits. A cold offline-raid driver gets a separate, bounded preparation ticket.
+That ticket authorizes only driver preparation. Once the driver is ready, the raid must pass a fresh
+admission check. Execution starts only when the caller sends the original command after handback.
+Its request ID, check ID, arguments, native session, body lifetimes, bridge writer and deadline are
+revalidated. Only the original executor's ordinary ACK and job receipts establish its result. If an
+admission ACK is lost, the original command remains unsent while the day runner reconciles the permits.
 
 A mind restart expires the old process's waiting requests. The current process can query or revoke an old permit
 on the same native boot, including when new planning is off. The original boot, serial, token, begin ID, guild,

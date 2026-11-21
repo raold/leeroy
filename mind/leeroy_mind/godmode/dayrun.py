@@ -124,6 +124,21 @@ class DayRun:
         self.listeners = {}
         self.cleanup_tasks = set()
 
+    def adopt_hello(self, ev, epoch):
+        self.boot = ev.started_ms
+        self.advertised = FEATURE in ev.features
+        self.epoch = epoch
+
+    def configure(self, enabled):
+        if self.admission == enabled:
+            return
+        self.admission = enabled
+        if not enabled:
+            for plan, in self.conn.execute(
+                    "SELECT plan FROM day_permit WHERE state IN ('opening','open','verifying')").fetchall():
+                self.close(plan, "skipped", "context_changed", notify=False)
+        self.changed()
+
     def changed(self):
         before = self.wakeup
         self.wakeup = asyncio.Event()
@@ -167,8 +182,9 @@ class DayRun:
     def close(self, plan, status, reason, *, notify=True):
         owner = f"day:{plan}"
         with self.store.transaction():
-            self.conn.execute("UPDATE day_plan SET status=?,reason=? WHERE action_ref=? AND "
-                              "status IN ('planned','running')", (status,reason,owner))
+            self.conn.execute("UPDATE day_plan SET status=CASE WHEN ?='done' AND evidence IS NULL "
+                              "THEN 'skipped' ELSE ? END,reason=? WHERE action_ref=? AND "
+                              "status IN ('planned','running')", (status,status,reason,owner))
             changed = self.conn.execute("UPDATE day_permit SET state='revoking',reason=? WHERE plan=? "
                               "AND state NOT IN ('closed','revoking','unresolved')", (reason,plan))
         unsubscribe = self.listeners.pop(plan, None)
@@ -195,6 +211,13 @@ class DayRun:
         sending.add(plan)
         writer_epoch = self.epoch
         async def send():
+            if isinstance(command, DayBegin) and (not self.admission or self.permit(plan)["state"] != "opening"):
+                # Only this spawned writer can send this begin ID. No permit exists on native.
+                self.close(plan, "skipped", "context_changed", notify=False)
+                with self.store.transaction():
+                    self.conn.execute("UPDATE day_permit SET state='closed' WHERE plan=? AND token IS NULL", (plan,))
+                self.changed()
+                return
             ack = await self.app.bridge.send(command, preserve_id=True, expected_epoch=writer_epoch)
             if ack is None or ack.id != command.id:
                 return  # Only this control's reply can establish a definite refusal.
@@ -268,7 +291,7 @@ class DayRun:
             if ev.reason in REASONS:
                 self.close(plan, "preempted", ev.reason, notify=False)
             elif permit["state"] in {"opening", "open", "verifying"}:
-                status = "done" if permit["evidence"] is not None and ev.reason == "ended" else "skipped"
+                status = "done" if ev.reason == "ended" else "skipped"
                 self.close(plan, status, ev.reason, notify=False)
         with self.store.transaction():
             succeeded = sorted(set(json.loads(permit["succeeded"])) | set(ev.succeeded))
@@ -292,9 +315,7 @@ class DayRun:
         if isinstance(ev, Hello):
             if self.realm._delivery_epoch(ev) != self.realm._transport_epoch:
                 return
-            self.boot = ev.started_ms
-            self.advertised = FEATURE in ev.features
-            self.epoch = self.realm._delivery_epoch(ev) or 0
+            self.adopt_hello(ev, self.realm._delivery_epoch(ev) or 0)
             c = self.realm.action_context()
             if c.presence_known:
                 for p in self.conn.execute("SELECT * FROM day_permit WHERE state!='closed'").fetchall():
@@ -463,7 +484,7 @@ class DayRun:
                 self.close(plan, "preempted" if reason in REASONS else "skipped", reason)
                 state = "revoking"
             elif now >= row["ends"]:
-                self.close(plan, "done" if permit["evidence"] else "skipped", "ended")
+                self.close(plan, "done", "ended")
                 state = "revoking"
         if state != "open":
             if now >= self.due.get(plan,0) and plan not in self.sending and self.context_valid(cleanup=True) and permit['boot'] == self.boot:

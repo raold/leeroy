@@ -42,6 +42,13 @@ struct DayPermit
     std::map<std::string, Step> steps;
     Place destination;
     bool unresolved = false;
+    std::string MutationRefusal(bool enabled, std::uint64_t currentEpoch, bool connected,
+                                std::uint64_t currentSerial, std::uint64_t now, bool ownerFight) const
+    {
+        if (!enabled || !reason.empty() || epoch != currentEpoch || !connected || serial != currentSerial || ends <= now)
+            return "day_revoked";
+        return ownerFight ? "busy:combat" : "";
+    }
     bool LocationMatches(Place const& current) const
     {
         return destination.name == current.name && destination.kind == current.kind && destination.map == current.map &&
@@ -98,6 +105,24 @@ struct DayPermit
         return kind == "rpg_status" && activity != "duel_practice";
     }
 };
+// An issued challenge is observed through its original DuelInfo objects. Only the
+// exact reciprocal duel may be interrupted, and never while either actor has foreign combat.
+template<class Player, class Receipt, class Revoking, class Combat, class Charge, class Interrupt>
+std::string ObserveIssuedDuel(Player* bot, Player* other, Receipt const& receipt, Revoking revoking,
+                              Combat onlyDuelCombat, Charge charge, Interrupt interrupt)
+{
+    if (!bot->duel || !other->duel || bot->duel.get() != receipt.sourceDuel || other->duel.get() != receipt.targetDuel)
+        return "duel_changed_without_end";
+    if (!revoking()) return {};
+    if (bot->duel->Opponent != other || other->duel->Opponent != bot ||
+        bot->duel->Initiator != bot || other->duel->Initiator != bot)
+        return "duel_receipt_missing";
+    if (!onlyDuelCombat(bot, other) || !onlyDuelCombat(other, bot)) return "foreign_combat";
+    if (auto why = charge(); !why.empty()) return why;
+    interrupt();
+    return {};
+}
+
 inline bool DayFishingCleaning(ContinuationOwner const& owner, std::uint64_t guildEpoch)
 {
     return owner.domain == ActivityDomain::Guild && owner.kind == PvpKind::Fishing && owner.originEpoch == guildEpoch &&
@@ -109,6 +134,17 @@ inline bool DayRequestMatches(nlohmann::json const& original, nlohmann::json con
                               std::int64_t now, bool consumed)
 {
     return !consumed && serial == currentSerial && now < deadline && original == candidate;
+}
+// The typed caller has finished admission. Commit its request before revoking any lower permit.
+template<class Requests, class Revoke>
+std::string StoreDayOwnerRequest(Requests& requests, std::string const& checkId,
+                                typename Requests::mapped_type request, bool coldDriver, Revoke revoke)
+{
+    auto [it, stored] = requests.emplace(checkId, std::move(request));
+    if (!stored) return "day_owner_scope";
+    if (coldDriver) return "day_driver_required";
+    for (auto const& token : it->second.tokens) revoke(token);
+    return {};
 }
 // A cold-driver ticket can only authorize the same check binding and exact permit set.
 inline bool DayDriverTicketMatches(nlohmann::json const& issued, nlohmann::json const& presented,

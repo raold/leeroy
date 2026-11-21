@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "LeeroyDayPlan.h"
+#include "../src/Realm/RealmModule.h"
 #include "LeeroyOwnerFight.h"
 #include "LeeroyGuildAddPolicy.h"
 #include "TestHarness.h"
@@ -119,7 +120,7 @@ LEEROY_TEST(DayAddWaitsForEveryExactCohortReleaseAndExpiresWithoutReplaying)
 }
 
 
-LEEROY_TEST(DayDispatchReadsTheGroupFightAgainAfterAdmission)
+namespace
 {
     struct Body;
     struct Reference
@@ -142,6 +143,10 @@ LEEROY_TEST(DayDispatchReadsTheGroupFightAgainAfterAdmission)
         int GetMap() const { return map; }
         Party* GetGroup() const { return party; }
     };
+}
+
+LEEROY_TEST(DayDispatchReadsTheGroupFightAgainAfterAdmission)
+{
     Body friendBody{false, 1, nullptr};
     Party party{{&friendBody}};
     Body owner{false, 1, &party};
@@ -227,4 +232,100 @@ LEEROY_TEST(DayOfflineDriverTicketPreservesTheOriginalManifestConnectionAndDeadl
     auto changed = raid;
     changed["members"] = {101,103};
     CHECK(!DayRequestMatches(raid, changed, 1, 1, 200, 190, false));
+}
+
+
+LEEROY_TEST(DayFirstChallengeRechecksGroupCombatAndAcceptedOwnerAfterBudgetWait)
+{
+    for (bool higherOwner : {false, true})
+    {
+        Body groupmate{false, 1, nullptr};
+        Party party{{&groupmate}};
+        Body human{false, 1, &party};
+        DayPermit permit;
+        permit.token = "permit";
+        permit.ends = 100;
+        ActionQueue queue;
+        TickBudget budget(2);
+        CHECK(queue.Push({"duel-id", "duel", {101, 102}, 0, {{"day_permit", permit.token}}}));
+        unsigned casts = 0, attempts = 0;
+        auto drain = [&] {
+            queue.Drain(budget, [&](ActionQueue::Entry& entry) {
+                ++attempts;
+                auto stop = BeforeDuelChallenge(entry, [&](auto const& tagged) {
+                    CHECK(tagged.payload.at("day_permit") == permit.token);
+                    return permit.MutationRefusal(true, 0, true, 0, 1, Leeroy::OwnerGroupInCombat(&human));
+                }, [&] { return std::string(budget.Take(1) ? "" : "busy:tick_budget"); });
+                if (!stop) { ++casts; return true; }
+                if (attempts == 1) CHECK(stop->state == StepState::Deferred);
+                else
+                {
+                    CHECK(stop->state == StepState::Refused && stop->unchanged);
+                    CHECK(stop->reason == (higherOwner ? "day_revoked" : "busy:combat"));
+                }
+                return stop->state != StepState::Deferred;
+            });
+        };
+        CHECK(budget.Take());
+        drain();
+        CHECK(queue.Size() == 1 && casts == 0);
+        if (higherOwner)
+        {
+            struct Request { std::set<std::string> tokens; };
+            std::map<std::string, Request> requests;
+            auto revoke = [&](auto const& token) { CHECK(token == permit.token); permit.reason = "raid"; };
+            CHECK(StoreDayOwnerRequest(requests, "cold", {{permit.token}}, true, revoke) == "day_driver_required");
+            CHECK(permit.reason.empty());
+            CHECK(StoreDayOwnerRequest(requests, "checked", {{permit.token}}, false, revoke).empty());
+            CHECK(requests.contains("checked") && permit.reason == "raid");
+        }
+        else groupmate.combat = true;
+        budget.Reset();
+        drain();
+        CHECK(casts == 0 && attempts == 2 && queue.Size() == 0);
+    }
+}
+
+
+LEEROY_TEST(DayIssuedChallengeObservesAndOnlyInterruptsItsExactDuel)
+{
+    struct Actor;
+    struct Info { Actor* Initiator; Actor* Opponent; };
+    struct Actor { std::unique_ptr<Info> duel; bool foreignCombat = false; };
+    Actor source, target;
+    source.duel = std::make_unique<Info>(&source, &target);
+    target.duel = std::make_unique<Info>(&source, &source);
+    struct Receipt { Info* sourceDuel; Info* targetDuel; } receipt{source.duel.get(), target.duel.get()};
+    TickBudget budget(2);
+    unsigned interruptions = 0;
+    auto observe = [&](bool revoked) {
+        return ObserveIssuedDuel(&source, &target, receipt, [&] { return revoked; },
+            [](Actor* actor, Actor*) { return !actor->foreignCombat; },
+            [&] { return std::string(budget.Take(2) ? "" : "busy:tick_budget"); },
+            [&] { ++interruptions; });
+    };
+    CHECK(observe(false).empty() && interruptions == 0);
+    CHECK(budget.Take());
+    CHECK(observe(true) == "busy:tick_budget" && interruptions == 0);
+    budget.Reset();
+    target.foreignCombat = true;
+    CHECK(observe(true) == "foreign_combat" && interruptions == 0);
+    target.foreignCombat = false;
+    auto original = std::move(target.duel);
+    target.duel = std::make_unique<Info>(*original);
+    CHECK(observe(true) == "duel_changed_without_end" && interruptions == 0);
+    target.duel = std::move(original);
+    target.duel->Opponent = nullptr;
+    CHECK(observe(true) == "duel_receipt_missing" && interruptions == 0);
+    target.duel->Opponent = &source;
+    CHECK(observe(true).empty() && interruptions == 1);
+}
+
+
+LEEROY_TEST(UntaggedDuelKeepsItsOrdinaryBudgetPath)
+{
+    Queued entry{"duel-id", "duel", {101, 102}, 0, {}};
+    auto result = BeforeDuelChallenge(entry, [](auto const&) { CHECK(false); return std::string(); },
+                                     [] { return std::string("busy:tick_budget"); });
+    CHECK(result && result->state == StepState::Pending);
 }
