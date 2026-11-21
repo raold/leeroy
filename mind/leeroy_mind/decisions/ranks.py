@@ -1,6 +1,7 @@
 """Officers review observed admissions and attendance. The roster owns all SetRank commands."""
 import json
 
+from leeroy_mind.clock import local_at
 from leeroy_mind.discord import store as discord
 from . import ledger, polls
 from .bank import members
@@ -9,6 +10,20 @@ from .strategy import held
 
 DAY = 86400
 CAST_KEY = "decisions:rank:cast"
+# Officers' rank polls opened at most per minute tick and per local day: a first pass that finds a
+# dozen reviews due spreads them over days instead of opening them all at once. Promotions first.
+POLLS_PER_TICK = 2
+POLLS_PER_DAY = 4
+ORDER = {"four_raids": 0, "newcomer": 1, "no_raids": 2}
+
+
+def opened_today(conn, now) -> int:
+    """Rank reviews proposed on now's local date (each instant classified by its own local date,
+    as at a DST boundary the offset at now can differ from the one at midnight)."""
+    day = local_at(now).date()
+    rows = conn.execute("SELECT proposed FROM guild_decision WHERE kind='rank' AND proposed BETWEEN ? AND ?",
+                        (now - 2*DAY, now + 2*DAY))
+    return sum(local_at(ts).date() == day for ts, in rows)
 
 
 def observe_cast(store, cast, *, now):
@@ -120,7 +135,10 @@ class RankRules:
         officers = sorted(g for g, m in cast.items() if m.rank == ranks["officer"] and app.personas.get(g))
         if not officers or server_quiet(app):
             return
-        for guid, v in due.items():
+        room = min(POLLS_PER_TICK, POLLS_PER_DAY - opened_today(store.conn, now))
+        for guid, v in sorted(due.items(), key=lambda item: (ORDER.get(item[1]["why"], 9), item[0])):
+            if room <= 0:
+                break
             subject = f"rank:{guid}"
             recent = store.conn.execute("SELECT * FROM guild_decision WHERE subject=? ORDER BY id DESC LIMIT 1",
                                         (subject,)).fetchone()
@@ -141,6 +159,7 @@ class RankRules:
                 polls.attach_message(store, poll, message)
                 ident = ledger.propose(store, kind="rank", subject=subject, value=v, positions=positions, now=now, poll=poll)
                 ledger.announce(store, ident, message)
+            room -= 1
 
     async def closed(self, app, poll, winner):
         store, now = app.store, app.clock.now()

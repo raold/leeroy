@@ -86,6 +86,17 @@ def test_card_part_absent_when_off(card_ctx, clock):
     assert list(PRIORITY).index('decisions') == list(PRIORITY).index('standing') + 1
 
 
+def test_a_kind_switched_off_leaves_the_card(card_ctx, clock):
+    # Bank requests ([decisions] bank_requests) off: its settled request is not in force on the card
+    on = part(card(card_ctx, 102, context=ctx(clock, 'officer')))
+    assert 'Bank request settled' in on and 'Loot rules' in on
+    off = part(card(card_ctx, 102, context=ctx(clock, 'officer', decision_kinds=frozenset({'lineup', 'loot_rule'}))))
+    assert 'Bank request' not in off and 'Loot rules' in off
+    # A poll of a kind switched off goes too
+    no_loot = part(card(card_ctx, 102, context=ctx(clock, 'officer', decision_kinds=frozenset({'lineup'}))))
+    assert 'Open poll' not in no_loot
+
+
 def test_the_part_is_bounded_and_fits_the_budget(card_ctx, clock, guild):
     now = clock.now()
     for n in range(10, 20):

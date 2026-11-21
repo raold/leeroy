@@ -8,6 +8,7 @@ import logging
 import sqlite3
 
 from . import apply, ledger, polls
+from .config import KIND_SWITCHES
 from .ledger import DecisionError
 from .positions import cast_votes, due_voters
 
@@ -41,6 +42,13 @@ class DecisionsService:
         self.enabled = True
         self._unrecorded: set[int] = set()  # undone in game, his overrule not yet in the ledger
         self.rules = {rules.kind: rules for rules in apply.builtin_rules()}  # this app's own kinds
+        # Kinds whose own switch is on (Part B's have none): an off kind's minute work and poll
+        # results never run, so it proposes, polls, posts and changes nothing in game
+        self.kinds_on = frozenset(kind for kind in ledger.KINDS if (switch := KIND_SWITCHES.get(kind)) is None
+                                  or getattr(config, switch, False) is True)
+
+    def kind_on(self, kind: str) -> bool:
+        return kind in self.kinds_on
 
     def rules_for(self, kind: str):
         return apply.rules_for(kind, self.rules)
@@ -74,7 +82,7 @@ class DecisionsService:
         """Each registered kind's own minute work (proposing, posting, taking effect, ending): a
         kind that fails is logged and the others still run."""
         for kind in ledger.KINDS:
-            hook = getattr(self.rules_for(kind), 'tick', None)
+            hook = getattr(self.rules_for(kind), 'tick', None) if self.kind_on(kind) else None
             if hook is None:
                 continue
             try:
@@ -102,10 +110,10 @@ class DecisionsService:
         polls.mark_handled in the transaction that records its decision; otherwise the receipt is
         written when the hook returns. Explicit False defers a hook awaiting fresh evidence.
         A failed hook is tried again on later ticks, at most
-        MAX_HOOK_TRIES times; a poll whose kind has no hook (yet) waits for one."""
+        MAX_HOOK_TRIES times; a poll whose kind has no hook (yet) or is switched off waits."""
         store = self.app.store
         for row in polls.unhandled(store.conn):
-            hook = getattr(self.rules_for(row['kind']), 'closed', None)
+            hook = getattr(self.rules_for(row['kind']), 'closed', None) if self.kind_on(row['kind']) else None
             if hook is None:
                 continue
             try:

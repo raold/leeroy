@@ -306,6 +306,8 @@ class Roster:
                         self._put(name, record)
             app = getattr(self.ports, "app", None)
             decisions = getattr(app, "decisions", None)
+            if decisions is not None and not decisions.kind_on("rank"):
+                decisions = None  # rank reviews off: ranks follow the guild's own rules, as before them
             def overlay():
                 if decisions is None:
                     return {}

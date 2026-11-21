@@ -19,8 +19,23 @@ stand-in ahead of both (tests).
 | `bank_items_per_day` | 10 | 0-50 | Stacks leaving the bank a day. |
 | `bank_restock_per_week` | 20 | 0-60 | Stacks the crafters restock a week; 0 turns the restock off. |
 | `loot_poll_days` | 14 | 3-60 | Fewest days between loot-rule polls (Part B's loot rules). |
+| `rank_reviews` | `false` | bool | Part C's officers' rank reviews (polls in #applications, then `SetRank`). |
+| `boss_strategy` | `false` | bool | Part C's boss strategy after two wipes (a #strategy post and a training layer). |
+| `bank_requests` | `false` | bool | Part C's members' bank requests (#bank-requests posts and, with native BankMail, handoffs). |
 
-An invalid table is off (`decisions_config_invalid key=`). Off adds no task, seed or card part,
+Part B's lineups and loot rules run whenever `enabled` is on. Each Part C kind runs only with its
+own switch on as well (`config.KIND_SWITCHES`, `DecisionsService.kinds_on`). A kind switched off
+proposes, polls, posts, seeds and changes nothing: the service skips its minute work and its poll
+results (a poll it left waits), and its rows and polls give the engine no seed and are left out
+of the awareness card's Decisions part (`CardContext.decision_kinds`). With
+`rank_reviews` off the cast is not observed for reviews and the roster sets ranks by the guild's
+own rules with no hold, exactly as before Part C (a review already in effect is no longer
+overlaid). With `boss_strategy` off nothing is wired into training: no guild layer and no wait
+through his raid's combat, wipe silence or debrief. With `bank_requests` off the bank is never read
+for requests. The weekly restock keeps its own switches (`bank_restock_per_week` and native
+`Leeroy.Decisions.BankRestock.Enable`).
+
+An invalid table is off, every switch in it included (`decisions_config_invalid key=`). Off adds no task, seed or card part,
 and the golden prompts are byte-identical (`tests/decisions/test_off.py`).
 
 ## The ledger (migration `00NN_decisions.sql`)
@@ -177,7 +192,9 @@ officer, or the DKP officer in her absence, posts each request in the officers' 
 Her post includes the requester, item, quantity, reason and count against today's cap.
 Each handoff rechecks the member's entitlement and the raid hold. A flask still requires the
 posted lineup for the same upcoming night. A BoE requires a fresh bind-on-equip template and
-an equippable upgrade for that member. Bank reads expire after 60 seconds. The final transfer
+an equippable upgrade for that member. Bank reads expire after 60 seconds. Looking for new
+requests reads the whole bank, professions, item templates and the cast's gear, so it runs at most
+every 15 minutes (`bank.DISCOVER_EVERY_S`); each handoff still reads afresh. The final transfer
 protects the last stack of each item in its tab. A missing bank read defers the handoff. The recipient receives the item in game.
 
 Requests use two durable Realm direct-ledger references, `decision:<id>:withdraw` and
@@ -224,7 +241,10 @@ The first observed guild cast establishes existing members. Later additions have
 time. Officers review newcomers in their first seven days, trials who raided at least four
 times in 30 days, and raiders with no attendance in 30 days. Approval in #applications requires a strict majority of current eligible officers. The owner's
 vote counts when he votes. His abstention leaves the decision with the officers. At least one
-cast officer must still hold office at settlement and application. A settled change schedules normal roster synchronization
+cast officer must still hold office at settlement and application. At most 2 review polls open
+in a minute tick and 4 a local day (`ranks.POLLS_PER_TICK`, `POLLS_PER_DAY`), promotions first,
+then newcomers, then raiders without raids, so a first pass that finds a dozen due spreads them
+over days. A settled change schedules normal roster synchronization
 with the approved rank as an overlay. Removing the overlay schedules restoration of the persona's
 rank. The owner and rank zero are protected. Private votes and reasons stay with the officers.
 The member sees her new rank in the guild roster.
@@ -238,7 +258,8 @@ weekly stock. Its default of zero leaves the original bootstrap stock available.
 in the bridge hello while enabled. Reconnect the mind after reloading the switches. An older
 bridge or a disabled mail key leaves an unsupported delivery as talk and consumes no bank stock.
 
-Enable `[server]` and `[decisions]` in the mind configuration and restart the mind and console.
+Enable `[server]` and `[decisions]` in the mind configuration, and each Part C kind wanted
+(`rank_reviews`, `boss_strategy`, `bank_requests`, all default off), and restart the mind and console.
 Bank writes also require the normal Realm enablement, bank permissions, item whitelist and a
 guild armory connection. Boss changes require `Leeroy.Training.Enable = 1` and `[training]`
 with telemetry and action enabled. Migration `0062_decisions_bank.sql` admits decision-owned
