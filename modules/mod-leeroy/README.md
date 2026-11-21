@@ -406,6 +406,20 @@ Restart recovery still retains a partial party whose identity cannot be proved: 
 group ID, leader and roster subset do not authorize disband. Live cancellation can instead restore
 each independently owned member through the existing handback path.
 
+Heroic receipt and Realm mail transactions require the updated core database handling from
+`c8bd1f28c20c72560fa5014eda3b0aa7c3d63dec` (`fix(Core/Database): Restart lost transactions`,
+upstream #28020). Check that this commit is an ancestor of the core revision used for the native
+build. The core retries connection losses before COMMIT, but treats a lost COMMIT acknowledgement
+as an unknown outcome. These module transactions must leave COMMIT to the core: a raw COMMIT
+inside the statement batch would look like a retryable query and could replay an already-committed
+character, inventory or mail snapshot.
+
+Independent persisted readback remains the proof of completion, including when the transaction
+callback reports failure. Realm mail accepts only the existing exact mail, attachment, source and
+money evidence; failed, absent or mismatched readback remains unknown without another transfer.
+This compatibility fix needs a native rebuild before enabling member heroics or Realm mail;
+it adds no migration or setting and does not enable either feature.
+
 # Ground hazards in the owner's group
 
 Stock playerbots adds its `avoid aoe` strategy to the combat engine only (`AutoAvoidAoe` with a game-client

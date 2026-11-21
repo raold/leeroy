@@ -63,6 +63,16 @@ math(EXPR command_size "${command_end}-${command_begin}")
 string(SUBSTRING "${command_text}" ${command_begin} ${command_size} command_body)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/MemberDungeonDispatch.inc" "${command_body}")
 
+# Exercise the production mail commit/readback lane with delayed database boundaries.
+set(mail_source "${CMAKE_CURRENT_SOURCE_DIR}/../src/Realm/RealmMail.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mail_source}")
+file(READ "${mail_source}" mail_text)
+string(FIND "${mail_text}" "void CommitMail(" mail_begin)
+string(FIND "${mail_text}" "RealmStep Send(" mail_end)
+math(EXPR mail_size "${mail_end}-${mail_begin}")
+string(SUBSTRING "${mail_text}" ${mail_begin} ${mail_size} mail_body)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/RealmMailCommit.inc" "${mail_body}")
+
 target_include_directories(leeroy_tests PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/Lib"

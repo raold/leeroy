@@ -347,6 +347,15 @@ std::vector<MailPersistedRow> ReadPersistedRows(QueryResult const& result)
     } while (result->NextRow());
     return rows;
 }
+void CommitMail(Attempt& attempt, CharacterDatabaseTransaction transaction)
+{
+    // Let the core own COMMIT. A raw COMMIT in the batch would look like a lost
+    // query and could replay the already-committed mail/inventory snapshot.
+    auto* const receipt = &attempt;
+    attempt.commit = std::make_unique<TransactionCallback>(CharacterDatabase.AsyncCommitTransaction(transaction));
+    attempt.commit->AfterComplete([receipt](bool committed) { receipt->committed = committed; });
+}
+
 RealmStep ReadResult(Queued const& entry, std::uint32_t guid, Attempt& attempt)
 {
     auto& module = RealmModule::Instance();
@@ -358,9 +367,8 @@ RealmStep ReadResult(Queued const& entry, std::uint32_t guid, Attempt& attempt)
     // and never accesses a Player or mutates a native object.
     attempt.commit->InvokeIfReady();
     if (!attempt.committed) return {StepState::Pending,""};
-    if (!*attempt.committed) return {StepState::Unknown,"mail_commit_failed"};
-    // Installed MySQLConnection::CommitTransaction discards COMMIT's result.
-    // AsyncCommit true therefore needs an independent exact-ID persisted read.
+    // Either callback result needs exact readback: false also covers a lost
+    // COMMIT acknowledgement after the database may have persisted the transfer.
     if (!attempt.readback)
     {
         auto* const receipt = &attempt;
@@ -539,14 +547,7 @@ RealmStep Send(Queued& entry, std::uint32_t guid)
     attempt.readbackSql = ReadbackSql(attempt.mail,*command,before-command->money,*plan,sources);
     if (attempt.readbackSql.size() > 8192) return {StepState::Unknown,"mail_readback_bound"};
     attempt.uncertain.clear(); // Exact native transfer is proved; never touch these objects again.
-    // Unlike MySQLConnection's implicit void CommitTransaction, a raw statement
-    // is checked by ExecuteTransaction. Make this transaction's own COMMIT an
-    // acknowledged statement, then still require exact persisted readback.
-    // The core's subsequent implicit COMMIT has no remaining writes to commit.
-    transaction->Append("COMMIT");
-    auto* const receipt = &attempt;
-    attempt.commit = std::make_unique<TransactionCallback>(CharacterDatabase.AsyncCommitTransaction(transaction));
-    attempt.commit->AfterComplete([receipt](bool committed) { receipt->committed = committed; });
+    CommitMail(attempt,transaction);
     return ReadResult(entry,guid,attempt);
 }
 
