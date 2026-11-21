@@ -55,7 +55,8 @@ def boss_lines(boss: Boss, difficulty: str | None) -> list[str]:
             lines.append(f"      stock: {m.handled_note}")
         if roles := m.responder_roles():
             own = f"; casts {', '.join(map(str, m.responder_spells(difficulty or m.only[0])))}"                 if m.respond_spells is not None else ""
-            lines.append(f"      responder: {m.area}, moves {'/'.join(roles)}{own}")
+            near = f" of {', '.join(map(str, m.anchors))}" if m.anchors else ""
+            lines.append(f"      responder: {m.area}{near}, moves {'/'.join(roles)}{own}")
         adds = f"; adds {', '.join(map(str, m.adds))}" if m.adds else ""
         lines.append(f"      spells {', '.join(map(str, ids)) or '-'}{adds}" + (f"; {numbers}" if numbers else "")
                      + ("" if m.only == boss_only(boss) else f"; only {', '.join(m.only)}"))
@@ -218,7 +219,7 @@ def raidplay_main(argv=None) -> int:
     _add_data_dir(parser)
     subs = parser.add_subparsers(dest="command", required=True)
     show = subs.add_parser("show", help="print a raid's or a boss's playbook")
-    show.add_argument("map", help="map id or raid key (533, naxx, 631, icc, 649, toc, 724, rs)")
+    show.add_argument("map", help="map id or raid key (533, naxx, 603, uld, 616, eoe, 631, icc, 649, toc, 724, rs)")
     show.add_argument("boss", nargs="?", help="boss index, slug or name")
     show.add_argument("--difficulty", type=int, choices=sorted(DIFFICULTIES),
                       help="0 10-man, 1 25-man, 2 10 heroic, 3 25 heroic")

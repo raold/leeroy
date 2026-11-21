@@ -727,3 +727,83 @@ LEEROY_TEST(Mechanic_ASpotNeverLiesInAnInfernosFireForANonTank)
         CHECK(Dist(spot, {0, 0, 0}) >= 12 + kReach);
     }
 }
+
+// Ulduar, Algalon: at Big Bang every bot but the tanks hides in the nearest black hole (32953, a worm hole 34099
+// below 20 percent), which takes it into phase 16 where Big Bang cannot see it; when it lands they step out.
+LEEROY_TEST(Mechanic_ANearestAreaNamesItsCreatures)
+{
+    json hide = Rule("uld.algalon.big_bang_hide", "stack", "nearest");
+    hide["roles"] = json::array({"healer", "melee", "ranged"});
+    hide["spells"] = json::array({64443, 64584});
+    hide["radius"] = 6;
+    hide["entries"] = json::array({32953, 34099});
+    json out = Rule("uld.algalon.big_bang_out", "avoid_ground", "nearest");
+    out["spells"] = json::array({64445});
+    out["radius"] = 6;
+    out["entries"] = json::array({32953, 34099});
+    std::string error;
+    auto table = ParseRaidMechanics(Table(json::array({hide, out})), error);
+    CHECK(table.has_value());
+    CHECK(table->rules[0].area == MechanicArea::Nearest);
+    CHECK(table->rules[0].entries == std::vector<std::uint32_t>({32953, 34099}));
+    CHECK(MechanicBindsAcrossPhases(table->rules[0]));
+    CHECK(!MechanicBindsAcrossPhases(Make(MechanicKind::AvoidGround, MechanicArea::Caster, 8)));
+
+    json none = hide;
+    none.erase("entries");
+    CHECK_EQ(Refused(Table(json::array({none}))), std::string("bad field: entries")); // a nearest area needs them
+    json stray = Rule();
+    stray["entries"] = json::array({32953});
+    CHECK_EQ(Refused(Table(json::array({stray}))), std::string("bad field: entries")); // only a nearest area
+    json many = hide;
+    many["entries"] = json::array({1, 2, 3, 4, 5, 6, 7, 8, 9});
+    CHECK_EQ(Refused(Table(json::array({many}))), std::string("bad field: entries"));
+    json zero = hide;
+    zero["entries"] = json::array({0});
+    CHECK_EQ(Refused(Table(json::array({zero}))), std::string("bad field: entries"));
+    json cone = Rule("x.y.z", "move_out_cone", "nearest");
+    cone["entries"] = json::array({32953});
+    cone["angle"] = 60;
+    CHECK_EQ(Refused(Table(json::array({cone}))), std::string("bad field: area"));
+}
+
+LEEROY_TEST(Mechanic_TheNearestAnchorOnTheBotsFloor)
+{
+    std::vector<MechanicAnchor> const anchors{{32953, {30, 0, 0}}, {32953, {-12, 0, 0}}, {34099, {5, 0, 0}},
+        {32955, {1, 0, 0}}, {32953, {2, 0, 20}}};
+    auto hole = MechanicNearestAnchor(anchors, {32953}, {0, 0, 0});
+    CHECK(hole.has_value());
+    CHECK_EQ(hole->x, -12.0f); // the star (32955) and the hole on another floor do not count
+    CHECK_EQ(MechanicNearestAnchor(anchors, {32953, 34099}, {0, 0, 0})->x, 5.0f);
+    CHECK(!MechanicNearestAnchor(anchors, {32953}, {200, 0, 0}).has_value()); // past kMechanicNearestYards
+    CHECK(!MechanicNearestAnchor({}, {32953}, {0, 0, 0}).has_value());
+}
+
+LEEROY_TEST(Mechanic_BigBangGathersInTheHoleThenLeavesIt)
+{
+    MechanicRule hide = Make(MechanicKind::Stack, MechanicArea::Nearest, 6, 0, 0,
+        kMechanicHealer | kMechanicMelee | kMechanicRanged);
+    hide.entries = {32953};
+    MechanicCast cast = CastAt({0, 0, 0});
+    CHECK(!MechanicDutyFor(hide, cast, {0, 0, 0}, std::nullopt).has_value()); // no hole within reach
+    cast.nearest = HazardPoint{40, 0, 0};
+    auto gather = MechanicDutyFor(hide, cast, {0, 0, 0}, std::nullopt);
+    CHECK(gather.has_value());
+    CHECK_EQ(gather->gather->x, 40.0f);
+    CHECK(MechanicDutyReaches(*gather, {0, 0, 0})); // 40 yards off still binds, unlike a stack on a target
+    CHECK(!MechanicBinds(hide, kMechanicTank, 1, 0)); // a tank stays out: Big Bang must find someone
+    auto spots = MechanicSpots({0, 0, 0}, {*gather}, {}, {}, kReach, 3, nullptr);
+    CHECK(!spots.empty());
+    for (auto const& spot : spots)
+        CHECK(Dist(spot, {40, 0, 0}) <= 6.0f); // inside the hole's 6 yards
+    CHECK(MechanicKept({41, 1, 0}, {*gather}, {}, {}, kReach, nullptr));
+
+    MechanicRule out = Make(MechanicKind::AvoidGround, MechanicArea::Nearest, 6);
+    out.entries = {32953};
+    auto leave = MechanicDutyFor(out, cast, {0, 0, 0}, std::nullopt);
+    CHECK(leave.has_value() && leave->leave.has_value());
+    CHECK_EQ(leave->leave->origin.x, 40.0f);
+    CHECK(!MechanicKept({41, 1, 0}, {*leave}, {}, {}, kReach, nullptr));
+    for (auto const& spot : MechanicSpots({41, 1, 0}, {*leave}, {}, {}, kReach, 3, nullptr))
+        CHECK(Dist(spot, {40, 0, 0}) >= 6 + kReach + kMechanicMarginYards);
+}

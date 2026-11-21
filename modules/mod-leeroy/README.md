@@ -374,7 +374,11 @@ unavailable and nobody moves). Hello lists `features: [..., "mechanics"]`.
   from the volcano), `move_out_cone` (`cone`: `angle` degrees wide and `range`, else `radius`, long, aimed the same
   way), `spread` (`group`), `stack` (`dest`: gather within `radius` of the cast's target, following it, else its
   destination), `run_out_debuff` (`target`: the member the cast or its aura lands on keeps `radius`, else
-  `range`, from every other member) and `los` (`caster`: out of its sight). `landing: true` means the place is
+  `range`, from every other member) and `los` (`caster`: out of its sight); `stack` and `avoid_ground` also take
+  `nearest` with `entries` (1-8 creature entries, required with it and refused elsewhere: `bad field: entries`):
+  a circle `radius` round whichever live creature of those entries stands nearest the bot within 40 yards, which
+  a stack gathers in from anywhere within those 40 yards and an avoid_ground leaves (Algalon's Black Holes at Big
+  Bang, hello feature `mechanics_nearest`). `landing: true` means the place is
   known only when the cast completes (Shock Vortex lands 13 yards from its target in a random direction): such a
   rule binds nobody until then. A malformed field is refused `bad field: <key>`. The table is accepted with the
   switch off too (the switch gates only the responses), and it belongs to the mind connection that sent it: a new
@@ -420,7 +424,9 @@ unavailable and nobody moves). Hello lists `features: [..., "mechanics"]`.
   (stock `avoid aoe`'s one way out comes first), never for spacing or a gather (the mechanic move serves those),
   and never a forced move.
 - **Phases.** A mechanic binds only bots in its caster's phase while the caster is there (Halion's physical and
-  twilight realms share the room: a meteor or an inferno in one never moves a body in the other), and the known
+  twilight realms share the room: a meteor or an inferno in one never moves a body in the other), except a
+  `nearest` area, whose refuge is what takes the bot out of the caster's phase (a Black Hole phases it); the world
+  tick scans those creatures in every phase round the responders while one is in force. The known
   ground hazards a bot's spots keep clear of are those of its own phases; an add's own burning aura
   (`HeldAuraHazard`) is no hazard for a tank, who holds the add in it.
 - **Never fight stock.** A bot whose last move is a forced move the guard did not issue, made since a mechanic

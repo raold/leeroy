@@ -12,12 +12,14 @@ COVERED = {
     631: list(range(13)),   # Icecrown Citadel: Marrowgar .. the Lich King, Svalna at 9
     649: list(range(5)),    # Trial of the Crusader: the Beasts .. Anub'arak
     724: [0, 1, 2, 6],      # Ruby Sanctum: Baltharus, Zarithrian, Saviana, Halion (3-5 are his intro)
+    603: list(range(14)),   # Ulduar: the Flame Leviathan .. Algalon
+    616: [0],               # Eye of Eternity: Malygos
 }
 
 
 def test_coverage_lists_every_covered_boss():
     pb = raidplay.load()
-    assert pb.covered_maps() == (533, 631, 649, 724)
+    assert pb.covered_maps() == (533, 603, 616, 631, 649, 724)
     assert {m: [b.index for b in pb.raids[m].bosses] for m in pb.raids} == COVERED
     assert [b.name for b in pb.raids[533].bosses] == [
         "Patchwerk", "Grobbulus", "Gluth", "Noth the Plaguebringer", "Heigan the Unclean", "Loatheb",
@@ -28,6 +30,10 @@ def test_coverage_lists_every_covered_boss():
         "council", "lanathel", "svalna", "valithria", "sindragosa", "lichking"]
     assert [b.slug for b in pb.raids[649].bosses] == ["beasts", "jaraxxus", "champions", "twins", "anubarak"]
     assert [b.slug for b in pb.raids[724].bosses] == ["baltharus", "zarithrian", "saviana", "halion"]
+    assert [b.slug for b in pb.raids[603].bosses] == [
+        "leviathan", "ignis", "razorscale", "xt002", "iron_council", "kologarn", "auriaya", "hodir", "thorim",
+        "freya", "mimiron", "vezax", "yogg", "algalon"]
+    assert [b.slug for b in pb.raids[616].bosses] == ["malygos"]
 
 
 def test_every_mechanic_is_well_formed():
@@ -90,7 +96,7 @@ def test_playbook_for_resolves_a_training_context():
     assert gluth.enrage == 360 and raidplay.mechanic("naxx.gluth.decimate").number("every", "25") == 90
     assert raidplay.mechanic("naxx.patchwerk.hateful_strike").spell_ids("25") == (59192,)
     assert raidplay.playbook_for(533, 2, 2) is None          # Naxxramas has no heroic
-    assert raidplay.playbook_for(603, 0, 0) is None          # Ulduar is not covered
+    assert raidplay.playbook_for(603, 0, 2) is None          # Ulduar has no heroic difficulty
     assert raidplay.playbook_for(631, 99, 0) is None
     assert raidplay.mechanic("nope") is None
     assert raidplay.load().check("icc.marrowgar.check_avoid_coldflame").tag == "coldflame"
@@ -189,3 +195,19 @@ def test_roles_and_handlers_are_closed():
         load_files({"toc.toml": _doc()["toc.toml"].replace(b'handled_by = "none"', b'handled_by = "playerbots"')})
     with pytest.raises(PlaybookError, match="explain|one line"):
         load_files({"toc.toml": _doc()["toc.toml"].replace(b'"Do the thing."', b'"' + b"x" * 300 + b'"')})
+
+
+def test_a_nearest_area_names_its_creatures():
+    pb = load_files(_doc(kind="stack", extra='area = "nearest"\nanchors = [32953, 34099]'))
+    m = pb.mechanic("toc.anubarak.thing")
+    assert m.area == "nearest" and m.anchors == (32953, 34099) and m.responder_roles() == ("tank",)
+    gather = load_files(_doc(kind="avoid_ground", extra='area = "nearest"\nanchors = [7]'))
+    assert gather.mechanic("toc.anubarak.thing").anchors == (7,)
+    for extra in ('area = "nearest"',                                  # no anchors
+                  'anchors = [32953]',                                 # anchors without a nearest area
+                  'area = "nearest"\nanchors = [1, 1]',                # each once
+                  'area = "nearest"\nanchors = [1, 2, 3, 4, 5, 6, 7, 8, 9]'):
+        with pytest.raises(PlaybookError):
+            load_files(_doc(kind="stack", extra=extra))
+    with pytest.raises(PlaybookError):                                 # a cone has no nearest area
+        load_files(_doc(kind="move_out_cone", extra='area = "nearest"\nanchors = [1]'))

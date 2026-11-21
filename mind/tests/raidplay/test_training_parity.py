@@ -106,15 +106,34 @@ def test_playbooks_add_rows_after_the_originals():
     new = boss_mechanics(True)
     for key, rows in OLD_BOSS_MECHANICS.items():
         assert new[key][:len(rows)] == rows
-    assert {m for m, _ in new} == {533, 631, 649, 724}
+    assert {m for m, _ in new} == {533, 603, 616, 631, 649, 724}
     assert (533, 2) in new and (533, 2) not in BOSS_MECHANICS
     assert (724, 6) in new and (724, 6) not in BOSS_MECHANICS
-    assert no_behind(True) == OLD_NO_BEHIND | {(533, 4), (533, 9), (533, 11), (533, 12), (724, 6)}
+    assert no_behind(True) == OLD_NO_BEHIND | {(533, 4), (533, 9), (533, 11), (533, 12), (724, 6), (603, 0),
+                                               (603, 5), (603, 6), (603, 10), (603, 12), (616, 0)}
     assert watch_names(True) == ("Inoculated",)
 
 
 # The one intended change (ruling, 2026-11-14): on normal the volcano and portal cannot be targeted.
 JARAXXUS_NORMAL = BossCall("jaraxxus: interrupt, dodge eruptions, kill the mistress")
+# Ulduar's and Malygos's calls, new with their playbooks (no lust on the Leviathan's vehicles).
+ULD_CALLS = {
+    (603, 0): BossCall("leviathan: kite when pursued, shut him down, keep pyrite up", False),
+    (603, 1): BossCall("ignis: melt constructs, cool them in water, dodge scorch"),
+    (603, 2): BossCall("razorscale: fire harpoons, kill dwarves, out of fire"),
+    (603, 3): BossCall("xt-002: bomb and light run out, everyone on the heart"),
+    (603, 4): BossCall("iron council: steelbreaker first, out of overload and runes"),
+    (603, 5): BossCall("kologarn: break the right arm, kill rubble, kite eye beams"),
+    (603, 6): BossCall("auriaya: all in front, kick the blast, out of pools"),
+    (603, 7): BossCall("hodir: keep moving, snowdrift at flash freeze, break ice"),
+    (603, 8): BossCall("thorim: gauntlet team runs, arena holds the middle"),
+    (603, 9): BossCall("freya: kill the gift, trio together, out of bombs"),
+    (603, 10): BossCall("mimiron: out of shock blast, dodge rockets and lasers"),
+    (603, 11): BossCall("vezax: kick searing flames, dodge crash, marked run out"),
+    (603, 12): BossCall("yogg: guardians die by sara, avoid clouds, look away"),
+    (603, 13): BossCall("algalon: black hole for big bang, swap at four punches"),
+    (616, 0): BossCall("malygos: kill sparks, bubbles on deep breath, shield surges"),
+}
 # Ruby Sanctum's calls, new with its playbooks (lust kept for Halion).
 RS_CALLS = {
     (724, 0): BossCall("baltharus: branded run out, off-tank takes the clone", False),
@@ -125,9 +144,9 @@ RS_CALLS = {
 
 
 def test_the_stock_calls_are_unchanged_but_jaraxxus():
-    assert list(BOSS_CALLS) == list(OLD_BOSS_CALLS) + list(RS_CALLS)
+    assert list(BOSS_CALLS) == sorted([*OLD_BOSS_CALLS, *RS_CALLS, *ULD_CALLS])
     assert {k: v for k, v in BOSS_CALLS.items() if k != (649, 1)} == {
-        k: v for k, v in OLD_BOSS_CALLS.items() if k != (649, 1)} | RS_CALLS
+        k: v for k, v in OLD_BOSS_CALLS.items() if k != (649, 1)} | RS_CALLS | ULD_CALLS
     assert BOSS_CALLS[649, 1] == JARAXXUS_NORMAL
     assert dict(HEROIC_CALLS) == {(649, 1): OLD_BOSS_CALLS[649, 1]}
     assert call_for(533, "Patchwerk")[1].pre == "Patchwerk next. drink up, then on the tank"
@@ -200,7 +219,8 @@ def test_the_switch_is_off_by_default():
 def test_calls_fall_back_to_the_old_values_when_the_data_cannot_load(monkeypatch, caplog):
     from leeroy_mind import raidplay
     from leeroy_mind.guild import boss_calls
-    assert boss_calls._FALLBACK == dict(BOSS_CALLS) == OLD_BOSS_CALLS | {(649, 1): JARAXXUS_NORMAL} | RS_CALLS
+    assert boss_calls._FALLBACK == dict(BOSS_CALLS) == (
+        OLD_BOSS_CALLS | {(649, 1): JARAXXUS_NORMAL} | RS_CALLS | ULD_CALLS)
     assert boss_calls._FALLBACK_HEROIC == dict(boss_calls.HEROIC_CALLS)
 
     def broken():
@@ -208,7 +228,7 @@ def test_calls_fall_back_to_the_old_values_when_the_data_cannot_load(monkeypatch
     monkeypatch.setattr(raidplay, "load", broken)
     calls, heroic = boss_calls._Calls(), boss_calls._Calls(heroic=True)
     with caplog.at_level("WARNING"):
-        assert dict(calls) == boss_calls._FALLBACK and len(calls) == 22
+        assert dict(calls) == boss_calls._FALLBACK and len(calls) == 37
         assert calls[631, 0].pre.startswith("marrowgar")
         assert dict(heroic) == boss_calls._FALLBACK_HEROIC
     assert [r.getMessage() for r in caplog.records] == ["boss_calls_fallback error=PlaybookError"] * 2

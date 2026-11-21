@@ -71,12 +71,13 @@ def test_a_tanks_job_only_when_tanks_are_named():
 
 
 def test_no_brief_without_a_playbook_a_difficulty_or_anyone_it_is_for():
-    assert B.build(603, 0, 0, EVERYONE) is None  # Ulduar has no playbooks yet
+    assert B.build(615, 0, 0, EVERYONE) is None  # the Obsidian Sanctum has no playbooks yet
+    assert B.build(603, 0, 2, EVERYONE) is None  # Ulduar has no heroic difficulty
     assert B.build(631, 0, None, EVERYONE) is None
     assert B.build(533, 0, 3, EVERYONE) is None  # Naxxramas has no heroic
     assert B.build(631, 0, 0, ("bard",)) is None
     assert C.boss_brief(C.BossContext(631, 0, "Lord Marrowgar")) is None  # size not known
-    assert C.boss_brief(C.BossContext(603, 0, "Flame Leviathan", 25)) is None
+    assert C.boss_brief(C.BossContext(615, 0, "Sartharion", 25)) is None
 
 
 def test_unreadable_playbooks_give_no_brief_and_say_so_once(monkeypatch, caplog):

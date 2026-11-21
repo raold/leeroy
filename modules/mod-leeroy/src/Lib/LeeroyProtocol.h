@@ -29,7 +29,7 @@ inline constexpr std::string_view kModuleVersion = "0.1.0";
 // lead: lead_do, a cast member of his group leading it in the open world while he follows (Leeroy.Lead.Enable,
 // LeeroyLead.h); a mind sends it only to a hello that lists it.
 inline constexpr std::string_view kFeatures[] = {"item_links", "playstyle", "raidlead", "mechanics", "regear",
-    "dummy_party_on_arrival", "invites", "lead"};
+    "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest"};
 
 std::int64_t NowUnixMs();
 
