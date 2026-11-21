@@ -61,4 +61,5 @@ def attach_selfies(app) -> SelfieService:
         app.register_background(app.selfie_booth.run_forever)
     if cfg.enabled:
         app.selfie_manual = ManualRender(app, cfg)
+        app.register_background(app.selfie_manual.run_forever)
     return service

@@ -490,6 +490,117 @@ def test_every_live_lease_preempts_and_the_tree_ends_before_the_preload(app, tmp
     run(go())
 
 
+# -- a run a lease preempted resumes by itself ----------------------------------------------------
+
+async def preempted_by(app, lease):
+    """A run the `lease` stopped at its first step, the lease then ended (call setup_backlog
+    first: a run needs something to render)."""
+    m = app.selfie_manual
+    assert (await m.request())["ok"]
+    app.arbiter.hold(lease)
+    await finish(app)
+    assert json.loads(app.store.get_meta(LAST))["outcome"] == "preempted"
+    await app.arbiter.release_live(lease)
+    return m
+
+
+def test_a_run_a_lease_stopped_resumes_once_the_gpu_is_free_and_waits_out_retries(app, caplog):
+    caplog.set_level(logging.INFO, logger="leeroy_mind")
+
+    async def go():
+        m = app.selfie_manual
+        assert (await m.request())["ok"]
+        app.arbiter.hold("offline_raid")  # a raid's start, refused by native moments later
+        await finish(app)
+        assert m.resume_pending
+        await m.tick()
+        assert not m.running  # the raid still holds the GPU
+        await app.arbiter.release_live("offline_raid")
+        await m.tick()
+        assert not m.running  # too soon: the raid's own retry would preempt it again
+        await app.clock.advance(manual_mod.RESUME_AFTER_S)
+        await m.tick()
+        assert m.running and not m.resume_pending
+        await finish(app)
+        rec = json.loads(app.store.get_meta(LAST))
+        assert rec["outcome"] == "done" and not m.resume_pending
+        assert not queued_sets(app.store)
+    setup_backlog(app)
+    run(go())
+    assert any(r.getMessage().startswith("selfies_manual_render_resumed") for r in caplog.records)
+
+
+@pytest.mark.parametrize("stop", ["owner", "gpu_pause", "shutdown"])
+def test_his_stop_free_gpu_and_shutdown_never_resume(app, tmp_path, stop):
+    hanging(tmp_path, app)
+
+    async def go():
+        m = app.selfie_manual
+        assert (await m.request())["ok"]
+        await asyncio.sleep(0)
+        await m.cancel(stop)
+        assert not m.resume_pending
+    setup_backlog(app)
+    run(go())
+
+
+def test_a_pause_or_an_empty_backlog_drops_a_pending_resume(app):
+    async def go():
+        m = await preempted_by(app, "voice_gpu")
+        assert m.resume_pending
+        app.arbiter.paused = True
+        await app.clock.advance(manual_mod.RESUME_AFTER_S)
+        await m.tick()
+        assert not m.running and not m.resume_pending  # he took the GPU for himself
+    setup_backlog(app)
+    run(go())
+
+
+def test_his_stop_with_nothing_running_cancels_a_pending_resume(app):
+    async def go():
+        m = await preempted_by(app, "voice_gpu")
+        answer = await m.stop_now()
+        assert answer["ok"] and not m.resume_pending
+        await app.clock.advance(manual_mod.RESUME_AFTER_S)
+        await m.tick()
+        assert not m.running
+    setup_backlog(app)
+    run(go())
+
+
+def test_resumes_are_capped_a_day(app):
+    async def go():
+        m = app.selfie_manual
+        for _ in range(manual_mod.MAX_RESUMES):
+            m = await preempted_by(app, "voice_gpu") if not m.resume_pending else m
+            await app.clock.advance(manual_mod.RESUME_AFTER_S)
+            await m.tick()
+            assert m.running
+            app.arbiter.hold("voice_gpu")
+            await finish(app)
+            await app.arbiter.release_live("voice_gpu")
+        await app.clock.advance(manual_mod.RESUME_AFTER_S)
+        assert not m.resume_pending
+        await m.tick()
+        assert not m.running
+    setup_backlog(app)
+    run(go())
+
+
+def test_a_resume_left_from_yesterday_is_dropped(app):
+    async def go():
+        m = await preempted_by(app, "voice_gpu")
+        await app.clock.advance(86400, step=3600)
+        await m.tick()
+        assert not m.running and not m.resume_pending
+    setup_backlog(app)
+    run(go())
+
+
+def test_the_resume_loop_is_attached_with_selfies_on(app):
+    assert app.selfie_manual.run_forever in app._background
+
+
 def test_a_lease_arriving_after_the_request_never_starts_the_worker(app):
     async def go():
         assert (await app.selfie_manual.request())["ok"]

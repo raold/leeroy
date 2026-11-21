@@ -32,8 +32,16 @@ it runs no night is due (NightScheduler.image_work), the booth does not start, a
 borrow is busy and the server lease stays released (its end ticks that lease again). A cancel
 path never calls the arbiter: hand_over holds its lock while it awaits the preempt.
 
+Resuming (2026-11-21): a run a lease preempted (his login, the Discord desk, an offline raid's
+start, the voice service, another job) resumes by itself, the same day, through request() and
+its admission, once RESUME_AFTER_S have passed since it stopped and nothing holds the GPU;
+run_forever checks every RESUME_TICK_S. Sets already ready stay ready: a resumed run renders
+what is still queued. His Stop, Free GPU and a shutdown never resume, nor does a pause or an
+empty backlog met while waiting; at most MAX_RESUMES a local day.
+
 Logs: selfies_manual_render_started total= kinds=, selfies_manual_render_done done= failed= held=
-seconds= outcome= by=; codes, ids and counts only, never a prompt, a scene or a name."""
+seconds= outcome= by=, selfies_manual_render_resumed tries=, selfies_manual_resume_dropped
+reason=; codes, ids and counts only, never a prompt, a scene or a name."""
 import asyncio
 import json
 import logging
@@ -68,6 +76,11 @@ MEASURED = 10  # the newest records an estimate reads
 MIN_IMAGE_S = 1.0  # no SDXL image comes back faster: a pass measuring less only failed fast
 ANSWER_HORIZON_S = 1800.0  # owed answers due this soon hold a start whose length is unknown
 UNIT_KEYS = ("ready", "refused", "failed", "skipped", "expired", "held", "measured")
+RESUME_TICK_S = 60.0  # run_forever's check for a run to resume
+RESUME_AFTER_S = 120.0  # a resume waits this long after its preemption: an offline raid's start
+                        # refused as driver_pending tries again after 60 s
+MAX_RESUMES = 6  # automatic resumes a local day; his Render click is never counted
+NO_RESUME = frozenset({"owner", "gpu_pause", "shutdown"})  # stops he asked for, or the app's
 
 OFF = "Selfies are off ([selfies] enabled in mind.toml)."
 IN_GAME = "Log out of WoW first: photos render only while you are out of the game."
@@ -206,6 +219,8 @@ class ManualRender:
         self._count_at = -math.inf
         self._count_warned = False
         self._lease_tasks: set[asyncio.Task] = set()
+        self._resume: dict | None = None  # {"day", "after", "tries"}: a preempted run to resume
+        self._resumes = ("", 0)  # (local day, automatic resumes that day)
         self._last = self._read_last()
         self._prior = app.arbiter._preempt  # the night's cancel_run, or the booth's preempt
         app.arbiter.set_preempt(self.preempt)
@@ -217,6 +232,10 @@ class ManualRender:
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
+
+    @property
+    def resume_pending(self) -> bool:
+        return self._resume is not None
 
     def _read_last(self) -> dict | None:
         try:
@@ -468,6 +487,7 @@ class ManualRender:
         # The presence leases go here, not in the run: a post that lands before its first step
         # keeps its lease, and that step finds it (_fence). Neither release suspends.
         await self._release_presence()
+        self._resume = None  # this run renders what a preempted one left
         self._stopping, self._calls, self._recorded = None, 0, False
         self._run_ctx, self._began = ctx, time.monotonic()
         self._progress = {"done": 0, "total": p.total, "started": ctx.clock.now(),
@@ -488,6 +508,10 @@ class ManualRender:
         after STOP_WAIT_S with `pending`."""
         task = self._task
         if not self.running:
+            if self._resume is not None:
+                self._drop_resume("owner")
+                return {"ok": True, "render": self.snapshot(),
+                        "message": "The stopped render won't resume."}
             return {"ok": False, "error": "not_running", "message": "No selfie render is running.",
                     "render": self.snapshot()}
         self.stop("owner")
@@ -518,6 +542,61 @@ class ManualRender:
         if self._prior is not None:
             await self._prior()
         await self.cancel(self._reason(self.app.arbiter.holders))
+
+    # -- resuming ---------------------------------------------------------------------------------
+
+    def _today(self) -> str:
+        return self.app.clock.local().date().isoformat()
+
+    def _drop_resume(self, reason: str) -> None:
+        if self._resume is not None:
+            self._resume = None
+            log("selfies_manual_resume_dropped", reason=reason)
+
+    def _want_resume(self, rec: dict) -> None:
+        """After a run ends: a lease's preemption is resumed later (tick); anything else ends any
+        resume. The day's count of automatic resumes caps it."""
+        if rec.get("outcome") != "preempted" or rec.get("by") in NO_RESUME or self._stopping in NO_RESUME:
+            self._resume = None
+            return
+        day = self._today()
+        tries = self._resumes[1] if self._resumes[0] == day else 0
+        if tries >= MAX_RESUMES:
+            self._drop_resume("capped")
+            return
+        self._resume = {"day": day, "after": self.app.clock.now() + RESUME_AFTER_S}
+
+    async def tick(self) -> None:
+        """Resume a preempted run when it is due and admission allows it (request() checks it
+        all again); a pause, an empty backlog or a new day drops it, any other refusal waits."""
+        resume = self._resume
+        if resume is None or self.running or self.app.clock.now() < resume["after"]:
+            return
+        day = self._today()
+        if resume["day"] != day:
+            self._drop_resume("day")
+            return
+        found = self.problem()
+        if found is not None:
+            if found[0] in ("gpu_paused", "off"):
+                self._drop_resume(found[0])
+            return
+        tries = (self._resumes[1] if self._resumes[0] == day else 0) + 1
+        answer = await self.request()
+        if answer.get("ok"):
+            self._resumes = (day, tries)
+            log("selfies_manual_render_resumed", tries=tries)
+        elif answer.get("error") == "nothing":
+            self._drop_resume("nothing")
+
+    async def run_forever(self) -> None:
+        """The app's background loop for resuming (registered with selfies on)."""
+        while True:
+            try:
+                await self.tick()
+            except Exception as e:
+                log("selfies_manual_resume_failed", level=logging.WARNING, error=type(e).__name__)
+            await self.app.clock.sleep(RESUME_TICK_S)
 
     async def close(self) -> None:
         """The app's shutdown drain: the run ends with its worker tree, and the lease tick."""
@@ -658,6 +737,7 @@ class ManualRender:
                          self._stopping or "lease", empty, empty, empty)
         if not task.cancelled() and (error := task.exception()) is not None:
             log("selfies_manual_render_failed", level=logging.WARNING, error=type(error).__name__)
+        self._want_resume(self._last or {})
         if self._stopping == "shutdown" or getattr(self.app, "stopping", False):
             return
         server = getattr(self.app, "server", None)

@@ -38,6 +38,13 @@ def valid(level) -> bool:
     return type(level) is int and 1 <= level <= 5
 
 
+# The top swim level is never photographed from behind: its varied look trades views with a
+# casual or going-out one (restyle_looks). 2026-11-21: level 5 from behind scored 1.0 on every
+# seed, and a slot refused three times refuses its whole set.
+BACK_SAFE_MAX = 4
+TRADE_WITH = ("casual", "going_out")
+
+
 def choices(category: str, level: int) -> tuple[str, ...]:
     return POOLS[category][level - 1] if category in POOLS and valid(level) else ()
 
@@ -83,6 +90,33 @@ def restyle_look(p, look, level, seed):
         return look
     updated = replace(look, outfit=choice)
     return look if screen(p, updated) else updated
+
+
+def restyle_looks(p, looks, level, seed):
+    """A varied set's looks (None for a slot of her ordinary photo), each restyled as
+    restyle_look does with seed "<seed>:<slot>". A swim look above BACK_SAFE_MAX with a back
+    view trades view and framing with a casual or going-out look seen from the front or side,
+    when both still pass the screens; with no such trade it keeps its view at BACK_SAFE_MAX.
+    The set keeps one of each view, and a set restyled once comes back unchanged."""
+    from .kind import BACK_VIEWS
+    from .varied import screen
+    out = [None if x is None else restyle_look(p, x, level, f"{seed}:{i}")
+           for i, x in enumerate(looks)]
+    if not valid(level) or level <= BACK_SAFE_MAX:
+        return tuple(out)
+    for i, x in enumerate(out):
+        if x is None or x.category != "swim" or x.view not in BACK_VIEWS or x.outfit not in choices("swim", level):
+            continue
+        for j, y in enumerate(out):
+            if y is None or y.category not in TRADE_WITH or y.view in BACK_VIEWS:
+                continue
+            front, back = replace(x, view=y.view, framing=y.framing), replace(y, view=x.view, framing=x.framing)
+            if not screen(p, front) and not screen(p, back):
+                out[i], out[j] = front, back
+                break
+        else:
+            out[i] = restyle_look(p, x, BACK_SAFE_MAX, f"{seed}:{i}")
+    return tuple(out)
 
 
 def profile(p, level, seed, *, kind_style: str):
