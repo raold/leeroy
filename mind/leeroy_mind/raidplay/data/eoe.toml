@@ -1,0 +1,400 @@
+# Eye of Eternity playbooks. Spell ids, timers and phases come from this server's boss script (script_dir),
+# Spell.dbc and the world database's spelldifficulty_dbc; the explanations are our own words. Stock playerbots
+# has an Eye of Eternity strategy (playerbots_dir, `wotlk-eoe`): fixed spots in phase 1, targets in phase 2 and
+# drake abilities in phase 3. Phase 3 is fought on drakes (vehicles), which the native responder never moves.
+map = 616
+key = "eoe"
+difficulties = ["10", "25"]
+script_dir = "src/server/scripts/Northrend/Nexus/EyeOfEternity"
+playerbots_dir = "src/Ai/Raid/EoE"
+
+# Eye of Eternity: Malygos (map 616, boss index 0). Spell ids, timers and phases come from this server's
+# boss_malygos.cpp, eye_of_eternity.h and instance_eye_of_eternity.cpp, Spell.dbc, spell_cone and the
+# core's SpellInfoCorrections; the explanations are our own words. Only three spells have spell
+# difficulty rows (spelldifficulty_dbc: Arcane Breath 56272/60072, Arcane Storm 61693/61694, the
+# phase-3 Surge of Power 57407/60936); every other spell is the same id on 10 and 25.
+#
+# Stock playerbots ("wotlk-eoe", src/Ai/Raid/EoE) judges the phase per bot: 3 while it rides a Wyrmrest
+# Skytalon, else 1 above 50 percent and 2 at or below it.
+# - Phase 1 ("malygos position", ACTION_MOVE, MOVEMENT_COMBAT, not forced): the main tank goes to a fixed
+#   spot 36 yards north of the centre (757, 1337); everyone else but hunters gathers within 15 yards of
+#   the centre (755, 1301), but stops gathering them while a Power Spark is alive. "malygos target" points every
+#   non-healer at Malygos (its spark targeting and the death grip pull are commented out). MalygosMultiplier
+#   switches off follow, damage assist, ranged target dropping and assist for tanks other than the main.
+# - Phase 2: "malygos target" points ranged damage dealers at a Scion and every other non-healer at a
+#   Nexus Lord; the multiplier switches off damage assist, flee and tank assist onto a Scion. Nobody rides
+#   a disc or uses a bubble.
+# - Phase 3: every movement action but "eoe fly drake" is switched off. That keeps a bot's drake in a ring
+#   3 yards round its master's drake, only while the master rides one (its boss-distance branch is dead
+#   code, `boss && false`). "eoe drake attack" sorts the group by GUID: the first five (eleven on 25-man),
+#   whatever their role, Revivify their own drake and Life Burst at five combo points; the rest Flame Spike
+#   and Engulf in Flames at two. It never casts Flame Shield or Blazing Speed.
+# - The "power spark" trigger is registered but no strategy uses it.
+# Phase 3 is fought on drakes: bots on a vehicle are outside the native responder, so none of its
+# mechanics are answered by moving bodies (area = "none"). Vortex also seats every player on a vehicle.
+
+[[boss]]
+index = 0
+name = "Malygos"
+slug = "malygos"
+creatures = [28859, 31734]
+script = "boss_malygos.cpp"
+enrage = 600
+# The last phase is a vehicle fight (melee ride drakes) and in phase 2 he cannot be attacked at all.
+melee_behind = false
+no_behind_since = 2
+call = "malygos: kill sparks, bubbles on deep breath, shield surges"
+phase = [
+  { id = "platform", name = "Phase 1: on the platform" },
+  { id = "discs", name = "Phase 2: the disc riders", hp_below = 50 },
+  { id = "drakes", name = "Phase 3: on the drakes" },
+]
+# Phase 2 starts at 50 percent (DamageTaken, never during a Vortex): he flies to the centre, rises, and
+# 22.5 s later moves out to his circle and sends the disc riders; he cannot be attacked until phase 3.
+# Phase 3 starts when every Nexus Lord and Scion is dead (checked every 3 s), not at a health mark.
+
+[[boss.mechanic]]
+id = "eoe.malygos.arcane_breath"
+name = "Arcane Breath"
+kind = "move_out_cone"
+phase = "platform"
+roles = ["healer", "melee", "ranged"]
+spells = { "10" = [56272], "25" = [60072] }
+hits = { "10" = [56272, 56279], "25" = [60072, 61079] }
+handled_by = "partial"
+playerbots = ["malygos position"]
+handled_note = "stock holds the main tank at a fixed spot north of the centre and gathers everyone else but hunters at the centre, behind him; nobody steps out of his front as he turns"
+explain = "He breathes arcane in a cone at his tank, and five seconds later each player it hit bursts on everyone within ten yards; only the tank faces him, and the tank stands alone."
+check = "eoe.malygos.check_avoid"
+radius = 40
+angle = 60
+cast = 1
+duration = 1
+first = 9
+every = 12
+respond_roles = ["healer", "melee", "ranged"]
+# 56272 (1 s cast at his victim): a 60 degree cone (spell_cone 60), 40 yards, that also leaves a 5 s aura
+# whose one tick casts 56279 (61079 on 25-man) from the player hit onto allies within 10 yards. First 9-12 s
+# after he lands, then every 12-15 s, held while a Vortex runs. Answered at the cast start; the cone itself
+# lands at the cast's end, so the hazard is held 1 s past it rather than the aura's 5 s.
+
+[[boss.mechanic]]
+id = "eoe.malygos.vortex"
+name = "Vortex"
+kind = "raid_cooldowns"
+phase = "platform"
+roles = ["healer"]
+spells = [56237, 55873, 56105]
+hits = [56256]
+handled_by = "none"
+explain = "Every minute or so he lifts the whole raid into a vortex for ten seconds, hurting everyone and breaking casts each second; healers top everyone up first and use instant heals inside."
+check = "none"
+duration = 10
+first = 30
+# He flies up over the centre and casts 56237, 55873 (10 s) and 56105, whose script makes every living
+# player cast 55853 on a Vortex trigger (30090): a control-vehicle aura, so each player rides a vortex
+# vehicle for 10 s, and its periodic 56256 deals 2,000 and interrupts the player's cast every second.
+# When 55873 ends, 73040 teleports everyone down and he lands at the centre. First 30 s after the fight
+# starts, then 60 s after each landing (about 75 s apart); other timers are delayed 25 s. Players on the
+# vortex are on a vehicle: nothing to move.
+
+[[boss.mechanic]]
+id = "eoe.malygos.power_spark"
+name = "Power Spark"
+kind = "switch_adds"
+phase = "platform"
+roles = ["ranged"]
+spells = []
+adds = [30084, 32187]
+handled_by = "none"
+explain = "Power Sparks drift from the portals toward him and, if one reaches him, raise his damage by half for ten seconds; ranged kill every spark well before it gets there."
+check = "none"
+first = 10
+every = 20
+# Summoned (no spell) at one of the four portals 10-15 s in, then every 20-30 s; it moves toward him every
+# 2 s and stops while a Vortex runs. Within 12 yards (3D) of him it casts 56152 on him (+50 percent
+# damage done, 10 s; removed if it lands during a Vortex) and despawns. Nobody in stock kills it.
+
+[[boss.mechanic]]
+id = "eoe.malygos.power_spark_pool"
+name = "Power Spark (on the floor)"
+kind = "stack"
+phase = "platform"
+roles = ["melee", "ranged"]
+spells = [55852]
+hits = [55849]
+handled_by = "none"
+explain = "A spark that dies sinks to the floor and for a minute gives everyone within eight yards half again as much damage; kill sparks where the raid stands and fight from inside the glow."
+check = "none"
+radius = 8
+duration = 60
+area = "none"
+# A killed spark becomes unattackable, drops to the floor and casts 55852 on itself (60 s), which every
+# second gives the players within 8 yards 55849 (+50 percent damage done, 1.5 s). Left to stock: it
+# gathers everyone but hunters at the centre and its main tank at a fixed spot, and the pool's ticks run
+# on into phase 2; binding bodies to wherever a spark died would fight both. It is not a damaging aura,
+# so the hazard scan does not push anyone out of it.
+
+[[boss.mechanic]]
+id = "eoe.malygos.arcane_storm"
+name = "Arcane Storm"
+kind = "raid_cooldowns"
+roles = ["healer"]
+spells = { "10" = [61693], "25" = [61694] }
+handled_by = "none"
+explain = "Every ten to fifteen seconds, in all three phases, Arcane Storm strikes five random players, twelve on 25-man; healers keep everyone topped up."
+check = "none"
+targets = { "10" = 5, "25" = 12 }
+first = 2
+every = 10
+# Instant (triggered), the target cap set by the script (5 or 12). First 2-5 s into phase 1, 12-15 s into
+# phases 2 and 3, then every 10-15 s; about 9,400-10,600 arcane on 10-man, 11,800-13,200 on 25-man.
+
+[[boss.mechanic]]
+id = "eoe.malygos.nexus_lords"
+name = "Nexus Lord"
+kind = "switch_adds"
+phase = "discs"
+roles = ["tank", "melee"]
+spells = []
+adds = [30245, 31750]
+handled_by = "playerbots"
+playerbots = ["malygos target"]
+explain = "When he takes to the air, two Nexus Lords, four on 25-man, ride discs down to the platform; tanks pick them up and melee kill them."
+check = "none"
+targets = { "10" = 2, "25" = 4 }
+# Each lord's disc sinks to the platform, then the lord attacks the nearest player (Arcane Shock 57058 /
+# 60073 on 25-man, a 5-yard hit, every 10-15 s). Stock sends every non-healer that is not a ranged damage
+# dealer, tanks included, at a lord.
+
+[[boss.mechanic]]
+id = "eoe.malygos.scions"
+name = "Scion of Eternity"
+kind = "switch_adds"
+phase = "discs"
+roles = ["ranged"]
+spells = []
+adds = [30249, 31751]
+handled_by = "playerbots"
+playerbots = ["malygos target"]
+explain = "Four Scions of Eternity, eight on 25-man, circle high above on discs; ranged shoot them down, and the last phase starts only when every Scion and Nexus Lord is dead."
+check = "none"
+targets = { "10" = 4, "25" = 8 }
+# They circle 30 yards from the centre, 20 or more yards above it, and every 5-8 s (first 20-25 s) cast
+# Arcane Barrage (56397) at a random player who is not on a vehicle. On this core that spell's only effect
+# is a script effect that no script or core case handles, so it lands nothing and is not listed as a hit.
+
+[[boss.mechanic]]
+id = "eoe.malygos.haste"
+name = "Haste"
+kind = "dispel"
+phase = "discs"
+roles = ["melee", "ranged"]
+spells = [57060]
+handled_by = "partial"
+playerbots = ["purge", "spellsteal"]
+handled_note = "a shaman's Purge or a mage's Spellsteal takes it off the bot's own current target only, and stock points its mages at the Scions, not the Lords"
+explain = "Nexus Lords cast Haste on themselves, doubling their attack and run speed for fifteen seconds; a shaman purges it or a mage steals it."
+check = "none"
+duration = 15
+first = 8
+every = 20
+# 57060 is a magic buff (dispel type 1): +100 percent melee haste, +100 percent run speed and the disc's
+# speed (SpellInfoCorrections). First 8-14 s after the lord engages, then every 20-30 s.
+
+[[boss.mechanic]]
+id = "eoe.malygos.arcane_bomb"
+name = "Arcane Bomb"
+kind = "avoid_ground"
+phase = "discs"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [56430]
+hits = [56431]
+handled_by = "none"
+explain = "Every fifteen seconds he lobs an Arcane Bomb onto the platform that blasts and throws back everyone within ten yards; step away from where it falls, then use the bubble it leaves."
+check = "eoe.malygos.check_avoid"
+radius = 10
+duration = 5
+first = 8
+every = 15
+area = "dest"
+# He casts 56430 (triggered) at a point 5-30 yards from the centre; the core makes it a missile (speed 30,
+# 2-4 s from his circle in the air) that summons an Arcane Overload (30282) there, which at once casts
+# 56431: about 4,700-5,300 arcane and a knockback within 10 yards. Answered at the
+# cast, round its destination, held 5 s to cover the flight. A player riding a disc is immune to 56431.
+# First 8 s after he moves out to his circle, then every 15 s.
+
+[[boss.mechanic]]
+id = "eoe.malygos.deep_breath"
+name = "Surge of Power (Deep Breath)"
+kind = "stack"
+phase = "discs"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [56505]
+hits = [56548]
+handled_by = "none"
+explain = "When he takes a deep breath the whole platform takes five seconds of Surge of Power; everyone gets inside an Arcane Overload bubble, which halves it, or rides a free disc, which blocks it."
+check = "none"
+radius = 12
+cast = 3
+duration = 5
+first = 55
+every = 65
+area = "none"
+# 55 s after he moves out to his circle, then every 65 s: he flies near the centre, warns, and 1.5 s
+# later begins the 3 s cast of 56505 on a Surge of Power (30334) at the centre; its 5 s aura fires 56548
+# every second, 5,000 to everyone in the room. Each Arcane Overload gives the players within 12 yards
+# 56438 (-50 percent magic damage taken) every second for its 45 s; the bubble shrinks on screen (56435)
+# but its 12-yard reach does not (the core's radius ignores scale). The cast names only the room's centre,
+# not a bubble, and up to three bubbles stand at once: the responder leaves it, since gathering bodies
+# on a new bubble would put them in its bomb's blast.
+
+[[boss.mechanic]]
+id = "eoe.malygos.hover_disc"
+name = "Hover Disk"
+kind = "use_object"
+phase = "discs"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [61421]
+handled_by = "none"
+explain = "When a Scion or Nexus Lord dies its disc sinks to the platform and anyone may ride it; a rider is immune to the Deep Breath and to the bomb blasts."
+check = "none"
+# A disc whose rider died lands, turns friendly and selectable; its spellclick casts Ride Vehicle
+# (61421). A boarding player is immune to 56431 and 56548 until he leaves it, and Scions never aim Arcane
+# Barrage at a player on a vehicle. Stock never boards one.
+
+[[boss.mechanic]]
+id = "eoe.malygos.drakes"
+name = "Wyrmrest Skytalon"
+kind = "use_object"
+phase = "drakes"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [59099, 56070]
+handled_by = "partial"
+playerbots = ["eoe fly drake"]
+handled_note = "the encounter seats every player on a drake; stock flies a bot's drake only to keep a ring three yards round its master's drake, and not at all when the master rides none"
+explain = "When the last disc rider dies the platform shatters and everyone lands on a red drake; from then on you fly it and fight with its abilities."
+check = "none"
+# 59099 (cast by a trigger at the centre) breaks the platform and throws everyone off; each living player
+# casts 56070, which summons a Wyrmrest Skytalon (30161, 31752 on 25-man) below him and seats him 2 s
+# later (56072, then 56071). Its bar: Flame Spike, Engulf in Flames, Revivify, Life Burst, Flame Shield,
+# Blazing Speed (creature_template_spell).
+
+[[boss.mechanic]]
+id = "eoe.malygos.drake_damage"
+name = "Flame Spike and Engulf in Flames"
+kind = "use_object"
+phase = "drakes"
+roles = ["melee", "ranged"]
+spells = [56091, 56092]
+handled_by = "partial"
+playerbots = ["eoe drake attack"]
+handled_note = "stock picks drake jobs by GUID order, not role: the first five members (eleven on 25-man) heal and the rest attack; none of them flies into range"
+explain = "Damage riders build combo points with Flame Spike and spend two or more on Engulf in Flames; both reach sixty yards, so sit past his thirty-yard pulse but within sixty."
+check = "none"
+range = 60
+# 56091: 60 yards, about 940-1,060 fire and one combo point. 56092: 60 yards, a fire damage over time whose
+# length grows with the combo points spent.
+
+[[boss.mechanic]]
+id = "eoe.malygos.drake_healing"
+name = "Revivify and Life Burst"
+kind = "heal_target"
+phase = "drakes"
+roles = ["healer"]
+spells = [57090, 57143]
+handled_by = "partial"
+playerbots = ["eoe drake attack"]
+handled_note = "stock's healer riders are the first five members by GUID (eleven on 25-man), whatever their role, and they Revivify only their own drake"
+explain = "Healer riders keep Revivify rolling on hurt drakes, which builds combo points, and spend five on Life Burst, a heal for every drake within sixty yards."
+check = "none"
+# 57090: a stacking heal over time (up to 5) on a friendly drake within 60 yards plus a combo point. 57143
+# as the core corrects it: a heal on allies within 60 yards that grows with the combo points spent.
+
+[[boss.mechanic]]
+id = "eoe.malygos.surge_of_power"
+name = "Surge of Power"
+kind = "use_object"
+phase = "drakes"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = { "10" = [57407], "25" = [60939, 60936] }
+hits = { "10" = [57407], "25" = [60936] }
+handled_by = "none"
+explain = "He fixes his eyes on one drake, three on 25-man, and three seconds later surges it with heavy arcane for three seconds; each warned rider presses Flame Shield at once."
+check = "none"
+duration = 3
+first = 4
+every = 7
+targets = { "10" = 1, "25" = 3 }
+# 10-man: a random drake (the unit carrying its rider's 56071) and its rider is warned by emote; 3 s later
+# 57407 (triggered, so instant; its script keeps only that drake) deals 12,000 every half second for 3 s.
+# 25-man: 60939 picks three drakes and warns their riders, and 3 s later 60936 hits those three. First
+# 4-7 s into phase 3, then every 7 s. Flame Shield (57108) cuts the drake's damage taken by 80 percent,
+# for one second per combo point spent. Stock never casts it.
+
+[[boss.mechanic]]
+id = "eoe.malygos.static_field"
+name = "Static Field"
+kind = "avoid_ground"
+phase = "drakes"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [57430]
+hits = [57429]
+handled_by = "partial"
+playerbots = ["eoe fly drake"]
+handled_note = "a bot's drake leaves a field only when its master's drake does, since stock flies bot drakes only in a ring round the master's"
+explain = "Every twelve seconds he drops a Static Field where a drake is, a thirty-yard ball that shocks everything inside it each second for twenty seconds; fly out of it at once."
+check = "none"
+radius = 30
+duration = 20
+first = 1
+every = 12
+area = "none"
+respond_roles = []
+# 57430 (triggered) sends a missile (speed 30) to a random target's spot, where 57431 summons a Static
+# Field (30592, unselectable) whose aura 57428 fires 57429 every second: about 9,400-10,600 arcane
+# within 30 yards; it despawns after 20 s. First 1-4 s into phase 3. Every player is on a drake, a vehicle
+# the native responder never moves; the field's 30 yards is also past the hazard scan's 15-yard limit.
+
+[[boss.mechanic]]
+id = "eoe.malygos.arcane_pulse"
+name = "Arcane Pulse"
+kind = "avoid_ground"
+phase = "drakes"
+roles = ["tank", "healer", "melee", "ranged"]
+spells = [57432]
+handled_by = "partial"
+playerbots = ["eoe fly drake"]
+handled_note = "stock keeps bot drakes in a ring round the master's drake and never measures the distance to him (that branch is disabled), so they are clear only when the master is"
+explain = "Throughout the last phase he pulses arcane every three seconds at everything within thirty yards of him; keep your drake farther out than that."
+check = "none"
+radius = 30
+every = 3
+area = "none"
+respond_roles = []
+# 57432, self-cast and triggered every 3 s from the start of phase 3: about 28,300-31,700 arcane within
+# 30 yards of him. Drakes are vehicles: left to their riders.
+
+[[boss.mechanic]]
+id = "eoe.malygos.berserk"
+name = "Berserk"
+kind = "enrage_timer"
+roles = ["melee", "ranged"]
+spells = [64238]
+handled_by = "none"
+explain = "Ten minutes after he lands to open the fight he goes berserk with ten times his damage; the kill has to come before then."
+check = "none"
+first = 600
+# EVENT_BERSERK is set 10 minutes after EVENT_START_FIGHT (when he lands from his opening flight) in event
+# group 0, so neither the Vortex delay nor the phase changes move it. 64238: +900 percent damage done and
+# +150 percent melee haste for 30 minutes.
+
+[[boss.check]]
+id = "eoe.malygos.check_avoid"
+kind = "avoid"
+since = 2
+names = ["Arcane Breath", "Arcane Bomb"]
+roles = ["healer", "melee", "ranged"]
+max_hits = 2
+# Tanks are left out: the breath is aimed at the tank. "Arcane Breath" also names its 10-yard after-burst
+# (56279, 61079), which lands only on those standing by a player it hit.

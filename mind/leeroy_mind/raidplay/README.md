@@ -19,8 +19,13 @@ Nothing here calls a model, opens `mind.db` or talks to the bridge.
 | Icecrown Citadel | 631 | `icc` | 10, 25, 10h, 25h | all 13 indexes (12 bosses plus Sister Svalna, 631:9) |
 | Trial of the Crusader | 649 | `toc` | 10, 25, 10h, 25h | all 5 |
 | Ruby Sanctum | 724 | `rs` | 10, 25, 10h, 25h | all 4 (`BOSS_NAMES` 724:0-2 and Halion at 6; 3-5 are his intro stages) |
+| Ulduar | 603 | `uld` | 10, 25 | all 14 (the Flame Leviathan .. Algalon) |
+| Eye of Eternity | 616 | `eoe` | 10, 25 | Malygos |
 
-Ulduar (603) is not covered yet. A covered raid must have a playbook for every boss index
+Not covered yet: the Obsidian Sanctum (615), the Vault of Archavon (624) and Onyxia's Lair (249). Ulduar has
+no heroic difficulty: each hard mode is a boss phase `hard_mode` named after what starts it, and the mechanics
+only it brings take `phase = "hard_mode"`. Ulduar's client `SpellDifficulty.dbc` rows are empty, so its 25-man ids
+come from the world database's `spelldifficulty_dbc`. A covered raid must have a playbook for every boss index
 `wow.BOSS_NAMES` lists as a fight (`raidplay check` fails otherwise).
 
 ## The data
@@ -75,14 +80,21 @@ Per mechanic (`[[boss.mechanic]]`):
   Its Ruby Sanctum one (`rs`, `src/Ai/Raid/RS`) is scripted to fixed spots: the raid shuttles between two spots
   at each meteor, combustion and consumption are carried to fixed spots and ended there, and its bots get auras
   the encounter does not give (its tanks Pain Suppression, everyone a barrier through each breath, and on heroic
-  through each consumption), so what bots survive there says little about the playbook.
+  through each consumption), so what bots survive there says little about the playbook. Its Ulduar strategy
+  (`uld`) reaches Yogg-Saron and has nothing for Algalon; with the raid cheat on several of its actions teleport
+  bots, strip debuffs or kill adds (Kologarn's eye beams and Crunch Armor, Mimiron's mines and bombs, Hodir's
+  Biting Cold, Yogg-Saron's clouds, Crushers, illusions and portals), said beside each mechanic. Its Eye of
+  Eternity one (`wotlk-eoe`) has fixed spots, targets and the drakes' abilities, no cheats.
 - The responder's reading (`respond.py`, see The responder): `area`, where the danger lies when the spell
   starts, for the kinds it responds to: `avoid_ground` `dest` (default: round the cast's destination, else its
   target), `caster` (round the caster, following it), `line` (a band `radius` either side and `range` long from
   the caster toward its target, else its facing) or `ring` (a ring `range` from the destination, `radius` either
   side; both numbers required for a line or a ring); `move_out_cone` `cone` (with `angle`, the whole cone in
   degrees, as `spell_cone` gives it, else the core's 60); `spread` `group`; `stack` `dest`; `run_out_debuff`
-  `target`; `los` `caster`; and `none` for any of them when the cast start does not say where or the cast has hit
+  `target`; `los` `caster`; `nearest` for a `stack` or `avoid_ground` round whichever live creature of its
+  `anchors` (creature entries, at most 8, required with it) stands nearest each bot within 40 yards, gathering in
+  it or leaving it, and binding the bot whatever phase it is in (Algalon's Black Holes hide a player from Big Bang
+  by phasing it); and `none` for any of them when the cast start does not say where or the cast has hit
   before any hook can run (the responder leaves it). `landing = true` (a `dest` or `ring` area) waits for the cast
   to complete and reads the place then (a random offset from the target). A `partial` mechanic of those kinds
   names `respond_roles`, the roles its `handled_note` says stock leaves (`[]` when moving them would fight stock;
@@ -135,10 +147,16 @@ no handler, no task, no command, and native has no table, so it moves nobody (ex
 (`responder_spells`), `radius`, `range`, `angle` (cones default to 60), `duration` (the playbook's hazard time,
 else native takes the spell's own, a spread's ending with its cast) and `landing`. It is bounded to native's
 limits (64 rules, 16 spells, 100 yards, 120 seconds), and each table fits one bridge line many times over. Today
-17 mechanics qualify (54 rules across the 14 covered raid difficulties): Impale (10-man), Void Zone, Meteor,
+43 mechanics qualify (106 rules across the 18 covered raid difficulties): Impale (10-man), Void Zone, Meteor,
 Holy Wrath, Detonate Mana, Coldflame, Death and Decay, Shock Vortex, Fire Bomb, Legion Flame, Infernal
-Eruption, Fel Lightning, Bladestorm, Hellfire, and Halion's Meteor Strike, its burning crater and, on heroic
-25-man, the Living Inferno's Blazing Aura.
+Eruption, Fel Lightning, Bladestorm, Hellfire, Halion's Meteor Strike, its burning crater and, on heroic
+25-man, the Living Inferno's Blazing Aura; in Ulduar 24 (Algalon's Big Bang and the step out after it, Cosmic
+Smash, Vezax's Shadow Crash, Yogg-Saron's Death Rays, XT-002's Searing Light and Gravity Bomb, the council's
+Rune of Death, Overload and Static Disruption, Ignis's Scorch and scorched ground, Razorscale's Devouring Flame
+and Flame Breath, Hodir's icicles, Thorim's charged orbs, Rune Detonation and Sif's Frost Nova and Blizzard,
+Freya's Nature's Fury, Tidal Wave and Unstable Sun Beam, Mimiron's Proximity Mines) and Malygos's Arcane Breath
+and Arcane Bomb. Rules with a `nearest` area go only to a worldserver whose hello also lists
+`mechanics_nearest` (an older one gets the rest: `raidplay_respond_nearest_unsupported`).
 
 `MechanicFeed` sends every covered map and difficulty as one `raid_mechanics` command at each hello from a
 worldserver whose hello lists the `mechanics` feature (an older one gets nothing: `raidplay_respond_unsupported`),
@@ -161,6 +179,16 @@ trail burns; Fire Bomb by its 8-yard impact (the patch it leaves is a ground haz
 ordinary one only (stock dodges the empowered one), where it lands, 12 yards round for its 30 seconds; Legion
 Flame's run-out lasts its 6-second trail, 15 yards from everyone; Infernal Eruption is a ring 15 yards from the
 volcano, 10 either side; Detonate Mana binds every mana user's role.
+
+Ulduar (`data/uld.toml`) and the Eye of Eternity (`data/eoe.toml`): Algalon's Big Bang is answered at its
+8-second cast by gathering every healer and damage dealer within the 6 yards of the nearest Black Hole (a Worm
+Hole below 20 percent), whose phase hides them from it; tanks stay out, since a Big Bang that finds nobody is
+followed by Ascend to the Heavens, and at the landing (64445) all step out again (inside, the hole keeps
+burning and Algalon cannot be reached). Left out on purpose: vehicle fights (the Flame Leviathan, Malygos's
+drakes: native never moves a bot on a vehicle), mechanics with dozens of emitters each ticking its own
+mechanic (XT-002's void zones, Auriaya's pools, Mimiron's hard-mode flames: the hazard scan measures them),
+those stock's forced positioning would undo (Mimiron's Frost Bomb, Rapid Burst, Laser Barrage), and turning or
+moving beams (Lightning Charge, the eye beams, Thorim's Runic Smash lanes).
 
 Ruby Sanctum (`data/rs.toml`): stock's `rs` strategy handles almost everything with fixed spots, so only Halion's
 fire reaches native. Meteor Strike is answered at its cast (74637, which Halion casts at a player as the server-side

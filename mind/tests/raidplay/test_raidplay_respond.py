@@ -82,7 +82,8 @@ def test_every_table_is_bounded_and_fits_one_bridge_line():
     respond.register_command("raid_mechanics", RaidMechanics)
     found = tables(raidplay.load())
     assert set(found) == {(533, 0), (533, 1), (631, 0), (631, 1), (631, 2), (631, 3),
-                          (649, 0), (649, 1), (649, 2), (649, 3), (724, 0), (724, 1), (724, 2), (724, 3)}
+                          (649, 0), (649, 1), (649, 2), (649, 3), (724, 0), (724, 1), (724, 2), (724, 3),
+                          (603, 0), (603, 1), (616, 0), (616, 1)}
     for (map_id, difficulty), rules in found.items():
         assert 0 < len(rules) <= respond.MAX_RULES
         line = encode_command(RaidMechanics("m1", map_id, difficulty, rules), 1)
@@ -91,7 +92,9 @@ def test_every_table_is_bounded_and_fits_one_bridge_line():
         assert wire["type"] == "raid_mechanics" and wire["map"] == map_id and wire["difficulty"] == difficulty
         assert set(wire["mechanics"][0]) == {"id", "kind", "area", "roles", "spells", "radius", "range", "angle",
                                              "duration", "landing"}
-    assert sum(len(rules) for rules in found.values()) == 54  # 17 mechanics over the difficulties they exist in
+        for rule in wire["mechanics"]:                     # entries only for a nearest area, which needs them
+            assert ("entries" in rule) == (rule["area"] == "nearest")
+    assert sum(len(rules) for rules in found.values()) == 106  # 43 mechanics over the difficulties they exist in
 
 
 def test_ruby_sanctum_moves_bodies_out_of_the_fire_only():
@@ -115,9 +118,44 @@ def test_ruby_sanctum_moves_bodies_out_of_the_fire_only():
             assert not m.responder_roles() or not m.responder_spells("25h")
 
 
+def test_algalon_hides_the_raid_in_the_nearest_black_hole_at_big_bang():
+    """Big Bang (an 8 s cast) misses whoever stands in a Black Hole's phase: healers and damage dealers gather in
+    the nearest hole (worm hole below 20%), the tanks stay out so it finds a target, and when it lands (64445)
+    they step out again."""
+    pb = raidplay.load()
+    for difficulty, cast in ((0, 64443), (1, 64584)):
+        by_id = {r.id: r for r in actionable(pb, 603, difficulty)}
+        hide, out = by_id["uld.algalon.big_bang"], by_id["uld.algalon.leave_hole"]
+        assert (hide.kind, hide.area, hide.spells, hide.radius) == ("stack", "nearest", (cast,), 6)
+        assert hide.entries == out.entries == (32953, 34099) and "tank" not in hide.roles
+        assert (out.kind, out.area, out.spells, out.duration) == ("avoid_ground", "nearest", (64445,), 3)
+        assert hide.duration < 1                                   # the gathering ends with the cast
+    assert raidplay.mechanic("uld.algalon.big_bang").anchors == (32953, 34099)
+
+
+def test_a_worldserver_without_nearest_areas_gets_the_tables_without_them():
+    async def go():
+        app = _App()
+        feed = MechanicFeed(app, raidplay.load())
+        await feed.connection(True)
+        await feed.event(_hello(("mechanics",)))
+        await _drain(feed)
+        sent = {r.id for c in app.sent for r in c.mechanics}
+        assert "uld.algalon.cosmic_smash" in sent and "uld.algalon.big_bang" not in sent
+        assert all(r.area != "nearest" for c in app.sent for r in c.mechanics)
+        new = _App()
+        feed = MechanicFeed(new, raidplay.load())
+        await feed.connection(True)
+        await feed.event(_hello(("mechanics", respond.FEATURE_NEAREST)))
+        await _drain(feed)
+        assert "uld.algalon.big_bang" in {r.id for c in new.sent for r in c.mechanics}
+    asyncio.run(go())
+
+
 def test_actionable_answers_nothing_for_an_uncovered_place():
     pb = raidplay.load()
-    assert actionable(pb, 603, 0) == ()        # Ulduar
+    assert actionable(pb, 533, 3) == ()        # Naxxramas has no 25 heroic
+    assert actionable(pb, 603, 2) == ()        # Ulduar has no heroic difficulty
     assert actionable(pb, 533, 2) == ()        # Naxxramas has no heroic
     assert actionable(pb, 631, "1") == ()
 
