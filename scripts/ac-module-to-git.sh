@@ -96,7 +96,9 @@ git -C "$STAGE" merge-base --is-ancestor "$sha" "$remote_head" \
     || die "$sha is not on $remote_head, so the clone could never fast-forward"
 if [ -n "$SUBDIR" ]; then
     [ "$(git -C "$STAGE" cat-file -t "$sha:$SUBDIR" 2>/dev/null)" = tree ] || die "no folder $SUBDIR at $sha"
-    tip="$(cd "$STAGE" && git subtree split --quiet --prefix="$SUBDIR" "$sha")" || die "subtree split failed"
+    # Older Git (2.43, Ubuntu 24.04) splits only a prefix that is on disk, even given a commit.
+    GIT_LFS_SKIP_SMUDGE=1 git -C "$STAGE" checkout --quiet --detach "$sha"
+    tip="$(cd "$STAGE" && git subtree split -q --prefix="$SUBDIR" "$sha")" || die "subtree split failed"
     GIT_LFS_SKIP_SMUDGE=1 git -C "$STAGE" checkout --quiet -B "$branch" "$tip"
     git -C "$STAGE" branch --quiet --unset-upstream "$branch" 2>/dev/null || true
 else
@@ -189,11 +191,12 @@ swapped=1
 log "$MODULE is now a git checkout: $branch at $(git -C "$DIR" rev-parse --short HEAD)"
 if [ -n "$SUBDIR" ]; then
     # The split is deterministic, so a later split of upstream extends this one and the
-    # rebase only replays the local edits, if any.
+    # rebase only replays the local edits, if any. It splits in a temporary worktree of
+    # upstream, where the prefix is on disk as older Git's subtree split wants.
     printf '    %s, no upstream (ac-update.sh skips it). Update with:\n' "split of $SUBDIR from ${sha:0:12}"
-    # shellcheck disable=SC2016  # the $(...) is for the operator's shell, printed as is
-    printf '      cd %q && git fetch origin && git rebase "$(git subtree split --prefix=%q origin/%s)"\n' \
-        "$DIR" "$SUBDIR" "$branch"
+    # shellcheck disable=SC2016  # the $w, $s and $(...) are for the operator's shell, printed as is
+    printf '      cd %q && git fetch origin && w=$(mktemp -d) && GIT_LFS_SKIP_SMUDGE=1 git worktree add --quiet --detach "$w" origin/%s && s=$(cd "$w" && git subtree split -q --prefix=%q HEAD) && git worktree remove --force "$w" && git rebase "$s"\n' \
+        "$DIR" "$branch" "$SUBDIR"
 else
     printf '    tracking %s; ac-update.sh fast-forwards it\n' "$remote_head"
 fi
