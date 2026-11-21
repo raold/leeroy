@@ -1,7 +1,7 @@
-From a8f5d37874ad9972af1e854f06b314708a59c6bf Mon Sep 17 00:00:00 2001
+From 89849476f6d09f16a112997639f146e8c6d003c5 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 31 Oct 2026 13:29:03 -0400
-Subject: [PATCH 09/11] Keep pinned bots from sending canned hello lines
+Subject: [PATCH 09/12] Keep pinned bots from sending canned hello lines
 
 The previous commit silenced the group-leader change lines. Pinned
 bots still said "Hello" after accepting a party invite, when the owner
@@ -94,10 +94,10 @@ index 9b3c5fbf..c77c2f18 100644
                  if (dCount > 20)
                      context->GetValue<uint32>("death count")->Set(0);
 diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
-index 009eb506..b71319da 100644
+index 12a49300..34a5da2b 100644
 --- a/src/Bot/RandomPlayerbotMgr.cpp
 +++ b/src/Bot/RandomPlayerbotMgr.cpp
-@@ -3231,8 +3231,10 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
+@@ -3270,8 +3270,10 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
                  {
                      botAI->SetMaster(player);
                      botAI->ResetStrategies();

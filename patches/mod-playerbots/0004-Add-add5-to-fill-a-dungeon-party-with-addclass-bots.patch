@@ -1,7 +1,7 @@
-From 538264f887e235b039bdb8c82c8eba8a57b58da7 Mon Sep 17 00:00:00 2001
+From 93412e5a21dba99ab8d1f7adcbc2f9bab1965569 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 15:17:27 -0400
-Subject: [PATCH 04/11] Add add5 to fill a dungeon party with addclass bots
+Subject: [PATCH 04/12] Add add5 to fill a dungeon party with addclass bots
 
 ---
  src/Bot/PlayerbotMgr.cpp | 16 ++++++++--------

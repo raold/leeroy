@@ -1,7 +1,7 @@
-From f80bc23632060b667beee66db895d2857bfa5610 Mon Sep 17 00:00:00 2001
+From ac53ff1779b340b9f879aefa4c01747b78e8c710 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 14 Nov 2026 07:15:24 -0500
-Subject: [PATCH 11/11] Let other modules keep bots' follow spots off ground
+Subject: [PATCH 11/12] Let other modules keep bots' follow spots off ground
  hazards
 
 A module may install a PlayerbotHazardFilter. FollowAction then lets it

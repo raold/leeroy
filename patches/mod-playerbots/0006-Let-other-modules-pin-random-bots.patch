@@ -1,7 +1,7 @@
-From ecbfeb6b8b1013e303fc056e8a2bfcbcede03112 Mon Sep 17 00:00:00 2001
+From bafd02fe51b727f3a9baa757698a46ba431515be Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 23:14:14 -0400
-Subject: [PATCH 06/11] Let other modules pin random bots
+Subject: [PATCH 06/12] Let other modules pin random bots
 
 SetPinnedBots keeps chosen random bots online regardless of bot_count and skips randomize, refresh, teleport and revive-teleport for them. Inert until called.
 ---
@@ -10,7 +10,7 @@ SetPinnedBots keeps chosen random bots online regardless of bot_count and skips 
  2 files changed, 145 insertions(+)
 
 diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
-index 427a032f..2ec5e462 100644
+index ef0676ee..aae41629 100644
 --- a/src/Bot/RandomPlayerbotMgr.cpp
 +++ b/src/Bot/RandomPlayerbotMgr.cpp
 @@ -360,6 +360,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
@@ -181,7 +181,7 @@ index 427a032f..2ec5e462 100644
  {
      uint32 bot = player->GetGUID().GetCounter();
 diff --git a/src/Bot/RandomPlayerbotMgr.h b/src/Bot/RandomPlayerbotMgr.h
-index bbe32a04..11041b7e 100644
+index e360a6e4..62633db3 100644
 --- a/src/Bot/RandomPlayerbotMgr.h
 +++ b/src/Bot/RandomPlayerbotMgr.h
 @@ -137,6 +137,11 @@ public:
@@ -196,7 +196,7 @@ index bbe32a04..11041b7e 100644
      void Randomize(Player* bot);
      void Clear(Player* bot);
      void RandomizeFirst(Player* bot);
-@@ -300,6 +305,14 @@ private:
+@@ -304,6 +309,14 @@ private:
      // Written on the world thread, read from map threads.
      std::set<std::pair<uint32, uint32>> _playerZones;
      std::mutex _playerZonesLock;
