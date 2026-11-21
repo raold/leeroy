@@ -9,7 +9,7 @@ CREATE TABLE day_plan (
 CREATE INDEX day_plan_due ON day_plan(status,starts,ends);
 CREATE TABLE day_permit (
   plan INTEGER PRIMARY KEY REFERENCES day_plan(id), begin_id TEXT UNIQUE NOT NULL,
-  token TEXT, boot INTEGER, serial TEXT, guild INTEGER, human INTEGER,
+  token TEXT, boot INTEGER, serial TEXT, guild INTEGER, human INTEGER, process TEXT, epoch TEXT,
   state TEXT NOT NULL, reason TEXT, release_ids TEXT CHECK(json_valid(release_ids)),
   succeeded TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(succeeded)), phase TEXT,
   evidence INTEGER REFERENCES game_event(id));

@@ -37,20 +37,7 @@ def test_plan_never_moves_into_his_group_or_instance():
     assert classify(Duel("duel", 101, 102, day_permit=PERMIT)).reserved_manifest == (101,102)
 
 
-def test_his_pull_preempts_the_block(store):
-    for guid, partner in ((101,102),(102,101)):
-        store.conn.execute("INSERT INTO day_plan(night,member,starts,ends,activity,place,partners,status) "
-                           "VALUES('2026-11-20',?,10,20,'duel_practice','duel_site',?,'planned')",
-                           (guid, f"[{partner}]"))
-    rows = store.conn.execute("SELECT * FROM day_plan ORDER BY id").fetchall()
-    dayrun.preempt_rows(store, rows, "his_group")
-    dayrun.preempt_rows(store, rows, "his_group")
-    assert [tuple(r) for r in store.conn.execute("SELECT status,reason FROM day_plan")] == [
-        ("preempted","his_group"), ("preempted","his_group")]
-    assert store.conn.execute("SELECT count(*) FROM memory").fetchone()[0] == 0
-
-
-def test_plan_block_reaches_card_and_memory(store):
+def test_planned_block_has_no_activity_claim(store):
     from leeroy_mind.awareness.card import card, CardContext
     store.conn.execute("INSERT INTO day_plan(night,member,starts,ends,activity,place,status) "
                        "VALUES('2026-11-20',101,10,20,'fishing','north_pond','planned')")
@@ -83,7 +70,7 @@ class Rehearsal:
         self.day = self.realm.parts["day"]
         self.hello_boot = 1770000000123
         self.released = []
-        self.gate = asyncio.Event()
+
 
     async def connect(self):
         from leeroy_mind.protocol import Hello
@@ -127,7 +114,7 @@ class Rehearsal:
         return next(c for c in self.app.sent if isinstance(c,RealmMove))
 
 
-def test_fishing_visit_then_proved_start_reaches_real_cards_and_one_memory(tmp_path, store, clock):
+def test_plan_block_reaches_card_and_memory(tmp_path, store, clock):
     import asyncio
     from leeroy_mind.awareness.card import CardContext, card
     from leeroy_mind.guild.protocol import Job
@@ -169,6 +156,10 @@ def test_fishing_visit_then_proved_start_reaches_real_cards_and_one_memory(tmp_p
         assert day.openers == (101,) and "went fishing" in day.fact
         assert any(t.owner == 101 and "went fishing" in t.topic for t in game_topics(store.conn, **args, day_plans=True))
         assert not any(t.key.startswith("day:") for t in game_topics(store.conn, **args))
+        from leeroy_mind.godmode.dayrun import seed_valid
+        assert seed_valid(store.conn, day.key, clock.now())
+        rig.day.close(1, "preempted", "string")
+        assert not seed_valid(store.conn, day.key, clock.now())
         assert "north pond" not in card(store.conn, 101, context=CardContext(channel="guild", now=clock.now())).render()
         await rig.realm.close()
 
@@ -176,7 +167,7 @@ def test_fishing_visit_then_proved_start_reaches_real_cards_and_one_memory(tmp_p
 
 
 @pytest.mark.parametrize("higher", ["raid", "offline_raid", "string", "heroic"])
-def test_original_owner_request_waits_for_its_own_seal_once(tmp_path, store, clock, higher):
+def test_his_pull_preempts_the_block(tmp_path, store, clock, higher):
     import asyncio
     from unittest.mock import AsyncMock
     from leeroy_mind.realm.actions import ActionRejected
@@ -208,4 +199,198 @@ def test_original_owner_request_waits_for_its_own_seal_once(tmp_path, store, clo
         assert store.conn.execute("SELECT count(*) FROM memory").fetchone()[0] == 0
         await rig.realm.close()
 
+    asyncio.run(go())
+
+
+def test_real_string_handoff_validates_before_revoking_then_uses_original_job(tmp_path, store, clock):
+    import asyncio
+    from leeroy_mind.godmode import intents
+    from leeroy_mind.godmode.service import Godmode
+    from leeroy_mind.guild.protocol import Job, StringDo
+    from leeroy_mind.protocol import Ack
+
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        move = await rig.begin()
+        app = rig.app
+        app.connected = True
+        app.personas = rig.people
+        app.store.set_meta("human_guid", "1")
+        service = Godmode(app, None)
+        def intent():
+            return intents.create(store, member=101, kind="come_to_me", args={}, human=None, now=clock.now())
+        app.world.human_online = False
+        assert (await service.pull(intent()))["reason"] == "human_offline"
+        assert rig.day.permit(1)["state"] == "open"
+        app.world.human_online = True
+        async def send(cmd, *, preserve_id):
+            assert preserve_id
+            app.sent.append(cmd)
+            if isinstance(cmd, StringDo):
+                service.on_job(Job(0, cmd.id, "string_do", "done", "came", "", (101,), (), 0, 0, 0, 101, 0, 0))
+            return Ack(0, cmd.id, True, "")
+        app.send = send
+        task = asyncio.create_task(service.pull(intent()))
+        await asyncio.sleep(0)
+        assert rig.day.permit(1)["state"] == "revoking"
+        assert not any(isinstance(c, StringDo) for c in app.sent)
+        await app.event(rig.receipt("closed", "string", released=(move.id,), succeeded=()))
+        result = await asyncio.wait_for(task, 1)
+        assert (result["state"], result["reason"]) == ("taken", "came")
+        [original] = [c for c in app.sent if isinstance(c, StringDo)]
+        assert store.conn.execute("SELECT request_id FROM day_handoff").fetchone()[0] == original.id
+        await rig.realm.close()
+
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("block", ["his_group", "combat", "native_instance"])
+def test_real_fences_skip_the_block_without_retry_or_claim(tmp_path, store, clock, block):
+    import asyncio
+    from leeroy_mind.protocol import Ack, Group
+
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        await rig.connect()
+        rig.plan()
+        if block == "his_group":
+            rig.app.world.group = Group(0, 1, False, (1, 101))
+        elif block == "combat":
+            rig.app.raid.phase = lambda now: "combat"
+        else:
+            original = rig.app.send
+            async def send(cmd, **kwargs):
+                ack = await original(cmd, **kwargs)
+                return Ack(0, cmd.id, False, "busy:instance") if isinstance(cmd, RealmMove) else ack
+            rig.app.send = send
+        await rig.tick()
+        if block == "native_instance":
+            await rig.app.event(rig.receipt())
+        for _ in range(4):
+            await rig.tick()
+        moves = [c for c in rig.app.sent if isinstance(c, RealmMove)]
+        assert len(moves) == int(block == "native_instance")
+        assert rig.day.rows(1)[0]["status"] in {"skipped", "preempted"}
+        assert not store.conn.execute("SELECT 1 FROM memory").fetchone()
+        await rig.realm.close()
+
+    asyncio.run(go())
+
+
+def test_skipped_fishing_preserves_the_arrival_without_an_invented_start(tmp_path, store, clock):
+    import asyncio
+    from leeroy_mind.guild.protocol import Job, JobSkip
+    from leeroy_mind.realm.protocol import RealmJob
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        move = await rig.begin()
+        rig.released.append(move.id)
+        await rig.app.event(rig.receipt())
+        await rig.app.event(RealmJob(0, move.id, "realm_move", "done", "", 101, 0))
+        await rig.tick()
+        fishing = next(c for c in rig.app.sent if isinstance(c, BotDo))
+        await rig.app.event(Job(0, fishing.id, "bot_do", "done", "", "", (), (JobSkip(101, "no_bobber"),),
+                                0, 0, 0, 0, 0, 0))
+        await rig.app.event(rig.receipt(released=(move.id, fishing.id)))
+        await rig.tick()
+        assert rig.day.rows(1)[0]["status"] == "skipped"
+        assert [r[0] for r in store.conn.execute("SELECT text FROM memory")] == ["Arrived at north pond."]
+        await rig.realm.close()
+    asyncio.run(go())
+
+
+def test_new_connection_is_cleanup_only_and_new_boot_keeps_unknown_held(tmp_path, store, clock):
+    import asyncio
+    from leeroy_mind.protocol import Hello
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        move = await rig.begin()
+        await rig.app.connection(False)
+        await rig.app.connection(True)
+        await rig.app.event(Hello(1, "test", "1", 21, 1, (), rig.hello_boot + 1))
+        await rig.tick()
+        assert rig.day.permit(1)["state"] == "unresolved"
+        assert rig.realm.action_store.get(move.id).state not in {"completed", "not_sent"}
+        await rig.app.event(rig.receipt("closed", "context_changed", released=(move.id,), succeeded=()))
+        await rig.tick()
+        assert rig.realm.action_store.holds()
+        assert sum(isinstance(c, RealmMove) for c in rig.app.sent) == 1
+        assert not store.conn.execute("SELECT 1 FROM memory").fetchone()
+        await rig.realm.close()
+    asyncio.run(go())
+
+
+def test_same_boot_mind_restart_reconciles_original_steps_without_replaying_the_waiter(tmp_path, store, clock):
+    import asyncio
+    from unittest.mock import AsyncMock
+    async def go():
+        old = Rehearsal(tmp_path, store, clock)
+        move = await old.begin()
+        send = AsyncMock()
+        request = asyncio.create_task(old.day.handoff("old-request", [101], "raid", lambda: True, send))
+        await asyncio.sleep(0)
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        await old.realm.close()
+        new = Rehearsal(tmp_path, store, clock)
+        await new.connect()
+        assert not new.realm.bodies.claims_for("day:1")
+        assert new.realm.action_store.holds()
+        resumed = asyncio.create_task(new.day.handoff("new-request", [101], "raid", lambda: True, send))
+        await asyncio.sleep(0)
+        await new.app.event(new.receipt("closed", "raid", released=(move.id,), succeeded=()))
+        await asyncio.wait_for(resumed, 1)
+        send.assert_awaited_once()
+        assert not new.realm.action_store.holds()
+        assert all(not isinstance(c, (RealmMove, RpgStatus, Duel, BotDo)) for c in new.app.sent)
+        assert dict(store.conn.execute("SELECT request_id,state FROM day_handoff")) == {
+            "old-request": "expired", "new-request": "sent"}
+        await new.realm.close()
+    asyncio.run(go())
+
+
+def test_seal_while_writer_is_inflight_waits_for_actual_settlement(tmp_path, store, clock):
+    import asyncio
+    from unittest.mock import AsyncMock
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        gate = asyncio.Event()
+        original = rig.app.send
+        async def delayed(cmd, **kw):
+            result = await original(cmd, **kw)
+            if isinstance(cmd, RealmMove):
+                await gate.wait()
+            return result
+        rig.app.send = delayed
+        move = await rig.begin()
+        assert rig.realm.action_store.get(move.id).transport_state == "inflight"
+        send = AsyncMock()
+        request = asyncio.create_task(rig.day.handoff("pull", [101], "string", lambda: True, send))
+        await asyncio.sleep(0)
+        await rig.app.event(rig.receipt("closed", "string", released=(move.id,), succeeded=()))
+        assert rig.realm.action_store.holds()
+        send.assert_not_awaited()
+        gate.set()
+        await rig.tick()
+        await rig.tick()
+        await asyncio.wait_for(request, 1)
+        send.assert_awaited_once()
+        assert not rig.realm.action_store.holds()
+        await rig.realm.close()
+    asyncio.run(go())
+
+
+def test_twenty_away_includes_opening_and_unresolved_permits(tmp_path, store, clock):
+    import asyncio
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        await rig.connect()
+        for guid in range(101, 122):
+            rig.plan(members=(guid,))
+        await rig.tick()
+        assert store.conn.execute("SELECT count(*) FROM day_permit").fetchone()[0] == 20
+        assert len([cmd for cmd in rig.app.sent if isinstance(cmd, dayrun.DayBegin)]) == 20
+        assert store.conn.execute("SELECT reason FROM day_plan WHERE member=121").fetchone()[0] == "away_cap"
+        await rig.realm.close()
     asyncio.run(go())

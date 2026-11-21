@@ -70,6 +70,7 @@ UNIT_CALLS: dict[str, dict[str, float]] = {
     "confide": {"json": 1.1},
     "arc": {"json": 1.5},                     # a read of what he said to her (arc/night.py)
     "life": {"json": 2},                      # generation and its invariant judge
+    "day_plans": {"json": 1},
     "wowlife": {"json": 2},                   # generation and its invariant judge
     "follow": {"json": 2},                    # follow-up generation and its grounding judge
     "lexicon": {"json": 1},                   # one proposal per eligible laughed-at moment
@@ -111,7 +112,7 @@ MEASURE_MIN = 3     # ...once there are 3 of them
 COUNTERS: dict[str, Callable[["NightContext"], int]] = {}
 # Optional extensions must be admitted on the particular runner before budgeting.
 # Core counters may belong to substages, so their historical counting is unchanged.
-EXTENSION_STAGES = frozenset({"coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards", "world_personas", "world_photos", "world_selfies", "talk_coach", "bandit", "meme_plan", "meme_render", "turing"})
+EXTENSION_STAGES = frozenset({"day_plans", "coach", "realm", "photo", "selfies", "scenes", "snaps", "claims", "newcomers", "signals", "rewards", "world_personas", "world_photos", "world_selfies", "talk_coach", "bandit", "meme_plan", "meme_render", "turing"})
 
 
 def register_counter(stage: str, fn: Callable[["NightContext"], int]) -> None:
@@ -463,6 +464,7 @@ register_counter("reflect", _reflect)
 register_counter("reflect_small", _reflect_small)
 register_counter("encounters", _scenes)
 register_counter("notes", _notes)
+register_counter("day_plans", lambda ctx: len(ctx.members()) if ctx.settings.day_plans else 0)
 register_counter("wowlife", _wow_lines)
 register_counter("stories", _stories)
 register_counter("recap", _recap)

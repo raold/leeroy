@@ -9,6 +9,7 @@
 #include "Realm/RealmPorts.h"
 #include "Realm/DayPlans.h"
 #include "LeeroyGuildAddPolicy.h"
+#include "LeeroyDayPlan.h"
 
 #include "AiFactory.h"
 #include "Chat.h"
@@ -270,6 +271,8 @@ std::vector<std::string> Fill(Player* human, uint32 size, PendingAdd const* resu
         return {why};
     }
 
+    if (ownerAsk)
+        pendingAdd.reset(); // Only an accepted owner ask supersedes an earlier unexecuted request.
     Group* group = human->GetGroup();
     std::vector<GuildAddMember> connected;
     uint32 members = 1;
@@ -313,7 +316,7 @@ std::vector<std::string> Fill(Player* human, uint32 size, PendingAdd const* resu
                     if (!bot->FindMap() && !bot->HasPendingBind() && bot->GetInstanceId() == 0)
                         body.elsewhere = false;
                 }
-                if (body.inCombat && Realm::DayDueling(holder, bot)) body.inCombat = false;
+                if (body.inCombat && Realm::DayDueling(token, holder, bot)) body.inCombat = false;
             }
             dayMembers.emplace(guid, std::move(token));
         }
@@ -497,7 +500,6 @@ public:
         if (!size)
             return true;
         StringWaiver const waiver;   // his own ask: a member he pulled to him is his to add
-        pendingAdd.reset(); // His newest command supersedes an earlier unexecuted request.
         for (auto const& message : Fill(invoker, size, nullptr, true))
             handler.PSendSysMessage("{}", message);
         return false; // Never playerbots' addclass bots for him.
@@ -554,8 +556,8 @@ void TickGuildAddHandoff()
     std::string error;
     auto roster = GuildAddRosterInForce(followRoster, postedRoster, NowUnixMs());
     auto& bridge = LeeroyModule::Instance().Bridge();
-    if (!GuildEnabled() || !Realm::Config().dayPlans || !bridge.Connected()
-        || bridge.ConnectionSerial() != request.bridgeSerial || realm.Epoch() != request.epoch || *identity != request.human
+    // A disconnected mind is unnecessary for this native player request. A replacement serial expires it.
+    if (!GuildEnabled() || !Realm::Config().dayPlans || bridge.ConnectionSerial() != request.bridgeSerial || realm.Epoch() != request.epoch || *identity != request.human
         || realm.BodyGeneration(HumanGuid()) != request.humanGeneration || GroupMembers(human) != request.group
         || !human->GetMap() || human->GetMap()->GetDifficulty() != request.difficulty
         || roster.preferred != request.roster.preferred || roster.bench != request.roster.bench
@@ -569,11 +571,10 @@ void TickGuildAddHandoff()
     }
     if (error.empty())
     {
-        if (NowUnixMs() >= request.deadline || std::any_of(request.permits.begin(), request.permits.end(),
-                [](auto const& token) { return Realm::DayUnresolved(token); }))
+        auto progress = Realm::DayGuildAddProgress(request.permits, request.deadline);
+        if (progress == Realm::DayHandoff::Unresolved)
             error = "Could not confirm release of the day activity";
-        else if (!std::all_of(request.permits.begin(), request.permits.end(),
-                [](auto const& token) { return Realm::DayReleased(token); }))
+        else if (progress == Realm::DayHandoff::Waiting)
             return;
     }
     auto saved = std::move(*pendingAdd);

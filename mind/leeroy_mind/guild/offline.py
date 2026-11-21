@@ -270,7 +270,7 @@ class OfflineRaids:
         with self.ports.conn:
             _put(self.ports.conn, DAY_PREFIX + day, value)
 
-    def _due(self):
+    def _due(self, *, admitted=False):
         now = self.ports.clock.local()
         begin = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = begin + timedelta(days=1)
@@ -285,8 +285,8 @@ class OfflineRaids:
             (begin.timestamp(), end.timestamp(), *void)).fetchone()[0]
         quota = max(held, day.get("accepted", 0) - len(voided)) >= self.cfg.offline_raids_per_day
         active = self.ports.conn.execute("SELECT 1 FROM guild_raid WHERE ended IS NULL").fetchone() is not None
-        due = (not day["blocked"] and day["attempts"] < MAX_ATTEMPTS
-               and self.ports.clock.now() >= day["next_try"]
+        due = (not day["blocked"] and (admitted or (day["attempts"] < MAX_ATTEMPTS
+               and self.ports.clock.now() >= day["next_try"]))
                and is_due(now, human_online=self._online or self.ports.human_online(),
                           last_logout=self._last_logout, raided_today=quota,
                           window=tuple(time.fromisoformat(t) for t in self.cfg.offline_window),
@@ -776,11 +776,14 @@ class OfflineRaids:
                 from leeroy_mind.realm.actions import ActionRejected
                 def valid():
                     members = set(plan.members)
+                    cast = self.ports.cast()
+                    available = {c.guid: c for c in candidates_from(cast, {g: self.ports.persona(g) for g in cast},
+                                                                    {}, {}, self.ports.away()) if c.available}
                     return (self._owned and self._owned["id"] == command.id and not self._owned["cancelled"]
                             and self._owned["day"] == self._day() and self._owned["phase"] == "awaiting_ack"
-                            and not self._online and not self.ports.human_online() and not self.ports.gpu_paused()
-                            and runnable(raid.key, self._features) and members <= set(self.ports.cast())
-                            and not members.intersection(self.ports.away()) and not any(members & b for b in self._busy())
+                            and self._due(admitted=True) and runnable(raid.key, self._features)
+                            and members <= available.keys() and available[plan.tank_guid].dc_tank
+                            and not any(members & b for b in self._busy())
                             and self.ports.clock.now() < self._owned["deadline"])
                 try:
                     ack = await runner.handoff(command.id, plan.members, "offline_raid", valid,

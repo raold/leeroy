@@ -4,7 +4,7 @@ import json
 from zoneinfo import ZoneInfo
 
 from leeroy_mind.culture import wowcal
-from leeroy_mind.nightly.llm import check_schema, system_prompt
+from leeroy_mind.nightly.llm import ReflectionError, check_schema, system_prompt
 from leeroy_mind.realm.calendar_time import TIMEZONE
 from leeroy_mind.server.state import tie_kind
 from leeroy_mind.tuning.edits import load, member_edits
@@ -63,7 +63,7 @@ def schema(options, slots):
         return {"type": "string", "enum": list(values)}
     block = {"slot": enum(slots), "activity": enum(options),
              "place": enum(sorted({p for places in options.values() for p in places}))}
-    return {"type": "object", "additionalProperties": False, "required": ["blocks"],
+    return {"title": "day_plans", "type": "object", "additionalProperties": False, "required": ["blocks"],
             "properties": {"blocks": {"type": "array", "minItems": 2, "maxItems": 4,
                 "items": {"type": "object", "additionalProperties": False,
                           "properties": block, "required": list(block)}}}}
@@ -119,8 +119,10 @@ async def stage_day_plans(ctx, places):
             if len({b["slot"] for b in blocks}) != len(blocks) or any(
                     b["place"] not in options[b["activity"]] for b in blocks):
                 raise ValueError("invalid_day_pairing")
-        except (ValueError, RuntimeError) as exc:
-            ctx.fail("day_plans", unit, exc)
+        except (ValueError, ReflectionError) as exc:
+            if isinstance(exc, ReflectionError) and exc.fatal:
+                raise
+            ctx.fail("day_plans", unit, ValueError("invalid_day_plan"))
             continue
 
         def write(store):

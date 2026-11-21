@@ -763,14 +763,16 @@ bool RealmModule::AcceptDomain(Queued entry, std::string& error)
         error = "pin_rejected";
         return false;
     }
+    DayAdmitted(_state->reservations.at(id).admitted); // Record before a later world tick can execute it.
     if (!_state->queue.Push(std::move(entry)))
     {
+        auto admitted = _state->reservations.at(id).admitted;
         _state->Release(id);
         _state->ApplyPins();
+        DayFinished(admitted, true, false);
         error = "bad field: queued_operation";
         return false;
     }
-    DayAdmitted(_state->reservations.at(id).admitted);
     return true;
 }
 
@@ -1088,9 +1090,8 @@ void RealmModule::Tick(std::uint32_t diff)
         if (entry.payload.is_object() && entry.payload.contains("day_permit")
             && !entry.payload.contains("step") && !pending && entry.cursor == 0)
         {
-            if (DayRevoking(entry)) return finish("day_revoked", false, true, true);
-            if (auto* human = FindOnline(HumanGuid()); human && human->IsInCombat())
-                return finish("busy:combat", false, true, true);
+            if (auto refusal = DayMutationRefusal(entry); !refusal.empty())
+                return finish(std::move(refusal), false, true, true);
         }
         auto const lease = reservation.bodies.find(guid);
         // What a skip of this member needs besides its own step's proof: a kind whose members are

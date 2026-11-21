@@ -882,10 +882,12 @@ public:
 };
 }
 
-bool DayDueling(std::string const& operation, Player* bot)
+bool DayDueling(std::string const& token, std::string const& operation, Player* bot)
 {
-    if (!bot || !bot->duel || !bot->duel->Opponent || !bot->duel->Initiator) return false;
-    auto* other = bot->duel->Opponent;
+    if (!bot || !bot->duel) return false;
+    auto* other = DayPartner(token, bot->GetGUID().GetCounter());
+    if (!other || !other->duel || bot->duel->Opponent != other || other->duel->Opponent != bot
+        || (bot->duel->Initiator != bot && bot->duel->Initiator != other)) return false;
     std::lock_guard lock(DuelMutex);
     auto found = Duels.find(bot->duel->Initiator->GetGUID().GetCounter());
     if (found == Duels.end()) return false;

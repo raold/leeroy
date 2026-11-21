@@ -148,9 +148,40 @@ its list; the answer says what she did or why not) and, beside her dials, her go
 Retire and a form for every kind. `POST /api/string` relays to the mind's `string` op under the same
 key, Origin and `--no-control` gates as Board replies.
 
+## Planned days in game
+
+Enable `[life] day_plans = true` for the nightly reflection stage and `[realm] enabled = true` for execution.
+The native worldserver also needs `Leeroy.DayPlans.Enable = 1` and `Leeroy.Realm.Enable = 1`. The day switches
+default off and work independently of godmode edits. The native key reloads with `.reload config`. A fresh
+bridge greeting advertises `day_plan_handoff_v1` for admission.
+
+The night selects two to four blocks for the following server-calendar day between 08:00 and 02:00 in
+America/New_York. Posted raids reserve the rest of the window from their start. Shared blocks have reciprocal
+participant rows and one `day:<leader plan id>` claim at rank `realm_day`. At most twenty members may be away.
+Offline blocks change only the schedule. Public cards and participant-led openers describe proved visits and
+activity starts. A shared visit produces a keyed event memory for each participant. The activity receipt updates
+that memory. Fishing requires native per-member success. RPG status is a one-shot request.
+
+An owner add, validated raid formation, offline raid or game string can interrupt the whole block. For a day
+teleport already in flight, the original request waits up to 30 seconds for native to confirm release. Native
+observes its own destination, cleans its exact duel or fishing operation, and closes the permit. Ordinary join,
+combat, group, instance and ownership checks run again before the original request proceeds. Timeout or changed
+identity ends the request. An unresolved operation stays in the Realm journal for the existing operator workflow.
+
+The handoff entry point for a higher-priority mind caller is `app.realm.parts["day"].handoff(request_id, members,
+reason, valid, send)`. Supply the original command ID, complete intended roster, a synchronous revalidation
+callback and the async original send. The day runner journals the waiting request before revocation and consumes
+it before sending. A process restart expires its outstanding requests. Recovery on the same native boot may
+query or revoke the old permit. Only its matching boot, serial, token, begin ID, guild, human and participants
+can reconcile settled day-step rows. A different native boot or body lifetime cannot establish release of an
+old operation. Recovery never replays a body command.
+
+Migration `0064_day_plans.sql` adds the plan, permit, step and handoff tables. Deploy with
+`ac-release.sh --native` to install the changed worldserver and mind together.
+
 ## Not reachable here
 
-- Day plans (Part C), members' heroics (Part D); an arena queue and "go to a place" strings.
+- Members' heroics (Part D), an arena queue and "go to a place" strings.
 - A string that brings a member into his instance, or anything inside one: refused by design.
 - "Stands in fire" inside instances waits for the dojo's policy work; `skill` changes only what
   the play-style map can say outdoors.

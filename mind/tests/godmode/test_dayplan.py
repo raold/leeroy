@@ -60,3 +60,30 @@ def test_off_means_no_stage():
     assert LifeCfg().day_plans is False
     runner = SimpleNamespace(add_stage=lambda *a, **kw: pytest.fail("disabled stage added"))
     plan.attach(runner, SimpleNamespace(day_plans=False), lambda: pytest.fail("places loaded"))
+
+
+from nightly.conftest import h  # the real night context, with a scripted reflection client
+
+
+def test_nightly_stage_commits_shared_enum_blocks_once(h):
+    import asyncio
+    places = Places.load(DIST)
+    inn = places.by_kind("inn")[0].name
+    ctx = h.ctx({"day_plans": [{"blocks": [{"slot": "08", "activity": "inn", "place": inn},
+                                           {"slot": "12", "activity": "offline", "place": "none"}]}] * 5})
+    async def go():
+        await plan.stage_day_plans(ctx, places)
+        rows = h.store.conn.execute("SELECT member,starts,ends,partners FROM day_plan WHERE activity='inn'").fetchall()
+        assert len(rows) == len(ctx.members())
+        import json
+        couples = {r["member"]: json.loads(r["partners"]) for r in rows}
+        assert any(couples.values())
+        for guid, others in couples.items():
+            for other in others:
+                assert couples[other] == [guid]
+        calls = len(ctx.reasoner.llm.calls)
+        assert calls > 0
+        await plan.stage_day_plans(ctx, places)
+        assert len(ctx.reasoner.llm.calls) == calls
+        assert h.store.conn.execute("SELECT count(*) FROM day_plan").fetchone()[0] == 2 * len(rows)
+    asyncio.run(go())

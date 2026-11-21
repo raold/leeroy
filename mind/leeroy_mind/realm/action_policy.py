@@ -138,7 +138,7 @@ def classify(cmd, *, child=False):
         e("status", {"idle", "rest", "wander npc", "wander random", "go grind", "go camp", "do quest", "do gather", "travel flight"})
         n("quest_id", 0)
         if cmd.quest_id and cmd.status != "do quest": raise ValueError("invalid quest status")
-        if permit and (cmd.quest_id or cmd.status not in {"idle", "rest", "wander npc", "do gather", "do quest"}):
+        if permit and (cmd.quest_id or cmd.status not in {"idle", "rest", "wander npc", "do gather"}):
             raise ValueError("invalid day status")
     elif kind in {"leave_pvp", "rearm", "wg_join", "guild_grow", "bot_do"}:
         maximum = 40 if kind in {"wg_join", "bot_do"} else 30 if kind == "guild_grow" else 150

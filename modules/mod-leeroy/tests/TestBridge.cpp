@@ -133,12 +133,15 @@ LEEROY_TEST(Bridge_LaterBadLineKeepsConnection)
 LEEROY_TEST(Bridge_ReconnectNeedsFreshGreeting)
 {
     Bridge b(NoLog);
+    std::vector<Command> commands;
     b.Start("127.0.0.1", 0);
     {
         TestClient c;
         c.Connect(b.BoundPort());
         WaitFor([&] { return b.ConnectionSerial() == 1; }, 1s);
         b.Greet(1, "H", "C");
+        c.Send(R"({"v":1,"type":"ping","id":"old"})");
+        CHECK(WaitFor([&] { return b.PopCommands(commands, 1) == 1; }, 1s));
         c.Close();
     }
     CHECK(WaitFor([&] { return !b.Connected(); }, 1s));
@@ -149,6 +152,10 @@ LEEROY_TEST(Bridge_ReconnectNeedsFreshGreeting)
     b.Greet(1, "STALE", "STALE"); CHECK(!c2.ReadLine(100ms));     // wrong serial is ignored
     b.Greet(2, "H2", "C2");
     CHECK_EQ(NextLine(c2), "H2"); CHECK_EQ(NextLine(c2), "C2"); CHECK_EQ(NextLine(c2), "E");
+    c2.Send(R"({"v":1,"type":"ping","id":"new"})");
+    CHECK(WaitFor([&] { return b.PopCommands(commands, 1) == 1; }, 1s));
+    CHECK_EQ(commands[0].connectionSerial, 1u);
+    CHECK_EQ(commands[1].connectionSerial, 2u);
 }
 
 LEEROY_TEST(Bridge_StopWithMindConnected)

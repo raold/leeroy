@@ -710,6 +710,9 @@ class ActionStore:
         return replace(r, state="conflict", evidence=document(ev, limit=32768), result_ok=False, result_reason="conflict", updated=now)
 
     def _reduce(self, r, ev, now):
+        seal = ev.get("day_release")
+        if seal and not seal["admitted"] and (ev.get("ack", {}).get("ok") or "job" in ev or "bot" in ev):
+            return self._conflict(r, ev, now)
         reduced = self._settle(r, ev, now)
         # The operator's release stands against later native evidence, unless it contradicts itself.
         if "abandoned" in ev and reduced.state != "conflict":
@@ -727,18 +730,19 @@ class ActionStore:
             return False
         command = json.loads(record.payload)
         permit = self.conn.execute(
-            "SELECT p.plan,p.begin_id,p.boot,p.serial,p.token,p.guild,p.human,p.release_ids,s.kind,s.member "
+            "SELECT p.plan,p.begin_id,p.boot,p.serial,p.token,p.guild,p.human,p.release_ids,s.kind,s.member,p.process,p.epoch "
             "FROM day_step s JOIN day_permit p ON p.plan=s.plan WHERE s.id=?",
             (record.command_id,)).fetchone()
         if not permit:
             return False
-        plan, origin, boot, serial, token, guild, human, released, step, member = permit
+        plan, origin, boot, serial, token, guild, human, released, step, member, process, epoch = permit
         participants = {g for (g,) in self.conn.execute("SELECT member FROM day_plan WHERE action_ref=?",
                                                         (f"day:{plan}",))}
         kind = {"move": "realm_move", "fishing": "bot_do", "duel": "duel", "status": "rpg_status"}.get(step)
         return (released is not None and command.get("day_permit") == token and bool(token)
                 and record.owner == f"day:{plan}" and kind == record.kind
                 and member in record.reserved_manifest and set(record.reserved_manifest) <= participants
+                and (record.process_id, str(record.connection_epoch)) == (process, epoch)
                 and record.guild == guild and record.human == human and boot and evidence.get("dispatch_started_ms") == boot
                 and evidence.get("day_release") == {"origin": origin, "serial": serial,
                     "admitted": record.command_id in json.loads(released)})
@@ -750,9 +754,11 @@ class ActionStore:
         complete = True
         for ident, origin, serial, released in rows:
             record = self.get(ident)
-            if record is None or record.state in TERMINAL:
+            if record is None or record.state == 'not_sent':
                 continue
             evidence = json.loads(record.evidence)
+            if 'abandoned' in evidence:
+                continue
             evidence["day_release"] = {"origin": origin, "serial": serial, "admitted": ident in json.loads(released)}
             if not self._day_proof(record, evidence):
                 complete = False
@@ -776,7 +782,7 @@ class ActionStore:
             error = ack["error"]
             refused = (r.policy in {"ordinary", "wg"} and error in REFUSALS
                        or json.loads(r.payload).get("day_permit") and error in {
-                           "day_off", "day_revoked", "day_scope", "day_duplicate"}
+                           "day_off", "day_revoked", "day_scope"}
                        or r.policy == "ordinary" and r.kind == "leave_pvp" and leave_refusal_guids(error, r.reserved_manifest)
                        or r.kind == "guild_grow" and _grow_refusal(error, r.reserved_manifest)
                        or r.policy == "wg" and error in {"no_wintergrasp", "no_online_members"}
@@ -860,7 +866,7 @@ class ActionStore:
             new = replace(old, transport_state="settled", send_error=safe_type, updated=now)
             if before_write and old.role == "root": new = replace(new, state="not_sent", result_ok=False, result_reason="not_sent")
             elif old.state not in TERMINAL and old.state != "conflict": new = replace(new, state="unknown", result_ok=False, result_reason="transport_unknown")
-            if "job" in ev or "bot" in ev:
+            if "job" in ev or "bot" in ev or "day_release" in ev and new.state != 'not_sent':
                 new = self._reduce(new, ev, now)
             return self._finish(old, new, now)
 
