@@ -252,7 +252,7 @@ struct HazardScanner
     {
         if (radius > 0.0f && seen.insert(object->GetGUID()).second)
             zones.push_back({object->GetPositionX(), object->GetPositionY(), object->GetPositionZ(), radius,
-                object->GetGUID().GetRawValue(), object->GetPhaseMask(), held});
+                object->GetGUID().GetRawValue(), object->GetPhaseMask(), held, false});
     }
 
     // An allow-listed npc that goes off when a player comes near: its trigger or its blast (this difficulty's
@@ -279,7 +279,7 @@ struct HazardScanner
             speed = spline->Velocity();
         }
         zones.push_back(HazardLeadZone({unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(), radius,
-            unit->GetGUID().GetRawValue(), unit->GetPhaseMask(), false}, next, speed));
+            unit->GetGUID().GetRawValue(), unit->GetPhaseMask(), false, false}, next, speed));
     }
 
     void Visit(DynamicObjectMapType& m)
