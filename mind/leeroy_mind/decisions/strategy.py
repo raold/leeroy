@@ -63,6 +63,15 @@ def played(app, ident):
         ledger.take_effect(app.store, ident, effect_ref={"layer": ident}, now=app.clock.now())
 
 
+def fresh_proposal(conn, row, now):
+    wipes = json.loads(row["value"]).get("wipes", [])
+    if not wipes:
+        return now - row["proposed"] <= WEEK
+    return len(wipes) == 2 and conn.execute(
+        "SELECT count(*) FROM tg_pull WHERE id IN (?,?) AND end_ms BETWEEN ? AND ?",
+        (*wipes, int((now-WEEK)*1000), int(now*1000))).fetchone()[0] == 2
+
+
 class StrategyRules:
     kind = "strategy"
 
@@ -87,6 +96,10 @@ class StrategyRules:
             training.listener._muster = None
 
     async def tick(self, app, now):
+        for pending in app.store.conn.execute(
+                "SELECT * FROM guild_decision WHERE kind='strategy' AND status='proposed'").fetchall():
+            if not fresh_proposal(app.store.conn, pending, now):
+                ledger.expire(app.store, pending["id"], now=now)
         if server_quiet(app) or not getattr(getattr(app, "world", None), "members", None):
             return
         conn, cast = app.store.conn, members(app)

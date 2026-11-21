@@ -46,3 +46,17 @@ def test_training_off_is_talk_only(store, guild, clock):
     asyncio.run(rules.tick(app, clock.now()))
     asyncio.run(rules.tick(app, clock.now()+3*3600))
     assert ledger.history(store.conn)[0]["status"] == "talk_only"
+
+
+def test_stale_wipe_proposal_expires_without_a_new_wipe(store,guild,clock):
+    from leeroy_mind.decisions.seeds import decision_seeds
+    wipes(store,clock)
+    now = clock.now()
+    proposal = strategy.propose_strategy(store.conn,"631:0:0",now=now)
+    ident = ledger.propose(store,kind="strategy",subject="strategy:631:0:0",value=proposal,positions=[],now=now)
+    clock._t += strategy.WEEK+1
+    assert not any(s.key == f"decision:{ident}:proposed" for s in
+                   decision_seeds(store.conn,now=clock.now(),personas=guild,officers={102}))
+    app = NS(store=store,clock=clock,world=NS(members={}))
+    asyncio.run(strategy.strategy_rules().tick(app,clock.now()))
+    assert ledger.get(store.conn,ident)["status"] == "expired"

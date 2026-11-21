@@ -168,8 +168,8 @@ def test_an_undo_the_ledger_cannot_record_yet_is_reported_and_retried(store, clo
     svc = service(store, [now + 2])
     try:
         reply = asyncio.run(svc.handle({'action': 'overrule', 'id': promote}))
-        assert reply['ok'] is False and reply['undone'] is True and reply['outcome'] == 'undone_unrecorded'
-        assert 'Undone in game' in reply['error'] and Rank.undone == [promote]
+        assert reply['ok'] is False and reply['undone'] is False and reply['outcome'] == 'scheduled_unrecorded'
+        assert 'scheduled' in reply['error'] and Rank.undone == [promote]
         assert ledger.current(store.conn, 'rank', 'rank:105')['id'] == promote
         with store.transaction():
             store.conn.execute('DROP TRIGGER temp.busy')

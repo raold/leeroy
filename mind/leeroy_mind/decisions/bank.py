@@ -94,16 +94,24 @@ def boe_gain(bank, guid, item, member, persona):
     return upgrade_gain(info, member.class_, stat_family(member.class_, member.spec_tab, role), gear, role=role)
 
 
+def timely(req, proposed, now):
+    day, opened = local_at(now).date(), local_at(proposed).date()
+    return day == opened if req.get("kind") == "raid_flasks" else day.isocalendar()[:2] == opened.isocalendar()[:2]
+
+
+def open_request(conn, req, proposed, now):
+    return timely(req, proposed, now) and (req.get("kind") != "raid_flasks"
+                                           or req.get("guid") in raid_tomorrow(conn, now))
+
+
 def entitled(app, req, bank, proposed):
     guid = req["guid"]
     member = members(app).get(guid)
     persona = app.personas.get(guid)
-    day = local_at(app.clock.now()).date()
-    request_day = local_at(proposed).date()
-    if not member or not persona or day.isocalendar()[:2] != request_day.isocalendar()[:2]:
+    if not member or not persona or not timely(req, proposed, app.clock.now()):
         return False
     if req["kind"] == "raid_flasks":
-        return day == request_day and guid in raid_tomorrow(app.store.conn, app.clock.now())
+        return guid in raid_tomorrow(app.store.conn, app.clock.now())
     if req["kind"] == "enchant_mats":
         return 333 in bank.get("professions", {}).get(guid, {})
     return req["kind"] == "boe_upgrade" and bool(boe_gain(bank, guid, req["item"], member, persona))
@@ -188,6 +196,24 @@ def ready(app):
     return bool(realm and Steps.ready(realm.action_context()) and not raid_holds(app, app.clock.now()))
 
 
+def delivery(conn, row):
+    """Operator-visible irreversible state at this instant, even before the next minute tick."""
+    ident = row["id"]
+    refs = (f"decision:{ident}:withdraw", f"decision:{ident}:mail")
+    receipts = {r["ref"]: r for r in conn.execute(
+        "SELECT ref,state,value FROM realm_direct WHERE owner='decision' AND ref IN (?,?) ORDER BY rowid", refs)}
+    withdraw, mail = (receipts.get(ref) for ref in refs)
+    if mail and mail["state"] in ("dispatched", "acked", "unknown"):
+        if mail["state"] == "acked" and mail["value"] is not None:
+            return True, f"Delivery confirmed by native mail #{mail['value']}. The posted mail cannot be recalled."
+        return True, "Mail already entered transport. Delivery is unconfirmed and may still complete."
+    if withdraw and withdraw["state"] in ("dispatched", "acked", "unknown"):
+        if withdraw["state"] == "acked" and withdraw["value"] is not None:
+            return True, "Withdrawal confirmed into the officer's bags. No mail delivery was admitted."
+        return True, "Withdrawal entered transport and remains unconfirmed. No mail delivery was admitted."
+    return False, "No bank transfer was admitted."
+
+
 class BankRules:
     kind = "bank"
 
@@ -244,20 +270,36 @@ class BankRules:
                 rid = BankLedger(store, app.clock).record("out", "request", req["guid"], req["item"], req["count"])
                 store.set_meta(f"decisions:bank:out:{ident}", str(rid))
                 effect = json.loads(row["effect_ref"] or "{}")
-                effect.update(refs=[f"decision:{ident}:withdraw", f"decision:{ident}:mail"], realm_bank=rid)
+                effect.update(refs=[f"decision:{ident}:withdraw"], realm_bank=rid)
                 store.conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (json.dumps(effect), ident))
+
+        for result in store.conn.execute(
+                "SELECT d.id,d.effect_ref,r.ref,r.value FROM realm_direct r JOIN guild_decision d "
+                "ON r.ref='decision:'||d.id||':mail' WHERE d.kind='bank' AND r.owner='decision' AND r.kind='mail_send' "
+                "AND r.state='acked' AND r.value IS NOT NULL AND json_extract(d.effect_ref,'$.mail_id') IS NULL").fetchall():
+            with store.transaction():
+                effect = json.loads(result["effect_ref"] or "{}")
+                effect["mail_id"] = int(result["value"])
+                effect["refs"] = list(dict.fromkeys([*effect.get("refs", []), result["ref"]]))
+                store.conn.execute("UPDATE guild_decision SET effect_ref=? WHERE id=?", (json.dumps(effect), result["id"]))
 
     async def tick(self, app, now):
         self.reconcile(app)
-        if self.features is None or not officer(app):
+        if self.features is None:
             return
         conn = app.store.conn
-        rows = conn.execute("SELECT * FROM guild_decision WHERE kind='bank' AND status='settled' ORDER BY id").fetchall()
-        if rows:
-            for row in rows:
-                if await self.advance(app, row):
-                    break  # one new wire admission per tick
+        by = officer(app)
+        for pending in conn.execute("SELECT * FROM guild_decision WHERE kind='bank' AND status='proposed'").fetchall():
+            req = json.loads(pending["value"])
+            if not open_request(conn, req, pending["proposed"], now) or (getattr(app.world, "_cast_seen", False)
+                    and (req.get("officer") != by or req.get("guid") not in members(app))):
+                ledger.expire(app.store, pending["id"], now=now)
+        if not by:
             return
+        rows = conn.execute("SELECT * FROM guild_decision WHERE kind='bank' AND status='settled' ORDER BY id").fetchall()
+        for row in rows:
+            if await self.advance(app, row):
+                return  # one new wire admission per tick; unresolved refs cannot starve discovery
         if server_quiet(app) or raid_holds(app, now):
             return
         bank = await read(app, details=True)
@@ -287,7 +329,8 @@ class BankRules:
         step = next_step(row, withdrawal, mail)
         receipt = f"decisions:bank:out:{ident}"
         if step == "done":
-            ledger.take_effect(store, ident, effect_ref={"refs": refs, "realm_bank": int(store.get_meta(receipt))}, now=now)
+            ledger.take_effect(store, ident, effect_ref={"refs": refs, "realm_bank": int(store.get_meta(receipt)),
+                                                       "mail_id": mail[2]}, now=now)
         elif step in ("unknown", "refused"):
             ledger.fail(store, ident, reason=step, now=now)
         elif step in ("withdraw", "mail"):
@@ -331,6 +374,11 @@ def record_post(app, seed, speaker, message, now):
         raise ValueError("bank_officer_changed")
     if seed.kind == "bank_request":
         ident = int(seed.key.split(":")[1])
+        row = ledger.get(app.store.conn, ident)
+        req = json.loads(row["value"])
+        if (not open_request(app.store.conn, req, row["proposed"], now) or req.get("officer") != speaker
+                or req.get("guid") not in members(app)):
+            raise ValueError("bank_request_stale")
         ledger.settle(app.store, ident, settled_by=speaker, message=message, now=now)
         rules = app.decisions.rules_for("bank")
         if "member_bank_mail" not in (rules.features or ()) or not getattr(getattr(app, "realm", None), "enabled", False):

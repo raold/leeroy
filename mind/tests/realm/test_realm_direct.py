@@ -353,3 +353,76 @@ def test_direct_attach_is_a_part_without_io(store, clock):
         asyncio.run(ticks())
     assert calls == [512, 512]
     assert len(_rows(store)) == 3
+
+
+@pytest.mark.parametrize("had_ack", [False, True])
+def test_decision_recovery_accepts_only_exact_positive_terminal_proof_once(store, ledger, had_ack):
+    from dataclasses import replace
+    from leeroy_mind.realm.protocol import BankWithdraw
+    cmd = BankWithdraw(uuid.uuid4().hex, 201, 46377, 20, 0, 202)
+    ref = "decision:5:withdraw"
+    _dispatched(ledger, cmd, ref, owner="decision", expects_job=True)
+    if had_ack:
+        assert ledger.on_ack(cmd, _ack(cmd))
+    recovered = DirectLedger(store, process_id="new", clock=store.clock)
+    recovered.recover(process_id="new")
+    assert recovered.state("decision", ref)[0] == "unknown"
+    assert recovered.prepare(replace(cmd, id=uuid.uuid4().hex), owner="decision", ref=ref,
+                             context=replace(LIVE, process_id="new"), expects_job=True) is None
+    proof = _job(cmd, "bank_withdraw", value=20)
+    for bad in (replace(proof, guid=202), replace(proof, value=19), replace(proof, kind="bank_stock"),
+                replace(proof, reason="failed"), replace(proof, id=uuid.uuid4().hex)):
+        assert not recovered.on_job(bad)
+    assert recovered.on_job(proof)
+    assert recovered.state("decision", ref)[::2] == ("acked", 20)
+    assert not recovered.on_job(proof)
+
+
+def test_populated_0062_upgrade_reconstructs_only_the_original_withdrawal(tmp_path, monkeypatch, clock):
+    from dataclasses import replace
+    from leeroy_mind.decisions import ledger as decisions
+    from leeroy_mind.storage import db
+    from leeroy_mind.storage.store import Store
+    from leeroy_mind.realm.action_policy import classify
+    from leeroy_mind.realm.protocol import BankWithdraw
+    import hashlib
+    files = db._migration_files()
+    with monkeypatch.context() as old:
+        old.setattr(db, "_migration_files", lambda: [(n,p) for n,p in files if n <= 62])
+        conn = db.open_db(tmp_path / "populated.db")
+    store = Store(conn,clock=clock)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 62
+        cmd = BankWithdraw(uuid.uuid4().hex,201,46377,20,0,202)
+        ident = decisions.propose(store,kind="bank",subject="bank:202",value=dict(guid=202,item=46377,count=20,tab=0),
+                                  positions=[],now=clock.now())
+        decisions.settle(store,ident,settled_by=201,now=clock.now())
+        ref = f"decision:{ident}:withdraw"
+        payload = hashlib.sha256(classify(cmd).payload.encode()).hexdigest()
+        conn.execute("INSERT INTO realm_direct(command_id,owner,ref,kind,payload_sha256,guild,human,process_id,"
+                     "expects_job,state,prepared_ms,dispatched_ms) VALUES (?,'decision',?,'bank_withdraw',?,50,10,"
+                     "'old',1,'acked',1,2)",(cmd.id,ref,payload))
+        assert db.migrate(conn) == db.latest_version()
+        assert db.migrate(conn) == db.latest_version()
+        direct = DirectLedger(store,process_id="new",clock=clock)
+        direct.recover(process_id="new")
+        proof = _job(cmd,"bank_withdraw",value=20)
+        assert not direct.on_job(replace(proof,guid=202))
+        assert direct.on_job(proof) and not direct.on_job(proof)
+        assert direct.state("decision",ref) == ("acked",None,20)
+        saved = conn.execute("SELECT actor,expected_count,recovered_reason FROM decision_job_proof").fetchone()
+        assert tuple(saved) == (201,20,"recovered_acked")
+    finally:
+        store.close()
+
+
+def test_conflicting_late_failure_preserves_the_original_ref_without_delivery(ledger, store):
+    from leeroy_mind.realm.protocol import BankWithdraw
+    cmd = BankWithdraw(uuid.uuid4().hex,201,46377,20,0,202)
+    ref = "decision:9:withdraw"
+    _dispatched(ledger,cmd,ref,owner="decision",expects_job=True)
+    recovered = DirectLedger(store,process_id="new",clock=store.clock)
+    recovered.recover(process_id="new")
+    assert recovered.on_job(_job(cmd,"bank_withdraw",state="failed",value=0,reason="operation_outcome_unknown"))
+    assert not recovered.on_job(_job(cmd,"bank_withdraw",value=20))
+    assert recovered.state("decision",ref) == ("unknown","late_job_failed",None)

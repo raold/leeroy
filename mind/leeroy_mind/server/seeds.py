@@ -94,6 +94,9 @@ class Seed:
     weight: float = 1.0
     witnesses: tuple[int, ...] = ()
 
+    def bank_announcement(self, channel):
+        return self.kind in ("bank_request", "restock") and self.officers_only and channel == "bank-requests"
+
     @property
     def openers(self) -> tuple[int, ...] | None:
         """Who already knows a subject before any of it is posted in the channel."""

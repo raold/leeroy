@@ -406,6 +406,17 @@ class Applier:
             return any(m.cls == 7 and self._available(state, (g,)) for g, m in state.members.items())
         return not human_lead and self._available(state, (tank,))
 
+    def guild_evidence(self, run):
+        """Outstanding physical guild settings, including unconfirmed cleanup after a restart."""
+        evidence = []
+        for row in self._rows(run):
+            if row["layer"] == "guild":
+                envelope = json.loads(row["command"])
+                strategy = envelope.get("guild_strategy")
+                receipt = self._receipts.get(row["id"])
+                evidence.append((row["context"], strategy[1] if strategy else None, bool(receipt and receipt.ok)))
+        return evidence
+
     def guild_pending(self, run):
         return any(r["layer"] == "guild" for r in self._rows(run))
 

@@ -91,6 +91,18 @@ def decisions_view(conn, *, now: float, enabled: bool = False) -> dict:
     name = lambda g: names.get(g, f"#{g}")  # noqa: E731
     for row in views.rows(conn, "SELECT * FROM guild_decision ORDER BY id DESC LIMIT ?", (LIMIT,)):
         message, poll = apply.channels_of(conn, row)
+        changed, action = apply.effects(row), _action(row)
+        if row["kind"] == "bank" and "realm_direct" in have:
+            from leeroy_mind.decisions.bank import delivery
+            irreversible, words = delivery(conn, row)
+            if irreversible:
+                changed.append(words)
+                if action:
+                    action.update(words=words, permanent=True, confirm=words + " Block further transfers?")
+        if action and action["kind"] == "undo" and row["kind"] in ("rank", "strategy"):
+            words = ("Schedule roster rank restoration?" if row["kind"] == "rank"
+                     else "Schedule strategy cleanup at the next safe point?")
+            action.update(words=words, confirm=words)
         out["decisions"].append({
             "id": row["id"], "kind": row["kind"], "label": apply.LABELS[row["kind"]], "subject": row["subject"],
             "summary": apply.summary(row, name), "status": row["status"], "state": apply.STATES[row["status"]],
@@ -98,10 +110,10 @@ def decisions_view(conn, *, now: float, enabled: bool = False) -> dict:
             "settler": (("a poll" if row["settled_by"] == 0 else name(row["settled_by"]))
                         if row["settled"] is not None else ""),
             "proposed": row["proposed"], "settled": row["settled"], "effect": row["effect"], "ended": row["ended"],
-            "changed": apply.effects(row), "positions": _positions(row["positions"], names),
+            "changed": changed, "positions": _positions(row["positions"], names),
             "poll": row["poll"], "supersedes": row["supersedes"], "overruled": bool(row["overruled_by_owner"]),
             "officers_only": apply.officers_only(row, message) or apply.private_channel(poll),
-            "action": _action(row)})
+            "action": action})
     for row in views.rows(conn, "SELECT * FROM guild_poll ORDER BY (status = 'open') DESC, id DESC LIMIT ?", (POLLS,)):
         card = poll_card(conn, row, human)
         card["positions"] = [{**p, "name": names.get(p["guid"], "")} for p in positions_of(row)]

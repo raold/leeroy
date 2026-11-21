@@ -57,13 +57,20 @@ def decision_seeds(conn, *, now, personas, officers) -> list[Seed]:
         about = tuple(sorted(g for g in stakeholders(row) if g in personas and (not private or g in officers)))
         label = LABELS[row['kind']]
         if proposed and row['kind'] == 'bank':
-            from .bank import given_today
+            from .bank import given_today, open_request
             req = json.loads(row['value'])
+            if 'officer' in req and (req['officer'] not in officers or req.get('guid') not in personas
+                                     or not open_request(conn, req, row['proposed'], now)):
+                continue
             if req.get('officer') in officers and 'item' in req:
                 block = (f"{name(req['guid'])} | {req['kind']} | item {req['item']} x{req['count']} | "
                          f"{given_today(conn, now)}/{req['cap']} stacks today")
                 out.append(Seed(f"bank_request:{row['id']}", 'bank_request', channels, block,
                                 (req['officer'],), True))
+                continue
+        if proposed and row['kind'] == 'strategy':
+            from .strategy import fresh_proposal
+            if not fresh_proposal(conn, row, now):
                 continue
         if proposed:
             fact = _fact(f'{label} proposed, {summary(row, name)}',

@@ -241,3 +241,92 @@ def test_lust_carrier_at_effect_boundary_controls_timer_and_recorded_cohort(fake
             assert json.loads(row["covariates"])["guild_strategy"] == 19
         await listener.close()
     asyncio.run(play())
+
+
+@pytest.mark.parametrize("lever, target, expected", [("lust_at", 4, None), ("PullPlayerReleaseDelay", 0, 19)])
+def test_no_muster_engagement_records_timer_or_inherited_dc(fake, lever, target, expected):
+    import asyncio
+    import json
+    from dataclasses import replace
+    from unittest.mock import Mock
+    from leeroy_mind.training.cards import Directive
+    from leeroy_mind.training.ledger import Ledger
+    from .test_tg_applier import card
+    from .test_tg_gate import boss
+    from .test_tg_ledger import header, member, feed, run as open_raid
+    from .test_tg_listener import real_listener, status
+
+    async def play():
+        listener, run, ports = real_listener(fake)
+        run.session.raid_id = open_raid(fake, human=False, instance=100).session.raid_id
+        listener.ledger = Ledger(fake)
+        team = dict(ports.state.members)
+        team[102] = replace(team[102], cls=7)
+        ports.state = replace(ports.state, members=team, run_key=listener.run_key(run))
+        selected = (19, card(Directive(lever, 85 if lever == "lust_at" else 125), context="631:4:0"))
+        listener.guild_layer = lambda context: selected if context == "631:4:0" else None
+        listener.guild_played = Mock()
+        ports.applier.guild_allowed = lambda context, ident: ident == 19
+        await listener.on_start(run)
+        await listener.on_dc_status(status(fake))
+        engaged = boss(fake, 4)
+        await listener.on_boss(engaged)
+        assert listener._lust_active == (lever == "lust_at")
+        if lever != "lust_at":
+            assert any(getattr(c,"key","") == lever and c.op == "scale" for c in ports.sent)
+        first = header(fake, start=engaged.ts, id=f"{engaged.ts}-100-4", instance_id=100, boss=4, outcome="wiped")
+        await fake.clock.advance(62, step=62)
+        await listener.on_boss(boss(fake, 4, "wiped"))
+        await fake.clock.advance(5, step=5)
+        before = list(ports.sent)
+        second = boss(fake, target)
+        await listener.on_boss(second)
+        assert not listener._lust_active
+        assert ports.applier.guild_pending(listener.run_key(run)) == (lever != "lust_at")
+        assert ports.sent == before
+        later = header(fake, start=second.ts, id=f"{second.ts}-100-{target}", instance_id=100, boss=target)
+        # Both headers arrive after the second pull. Attribute by encounter start, never arrival.
+        for h, ident, scoreable in [(later, expected, 0), (first, 19, 1)]:
+            await feed(listener.ledger, member(h), h)
+            row = fake.conn.execute("SELECT covariates,scoreable FROM tg_pull WHERE id=?", (h.id,)).fetchone()
+            assert json.loads(row["covariates"]).get("guild_strategy") == ident
+            assert row["scoreable"] == scoreable
+        await listener.close()
+    asyncio.run(play())
+
+
+def test_two_played_strategy_wipes_do_not_retire_the_baseline_champion(fake):
+    import asyncio
+    from dataclasses import replace
+    from unittest.mock import Mock
+    from .test_tg_listener import real_listener, status, card as saved_card
+    from .test_tg_applier import card
+    from .test_tg_gate import boss
+    from .test_tg_experiments import pull
+    from leeroy_mind.training.cards import Directive
+
+    async def play():
+        listener, run, ports = real_listener(fake)
+        run = replace(run, human_in_raid=True)
+        previous = saved_card(fake,status="retired",value=35)
+        champion = saved_card(fake,previous=previous.id,version=2)
+        ctx = "631:4:0"
+        selected = (19,card(Directive("PullPlayerReleaseDelay",125),context=ctx))
+        listener.guild_layer = lambda _: selected
+        listener.guild_played = Mock()
+        ports.applier.guild_allowed = lambda _,i: selected and i == selected[0]
+        for n in range(3):
+            pull(fake,f"base{n}",boss=4,when=fake.clock.now()-100*(n+1))
+            pull(fake,f"changed{n}",boss=4,when=fake.clock.now()-100*(n+1))
+            fake.conn.execute("""UPDATE tg_pull SET covariates='{"guild_strategy":19}' WHERE id=?""",(f"changed{n}",))
+        await listener.on_start(run)
+        for _ in range(2):
+            await listener.on_dc_status(status(fake))
+            await listener.on_boss(boss(fake,4))
+            await fake.clock.advance(2,step=2)
+            await listener.on_boss(boss(fake,4,"wiped"))
+        assert listener.card_for(ctx,run,19)[0].id == previous.id
+        selected = None
+        assert listener.card_for(ctx,run)[0].id == champion.id
+        await listener.close()
+    asyncio.run(play())

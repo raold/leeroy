@@ -30,6 +30,7 @@ on_send, on_ack, on_job and on_send_error to this ledger is the service's.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import sqlite3
@@ -39,7 +40,7 @@ from leeroy_mind.storage.store import Store
 
 from .action_policy import classify
 from .actions import ActionContext
-from .protocol import RealmJob
+from .protocol import BankStock, BankWithdraw, MailSend, RealmJob
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ RETAIN_ACKED_S = 30 * 86400
 # read only within this.
 RETAIN_POST_REFUSALS_S = 30 * 86400
 # Send errors raised before the bridge writes anything: the command cannot have gone out.
+_MISSING_JOB = frozenset({"recovered_dispatched", "recovered_acked", "transport_unknown"})
 _PRETRANSPORT = frozenset({"RealmDisabled", "NotConnected"})
 # Native's failures after it entered the write: it may have been done. Unknown, never refused, so
 # never sent again (a calendar write that threw or failed its readback; ApplyCalendarWrite).
@@ -192,6 +194,11 @@ class DirectLedger:
                         "process_id,expects_job,state,prepared_ms) VALUES (?,?,?,?,?,?,?,?,?,'prepared',?)",
                         (cmd.id, owner, ref, kind, payload_sha256, context.guild, context.human,
                          self._process_id, int(expects_job), self._now_ms()))
+                    if owner == "decision" and expects_job and isinstance(cmd, (BankStock, BankWithdraw, MailSend)):
+                        actor = (cmd.officer_guid if isinstance(cmd, BankStock) else
+                                 cmd.from_guid if isinstance(cmd, MailSend) else cmd.guid)
+                        conn.execute("INSERT INTO decision_job_proof(command_id,actor,expected_count) VALUES (?,?,?)",
+                                     (cmd.id, actor, getattr(cmd, "count", None)))
             except sqlite3.IntegrityError:
                 return None
         return cmd.id
@@ -240,8 +247,15 @@ class DirectLedger:
         self._own_unit()
         with self._store.transaction():
             row = self._row(cmd)
-            if (row is None or row["state"] != "dispatched" or type(ack) is not Ack
-                    or ack.id != cmd.id or type(ack.ok) is not bool or type(ack.error) is not str):
+            if (row is None or type(ack) is not Ack or ack.id != cmd.id
+                    or type(ack.ok) is not bool or type(ack.error) is not str):
+                return False
+            if row["state"] != "dispatched":
+                if (row["owner"] == "decision" and row["expects_job"] and not ack.ok
+                        and (row["state"] == "acked" and row["settled_ms"] is None or
+                             row["state"] == "unknown" and row["reason"] in _MISSING_JOB)):
+                    self._move(row, "unknown", reason="conflicting_ack")
+                    return True
                 return False
             if not ack.ok:
                 state = "unknown" if ack.error in NATIVE_UNKNOWN else "refused"
@@ -249,6 +263,53 @@ class DirectLedger:
             else:
                 self._move(row, "acked", settle=not row["expects_job"])
         return True
+
+    def _decision_proof(self, row, ev):
+        conn = self._store.conn
+        proof = conn.execute("SELECT actor,expected_count FROM decision_job_proof WHERE command_id=?",
+                             (ev.id,)).fetchone()
+        if proof is not None:
+            return proof
+        # A populated 0062 database has the immutable command hash, but no separate
+        # actor/count columns. Rebuild only from its saved request/plan and verify that hash.
+        from .protocol import MailItem
+        commands = []
+        parts = row["ref"].split(":")
+        if len(parts) == 3 and parts[0] == "decision" and parts[1].isdecimal():
+            d = conn.execute("SELECT settled_by,value FROM guild_decision WHERE id=? AND kind='bank'",
+                             (parts[1],)).fetchone()
+            if d:
+                req = json.loads(d["value"])
+                if all(k in req for k in ("item", "count", "guid", "tab")):
+                    if parts[2] == "withdraw" and ev.kind == "bank_withdraw":
+                        commands.append(BankWithdraw(ev.id, d["settled_by"], req["item"], req["count"],
+                                                     req["tab"], req["guid"]))
+                    elif parts[2] == "mail" and ev.kind == "mail_send":
+                        commands.append(MailSend(ev.id, d["settled_by"], "Guild bank request",
+                            items=(MailItem(req["item"], req["count"], "bags"),), to_guid=req["guid"]))
+                if ev.guid != d["settled_by"]:
+                    return None
+        elif ev.kind == "bank_stock" and len(parts) == 4 and parts[0] == "restock" and parts[3].isdecimal():
+            from leeroy_mind.decisions.restock import PREFIX, targets
+            raw = self._store.get_meta(PREFIX + parts[1])
+            stacks = json.loads(raw)["stacks"] if raw else []
+            index = int(parts[3])
+            if index < len(stacks) and str(stacks[index]["item"]) == parts[2]:
+                stack = stacks[index]
+                target = targets().get(stack["item"])
+                if target is None:
+                    return None
+                tab, slots, size = target
+                for limit in range(stack["count"], size + 1):
+                    commands.append(BankStock(ev.id, ev.guid, tab, stack["item"], stack["count"],
+                                              maker=stack["maker"], target=slots*limit))
+        for cmd in commands:
+            if _classified(cmd) == (row["kind"], row["payload_sha256"]):
+                count = getattr(cmd, "count", None)
+                conn.execute("INSERT INTO decision_job_proof(command_id,actor,expected_count) VALUES (?,?,?)",
+                             (ev.id, ev.guid, count))
+                return {"actor": ev.guid, "expected_count": count}
+        return None
 
     def on_job(self, ev) -> bool:
         """Settle an intent that expects a job from its result, before or after the ack."""
@@ -258,17 +319,35 @@ class DirectLedger:
         with self._store.transaction():
             row = self._store.conn.execute(
                 f"SELECT {_COLUMNS} FROM realm_direct WHERE command_id=?", (ev.id,)).fetchone()
-            if (row is None or row["kind"] != ev.kind or row["expects_job"] != 1
-                    or not (row["state"] == "dispatched"
-                            or (row["state"] == "acked" and row["settled_ms"] is None))):
+            if row is None or row["kind"] != ev.kind or not row["expects_job"] or row["dispatched_ms"] is None:
                 return False
+            decision_job = row["owner"] == "decision" and ev.kind in ("bank_stock", "bank_withdraw", "mail_send")
+            late = (decision_job and row["state"] == "unknown" and row["reason"] in _MISSING_JOB)
+            if not (late or row["state"] == "dispatched" or row["state"] == "acked" and row["settled_ms"] is None):
+                return False
+            if decision_job:
+                proof = self._decision_proof(row, ev)
+                if proof is None or ev.guid != proof["actor"]:
+                    return False
+                if ev.state == "done" and (ev.reason or ev.changed is False or ev.skipped or ev.released
+                        or ev.readback_guid or ev.check
+                        or not (ev.value == proof["expected_count"] if ev.kind != "mail_send" else 0 < ev.value <= _U32)):
+                    return False
+                if late:
+                    self._store.conn.execute("UPDATE decision_job_proof SET recovered_reason=? WHERE command_id=?",
+                                             (row["reason"], ev.id))
+                    if ev.state != "done":
+                        # Conflicting terminal evidence fences this original ref permanently.
+                        self._move(row, "unknown", reason="late_job_failed")
+                        return True
             if ev.state == "done" and type(ev.value) is int and 0 <= ev.value <= _U64:
                 self._move(row, "acked", value=str(ev.value))
             else:
                 uncertain = (type(ev.reason) is str and ev.reason in NATIVE_UNKNOWN
                              or row["owner"] == "decision" and ev.changed is not False)
                 state = "unknown" if uncertain else "refused"
-                self._move(row, state, reason=_reason(ev.reason, "job_failed"))
+                reason = _reason(ev.reason, "job_failed")
+                self._move(row, state, reason="job_failed" if decision_job and reason in _MISSING_JOB else reason)
         return True
 
     def on_send_error(self, cmd, error_type) -> bool:
@@ -301,7 +380,8 @@ class DirectLedger:
 
         A prepared intent never reached the wire, so it is abandoned and its ref is free. A
         dispatched one may have reached native, so it is unknown and its ref stays taken. An
-        acked one still waiting for its job keeps waiting: the job may yet come. Returns how
+        decision waiting for its job becomes unknown and keeps its proof for a late job.
+        Other acked jobs keep waiting. Returns how
         many were abandoned and how many became unknown.
         """
         self._own_unit()
@@ -315,6 +395,11 @@ class DirectLedger:
             unknown = conn.execute(
                 "UPDATE realm_direct SET state='unknown',reason='recovered_dispatched',"
                 "settled_ms=max(?,dispatched_ms) WHERE state='dispatched' AND process_id<>?",
+                (now, process_id)).rowcount
+            unknown += conn.execute(
+                "UPDATE realm_direct SET state='unknown',reason='recovered_acked',settled_ms=max(?,dispatched_ms) "
+                "WHERE owner='decision' AND kind IN ('bank_withdraw','bank_stock','mail_send') AND state='acked' "
+                "AND expects_job=1 AND settled_ms IS NULL AND process_id<>?",
                 (now, process_id)).rowcount
         if abandoned or unknown:
             log.info("realm_direct_recovered: abandoned=%d unknown=%d", abandoned, unknown)

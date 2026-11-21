@@ -228,3 +228,79 @@ def test_backward_clock_step_cannot_reopen_today_allowance(store, clock):
     clock._t = (noon - timedelta(minutes=1)).timestamp()
     given = bank.given_today(store.conn, clock.now())
     assert bank.approve(request(), snapshot((0, 46377, 20), (1, 46377, 20)), given_today=given, cap=1) == (False, "cap")
+
+
+def test_overrule_reports_wire_stage_and_late_delivery_once(store, clock):
+    import asyncio
+    import json
+    from dataclasses import replace
+    from types import SimpleNamespace as NS
+    from uuid import uuid4
+    from leeroy_mind.console.decisionsview import decisions_view
+    from leeroy_mind.decisions.service import DecisionsService
+    from leeroy_mind.realm.actions import ActionContext
+    from leeroy_mind.realm.direct import DirectLedger
+
+    ctx = ActionContext(True, True, True, 1, "old", 1, 8, 1)
+    direct = DirectLedger(store, process_id="old", clock=clock)
+    app = NS(store=store, clock=clock, realm=NS(part=lambda _: direct))
+    service = DecisionsService(app, NS())
+    rules = service.rules_for("bank")
+    for phase, word in [("new","No bank transfer"), ("bags","officer's bags"), ("flight","may still complete"),
+                        ("confirmed","Delivery confirmed")]:
+        row = settled(store, clock)
+        ident = row["id"]
+        def send(cmd, step):
+            assert direct.prepare(cmd, owner="decision", ref=f"decision:{ident}:{step}", context=ctx, expects_job=True)
+            direct.before_send(cmd, context=ctx)
+        if phase != "new":
+            withdrawal = protocol.BankWithdraw(uuid4().hex, 101, 46377, 20, 0, 102)
+            send(withdrawal, "withdraw")
+            assert direct.on_job(protocol.RealmJob(0,withdrawal.id,"bank_withdraw","done","",101,20))
+        if phase in ("flight","confirmed"):
+            cmd = protocol.MailSend(uuid4().hex,101,"Guild bank request",items=(protocol.MailItem(46377,20,"bags"),),
+                                    to_guid=102)
+            send(cmd, "mail")
+            job = protocol.RealmJob(0,cmd.id,"mail_send","done","",101,77)
+            if phase == "confirmed":
+                assert direct.on_job(job)
+        before = decisions_view(store.conn,now=clock.now(),enabled=True)["decisions"][0]
+        if phase != "new":
+            assert before["action"]["permanent"] and word in before["action"]["confirm"]
+        result = asyncio.run(service.handle({"action":"overrule","id":ident}))
+        assert word in result["message"]
+        if phase == "flight":
+            ctx = replace(ctx, process_id="new")
+            direct = DirectLedger(store,process_id="new",clock=clock)
+            direct.recover(process_id="new")
+            assert direct.on_job(job) and not direct.on_job(job)
+        for _ in range(2):
+            asyncio.run(rules.tick(app,clock.now()))
+        closed = ledger.get(store.conn,ident)
+        assert closed["status"] == "overruled"
+        effect = json.loads(closed["effect_ref"] or "{}")
+        if phase != "new":
+            assert effect["realm_bank"]
+        if phase in ("flight","confirmed"):
+            assert effect["mail_id"] == 77
+        elif phase == "bags":
+            assert effect["refs"] == [f"decision:{ident}:withdraw"]
+    assert store.conn.execute("SELECT count(*) FROM realm_bank WHERE reason='request'").fetchone()[0] == 3
+
+
+def test_unposted_bank_requests_expire_without_another_candidate(store, clock, guild):
+    import asyncio
+    from types import SimpleNamespace as NS
+    from leeroy_mind.decisions.seeds import decision_seeds
+    now = clock.now()
+    rules = bank.bank_rules()
+    rules.features = frozenset()
+    app = NS(store=store, clock=clock, human_guid=1, world=NS(members={}, _cast_seen=True), personas=guild)
+    for kind, age, officer in [("raid_flasks", 86400, 101), ("enchant_mats", 8*86400, 101),
+                               ("enchant_mats", 0, 103)]:
+        ident = ledger.propose(store,kind="bank",subject=f"bank:{kind}:{officer}",
+            value=request(kind=kind,officer=officer,cap=10),positions=[],now=now-age)
+        seeds = decision_seeds(store.conn,now=now,personas=guild,officers={101})
+        assert not any(s.key in (f"bank_request:{ident}",f"decision:{ident}:proposed") for s in seeds)
+        asyncio.run(rules.tick(app,now))
+        assert ledger.get(store.conn,ident)["status"] == "expired"

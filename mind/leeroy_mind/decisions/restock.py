@@ -107,17 +107,19 @@ def close_previous_weeks(app, week):
     store = app.store
     for state in history(store.conn):
         stacks, results = state["stacks"], state["results"]
-        if state["week"] >= week or len(results) == len(stacks):
+        if state["week"] >= week or (len(results) == len(stacks) and "unknown" not in results.values()):
             continue
         direct = app.realm.part("direct")
         for index, row in enumerate(stacks):
             token = str(index)
-            if token in results:
+            if token in results and results[token] != "unknown":
                 continue
             item, maker = row["item"], row["maker"]
             ref = f"restock:{state['week']}:{item}:{index}"
             outcome = verdict(direct.state("decision", ref), row["count"])
             if outcome == "wait":
+                outcome = "unknown"  # week ended with no terminal receipt; this ref still waits for late proof
+            if results.get(token) == outcome:
                 continue
             with store.transaction():
                 if outcome == "credited":
@@ -139,7 +141,7 @@ async def run(app, *, start=False):
     if not start and not raw:
         return
     state = json.loads(raw) if raw else None
-    if state and len(state["results"]) == len(state["stacks"]):
+    if state and len(state["results"]) == len(state["stacks"]) and "unknown" not in state["results"].values():
         return
     by = requests.officer(app)
     if not by:
@@ -157,13 +159,13 @@ async def run(app, *, start=False):
     # The stage and the minute tick can overlap across an armory read. Only admit an unclaimed ref.
     for index, row in enumerate(state["stacks"]):
         token = str(index)
-        if token in state["results"]:
+        if token in state["results"] and state["results"][token] != "unknown":
             continue
         item, maker = row["item"], row["maker"]
         ref = f"restock:{week}:{item}:{index}"
         status = verdict(direct.state("decision", ref), row["count"])
-        if status == "wait":
-            return
+        if status == "wait" or state["results"].get(token) == status:
+            continue
         if status == "send":
             def valid():
                 return ("bank_stock_target" in (rules.features or ()) and app.clock.local().strftime("%G-W%V") == week

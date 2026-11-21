@@ -30,14 +30,14 @@ from tests.guild.test_raid_night import setup  # noqa: F401
 from tests.guild.test_raid_night_lineup import form10, formed_members
 from tests.training.fakes import FakeTrainingPorts
 from tests.training.test_tg_listener import real_listener, status
-from leeroy_mind.server.engine import Conversation
+from leeroy_mind.server import engine as server_engine
 from tests.training.test_tg_store import context, record
 from tests.training.test_tg_ledger import feed, header, member, run as open_training_raid
 from .test_lineup import event
 from .test_loot_rules import receipt
 
 
-def test_decisions_rehearsal(setup, tmp_path, clock):
+def test_decisions_rehearsal(setup, tmp_path, clock, monkeypatch):
     async def play():
         ports, armory, night = setup
         seed = Store(ports.conn, clock=clock)
@@ -139,23 +139,35 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
             server = app.server.engine
             # Pin availability and model wording; exercise the actual server opener, Discord
             # pipeline, recorded line, code block and atomic callback for its chosen seed.
-            server._blocked = lambda now: None
-            server._valid = lambda *args: True
-            server._observe = AsyncMock(return_value=NS(personas=people, in_play=set(), away=set(),
-                ties={}, states={speaker:NS(presence=NS(state="online"))}))
+            server.next_start = 0
+            app.server.lease.ready = lambda: True
+            app.guild.members_in_play = lambda: set()
+            monkeypatch.setattr(app.engine.live_review, "config", replace(app.engine.live_review.config, enabled=True))
+            # One available officer and one ordinary member. The scheduler chooses the private opener.
+            free = {speaker:people[speaker], 102:people[102]}
+            observed = NS(personas=free, in_play=frozenset(), away=frozenset(), local=clock.local(),
+                          human=1, officers=frozenset({speaker}), classes={}, ties={}, seeds=[seed],
+                          states={g:NS(presence=NS(state="online")) for g in free})
+            monkeypatch.setattr(server_engine.runtime, "snapshot", AsyncMock(return_value=observed))
+            monkeypatch.setattr(server_engine, "presence_of", lambda *a, **kw: NS(state="online"))
+            monkeypatch.setattr(server_engine.rhythm, "length", lambda rng: 1)
+            server._observe = AsyncMock(return_value=observed)
             async def compose(turn, meta):
                 answer = await app.llm.chat("fake", [{"role":"user", "content":turn.instruction}], options={})
-                reason = app.engine._deliver_discord(turn,meta,people[speaker],answer.text,[])
+                reason = app.engine._deliver_discord(turn,meta,people[turn.speaker],answer.text,[])
                 assert reason is None, reason
             app.engine.speak_meta = compose
-            conversation = Conversation("synthetic-"+seed.key, seed.channels[0], seed, [speaker], clock.now(), 1)
-            server._live[conversation.id] = conversation
-            await server._conversation(conversation)
+            assert not server._blocked(clock.now())
+            await server.tick(clock.now())
+            [conversation] = list(server._live.values())
+            if seed.bank_announcement(conversation.channel):
+                assert conversation.cast == [speaker] and conversation.maximum == 1
+            await conversation.task
             assert len(conversation.messages) == 1, conversation.reason
             row = conn.execute("SELECT channel,text FROM discord_message WHERE id=?", (conversation.messages[0],)).fetchone()
             assert row["channel"] == seed.channels[0]
-            assert row["text"].startswith("I checked the bank." if seed.kind == "bank_request" else "That tank coverage works for me.")
-            if seed.kind == "bank_request":
+            assert row["text"].startswith("I checked the bank." if seed.kind in ("bank_request", "restock") else "That tank coverage works for me.")
+            if seed.kind in ("bank_request","restock"):
                 assert row["channel"] == "bank-requests" and seed.fact in row["text"].split("```")[1]
 
         start = clock.now()
@@ -170,11 +182,29 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
         clock._t += 2*3600
         await tick("lineup")
         assert rows("lineup")[0]["message"]
+        # A different withdrawal lacks its terminal job. It cannot monopolize the officer.
+        orphan = ledger.propose(store,kind="bank",subject="bank:unresolved", value={"count":20},
+                                positions=[],now=clock.now())
+        ledger.settle(store,orphan,settled_by=104,now=clock.now())
+        # The missing terminal job remains reserved alongside the independent requests.
+        stuck = realm.BankWithdraw("e"*32,104,34753,20,0,102)
+        ref = f"decision:{orphan}:withdraw"
+        assert direct.prepare(stuck,owner="decision",ref=ref,context=ctx,expects_job=True)
+        direct.before_send(stuck,context=ctx)
+        from leeroy_mind.protocol import Ack
+        direct.on_ack(stuck,Ack(0,stuck.id,True,""))
         await tick("bank")
         requests = [s for s in seeds() if s.kind == "bank_request"]
         assert len(requests) >= 2
         for seed in requests[:2]:
             await post_seed(seed, 104)
+        # The same sole officer can publish completed weekly stock through the same scheduler.
+        from leeroy_mind.decisions import restock
+        week = clock.local().strftime("%G-W%V")
+        store.set_meta(restock.PREFIX+week,json.dumps(dict(week=week,officer=104,no_maker=[],results={"0":"credited"},
+            stacks=[dict(item=43015,count=10,tab=0,maker=102)])))
+        await post_seed(next(s for s in seeds() if s.kind == "restock"), 104)
+        assert json.loads(store.get_meta(restock.PREFIX+week))["message"]
         clock._t = at - 6*3600
         at = clock.now()
         await tick("lineup")
@@ -213,9 +243,16 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
 
         for _ in range(6):
             await tick("bank")
+        assert direct.state("decision",ref) == ("acked",None,None)
+        from unittest.mock import patch
+        # Once the actionable requests finish, an unresolved one must still permit fresh discovery.
+        from leeroy_mind.decisions import bank
+        with patch.object(bank,"read",wraps=bank.read) as read_again:
+            await tick("bank")
+            read_again.assert_awaited()
         assert [c["type"] for c in bridge.commands if c["type"] in ("bank_withdraw","mail_send")] == ["bank_withdraw","mail_send"]
-        assert rows("bank")[0]["status"] == "in_effect"
-        assert json.loads(rows("bank")[1]["effect_ref"])["failed"] == "last_stack"
+        assert ledger.get(conn,int(requests[0].key.split(":")[1]))["status"] == "in_effect"
+        assert json.loads(ledger.get(conn,int(requests[1].key.split(":")[1]))["effect_ref"])["failed"] == "last_stack"
 
         # Two actual training pull receipts from the raid; the lead settles its one menu change.
         for i in range(2):
@@ -265,6 +302,8 @@ def test_decisions_rehearsal(setup, tmp_path, clock):
         await app.guild.roster.sync_ranks()
         assert any(c["type"] == "set_rank" and c["guid"] == 105 and c["rank"] == 4 for c in bridge.commands)
         assert ledger.get(conn, newcomer["id"])["status"] == "in_effect"
+        rank_reply = await svc.handle(dict(action="overrule", id=newcomer["id"]))
+        assert not rank_reply["undone"] and "scheduled" in rank_reply["message"]
         result = await svc.handle(dict(action="overrule", id=rows("loot_rule")[-1]["id"]))
         assert result["undone"] and loot_rules.current_rule(conn).mode == "dkp"
         view = decisions_view(conn, now=clock.now(), enabled=True)["decisions"]

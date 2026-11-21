@@ -196,9 +196,10 @@ class ServerEngine:
                 classes=observed.classes, away=observed.away,
                 tease=lambda a,b: self._tease(a,b),
                 group_audience=getattr(observed,'group_audiences',{}).get(channel,frozenset()))
-            if len(cast) < 2:
+            announcement = seed.bank_announcement(channel)
+            if len(cast) < (1 if announcement else 2):
                 return
-            conversation = Conversation(uuid.uuid4().hex, channel, seed, cast, now, rhythm.length(self.rng))
+            conversation = Conversation(uuid.uuid4().hex, channel, seed, cast, now, 1 if announcement else rhythm.length(self.rng))
             if is_group(channel):
                 conversation.maximum = self.rng.randint(2,4)
                 conversation.readers = observed.group_audiences.get(channel,frozenset())

@@ -184,9 +184,16 @@ Requests use two durable Realm direct-ledger references, `decision:<id>:withdraw
 `decision:<id>:mail`. The first moves stock to the officer's bags. The second sends bag items
 with zero gold to the named member. A confirmed withdrawal creates one outgoing bank receipt,
 even if the owner overrules it before delivery. An unknown result stops the request and reserves
-its daily allowance. Overruling after delivery preserves the receipt and the recipient's items.
+its daily allowance. Each unresolved request or stack keeps its own ref while independent work
+continues. A matching late native job can still confirm the original withdrawal or mail. The
+Decisions card and overrule response report which transfers entered transport and which completed.
+One available bank officer can publish an operational post in the private bank channel.
 
 The night stage after the snapshot plans the ISO week's top-ups in `decisions:restock:<week>`.
+If the first planning attempt cannot read a fresh bank snapshot, it waits for the next nightly
+stage. The minute tick resumes an existing plan. Maker skill comes from the armory read before
+dispatch. Native checks current membership, whitelist and capacity at the write; an intervening
+profession change can leave the earlier maker credit in the ledger.
 It fills the largest proportional deficits against the original per-tab stock, using only bank
 whitelist entries, free slots and members with the corresponding profession at 375 or higher.
 It distributes planned stacks among eligible makers. Each ISO week's announcement groups item IDs
@@ -234,3 +241,6 @@ Bank writes also require the normal Realm enablement, bank permissions, item whi
 guild armory connection. Boss changes require `Leeroy.Training.Enable = 1` and `[training]`
 with telemetry and action enabled. Migration `0062_decisions_bank.sql` admits decision-owned
 direct receipts, request outflows and the guild training layer, preserving existing receipts.
+Migration `0063_decision_job_proof.sql` binds expected job actors and counts to their original
+command IDs. An outstanding 0062 request or stock plan can supply that evidence after upgrade
+when its reconstructed payload matches the original stored hash.

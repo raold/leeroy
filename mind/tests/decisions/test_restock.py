@@ -78,3 +78,43 @@ def test_sixty_distinct_deliveries_fit_one_wrapped_discord_post():
     block = restock.announcement({"stacks":rows, "results":dict.fromkeys(map(str,range(60)), "credited")}, names)
     assert len("We filled the tab.\n```\n"+block+"\n```") <= MAX_TEXT
     assert all(name in block for name in names.values()) and block.count("43015×1") == 60
+
+
+def test_unsettled_stack_does_not_block_an_independent_stack_or_late_credit(store, clock, monkeypatch):
+    import asyncio
+    import json
+    from types import SimpleNamespace as NS
+    from unittest.mock import AsyncMock
+    week = clock.local().strftime("%G-W%V")
+    stacks = [dict(item=43015, maker=101, tab=0, count=10), dict(item=34753, maker=102, tab=0, count=10)]
+    state = dict(week=week, stacks=stacks, results={}, no_maker=[],officer=104)
+    store.set_meta(restock.PREFIX+week,json.dumps(state))
+    first, second = f"restock:{week}:43015:0", f"restock:{week}:34753:1"
+    evidence = {first:("acked",None,None)}
+    direct = NS(state=lambda owner,ref: evidence.get(ref))
+    sent = []
+    async def send(app,cmd,ref,check):
+        assert check()
+        sent.append(ref)
+        evidence[ref] = ("acked",None,10)
+    rules = NS(features={"bank_stock_target"},valid=lambda *_:True,send=send)
+    app = NS(store=store,clock=clock,realm=NS(part=lambda _:direct), guild=NS(cfg=NS(worldserver_conf="mock")),
+             decisions=NS(config=NS(bank_restock_per_week=2),rules_for=lambda _:rules))
+    bank = dict(empty(),professions={101:{185:450},102:{185:450}})
+    monkeypatch.setattr(restock.requests,"read",AsyncMock(return_value=bank))
+    monkeypatch.setattr(restock.requests,"ready",lambda _: True)
+    monkeypatch.setattr(restock.requests,"officer",lambda _:104)
+    monkeypatch.setattr(restock.requests,"members",lambda _: {101,102,104})
+    monkeypatch.setattr(restock,"load_items",lambda _: {43015:10,34753:10})
+    monkeypatch.setattr(restock,"items_path",lambda _:None)
+    asyncio.run(restock.run(app))
+    assert sent == [second]
+    evidence[first] = ("unknown","recovered_acked",None)
+    asyncio.run(restock.run(app))
+    assert json.loads(store.get_meta(restock.PREFIX+week))["results"] == {"0":"unknown","1":"credited"}
+    evidence[first] = ("acked",None,10)
+    for _ in range(2):
+        restock.close_previous_weeks(app,"9999-W01")
+    assert sent == [second]
+    assert json.loads(store.get_meta(restock.PREFIX+week))["results"] == {"0":"credited","1":"credited"}
+    assert store.conn.execute("SELECT count(*) FROM realm_bank WHERE reason='craft'").fetchone()[0] == 2

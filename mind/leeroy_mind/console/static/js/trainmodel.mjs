@@ -91,6 +91,7 @@ export function hurtHead(c) {
   c = obj(c);
   var kinds = Object.keys(obj(c.by_kind)).sort().map(function (k) { return k + " " + num(c.by_kind[k]); });
   var parts = [plural(num(c.pulls), "pull") + " (" + plural(num(c.kills), "kill") + ", " + plural(num(c.wipes), "wipe") + ")"];
+  if (c.guild_strategy) { parts.push("guild strategy #" + c.guild_strategy); }
   if (kinds.length) { parts.push(kinds.join(", ")); }
   var deaths = obj(c.deaths);
   parts.push((typeof deaths.per_pull === "number" ? deaths.per_pull.toFixed(2) : "-") + " deaths a pull");
