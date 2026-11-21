@@ -449,6 +449,13 @@ Apply them to a checkout of each module with
 ./ac-module-to-git.sh [--go] [--subdir P] <module> <url> <commit>  # swap a zip-extracted module for its git clone
 ```
 
+On server startup, native `*.log.YYYY-MM-DD HH-MM-SS` rotations older than
+14 days are pruned by their local rotation timestamp. Every rotation within
+that window survives, even after frequent restarts. Active logs, invalid or
+future timestamps, symlinks and subdirectories are untouched. For a separate
+maintenance run, `python scripts/prune-native-logs.py <log-directory> --days N`
+accepts a positive retention period; startup uses 14 days.
+
 They assume this repo is the install root, with the core checked out in
 `azerothcore-wotlk/` and the build in `build/`.
 
