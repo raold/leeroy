@@ -636,3 +636,21 @@ def test_engagement_during_countdown_delivery_cannot_recreate_go_timer(raid_setu
         await night.tick()
         assert "go" not in [row[2] for row in ports.said] and not controls(ports, "dc_on")
     asyncio.run(go())
+
+
+def test_a_failed_lane_logs_the_error_class_and_place_never_its_message(caplog):
+    from leeroy_mind.guild.service import GuildLife
+
+    async def fails():
+        raise ValueError("Testblade -> M105: secret words")
+
+    async def stop(seconds):
+        raise asyncio.CancelledError
+
+    lane = SimpleNamespace(app=SimpleNamespace(clock=SimpleNamespace(sleep=stop)))
+    with caplog.at_level("WARNING", logger="leeroy_mind.guild.service"):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(GuildLife._loop(lane, "online", fails))
+    (line,) = [r.getMessage() for r in caplog.records if r.name == "leeroy_mind.guild.service"]
+    assert line.startswith("guild lane failed: online ValueError at test_service.py:") and line.endswith(" fails")
+    assert "secret" not in line and "Testblade" not in line

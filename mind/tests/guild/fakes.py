@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 from types import SimpleNamespace
 
+from leeroy_mind.bridge import valid_preserved_id
 from leeroy_mind.guild.protocol import Job, register
 from leeroy_mind.human import HumanIdentity
 from leeroy_mind.protocol import Ack, Member, encode_command
@@ -90,6 +91,8 @@ class FakePorts:
     async def send(self, cmd, *, expected_epoch=None):
         if expected_epoch is not None:
             assert expected_epoch == self.app.realm._transport_epoch
+        if not valid_preserved_id(cmd.id):  # LivePorts sends every guild command preserve_id=True
+            raise ValueError("invalid preserved command identity")
         type_name = json.loads(encode_command(cmd, int(self.clock.now() * 1000)))["type"]
         self.sent.append(cmd)
         self._command_types[cmd.id] = type_name

@@ -153,6 +153,44 @@ def test_token_mean_and_empty_baseline():
     assert upgrade_gain(token, 8, "int", {0: 277}) is None
 
 
+# Tier tokens as the world database has them (item level 80, no slot, the token's classes)
+VANQUISHER_MARK = ItemInfo(52025, "Vanquisher's Mark of Sanctification", 4, 80, 0, 15, 0, 1192, frozenset())
+PROTECTOR_HEROIC_MARK = ItemInfo(52029, "Protector's Mark of Sanctification", 4, 80, 0, 15, 0, 69, frozenset())
+LOST_CROWN = ItemInfo(40633, "Crown of the Lost Vanquisher", 4, 80, 0, 15, 0, 1192, frozenset())
+TROPHY = ItemInfo(47242, "Trophy of the Crusade", 4, 80, 0, 15, 4, -1, frozenset())
+TIER_WORN = (0, 2, 4, 6, 9)  # head, shoulders, chest, legs, hands
+
+
+def test_a_mark_of_sanctification_is_worth_her_best_tier_slot():
+    worn = {0: 245, 2: 251, 4: 264, 6: 264, 9: 264}
+    assert upgrade_gain(VANQUISHER_MARK, 8, "int", worn) == 19  # a mage's 264 helm over her 245
+    assert upgrade_gain(VANQUISHER_MARK, 11, "int", {}, role="healer") == 64  # an empty slot reads 200
+    assert upgrade_gain(VANQUISHER_MARK, 4, "agi", dict.fromkeys(TIER_WORN, 264)) is None
+    assert upgrade_gain(VANQUISHER_MARK, 1, "str", {}) is None  # a warrior: no Vanquisher
+    heroic = upgrade_gain(PROTECTOR_HEROIC_MARK, 1, "str", dict.fromkeys(TIER_WORN, 264), role="tank")
+    assert heroic == 13  # the heroic mark buys 277
+
+
+def test_a_slot_token_is_worth_its_own_slot_only():
+    assert upgrade_gain(LOST_CROWN, 6, "str", {0: 200, 9: 100}) == 13  # the 25-player crown: a 213 helm
+    assert upgrade_gain(LOST_CROWN, 6, "str", {0: 213, 9: 100}) is None
+
+
+def test_the_crusade_trophy_is_every_class_tier_piece():
+    assert all(upgrade_gain(TROPHY, cls, family, {}) == 45
+               for cls, family in ((1, "str"), (5, "int"), (11, "agi"), (7, "int")))
+
+
+def test_the_token_table_covers_every_wotlk_tier_token():
+    from leeroy_mind.guild.tokens import TIER_SLOTS, TIER_TOKENS
+    assert len(TIER_TOKENS) == 70
+    assert TIER_TOKENS[40610] == (200, (5,)) and TIER_TOKENS[40639] == (213, (3,))
+    assert TIER_TOKENS[45632] == (226, (5,)) and TIER_TOKENS[45637] == (219, (5,))
+    assert TIER_TOKENS[45658] == (226, (3,)) and TIER_TOKENS[45661] == (219, (3,))
+    assert TIER_TOKENS[47242] == (245, TIER_SLOTS) and TIER_TOKENS[47559] == (258, TIER_SLOTS)
+    assert TIER_TOKENS[52027] == (264, TIER_SLOTS) and TIER_TOKENS[52030] == (277, TIER_SLOTS)
+
+
 # A physical damage trinket of crit rating alone (its attack power a proc), as the culture loot
 # wishes gave to healers and casters (2026-11-20); invented stats, item_template's stat types
 SCALE = ItemInfo(13, "Invented Honed Scale", 4, 264, 12, 4, 0, -1, frozenset({32}))

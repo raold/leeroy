@@ -21,6 +21,13 @@ ANOTHER_MIND = "another mind is connected"  # mod-leeroy's refusal (LeeroyProtoc
 MISSED_PONGS = 2  # pings without a pong, in a row, before the connection is dropped
 
 
+def valid_preserved_id(cmd_id) -> bool:
+    """A command identity the mind may keep on the wire (send(preserve_id=True)): 1-128 ASCII
+    letters, digits, `_` and `-`. Callers build theirs with this rule; a colon is refused."""
+    return (isinstance(cmd_id, str) and 0 < len(cmd_id) <= 128 and cmd_id.isascii()
+            and all(c.isalnum() or c in "_-" for c in cmd_id))
+
+
 class BridgeError(Exception):
     pass
 
@@ -401,8 +408,7 @@ class BridgeClient:
             issued = self._preserved_ids = set()
         if preserve_id:
             cmd_id = cmd.id
-            if (not isinstance(cmd_id, str) or not cmd_id or len(cmd_id) > 128
-                    or not cmd_id.isascii() or not all(c.isalnum() or c in "_-" for c in cmd_id)):
+            if not valid_preserved_id(cmd_id):
                 raise ValueError("invalid preserved command identity")
             old_auto = cmd_id.startswith("m") and cmd_id[1:].isdigit() and int(cmd_id[1:]) < self._next_id
             if cmd_id in issued or cmd_id in self._pending or old_auto:
