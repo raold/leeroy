@@ -33,10 +33,15 @@ On the platform:
   The actual navigation path is checked as well as its destination; missing or
   incomplete paths fail closed.
   The cast target moves away from the raid before the puddle spawns.
+  The bounded search spans the whole platform diameter, so a grown puddle is
+  not mistaken for a blocked route merely because its edge is over 28 yards away.
 - Val'kyr rescue uses the actual passenger seat. Available damage bots and
   off-tanks split across carriers and use real learned stuns/slows. Main tanks
   and healers keep their duties. The core releases the passenger on heroic
   below 50%; an empty carrier stops being a rescue target immediately.
+  The allocation uses the same eligibility checks as execution, so stay/passive
+  and self-bots cannot consume rescue slots. Target acquisition consumes one
+  tick; an already selected target yields to the ordinary damage rotation.
 - Ranged damage bots shoot Vile Spirits. Low, approaching spirits are avoided
   by every role instead of assigning an off-tank to soak them with free auras.
 - If no validated route exists, the bot reports `no_safe_path` and does not

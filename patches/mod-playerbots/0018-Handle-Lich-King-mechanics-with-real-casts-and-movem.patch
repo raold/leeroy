@@ -1,4 +1,4 @@
-From 0aad942e723cb28fae9dad9c33d681cd2273b4b8 Mon Sep 17 00:00:00 2001
+From 0d99a86367455a3649564833d8f199d07a8bcb37 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sun, 22 Nov 2026 14:39:59 -0500
 Subject: [PATCH] Handle Lich King mechanics with real casts and movement
@@ -8,7 +8,7 @@ Subject: [PATCH] Handle Lich King mechanics with real casts and movement
  src/Ai/Base/Strategy/ReactionStrategy.cpp     |   5 +
  src/Ai/Raid/ICC/Action/ICCActions.h           |  31 ++
  src/Ai/Raid/ICC/Action/ICCActions_LK.cpp      |  44 ++-
- .../ICC/Action/ICCActions_LKMechanics.cpp     | 319 ++++++++++++++++++
+ .../ICC/Action/ICCActions_LKMechanics.cpp     | 323 ++++++++++++++++++
  src/Ai/Raid/ICC/ICCActionContext.h            |   2 +
  src/Ai/Raid/ICC/ICCMultipliers.cpp            |  42 +++
  src/Ai/Raid/ICC/ICCMultipliers.h              |   7 +
@@ -16,11 +16,11 @@ Subject: [PATCH] Handle Lich King mechanics with real casts and movement
  src/Ai/Raid/ICC/ICCTriggerContext.h           |   4 +
  src/Ai/Raid/ICC/ICCTriggers.cpp               |  13 +
  src/Ai/Raid/ICC/ICCTriggers.h                 |  14 +
- src/Ai/Raid/LichKingMechanicsPolicy.h         | 131 +++++++
+ src/Ai/Raid/LichKingMechanicsPolicy.h         | 147 ++++++++
  src/PlayerbotAIConfig.cpp                     |   1 +
  src/PlayerbotAIConfig.h                       |   1 +
- tests/lich_king_mechanics_test.cpp            |  95 ++++++
- 16 files changed, 707 insertions(+), 9 deletions(-)
+ tests/lich_king_mechanics_test.cpp            | 131 +++++++
+ 16 files changed, 763 insertions(+), 9 deletions(-)
  create mode 100644 src/Ai/Raid/ICC/Action/ICCActions_LKMechanics.cpp
  create mode 100644 src/Ai/Raid/LichKingMechanicsPolicy.h
  create mode 100644 tests/lich_king_mechanics_test.cpp
@@ -300,10 +300,10 @@ index f67715a9..cd0b2878 100644
      // Defile target: let HandleDefileMechanics() handle movement
 diff --git a/src/Ai/Raid/ICC/Action/ICCActions_LKMechanics.cpp b/src/Ai/Raid/ICC/Action/ICCActions_LKMechanics.cpp
 new file mode 100644
-index 00000000..51e09611
+index 00000000..850fbf24
 --- /dev/null
 +++ b/src/Ai/Raid/ICC/Action/ICCActions_LKMechanics.cpp
-@@ -0,0 +1,319 @@
+@@ -0,0 +1,323 @@
 +/*
 + * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
 + * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
@@ -338,12 +338,13 @@ index 00000000..51e09611
 +
 +bool IccLichKingMechanicsAction::Active(Player* player)
 +{
-+    if (!sPlayerbotAIConfig.LichKingMechanics || !player || !player->IsAlive() ||
-+        !player->IsInWorld() || player->GetMapId() != 631 || IsRealPlayer(player) || IsSelfBot(player))
++    if (!sPlayerbotAIConfig.LichKingMechanics || !player || !player->IsInWorld() || player->GetMapId() != 631)
 +        return false;
 +    PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
-+    if (!ai || ai->HasStrategy("stay", BOT_STATE_COMBAT) || ai->HasStrategy("stay", BOT_STATE_NON_COMBAT) ||
-+        ai->HasStrategy("passive", BOT_STATE_COMBAT))
++    bool const stay = ai && (ai->HasStrategy("stay", BOT_STATE_COMBAT) || ai->HasStrategy("stay", BOT_STATE_NON_COMBAT));
++    bool const passive = ai && ai->HasStrategy("passive", BOT_STATE_COMBAT);
++    if (!Eligible(true, player->IsAlive(), player->IsInWorld(), ai != nullptr, IsRealPlayer(player), IsSelfBot(player),
++                  stay, passive))
 +        return false;
 +    InstanceScript* instance = player->GetInstanceScript();
 +    return instance && instance->GetBossState(Encounter) == IN_PROGRESS;
@@ -449,7 +450,7 @@ index 00000000..51e09611
 +                for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
 +                {
 +                    Player* member = ref->GetSource();
-+                    if (member && GET_PLAYERBOT_AI(member) && member->IsAlive() && member->IsInWorld() &&
++                    if (Active(member) &&
 +                        member->GetMap() == bot->GetMap() && !member->GetVehicleBase() &&
 +                        !PlayerbotAI::IsHeal(member) && !PlayerbotAI::IsMainTank(member) &&
 +                        std::abs(member->GetPositionZ() - PlatformZ) < 8.0f)
@@ -514,7 +515,7 @@ index 00000000..51e09611
 +            if (std::abs(z - bot->GetPositionZ()) >= 3.0f || !bot->IsWithinLOS(p.x, p.y, z))
 +                return false;
 +            PathGenerator path(bot);
-+            path.SetPathLengthLimit(40.0f);
++            path.SetPathLengthLimit(EscapePathLimit);
 +            if (!path.CalculatePath(p.x, p.y, z) || path.GetPathType() != PATHFIND_NORMAL)
 +                return false;
 +            Point previous = XY(bot);
@@ -618,7 +619,10 @@ index 00000000..51e09611
 +        Note("valkyr_cc", true, Valkyr);
 +        return true;
 +    }
-+    bool const attacked = Attack(target); // Sets the ordinary rotation's target; never grants a kill.
++    Unit* selected = AI_VALUE(Unit*, "current target");
++    if (!AcquireTarget(selected ? selected->GetGUID().GetRawValue() : 0, target->GetGUID().GetRawValue()))
++        return false;
++    bool const attacked = Attack(target); // Acquire once, then yield to the ordinary rotation.
 +    if (attacked)
 +        Note(target->GetEntry() == Valkyr ? "valkyr_rescue" : "spirit_attack", true, target->GetEntry());
 +    return attacked;
@@ -810,10 +814,10 @@ index 5804a760..47bd97c5 100644
  public:
 diff --git a/src/Ai/Raid/LichKingMechanicsPolicy.h b/src/Ai/Raid/LichKingMechanicsPolicy.h
 new file mode 100644
-index 00000000..378eac26
+index 00000000..604ab9fc
 --- /dev/null
 +++ b/src/Ai/Raid/LichKingMechanicsPolicy.h
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,147 @@
 +/*
 + * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
 + * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
@@ -845,6 +849,21 @@ index 00000000..378eac26
 +inline constexpr float FrostmourneZ = 1049.95f;
 +inline constexpr float PlatformRadius = 43.0f; // Stay inside the central platform after Quake.
 +inline constexpr float RoomRadius = 35.0f;
++inline constexpr unsigned MaxEscapeStep = 88; // Across the whole 86-yard central platform.
++inline constexpr float EscapePathLimit = 96.0f;
++
++inline bool Eligible(bool enabled, bool alive, bool inWorld, bool botAI, bool realPlayer, bool selfBot,
++                     bool stay, bool passive)
++{
++    return enabled && alive && inWorld && botAI && !realPlayer && !selfBot && !stay && !passive;
++}
++
++inline bool AcquireTarget(std::uint64_t current, std::uint64_t wanted)
++{
++    // AttackAction can report success repeatedly (for example while a ranged
++    // attacker has no auto-attack victim). Let the ordinary rotation own the next tick.
++    return wanted && current != wanted;
++}
 +
 +inline float Distance(Point a, Point b) { return std::hypot(a.x - b.x, a.y - b.y); }
 +
@@ -908,9 +927,10 @@ index 00000000..378eac26
 +{
 +    std::optional<Point> best;
 +    float score = -1e30f;
-+    for (float step : {4.0f, 8.0f, 12.0f, 16.0f, 20.0f, 28.0f})
++    for (unsigned distance = 4; distance <= MaxEscapeStep; distance += 4)
 +        for (unsigned i = 0; i < 32; ++i)
 +        {
++            float const step = static_cast<float>(distance);
 +            float const angle = float(i) * 6.283185307f / 32.0f;
 +            Point const p = {start.x + step * std::cos(angle), start.y + step * std::sin(angle)};
 +            if (Distance(p, center) > boundary || !SafeSegment(start, p, hazards))
@@ -971,10 +991,10 @@ index 0ca1ae02..14a12b6c 100644
      uint32 GlobalCoolDown, ReactDelay, MaxWaitForMove, DisableMoveSplinePath, MaxMovementSearchTime, ExpireActionTime,
 diff --git a/tests/lich_king_mechanics_test.cpp b/tests/lich_king_mechanics_test.cpp
 new file mode 100644
-index 00000000..ef03e19d
+index 00000000..692fc093
 --- /dev/null
 +++ b/tests/lich_king_mechanics_test.cpp
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,131 @@
 +/*
 + * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
 + * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
@@ -1003,6 +1023,35 @@ index 00000000..ef03e19d
 +{
 +    using namespace LichKingMechanics;
 +    auto valid = [](Point) { return true; };
++    CHECK(Eligible(true, true, true, true, false, false, false, false));
++    CHECK(!Eligible(false, true, true, true, false, false, false, false));
++    CHECK(!Eligible(true, false, true, true, false, false, false, false));
++    CHECK(!Eligible(true, true, false, true, false, false, false, false));
++    CHECK(!Eligible(true, true, true, false, false, false, false, false));
++    CHECK(!Eligible(true, true, true, true, true, false, false, false));
++    CHECK(!Eligible(true, true, true, true, false, true, false, false));
++    CHECK(!Eligible(true, true, true, true, false, false, true, false));
++    CHECK(!Eligible(true, true, true, true, false, false, false, true));
++    // Both Execute and rescue allocation use this eligibility: excluded members consume no slot.
++    std::vector<bool> const available = {
++        Eligible(true, true, true, true, false, false, false, false),
++        Eligible(true, true, true, true, false, false, true, false),
++        Eligible(true, true, true, true, false, true, false, false),
++        Eligible(true, true, true, true, false, false, false, true),
++        Eligible(true, true, true, true, false, false, false, false)};
++    CHECK(std::count(available.begin(), available.end(), true) == 2);
++    CHECK(AcquireTarget(0, 10));
++    CHECK(AcquireTarget(10, 11));
++    CHECK(!AcquireTarget(10, 0));
++    unsigned acquired = 0, rotationTicks = 0;
++    std::uint64_t selected = 0;
++    for (unsigned tick = 0; tick < 50; ++tick)
++    {
++        if (AcquireTarget(selected, 10)) { selected = 10; ++acquired; }
++        else ++rotationTicks;
++    }
++    CHECK(acquired == 1);
++    CHECK(rotationTicks == 49); // Stable target must not consume every raid-priority tick.
 +    CHECK(LocateRoom(false, true, true, Frostmourne, FrostmourneZ) == Room::None);
 +    CHECK(LocateRoom(true, false, true, Frostmourne, FrostmourneZ) == Room::Normal);
 +    CHECK(LocateRoom(true, true, true, Frostmourne, FrostmourneZ) == Room::Heroic);
@@ -1061,6 +1110,13 @@ index 00000000..ef03e19d
 +    auto const boxed = Escape({0, 0}, {0, 0}, 30, {{{0, 0}, 100}}, {}, false, valid);
 +    CHECK(!boxed); // No unsafe fallback to the original destination.
 +    CHECK(!Escape({0, 0}, {0, 0}, 30, {{{0, 0}, 5}}, {}, false, [](Point) { return false; }));
++    auto const grown = Escape(Platform, Platform, PlatformRadius,
++                               {{Platform, DefileRadius(3)}}, {}, false, valid);
++    CHECK(grown && Distance(*grown, Platform) >= 32 && Distance(*grown, Platform) <= PlatformRadius);
++    Point const edge = {Platform.x + 40, Platform.y};
++    auto const across = Escape(edge, Platform, PlatformRadius, {{edge, DefileRadius(6)}}, {}, false, valid);
++    CHECK(across && Distance(*across, edge) >= 62 && Distance(*across, Platform) <= PlatformRadius);
++    CHECK(EscapePathLimit >= MaxEscapeStep);
 +    auto const roomEscape = Escape(Frostmourne, Frostmourne, RoomRadius,
 +                                  {{Frostmourne, 12}}, {}, false, valid);
 +    CHECK(roomEscape && Distance(*roomEscape, Frostmourne) < RoomRadius);
