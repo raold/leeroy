@@ -1471,3 +1471,66 @@ def test_proof_provider_failure_is_safe_and_preserves_reservation(caplog):
     assert not ledger.may_move("raid", 101)
     assert "body_run_proof_unavailable" in caplog.text
     assert "private proof payload" not in caplog.text
+
+
+@pytest.mark.parametrize("size", [1, 2, 40, 150])
+def test_holders_of_is_holder_for_each_member_from_one_source_read(size):
+    selected = tuple(range(101, 101 + size))
+    rows = (hold("raid", {101}), hold("training", {102, 103}, scope="lab", retained=True),
+            hold("realm_day", {103}, scope="day"))
+    source = Snapshot(*rows)
+    ledger, clock = ledger_with(source)
+    assert claim(ledger, clock, "realm_event", {104}) == {104}
+    batch = ledger.holders_of(selected)
+    calls = source.calls
+    assert batch == {guid: ledger.holder(guid) for guid in selected}
+    assert source.calls == calls + size  # holder() reads every source per member
+    batch_calls = source.calls
+    ledger.holders_of(selected)
+    assert source.calls == batch_calls + 1
+    assert set(batch) == set(selected)
+    assert batch[101] == "raid" and (size < 3 or batch[103] == "training")
+
+
+def test_holders_of_fails_closed_and_rejects_invalid_members_before_reading():
+    source = Snapshot(hold("training", {101}, retained=True))
+    ledger, _ = ledger_with(source)
+    for members in ({0}, {1 << 32}, {"101"}, ALL, None):
+        with pytest.raises(ValueError):
+            ledger.holders_of(members)
+    assert source.calls == 0
+    source.failure = True
+    with pytest.raises(BodyEvidenceUnavailable, match="^body evidence unavailable$"):
+        ledger.holders_of((101, 102))
+    source.failure = False
+    assert ledger.holders_of((101, 102)) == {101: "training", 102: None}
+    assert ledger.holders_of(()) == {}
+
+
+def test_a_slow_refresh_is_logged_with_counts_once_a_minute(monkeypatch, caplog):
+    now = [0.0]
+    monkeypatch.setattr("leeroy_mind.bodies._timer", lambda: now[0])
+
+    class Slow(Snapshot):
+        seconds = 0.0
+
+        def __call__(self):
+            now[0] += self.seconds
+            return super().__call__()
+
+    slow = Slow(hold("raid", {101, 102}, scope="private-scope"))
+    ledger = BodyLedger(FakeClock())
+    ledger.add_holder_source("fast", Snapshot(hold("training", {103}, scope="lab")))
+    ledger.add_holder_source("journal", slow)
+    with caplog.at_level(logging.WARNING):
+        ledger.holder(101)
+        assert "bodies_refresh_slow" not in caplog.text
+        slow.seconds = 0.08
+        ledger.holder(101)
+        ledger.holder(102)  # also slow, inside the minute: counted, not logged
+        now[0] += 61
+        ledger.holder(101)
+    lines = [r.getMessage() for r in caplog.records if "bodies_refresh_slow" in r.getMessage()]
+    assert lines == ["bodies_refresh_slow ms=80 rows=2 source=journal source_ms=80 refreshes=2 slow=1",
+                     "bodies_refresh_slow ms=80 rows=2 source=journal source_ms=80 refreshes=2 slow=2"]
+    assert "private-scope" not in caplog.text and "101" not in caplog.text

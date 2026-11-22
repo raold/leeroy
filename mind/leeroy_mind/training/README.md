@@ -119,6 +119,11 @@ its bot lands on another map, so every trial it accepted failed `ownership_chang
 (2026-11-10..14). Against such a native the lab claims nothing, sends nothing and logs
 `training_lab_native_unsupported` once; its reason reads `native_dummy_unsupported`.
 
+The lab reads its members' bodies in one snapshot (`TrainingPorts.holders_of`, `BodyLedger.holders_of`):
+its eligibility pass over the cast, its "still ours" check and its preemption check. One `holder()`
+per member read every body source again, the whole Realm journal included, and on 2026-11-22 held
+the mind's event loop at 100% CPU for 40 minutes until `[training] lab = false`.
+
 ## Raid debrief
 
 `python -m leeroy_mind training debrief --data-dir <mind-data>` prints a JSON

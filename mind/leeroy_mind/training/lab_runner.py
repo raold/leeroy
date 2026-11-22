@@ -262,26 +262,43 @@ class LabRunner:
         """Malformed standing state is unknown, so it also blocks restoration."""
         return desired_setups(self.ports.conn, guids)
 
+    def _holders(self, guids):
+        """One body snapshot for many members. A holder() per member re-read every body source,
+        the whole Realm journal included, and held the event loop for 40 minutes (2026-11-22)."""
+        guids = tuple(guids)
+        return self.ports.holders_of(guids) if guids else {}
+
     def _eligible(self):
         away = self.ports.away()
-        groups = {}
+        candidates = []
         desired = self._desired(set(self.ports.cast()))
         for guid, member in sorted(self.ports.cast().items()):
             spec = (member.class_, member.spec_tab)
             if (type(guid) is int and guid > 0 and guid != self.ports.human_guid
                     and member.online is True and member.level == 80 and spec in _DAMAGE_SPECS
-                    and guid not in away and guid not in desired and self.ports.holder(guid) is None):
+                    and guid not in away and guid not in desired):
+                candidates.append((guid, spec))
+        holders = self._holders(guid for guid, _ in candidates)
+        groups = {}
+        for guid, spec in candidates:
+            if holders.get(guid, OWNER) is None:  # a member the snapshot left out is not free
                 groups.setdefault(spec, []).append(guid)
         return {spec: guids[:min(10, self.cfg.lab_bots)] for spec, guids in groups.items()
                 if len(guids) >= 2 and self.cfg.lab_bots >= 2}
 
     def _still_ours(self, guids):
         cast, away = self.ports.cast(), self.ports.away()
-        spec = tuple(self._owned["spec"])
-        return (not self._desired(set(guids)) and all(
-            guid in cast and cast[guid].online is True
-            and (cast[guid].class_, cast[guid].spec_tab) == spec and guid not in away
-            and self.ports.holder(guid) in (None, OWNER) for guid in guids))
+        spec, guids = tuple(self._owned["spec"]), tuple(guids)
+        if self._desired(set(guids)):
+            return False
+        checked = []
+        for guid in guids:
+            if not (guid in cast and cast[guid].online is True
+                    and (cast[guid].class_, cast[guid].spec_tab) == spec and guid not in away):
+                break
+            checked.append(guid)
+        holders = self._holders(checked)
+        return len(checked) == len(guids) and all(holders.get(g, "") in (None, OWNER) for g in checked)
 
     def _renew(self):
         guids = self._owned_bodies()
@@ -297,7 +314,8 @@ class LabRunner:
         """A preempted body is never reclaimed or restored by this session."""
         members = self.members()
         previous = set(self._owned.get("preempted", ())) if self.active else set()
-        preempted = previous | {g for g in members if self.ports.holder(g) not in (None, OWNER)}
+        holders = self._holders(sorted(members))
+        preempted = previous | {g for g in members if holders.get(g, "") not in (None, OWNER)}
         if preempted != previous:
             self._owned["preempted"] = sorted(preempted)
             self._owned["alive"] = [g for g in self._owned["alive"] if g not in preempted]
