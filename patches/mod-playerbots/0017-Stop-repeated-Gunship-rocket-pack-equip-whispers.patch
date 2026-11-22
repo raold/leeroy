@@ -1,4 +1,4 @@
-From 1e9271f6f9c8f1133c45416a182993cf1af07a5e Mon Sep 17 00:00:00 2001
+From 98d48d532eb0a3d46c9e6810f3a1a3222d13eb58 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sun, 22 Nov 2026 13:25:50 -0500
 Subject: [PATCH] Stop repeated Gunship rocket-pack equip whispers
@@ -58,7 +58,7 @@ index 77753346..a24be4c7 100644
 +    return pack->IsEquipped();
  }
 diff --git a/src/Ai/Raid/ICC/ICCTriggers.cpp b/src/Ai/Raid/ICC/ICCTriggers.cpp
-index 2fb7b3a3..3ef2c47c 100644
+index fcb59ca7..a0292aad 100644
 --- a/src/Ai/Raid/ICC/ICCTriggers.cpp
 +++ b/src/Ai/Raid/ICC/ICCTriggers.cpp
 @@ -9,6 +9,8 @@

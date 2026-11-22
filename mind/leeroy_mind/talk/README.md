@@ -19,7 +19,7 @@ checks affect delivery; the mind can still compose a line that is later refused.
 Release the native and mind changes before enabling it. Disable it before
 rolling native back. No migration is needed. With it off, the optional wire
 field is omitted and delivery is unchanged. This does not control playerbots'
-own canned messages: the separate playerbots patch `0016` fixes the repeated
+own canned messages: the separate playerbots patch `0017` fixes the repeated
 Gunship rocket-pack equip whisper at its source.
 
 Run `python -m pytest -q tests/test_combat_quiet.py` for the fake-only checks.

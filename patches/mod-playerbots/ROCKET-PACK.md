@@ -1,6 +1,6 @@
 # Gunship rocket-pack setup
 
-Patch `0016` fixes automatic Gunship preparation repeatedly whispering
+Patch `0017` fixes automatic Gunship preparation repeatedly whispering
 “Equipping” when the core refuses the belt swap during combat. It is a native
 bug fix; rebuild worldserver after applying the patch series in numeric order.
 Do not hot-apply it to a running server.
