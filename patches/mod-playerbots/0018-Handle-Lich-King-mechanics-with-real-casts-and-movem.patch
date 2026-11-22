@@ -1,0 +1,1075 @@
+From 0aad942e723cb28fae9dad9c33d681cd2273b4b8 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 14:39:59 -0500
+Subject: [PATCH] Handle Lich King mechanics with real casts and movement
+
+---
+ conf/playerbots.conf.dist                     |   4 +
+ src/Ai/Base/Strategy/ReactionStrategy.cpp     |   5 +
+ src/Ai/Raid/ICC/Action/ICCActions.h           |  31 ++
+ src/Ai/Raid/ICC/Action/ICCActions_LK.cpp      |  44 ++-
+ .../ICC/Action/ICCActions_LKMechanics.cpp     | 319 ++++++++++++++++++
+ src/Ai/Raid/ICC/ICCActionContext.h            |   2 +
+ src/Ai/Raid/ICC/ICCMultipliers.cpp            |  42 +++
+ src/Ai/Raid/ICC/ICCMultipliers.h              |   7 +
+ src/Ai/Raid/ICC/ICCStrategy.cpp               |   3 +
+ src/Ai/Raid/ICC/ICCTriggerContext.h           |   4 +
+ src/Ai/Raid/ICC/ICCTriggers.cpp               |  13 +
+ src/Ai/Raid/ICC/ICCTriggers.h                 |  14 +
+ src/Ai/Raid/LichKingMechanicsPolicy.h         | 131 +++++++
+ src/PlayerbotAIConfig.cpp                     |   1 +
+ src/PlayerbotAIConfig.h                       |   1 +
+ tests/lich_king_mechanics_test.cpp            |  95 ++++++
+ 16 files changed, 707 insertions(+), 9 deletions(-)
+ create mode 100644 src/Ai/Raid/ICC/Action/ICCActions_LKMechanics.cpp
+ create mode 100644 src/Ai/Raid/LichKingMechanicsPolicy.h
+ create mode 100644 tests/lich_king_mechanics_test.cpp
+
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index 41196a64..ddecd633 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -494,6 +494,10 @@ Playerbots.TwinValkyrInteractions = 0
+ # Uses normal boarding and spell costs; never moves the human or skips a boss.
+ Playerbots.RaidVehicleSupport = 0
+ 
++# Real LK normal/heroic Frostmourne, Defile, Val'kyr rescue and Vile Spirits.
++# Experimental, opt-in after a supervised pull. Disables LK teleport/instant-kill/free-aura shortcuts.
++Playerbots.LichKingMechanics = 0
++
+ # Enable auto avoid aoe strategy
+ # Default: 1 (enabled)
+ Playerbots.AutoAvoidAoe = 1
+diff --git a/src/Ai/Base/Strategy/ReactionStrategy.cpp b/src/Ai/Base/Strategy/ReactionStrategy.cpp
+index c44f1915..2923cc88 100644
+--- a/src/Ai/Base/Strategy/ReactionStrategy.cpp
++++ b/src/Ai/Base/Strategy/ReactionStrategy.cpp
+@@ -14,6 +14,11 @@
+ 
+ void ReactionStrategy::InitReactionTriggers(std::vector<TriggerNode*>& triggers)
+ {
++    // PlayerbotAI defers its normal combat engine while casting. Defile and falling
++    // bombs cannot wait for that cast/channel to finish, even at ACTION_EMERGENCY.
++    triggers.push_back(new TriggerNode("icc lich king emergency",
++        { NextAction("icc lich king mechanics", ACTION_EMERGENCY + 6) }));
++
+     // Upstream cmangos switches engines from here (combat start/end, death, resurrect). This
+     // port keeps every engine switch on the existing paths (AttackAction, DropTargetAction,
+     // PlayerbotAI::DoNextAction) because entering the combat engine without a current target
+diff --git a/src/Ai/Raid/ICC/Action/ICCActions.h b/src/Ai/Raid/ICC/Action/ICCActions.h
+index 80aad005..2d11a86a 100644
+--- a/src/Ai/Raid/ICC/Action/ICCActions.h
++++ b/src/Ai/Raid/ICC/Action/ICCActions.h
+@@ -17,6 +17,7 @@
+ #include "ICCStrategy.h"
+ #include "ICCTriggers.h"
+ #include "LastMovementValue.h"
++#include "LichKingMechanicsPolicy.h"
+ #include "MovementActions.h"
+ #include "ObjectGuid.h"
+ #include "PlayerbotAI.h"
+@@ -760,6 +761,36 @@ private:
+ };
+ 
+ //LK
++class IccLichKingMechanicsAction : public AttackAction
++{
++public:
++    IccLichKingMechanicsAction(PlayerbotAI* botAI) : AttackAction(botAI, "icc lich king mechanics") {}
++    bool Execute(Event event) override;
++    bool ShouldReactionInterruptCast() const override { return true; }
++    static bool Active(Player* player);
++    static LichKingMechanics::Room RoomFor(Player* player);
++    static bool Isolated(Player* player);
++    static IccLichKingMechanicsAction* For(PlayerbotAI* ai);
++    bool NeedsMovement();
++    bool OwnsTarget();
++    bool HasHazards();
++    bool SafeTarget(Unit* target);
++    bool SafeMove(Unit* target);
++
++private:
++    void Refresh(bool force = false);
++    bool MoveSafely();
++    bool CastKnown(std::initializer_list<char const*> spells, Unit* target, bool onlyMissing = false);
++    bool HealTerenas(Unit* target);
++    void Note(char const* code, bool success, uint32 entry = 0);
++    uint32 sampleMs = 0, noteMs = 0;
++    bool sampled = false, move = false, drop = false;
++    LichKingMechanics::Room room = LichKingMechanics::Room::None;
++    ObjectGuid priorityTarget, terenas;
++    std::vector<LichKingMechanics::Hazard> hazards;
++    std::vector<LichKingMechanics::Point> raid;
++};
++
+ class IccLichKingShadowTrapAction : public MovementAction
+ {
+ public:
+diff --git a/src/Ai/Raid/ICC/Action/ICCActions_LK.cpp b/src/Ai/Raid/ICC/Action/ICCActions_LK.cpp
+index f67715a9..cd0b2878 100644
+--- a/src/Ai/Raid/ICC/Action/ICCActions_LK.cpp
++++ b/src/Ai/Raid/ICC/Action/ICCActions_LK.cpp
+@@ -166,13 +166,15 @@ static bool CastAoeTaunt(PlayerbotAI* botAI, Player* bot)
+ 
+ bool IccLichKingShadowTrapAction::Execute(Event /*event*/)
+ {
++    if (IccLichKingMechanicsAction::Isolated(bot))
++        return false;
+     Unit* boss = AI_VALUE2(Unit*, "find target", "the lich king");
+     if (!boss || !PlayerbotAI::IsTank(bot))
+         return false;
+ 
+     Difficulty const diff = bot->GetRaidDifficulty();
+ 
+-    if (sPlayerbotAIConfig.EnableICCBuffs && boss->IsInCombat() && IsHeroicLk(diff))
++    if (sPlayerbotAIConfig.EnableICCBuffs && !sPlayerbotAIConfig.LichKingMechanics && boss->IsInCombat() && IsHeroicLk(diff))
+         IccApplyHeroicBuffToMember(bot, true, false);
+ 
+     static constexpr float CIRCLE_RADIUS = 20.0f;
+@@ -246,6 +248,8 @@ bool IccLichKingShadowTrapAction::Execute(Event /*event*/)
+ 
+ bool IccLichKingNecroticPlagueAction::Execute(Event /*event*/)
+ {
++    if (IccLichKingMechanicsAction::Isolated(bot))
++        return false;
+     if (!botAI->HasAura("Necrotic Plague", bot))
+         return false;
+ 
+@@ -363,22 +367,24 @@ bool IccLichKingNecroticPlagueAction::Execute(Event /*event*/)
+ 
+ bool IccLichKingWinterAction::Execute(Event /*event*/)
+ {
++    if (IccLichKingMechanicsAction::Isolated(bot))
++        return false;
+     Unit* boss = AI_VALUE2(Unit*, "find target", "the lich king");
+     if (!boss)
+         return false;
+ 
+     Difficulty const diff = bot->GetRaidDifficulty();
+ 
+-    if (sPlayerbotAIConfig.EnableICCBuffs && boss->IsInCombat() && IsHeroicLk(diff))
++    if (sPlayerbotAIConfig.EnableICCBuffs && !sPlayerbotAIConfig.LichKingMechanics && boss->IsInCombat() && IsHeroicLk(diff))
+         IccApplyHeroicBuffToMember(bot, true, true);
+ 
+     // Speed boost to help escape the inward push
+-    if (bot->GetDistance2d(boss) < 35.0f && !bot->HasAura(SPELL_NITRO_BOOSTS))
++    if (!sPlayerbotAIConfig.LichKingMechanics && bot->GetDistance2d(boss) < 35.0f && !bot->HasAura(SPELL_NITRO_BOOSTS))
+         bot->AddAura(SPELL_NITRO_BOOSTS, bot);
+ 
+     // Heroic: if more than 2 Raging Spirits are alive, kill the one with the
+     // highest HP. Only the main tank does this to avoid simultaneous actions.
+-    if (PlayerbotAI::IsMainTank(bot) && IsHeroicLk(diff))
++    if (!sPlayerbotAIConfig.LichKingMechanics && PlayerbotAI::IsMainTank(bot) && IsHeroicLk(diff))
+     {
+         GuidVector const& heroicNpcs = AI_VALUE(GuidVector, "nearest hostile npcs");
+         std::vector<Unit*> spirits;
+@@ -657,6 +663,8 @@ bool IccLichKingWinterAction::Execute(Event /*event*/)
+ 
+ bool IccLichKingWinterAction::FixPlatformPosition()
+ {
++    if (sPlayerbotAIConfig.LichKingMechanics)
++        return false;
+     if (std::abs(bot->GetPositionZ() - PLATFORM_Z) > 1.0f)
+     {
+         bot->TeleportTo(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(),
+@@ -1799,6 +1807,8 @@ bool IccLichKingWinterAction::HandlePetManagement()
+ 
+ bool IccLichKingAddsAction::Execute(Event /*event*/)
+ {
++    if (IccLichKingMechanicsAction::Isolated(bot))
++        return false;
+     // Being carried by a Val'kyr — no actions possible
+     if (bot->HasAura(SPELL_HARVEST_SOUL_VALKYR))
+         return false;
+@@ -1810,7 +1820,7 @@ bool IccLichKingAddsAction::Execute(Event /*event*/)
+ 
+     // Heroic cheat buffs — apply to all group members
+     Creature* lichKing = bot->FindNearestCreature(NPC_THE_LICH_KING, 100.0f);
+-    if (lichKing && lichKing->IsInCombat() && sPlayerbotAIConfig.EnableICCBuffs && IsHeroicLk(diff))
++    if (lichKing && lichKing->IsInCombat() && sPlayerbotAIConfig.EnableICCBuffs && !sPlayerbotAIConfig.LichKingMechanics && IsHeroicLk(diff))
+     {
+         Group* buffGroup = bot->GetGroup();
+         if (buffGroup)
+@@ -1963,7 +1973,7 @@ bool IccLichKingAddsAction::Execute(Event /*event*/)
+     }
+ 
+     // Val'kyr edge-dive (ongoing)
+-    if (bot->HasAura(SPELL_VALKYR_CARRY))
++    if (!sPlayerbotAIConfig.LichKingMechanics && bot->HasAura(SPELL_VALKYR_CARRY))
+     {
+         if (bot->GetPositionZ() > 779.0f)
+             return JumpTo(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(), 740.01f);
+@@ -1973,7 +1983,7 @@ bool IccLichKingAddsAction::Execute(Event /*event*/)
+     }
+ 
+     // Detect bots fallen off edge and initiate dive
+-    if (boss && boss->GetHealthPct() < 70.0f && boss->GetHealthPct() > 40.0f &&
++    if (!sPlayerbotAIConfig.LichKingMechanics && boss && boss->GetHealthPct() < 70.0f && boss->GetHealthPct() > 40.0f &&
+         !IccBossHasRemorselessWinter(boss))
+     {
+         static constexpr float PLATFORM_CENTER_X = 503.0f;
+@@ -2032,6 +2042,8 @@ bool IccLichKingAddsAction::Execute(Event /*event*/)
+ 
+ bool IccLichKingAddsAction::HandleTeleportationFixes(Difficulty diff, Unit* terenas)
+ {
++    if (sPlayerbotAIConfig.LichKingMechanics)
++        return false;
+     static constexpr float PLATFORM_Z  = 840.857f;
+     static constexpr float SPIRIT_Z    = 1049.865f;
+     static constexpr float MAX_Y_DRIFT = 200.0f;
+@@ -2114,6 +2126,8 @@ bool IccLichKingAddsAction::HandleTeleportationFixes(Difficulty diff, Unit* tere
+ 
+ bool IccLichKingSpiritBombAction::IsBombThreatActive(PlayerbotAI* botAI, Player* bot)
+ {
++    if (sPlayerbotAIConfig.LichKingMechanics)
++        return false;
+     if (!botAI || !bot || !PlayerbotAI::IsMainTank(bot))
+         return false;
+ 
+@@ -2137,6 +2151,8 @@ bool IccLichKingSpiritBombAction::IsBombThreatActive(PlayerbotAI* botAI, Player*
+ 
+ bool IccLichKingSpiritBombAction::Execute(Event)
+ {
++    if (sPlayerbotAIConfig.LichKingMechanics)
++        return false;
+     Difficulty const diff = bot->GetMap() ? bot->GetMap()->GetDifficulty() : RAID_DIFFICULTY_10MAN_NORMAL;
+     Unit* terenas = bot->FindNearestCreature(NPC_TERENAS_MENETHIL_HC, 55.0f);
+ 
+@@ -2337,6 +2353,8 @@ bool IccLichKingSpiritBombAction::Execute(Event)
+ 
+ bool IccLichKingAddsAction::HandleHeroicNonTankPositioning(Difficulty diff, Unit* terenas)
+ {
++    if (sPlayerbotAIConfig.LichKingMechanics)
++        return false;
+     if (!terenas || PlayerbotAI::IsMainTank(bot) || !IsHeroicLk(diff))
+         return false;
+ 
+@@ -2357,6 +2375,8 @@ bool IccLichKingAddsAction::HandleHeroicNonTankPositioning(Difficulty diff, Unit
+ 
+ bool IccLichKingAddsAction::HandleSpiritMarkingAndTargeting(Difficulty diff, Unit* terenas)
+ {
++    if (sPlayerbotAIConfig.LichKingMechanics)
++        return false;
+     if (!terenas || PlayerbotAI::IsMainTank(bot) || !IsHeroicLk(diff))
+         return false;
+ 
+@@ -2727,7 +2747,7 @@ bool IccLichKingAddsAction::HandleAssistTankAddManagement(Unit* boss, Difficulty
+                     continue;
+                 if (!IsLkShambling(unit->GetEntry()))
+                     continue;
+-                if (!unit->HasAura(SPELL_HAMMER_OF_JUSTICE))
++                if (!sPlayerbotAIConfig.LichKingMechanics && !unit->HasAura(SPELL_HAMMER_OF_JUSTICE))
+                     bot->AddAura(SPELL_HAMMER_OF_JUSTICE, unit);
+             }
+         }
+@@ -3454,6 +3474,8 @@ bool IccLichKingAddsAction::HandleCenterStacking(Unit* boss, Difficulty diff)
+ 
+ bool IccLichKingAddsAction::HandleDefileMechanics(Unit* boss, Difficulty diff)
+ {
++    if (sPlayerbotAIConfig.LichKingMechanics)
++        return false;
+     if (!boss)
+         return false;
+ 
+@@ -3670,6 +3692,8 @@ bool IccLichKingAddsAction::HandleDefileMechanics(Unit* boss, Difficulty diff)
+ 
+ bool IccLichKingAddsAction::HandleValkyrMechanics(Difficulty diff)
+ {
++    if (sPlayerbotAIConfig.LichKingMechanics)
++        return false;
+     Unit* boss = AI_VALUE2(Unit*, "find target", "the lich king");
+     Group* group = bot->GetGroup();
+     if (!group)
+@@ -3833,7 +3857,7 @@ bool IccLichKingAddsAction::HandleValkyrAssignment(std::vector<Unit*> const& gra
+     Attack(myValkyr);
+ 
+     Difficulty const diff = bot->GetRaidDifficulty();
+-    if (sPlayerbotAIConfig.EnableICCBuffs && IsHeroicLk(diff) &&
++    if (sPlayerbotAIConfig.EnableICCBuffs && !sPlayerbotAIConfig.LichKingMechanics && IsHeroicLk(diff) &&
+         !myValkyr->HasAura(SPELL_HAMMER_OF_JUSTICE))
+         bot->AddAura(SPELL_HAMMER_OF_JUSTICE, myValkyr);
+ 
+@@ -3898,6 +3922,8 @@ std::pair<float, float> IccLichKingAddsAction::DefileAwareStep(float tx, float t
+ 
+ bool IccLichKingAddsAction::HandleVileSpiritMechanics()
+ {
++    if (sPlayerbotAIConfig.LichKingMechanics)
++        return false;
+     static constexpr float ARRIVE_TOLERANCE = 4.0f;
+ 
+     // Defile target: let HandleDefileMechanics() handle movement
+diff --git a/src/Ai/Raid/ICC/Action/ICCActions_LKMechanics.cpp b/src/Ai/Raid/ICC/Action/ICCActions_LKMechanics.cpp
+new file mode 100644
+index 00000000..51e09611
+--- /dev/null
++++ b/src/Ai/Raid/ICC/Action/ICCActions_LKMechanics.cpp
+@@ -0,0 +1,319 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#include "ICCActions.h"
++#include "InstanceScript.h"
++#include "Log.h"
++#include "PathGenerator.h"
++#include "Spell.h"
++#include "SpellMgr.h"
++
++namespace
++{
++using namespace LichKingMechanics;
++constexpr uint32 Encounter = 12;
++constexpr uint32 TerenasNormal = 36823, SpiritWarden = 36824, TerenasHeroic = 39217;
++constexpr uint32 Defile = 38757, Valkyr = 36609, Vile = 37799, Wicked = 39190, Bomb = 39189;
++constexpr uint32 NormalTeleport = 72546, HeroicTeleport = 73655, SoulRip = 69397;
++
++Point XY(WorldObject const* object) { return {object->GetPositionX(), object->GetPositionY()}; }
++bool Heroic(Player* player)
++{
++    Difficulty const difficulty = player->GetMap()->GetDifficulty();
++    return difficulty == RAID_DIFFICULTY_10MAN_HEROIC || difficulty == RAID_DIFFICULTY_25MAN_HEROIC;
++}
++bool InRoom(Unit* unit)
++{
++    return Distance(XY(unit), Frostmourne) < 45.0f && std::abs(unit->GetPositionZ() - FrostmourneZ) < 35.0f;
++}
++}
++
++bool IccLichKingMechanicsAction::Active(Player* player)
++{
++    if (!sPlayerbotAIConfig.LichKingMechanics || !player || !player->IsAlive() ||
++        !player->IsInWorld() || player->GetMapId() != 631 || IsRealPlayer(player) || IsSelfBot(player))
++        return false;
++    PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
++    if (!ai || ai->HasStrategy("stay", BOT_STATE_COMBAT) || ai->HasStrategy("stay", BOT_STATE_NON_COMBAT) ||
++        ai->HasStrategy("passive", BOT_STATE_COMBAT))
++        return false;
++    InstanceScript* instance = player->GetInstanceScript();
++    return instance && instance->GetBossState(Encounter) == IN_PROGRESS;
++}
++
++LichKingMechanics::Room IccLichKingMechanicsAction::RoomFor(Player* player)
++{
++    if (!Active(player))
++        return Room::None;
++    return LocateRoom(true, Heroic(player), player->HasAura(NormalTeleport) || player->HasAura(HeroicTeleport),
++                      XY(player), player->GetPositionZ());
++}
++
++bool IccLichKingMechanicsAction::Isolated(Player* player)
++{
++    return Active(player) && (RoomFor(player) != Room::None || player->GetVehicleBase());
++}
++
++IccLichKingMechanicsAction* IccLichKingMechanicsAction::For(PlayerbotAI* ai)
++{
++    return dynamic_cast<IccLichKingMechanicsAction*>(ai->GetAiObjectContext()->GetAction("icc lich king mechanics"));
++}
++
++void IccLichKingMechanicsAction::Refresh(bool force)
++{
++    uint32 const now = getMSTime();
++    if (!force && sampled && getMSTimeDiff(sampleMs, now) < 200)
++        return;
++    sampled = true;
++    sampleMs = now;
++    hazards.clear();
++    raid.clear();
++    priorityTarget.Clear();
++    terenas.Clear();
++    move = drop = false;
++    room = RoomFor(bot);
++    if (!Active(bot) || bot->GetVehicleBase() || room == Room::Transit)
++        return;
++    bool const inside = room == Room::Normal || room == Room::Heroic;
++    if (!inside && std::abs(bot->GetPositionZ() - PlatformZ) > 8.0f)
++        return;
++
++    if (Group* group = bot->GetGroup())
++        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
++        {
++            Player* member = ref->GetSource();
++            if (member && member != bot && member->IsAlive() && member->IsInWorld() &&
++                member->GetMap() == bot->GetMap() && std::abs(member->GetPositionZ() - bot->GetPositionZ()) < 8.0f)
++                raid.push_back(XY(member));
++        }
++
++    // Include unselectable bombs/puddles: "nearest hostile npcs" omits those.
++    std::vector<Creature*> const creatures = inside ?
++        IccGetCreaturesByEntries(bot, {TerenasNormal, TerenasHeroic, SpiritWarden, Wicked, Bomb}, 90.0f) :
++        IccGetCreaturesByEntries(bot, {Defile, Valkyr, Vile}, 100.0f);
++    std::vector<Creature*> carriers;
++    Creature* spirit = nullptr;
++    float spiritDistance = 10000.0f;
++    for (Creature* creature : creatures)
++    {
++        if (!creature || !creature->IsAlive() || InRoom(creature) != inside)
++            continue;
++        uint32 const entry = creature->GetEntry(); // Core retains the normal entry on all four difficulties.
++        if ((room == Room::Normal && entry == TerenasNormal) || (room == Room::Heroic && entry == TerenasHeroic))
++            terenas = creature->GetGUID();
++        if (room == Room::Normal && entry == SpiritWarden && bot->IsValidAttackTarget(creature))
++            priorityTarget = creature->GetGUID();
++        if (!inside && entry == Defile && std::abs(creature->GetPositionZ() - bot->GetPositionZ()) < 6.0f)
++            hazards.push_back({XY(creature), DefileRadius(creature->GetObjectScale())});
++        if (room == Room::Heroic && entry == Bomb && creature->GetPositionZ() - bot->GetPositionZ() < 18.0f)
++            hazards.push_back({XY(creature), 14.0f});
++        if ((!inside && entry == Vile) || (room == Room::Heroic && entry == Wicked))
++        {
++            if (!bot->IsValidAttackTarget(creature))
++                continue;
++            // Airborne spirits can be shot. Only approaching, low spirits threaten a collision.
++            if (std::abs(creature->GetPositionZ() - bot->GetPositionZ()) < 8.0f)
++                hazards.push_back({XY(creature), 10.0f});
++            float const distance = bot->GetExactDist(creature);
++            if (distance < spiritDistance && PlayerbotAI::IsRanged(bot) && !PlayerbotAI::IsHeal(bot) &&
++                !PlayerbotAI::IsMainTank(bot))
++            {
++                spirit = creature;
++                spiritDistance = distance;
++            }
++        }
++        if (!inside && entry == Valkyr && RescueTarget(creature->IsAlive(),
++                creature->GetVehicleKit() && creature->GetVehicleKit()->GetPassenger(0),
++                bot->IsValidAttackTarget(creature)))
++            carriers.push_back(creature);
++    }
++
++    if (!inside)
++    {
++        auto const& cast = IcecrownHelpers::IccState(bot->GetInstanceId()).defileCast;
++        drop = cast.targetGuid == bot->GetGUID() && getMSTimeDiff(cast.castTime, now) < 3000;
++        if (!carriers.empty() && !PlayerbotAI::IsHeal(bot) && !PlayerbotAI::IsMainTank(bot))
++        {
++            // Deterministic split among available DPS/OT bots; healers/dead/outside members don't consume slots.
++            std::sort(carriers.begin(), carriers.end(), [](Creature* a, Creature* b) { return a->GetGUID() < b->GetGUID(); });
++            std::vector<ObjectGuid> rescuers;
++            if (Group* group = bot->GetGroup())
++                for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
++                {
++                    Player* member = ref->GetSource();
++                    if (member && GET_PLAYERBOT_AI(member) && member->IsAlive() && member->IsInWorld() &&
++                        member->GetMap() == bot->GetMap() && !member->GetVehicleBase() &&
++                        !PlayerbotAI::IsHeal(member) && !PlayerbotAI::IsMainTank(member) &&
++                        std::abs(member->GetPositionZ() - PlatformZ) < 8.0f)
++                        rescuers.push_back(member->GetGUID());
++                }
++            std::sort(rescuers.begin(), rescuers.end());
++            auto const found = std::find(rescuers.begin(), rescuers.end(), bot->GetGUID());
++            std::size_t const slot = found == rescuers.end() ? 0 : static_cast<std::size_t>(found - rescuers.begin());
++            priorityTarget = carriers[slot % carriers.size()]->GetGUID();
++        }
++    }
++    if (priorityTarget.IsEmpty() && spirit)
++        priorityTarget = spirit->GetGUID();
++    move = drop || Threatened(XY(bot), hazards);
++}
++
++bool IccLichKingMechanicsAction::NeedsMovement() { Refresh(); return move; }
++bool IccLichKingMechanicsAction::OwnsTarget() { Refresh(); return !priorityTarget.IsEmpty(); }
++bool IccLichKingMechanicsAction::HasHazards() { Refresh(); return !hazards.empty(); }
++
++bool IccLichKingMechanicsAction::SafeTarget(Unit* target)
++{
++    if (!target || target == bot)
++        return true;
++    Refresh();
++    if (!priorityTarget.IsEmpty() && bot->IsValidAttackTarget(target) && target->GetGUID() != priorityTarget)
++        return false;
++    Room const current = RoomFor(bot);
++    return target->GetMap() == bot->GetMap() &&
++           (current == Room::Normal || current == Room::Heroic ? InRoom(target) : !InRoom(target));
++}
++
++bool IccLichKingMechanicsAction::SafeMove(Unit* target)
++{
++    Refresh();
++    if (!target || !SafeTarget(target))
++        return false;
++    bool const inside = room == Room::Normal || room == Room::Heroic;
++    return std::abs(target->GetPositionZ() - bot->GetPositionZ()) < 8.0f &&
++           Distance(XY(target), inside ? Frostmourne : Platform) < (inside ? RoomRadius : PlatformRadius) &&
++           SafeSegment(XY(bot), XY(target), hazards);
++}
++
++void IccLichKingMechanicsAction::Note(char const* code, bool success, uint32 entry)
++{
++    uint32 const now = getMSTime();
++    if (noteMs && getMSTimeDiff(noteMs, now) < 5000)
++        return;
++    noteMs = now;
++    LOG_INFO("playerbots", "lk_mechanic instance={} bot={} room={} code={} ok={} entry={}",
++             bot->GetInstanceId(), bot->GetGUID().GetCounter(), uint32(room), code, success, entry);
++}
++
++bool IccLichKingMechanicsAction::MoveSafely()
++{
++    bool const inside = room == Room::Heroic || room == Room::Normal;
++    auto const destination = Escape(XY(bot), inside ? Frostmourne : Platform, inside ? RoomRadius : PlatformRadius,
++        hazards, raid, drop, [&](Point p)
++        {
++            float z = bot->GetPositionZ();
++            bot->UpdateAllowedPositionZ(p.x, p.y, z);
++            if (std::abs(z - bot->GetPositionZ()) >= 3.0f || !bot->IsWithinLOS(p.x, p.y, z))
++                return false;
++            PathGenerator path(bot);
++            path.SetPathLengthLimit(40.0f);
++            if (!path.CalculatePath(p.x, p.y, z) || path.GetPathType() != PATHFIND_NORMAL)
++                return false;
++            Point previous = XY(bot);
++            for (auto const& vertex : path.GetPath())
++            {
++                Point const next = {vertex.x, vertex.y};
++                Point const center = inside ? Frostmourne : Platform;
++                if (Distance(next, center) > std::max(inside ? RoomRadius : PlatformRadius,
++                                                     Distance(previous, center)) + 0.1f ||
++                    std::abs(vertex.z - bot->GetPositionZ()) >= 3.0f)
++                    return false;
++                if (Distance(previous, next) > 0.1f && !SafeSegment(previous, next, hazards, false))
++                    return false;
++                previous = next;
++            }
++            return true;
++        });
++    if (!destination)
++    {
++        Note("no_safe_path", false);
++        bot->StopMoving();
++        return false;
++    }
++    float z = bot->GetPositionZ();
++    bot->UpdateAllowedPositionZ(destination->x, destination->y, z);
++    bot->CastStop();
++    bool const moved = MoveTo(bot->GetMapId(), destination->x, destination->y, z, false, false, true, true,
++                              MovementPriority::MOVEMENT_FORCED, true);
++    Note(drop ? "defile_drop" : (inside ? "frostmourne_dodge" : "platform_dodge"), moved);
++    return moved;
++}
++
++bool IccLichKingMechanicsAction::CastKnown(std::initializer_list<char const*> spells, Unit* target, bool onlyMissing)
++{
++    for (char const* name : spells)
++    {
++        uint32 const spell = context->GetValue<uint32>("spell id", name)->Get();
++        SpellInfo const* info = sSpellMgr->GetSpellInfo(spell);
++        if (!spell || !info || !bot->HasSpell(spell) || (onlyMissing && target->HasAura(spell)) ||
++            (info->PowerType < MAX_POWERS && info->CalcPowerCost(bot, info->GetSchoolMask()) >
++                static_cast<int32>(bot->GetPower(static_cast<Powers>(info->PowerType)))) || !botAI->CanCastSpell(spell, target, true))
++            continue;
++        if (botAI->CastSpell(spell, target))
++            return true;
++    }
++    return false;
++}
++
++bool IccLichKingMechanicsAction::HealTerenas(Unit* target)
++{
++    if (!target || !target->IsAlive() || !ShouldHealTerenas(room, PlayerbotAI::IsHeal(bot), target->GetHealthPct()))
++        return false;
++    if (!bot->IsWithinLOSInMap(target) || !bot->IsWithinDistInMap(target, 30.0f))
++        return SafeMove(target) && MoveNear(target, 25.0f, MovementPriority::MOVEMENT_COMBAT);
++    if (bot->isMoving())
++        bot->StopMoving();
++    bool const cast = CastKnown({"holy light", "healing wave", "greater heal", "nourish", "healing touch",
++                                "flash of light", "lesser healing wave", "flash heal", "regrowth"}, target);
++    Note("terenas_heal", cast, target->GetEntry());
++    return cast;
++}
++
++bool IccLichKingMechanicsAction::Execute(Event /*event*/)
++{
++    if (!Active(bot))
++        return false;
++    Refresh(true);
++    if (bot->GetVehicleBase() || room == Room::Transit)
++        return false; // The encounter owns transport and release; never teleport/eject the victim.
++    Unit* current = AI_VALUE(Unit*, "current target");
++    if (current && !SafeTarget(current))
++    {
++        bot->AttackStop();
++        context->GetValue<Unit*>("current target")->Set(nullptr);
++        bot->SetSelection(ObjectGuid::Empty);
++    }
++    if (move)
++        return MoveSafely();
++    Unit* target = priorityTarget.IsEmpty() ? nullptr : botAI->GetUnit(priorityTarget);
++    if (target && target->GetEntry() == SpiritWarden)
++    {
++        Spell* cast = target->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
++        if (!cast)
++            cast = target->GetCurrentSpell(CURRENT_GENERIC_SPELL);
++        if (cast && cast->GetSpellInfo()->Id == sSpellMgr->GetSpellIdForDifficulty(SoulRip, target) &&
++            CastKnown({"kick", "pummel", "shield bash", "mind freeze", "wind shear", "counterspell",
++                       "silence", "strangulate", "hammer of justice", "bash", "maim"}, target))
++        {
++            Note("soul_rip_interrupt", true, SpiritWarden);
++            return true;
++        }
++    }
++    if (HealTerenas(terenas.IsEmpty() ? nullptr : botAI->GetUnit(terenas)))
++        return true;
++    if (!target || !target->IsAlive() || !bot->IsValidAttackTarget(target) || !SafeTarget(target))
++        return false;
++    if (target->GetEntry() == Valkyr && CastKnown({"hammer of justice", "concussion blow", "shockwave",
++            "kidney shot", "bash", "maim", "shadowfury", "chains of ice", "hamstring", "frost shock",
++            "concussive shot", "slow", "curse of exhaustion"}, target, true))
++    {
++        Note("valkyr_cc", true, Valkyr);
++        return true;
++    }
++    bool const attacked = Attack(target); // Sets the ordinary rotation's target; never grants a kill.
++    if (attacked)
++        Note(target->GetEntry() == Valkyr ? "valkyr_rescue" : "spirit_attack", true, target->GetEntry());
++    return attacked;
++}
+diff --git a/src/Ai/Raid/ICC/ICCActionContext.h b/src/Ai/Raid/ICC/ICCActionContext.h
+index 07a7d1a6..cdc1d13e 100644
+--- a/src/Ai/Raid/ICC/ICCActionContext.h
++++ b/src/Ai/Raid/ICC/ICCActionContext.h
+@@ -79,6 +79,7 @@ public:
+         creators["icc sindragosa mystic buffet"] = &RaidIccActionContext::icc_sindragosa_mystic_buffet;
+         creators["icc sindragosa frost bomb"] = &RaidIccActionContext::icc_sindragosa_frost_bomb;
+ 
++        creators["icc lich king mechanics"] = &RaidIccActionContext::icc_lich_king_mechanics;
+         creators["icc lich king shadow trap"] = &RaidIccActionContext::icc_lich_king_shadow_trap;
+         creators["icc lich king necrotic plague"] = &RaidIccActionContext::icc_lich_king_necrotic_plague;
+         creators["icc lich king winter"] = &RaidIccActionContext::icc_lich_king_winter;
+@@ -150,6 +151,7 @@ private:
+     static Action* icc_sindragosa_mystic_buffet(PlayerbotAI* botAI) { return new IccSindragosaMysticBuffetAction(botAI); }
+     static Action* icc_sindragosa_frost_bomb(PlayerbotAI* botAI) { return new IccSindragosaFrostBombAction(botAI); }
+ 
++    static Action* icc_lich_king_mechanics(PlayerbotAI* botAI) { return new IccLichKingMechanicsAction(botAI); }
+     static Action* icc_lich_king_shadow_trap(PlayerbotAI* botAI) { return new IccLichKingShadowTrapAction(botAI); }
+     static Action* icc_lich_king_necrotic_plague(PlayerbotAI* botAI) { return new IccLichKingNecroticPlagueAction(botAI); }
+     static Action* icc_lich_king_winter(PlayerbotAI* botAI) { return new IccLichKingWinterAction(botAI); }
+diff --git a/src/Ai/Raid/ICC/ICCMultipliers.cpp b/src/Ai/Raid/ICC/ICCMultipliers.cpp
+index ad997fc5..b4c58e22 100644
+--- a/src/Ai/Raid/ICC/ICCMultipliers.cpp
++++ b/src/Ai/Raid/ICC/ICCMultipliers.cpp
+@@ -957,8 +957,50 @@ float IccSindragosaMultiplier::GetValue(Action* action)
+     return 1.0f;
+ }
+ 
++float IccLichKingMechanicsMultiplier::GetValue(Action* action)
++{
++    if (!action || !IccLichKingMechanicsAction::Active(bot))
++        return 1.0f;
++    if (dynamic_cast<IccLichKingMechanicsAction*>(action))
++        return 1.0f;
++    auto const room = IccLichKingMechanicsAction::RoomFor(bot);
++    if (bot->GetVehicleBase() || room == LichKingMechanics::Room::Transit)
++        return 0.0f;
++    auto* mechanics = IccLichKingMechanicsAction::For(botAI);
++    if (!mechanics)
++        return 0.0f;
++    // The emergency move owns this tick, including when no safe route was found.
++    if (mechanics->NeedsMovement())
++        return dynamic_cast<SetFacingTargetAction*>(action) ? 1.0f : 0.0f;
++    bool const inside = room != LichKingMechanics::Room::None;
++    if (inside && (dynamic_cast<IccLichKingAddsAction*>(action) ||
++                   dynamic_cast<IccLichKingWinterAction*>(action) ||
++                   dynamic_cast<IccLichKingShadowTrapAction*>(action) ||
++                   dynamic_cast<IccLichKingNecroticPlagueAction*>(action) ||
++                   dynamic_cast<IccLichKingSpiritBombAction*>(action)))
++        return 0.0f;
++    bool const occupied = inside || mechanics->OwnsTarget() || mechanics->HasHazards();
++    if (occupied && (dynamic_cast<IccLichKingAddsAction*>(action) || dynamic_cast<DpsAssistAction*>(action) ||
++                     dynamic_cast<TankAssistAction*>(action) || dynamic_cast<AttackRtiTargetAction*>(action) ||
++                     dynamic_cast<FollowAction*>(action) || dynamic_cast<CombatFormationMoveAction*>(action) ||
++                     dynamic_cast<FleeAction*>(action) || dynamic_cast<MoveRandomAction*>(action) ||
++                     dynamic_cast<CastBlinkBackAction*>(action) || dynamic_cast<CastDisengageAction*>(action) ||
++                     dynamic_cast<CastChargeAction*>(action) || dynamic_cast<CastFeralChargeBearAction*>(action)))
++        return 0.0f;
++    Unit* target = action->GetTarget();
++    if (!mechanics->SafeTarget(target))
++        return 0.0f;
++    if (occupied && dynamic_cast<MovementAction*>(action) && !mechanics->SafeMove(target))
++        return 0.0f;
++    // Class healing and damage remain available, including warlocks and melee in the heroic room.
++    return 1.0f;
++}
++
+ float IccLichKingAddsMultiplier::GetValue(Action* action)
+ {
++    if (IccLichKingMechanicsAction::Isolated(bot) ||
++        (IccLichKingMechanicsAction::Active(bot) && dynamic_cast<IccLichKingMechanicsAction*>(action)))
++        return 1.0f;
+     if (bot->FindNearestCreature(NPC_VALITHRIA_DREAMWALKER, 100.0f))
+         return 1.0f;
+ 
+diff --git a/src/Ai/Raid/ICC/ICCMultipliers.h b/src/Ai/Raid/ICC/ICCMultipliers.h
+index 5d4e18bd..ac9d3c84 100644
+--- a/src/Ai/Raid/ICC/ICCMultipliers.h
++++ b/src/Ai/Raid/ICC/ICCMultipliers.h
+@@ -98,6 +98,13 @@ public:
+ };
+ 
+ //LK
++class IccLichKingMechanicsMultiplier : public Multiplier
++{
++public:
++    IccLichKingMechanicsMultiplier(PlayerbotAI* botAI) : Multiplier(botAI, "icc lich king mechanics") {}
++    float GetValue(Action* action) override;
++};
++
+ class IccLichKingAddsMultiplier : public Multiplier
+ {
+ public:
+diff --git a/src/Ai/Raid/ICC/ICCStrategy.cpp b/src/Ai/Raid/ICC/ICCStrategy.cpp
+index f13b2623..304b920a 100644
+--- a/src/Ai/Raid/ICC/ICCStrategy.cpp
++++ b/src/Ai/Raid/ICC/ICCStrategy.cpp
+@@ -166,6 +166,8 @@ void RaidIccStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+         { NextAction("icc sindragosa frost bomb", ACTION_RAID + 7) }));
+ 
+     //LICH KING
++    triggers.push_back(new TriggerNode("icc lich king mechanics",
++        { NextAction("icc lich king mechanics", ACTION_RAID + 8) }));
+     triggers.push_back(new TriggerNode("icc lich king shadow trap",
+         { NextAction("icc lich king shadow trap", ACTION_RAID + 6) }));
+ 
+@@ -194,6 +196,7 @@ void RaidIccStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)
+     multipliers.push_back(new IccBqlMultiplier(botAI));
+     multipliers.push_back(new IccValithriaDreamCloudMultiplier(botAI));
+     multipliers.push_back(new IccSindragosaMultiplier(botAI));
++    multipliers.push_back(new IccLichKingMechanicsMultiplier(botAI));
+     multipliers.push_back(new IccLichKingAddsMultiplier(botAI));
+     multipliers.push_back(new IccLichKingSpiritBombMultiplier(botAI));
+     multipliers.push_back(new IccGunshipMultiplier(botAI));
+diff --git a/src/Ai/Raid/ICC/ICCTriggerContext.h b/src/Ai/Raid/ICC/ICCTriggerContext.h
+index 1075f1b2..8aa5dc20 100644
+--- a/src/Ai/Raid/ICC/ICCTriggerContext.h
++++ b/src/Ai/Raid/ICC/ICCTriggerContext.h
+@@ -75,6 +75,8 @@ public:
+         creators["icc sindragosa mystic buffet"] = &RaidIccTriggerContext::icc_sindragosa_mystic_buffet;
+         creators["icc sindragosa frost bomb"] = &RaidIccTriggerContext::icc_sindragosa_frost_bomb;
+ 
++        creators["icc lich king mechanics"] = &RaidIccTriggerContext::icc_lich_king_mechanics;
++        creators["icc lich king emergency"] = &RaidIccTriggerContext::icc_lich_king_emergency;
+         creators["icc lich king shadow trap"] = &RaidIccTriggerContext::icc_lich_king_shadow_trap;
+         creators["icc lich king necrotic plague"] = &RaidIccTriggerContext::icc_lich_king_necrotic_plague;
+         creators["icc lich king winter"] = &RaidIccTriggerContext::icc_lich_king_winter;
+@@ -143,6 +145,8 @@ private:
+     static Trigger* icc_sindragosa_mystic_buffet(PlayerbotAI* botAI) { return new IccSindragosaMysticBuffetTrigger(botAI); }
+     static Trigger* icc_sindragosa_frost_bomb(PlayerbotAI* botAI) { return new IccSindragosaFrostBombTrigger(botAI); }
+ 
++    static Trigger* icc_lich_king_mechanics(PlayerbotAI* botAI) { return new IccLichKingMechanicsTrigger(botAI); }
++    static Trigger* icc_lich_king_emergency(PlayerbotAI* botAI) { return new IccLichKingEmergencyTrigger(botAI); }
+     static Trigger* icc_lich_king_shadow_trap(PlayerbotAI* botAI) { return new IccLichKingShadowTrapTrigger(botAI); }
+     static Trigger* icc_lich_king_necrotic_plague(PlayerbotAI* botAI) { return new IccLichKingNecroticPlagueTrigger(botAI); }
+     static Trigger* icc_lich_king_winter(PlayerbotAI* botAI) { return new IccLichKingWinterTrigger(botAI); }
+diff --git a/src/Ai/Raid/ICC/ICCTriggers.cpp b/src/Ai/Raid/ICC/ICCTriggers.cpp
+index fcb59ca7..262ea90c 100644
+--- a/src/Ai/Raid/ICC/ICCTriggers.cpp
++++ b/src/Ai/Raid/ICC/ICCTriggers.cpp
+@@ -979,6 +979,19 @@ bool IccSindragosaFrostBombTrigger::IsActive()
+ 
+ //LK
+ 
++bool IccLichKingEmergencyTrigger::IsActive()
++{
++    if (!IccLichKingMechanicsAction::Active(bot))
++        return false;
++    auto* mechanics = IccLichKingMechanicsAction::For(botAI);
++    return mechanics && mechanics->NeedsMovement();
++}
++
++bool IccLichKingMechanicsTrigger::IsActive()
++{
++    return IccLichKingMechanicsAction::Active(bot);
++}
++
+ bool IccLichKingShadowTrapTrigger::IsActive()
+ {
+     Unit* vdw = bot->FindNearestCreature(NPC_VALITHRIA_DREAMWALKER, 100.0f);
+diff --git a/src/Ai/Raid/ICC/ICCTriggers.h b/src/Ai/Raid/ICC/ICCTriggers.h
+index 5804a760..47bd97c5 100644
+--- a/src/Ai/Raid/ICC/ICCTriggers.h
++++ b/src/Ai/Raid/ICC/ICCTriggers.h
+@@ -636,6 +636,20 @@ public:
+ };
+ 
+ //LICH KING
++class IccLichKingEmergencyTrigger : public Trigger
++{
++public:
++    IccLichKingEmergencyTrigger(PlayerbotAI* botAI) : Trigger(botAI, "icc lich king emergency") {}
++    bool IsActive() override;
++};
++
++class IccLichKingMechanicsTrigger : public Trigger
++{
++public:
++    IccLichKingMechanicsTrigger(PlayerbotAI* botAI) : Trigger(botAI, "icc lich king mechanics") {}
++    bool IsActive() override;
++};
++
+ class IccLichKingShadowTrapTrigger : public Trigger
+ {
+ public:
+diff --git a/src/Ai/Raid/LichKingMechanicsPolicy.h b/src/Ai/Raid/LichKingMechanicsPolicy.h
+new file mode 100644
+index 00000000..378eac26
+--- /dev/null
++++ b/src/Ai/Raid/LichKingMechanicsPolicy.h
+@@ -0,0 +1,131 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#ifndef PLAYERBOTS_LICHKINGMECHANICSPOLICY_H
++#define PLAYERBOTS_LICHKINGMECHANICSPOLICY_H
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <optional>
++#include <vector>
++
++namespace LichKingMechanics
++{
++struct Point
++{
++    float x, y;
++};
++struct Hazard
++{
++    Point center;
++    float radius;
++};
++inline constexpr Point Platform = {503.62f, -2124.65f};
++inline constexpr Point Frostmourne = {495.708f, -2523.76f};
++inline constexpr float PlatformZ = 840.857f;
++inline constexpr float FrostmourneZ = 1049.95f;
++inline constexpr float PlatformRadius = 43.0f; // Stay inside the central platform after Quake.
++inline constexpr float RoomRadius = 35.0f;
++
++inline float Distance(Point a, Point b) { return std::hypot(a.x - b.x, a.y - b.y); }
++
++enum class Room { None, Transit, Normal, Heroic };
++inline Room LocateRoom(bool active, bool heroic, bool teleportAura, Point p, float z)
++{
++    if (!active)
++        return Room::None;
++    // Position covers the brief aura removal/arrival interval too. Never follow an outside tank.
++    if (Distance(p, Frostmourne) < 45.0f && std::abs(z - FrostmourneZ) < 15.0f)
++        return heroic ? Room::Heroic : Room::Normal;
++    return teleportAura ? Room::Transit : Room::None;
++}
++
++inline float DefileRadius(float scale)
++{
++    // boss_the_lich_king.cpp: spell_the_lich_king_defile::CorrectRange.
++    return std::isfinite(scale) && scale > 0.0f ? 10.0f * scale + 2.0f : 12.0f;
++}
++
++inline bool Contains(Hazard const& hazard, Point p) { return Distance(hazard.center, p) < hazard.radius; }
++inline bool Threatened(Point p, std::vector<Hazard> const& hazards)
++{
++    return std::any_of(hazards.begin(), hazards.end(), [&](Hazard const& h) { return Contains(h, p); });
++}
++
++// A segment may leave a hazard it already occupies, but must move monotonically away
++// from that hazard and never cross another one. Checking just the destination is unsafe.
++inline bool SafeSegment(Point start, Point end, std::vector<Hazard> const& hazards, bool requireExit = true)
++{
++    float const dx = end.x - start.x, dy = end.y - start.y;
++    float const length2 = dx * dx + dy * dy;
++    if (length2 < 0.01f)
++        return false;
++    for (Hazard const& h : hazards)
++    {
++        if (Contains(h, end) && (requireExit || !Contains(h, start)))
++            return false;
++        float const sx = start.x - h.center.x, sy = start.y - h.center.y;
++        float const projection = sx * dx + sy * dy;
++        if (Contains(h, start))
++        {
++            if (projection < -0.01f)
++                return false;
++        }
++        else
++        {
++            float const t = std::clamp(-projection / length2, 0.0f, 1.0f);
++            if (Contains(h, {start.x + t * dx, start.y + t * dy}))
++                return false;
++        }
++    }
++    return true;
++}
++
++// Return no route when boxed in; never fall back to a known unsafe destination.
++// valid() supplies map height/LOS validation without coupling this policy to the core.
++template <class Valid>
++std::optional<Point> Escape(Point start, Point center, float boundary, std::vector<Hazard> const& hazards,
++                            std::vector<Point> const& raid, bool dropDefile, Valid valid)
++{
++    std::optional<Point> best;
++    float score = -1e30f;
++    for (float step : {4.0f, 8.0f, 12.0f, 16.0f, 20.0f, 28.0f})
++        for (unsigned i = 0; i < 32; ++i)
++        {
++            float const angle = float(i) * 6.283185307f / 32.0f;
++            Point const p = {start.x + step * std::cos(angle), start.y + step * std::sin(angle)};
++            if (Distance(p, center) > boundary || !SafeSegment(start, p, hazards))
++                continue;
++            float clearance = 20.0f;
++            for (Hazard const& h : hazards)
++                clearance = std::min(clearance, Distance(p, h.center) - h.radius);
++            float separation = 20.0f;
++            for (Point member : raid)
++                separation = std::min(separation, Distance(p, member));
++            // Short escape beats long wandering; a Defile target chooses space away from the raid.
++            float const value = std::min(clearance, 5.0f) - step * 0.7f +
++                                (dropDefile ? separation * 2.0f + Distance(p, center) * 0.15f : 0.0f);
++            if (value > score && valid(p))
++            {
++                best = p;
++                score = value;
++            }
++        }
++    return best;
++}
++
++inline bool RescueTarget(bool alive, bool passenger, bool attackable)
++{
++    // The core ejects the passenger below 50% on heroic; do not infer the carry from rounded health.
++    return alive && passenger && attackable;
++}
++
++inline bool ShouldHealTerenas(Room room, bool healer, float healthPct)
++{
++    return room == Room::Normal && healer && healthPct < 95.0f;
++}
++} // namespace LichKingMechanics
++#endif
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index 91aa89ec..3bfe9feb 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -312,6 +312,7 @@ bool PlayerbotAIConfig::Initialize()
+     EnableICCBuffs = sConfigMgr->GetOption<bool>("Playerbots.EnableICCBuffs", true);
+     TwinValkyrInteractions = sConfigMgr->GetOption<bool>("Playerbots.TwinValkyrInteractions", false);
+     RaidVehicleSupport = sConfigMgr->GetOption<bool>("Playerbots.RaidVehicleSupport", false);
++    LichKingMechanics = sConfigMgr->GetOption<bool>("Playerbots.LichKingMechanics", false);
+ 
+     //////////////////////////// Professions
+     ClassMatchingProfessionChance =
+diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
+index 0ca1ae02..14a12b6c 100644
+--- a/src/PlayerbotAIConfig.h
++++ b/src/PlayerbotAIConfig.h
+@@ -109,6 +109,7 @@ public:
+     bool EnableICCBuffs;
+     bool TwinValkyrInteractions;
+     bool RaidVehicleSupport;
++    bool LichKingMechanics;
+     bool AllowAccountBots, AllowGuildBots, AllowTrustedAccountBots;
+     bool RandomBotGuildNearby, RandomBotInvitePlayer, InviteChat;
+     uint32 GlobalCoolDown, ReactDelay, MaxWaitForMove, DisableMoveSplinePath, MaxMovementSearchTime, ExpireActionTime,
+diff --git a/tests/lich_king_mechanics_test.cpp b/tests/lich_king_mechanics_test.cpp
+new file mode 100644
+index 00000000..ef03e19d
+--- /dev/null
++++ b/tests/lich_king_mechanics_test.cpp
+@@ -0,0 +1,95 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#include "../src/Ai/Raid/LichKingMechanicsPolicy.h"
++#include <iostream>
++#include <limits>
++
++namespace
++{
++int checks = 0, failures = 0;
++void Check(bool result, int line)
++{
++    ++checks;
++    if (!result)
++    {
++        ++failures;
++        std::cerr << "Failed at line " << line << '\n';
++    }
++}
++}
++#define CHECK(expr) Check(static_cast<bool>(expr), __LINE__)
++
++int main()
++{
++    using namespace LichKingMechanics;
++    auto valid = [](Point) { return true; };
++    CHECK(LocateRoom(false, true, true, Frostmourne, FrostmourneZ) == Room::None);
++    CHECK(LocateRoom(true, false, true, Frostmourne, FrostmourneZ) == Room::Normal);
++    CHECK(LocateRoom(true, true, true, Frostmourne, FrostmourneZ) == Room::Heroic);
++    CHECK(LocateRoom(true, false, false, Frostmourne, FrostmourneZ) == Room::Normal);
++    CHECK(LocateRoom(true, true, false, Frostmourne, FrostmourneZ) == Room::Heroic);
++    CHECK(LocateRoom(true, true, true, Platform, PlatformZ) == Room::Transit);
++    CHECK(LocateRoom(true, true, false, Platform, PlatformZ) == Room::None);
++    CHECK(LocateRoom(true, true, false, Frostmourne, PlatformZ) == Room::None);
++    CHECK(LocateRoom(true, false, false, {495.7f, -2400.0f}, FrostmourneZ) == Room::None);
++    for (Room room : {Room::None, Room::Transit, Room::Normal, Room::Heroic})
++    {
++        CHECK(ShouldHealTerenas(room, true, 50.0f) == (room == Room::Normal));
++        CHECK(!ShouldHealTerenas(room, false, 50.0f));
++        CHECK(!ShouldHealTerenas(room, true, 100.0f));
++    }
++    CHECK(RescueTarget(true, true, true));
++    CHECK(!RescueTarget(false, true, true));
++    CHECK(!RescueTarget(true, false, true)); // Heroic ejection ends rescue regardless of rounded HP.
++    CHECK(!RescueTarget(true, true, false));
++    CHECK(DefileRadius(1.0f) == 12.0f);
++    CHECK(DefileRadius(2.0f) == 22.0f);
++    CHECK(DefileRadius(0.5f) == 7.0f);
++    CHECK(DefileRadius(std::numeric_limits<float>::quiet_NaN()) == 12.0f);
++    CHECK(DefileRadius(-1.0f) == 12.0f);
++
++    std::vector<Hazard> puddles = {{{0, 0}, 5}};
++    CHECK(!SafeSegment({-10, 0}, {10, 0}, puddles)); // Safe endpoint across a lethal puddle.
++    CHECK(SafeSegment({-10, 6}, {10, 6}, puddles));
++    CHECK(!SafeSegment({2, 0}, {-8, 0}, puddles)); // Crossing the center to exit is worse.
++    CHECK(SafeSegment({2, 0}, {8, 0}, puddles));
++    CHECK(SafeSegment({0, 0}, {8, 0}, puddles));
++    CHECK(!SafeSegment({2, 0}, {3, 0}, puddles));
++    CHECK(SafeSegment({2, 0}, {3, 0}, puddles, false)); // Intermediate path vertex while exiting.
++    CHECK(!SafeSegment({3, 0}, {2, 0}, puddles, false));
++    CHECK(!SafeSegment({6, 0}, {3, 0}, puddles, false)); // A route cannot re-enter after escaping.
++    CHECK(!SafeSegment({2, 0}, {2, 0}, puddles));
++    puddles.push_back({{10, 0}, 4});
++    CHECK(!SafeSegment({2, 0}, {15, 0}, puddles)); // Escaping one must not enter another.
++    CHECK(SafeSegment({2, 0}, {2, 12}, puddles));
++
++    // Defile edge escapes must remain on the platform and clear the actual scaled radius.
++    for (unsigned n = 0; n < 32; ++n)
++    {
++        float const angle = n * 6.283185307f / 32;
++        Point const start = {Platform.x + 37 * std::cos(angle), Platform.y + 37 * std::sin(angle)};
++        std::vector<Hazard> const hazards = {{start, DefileRadius(1)}};
++        auto const escape = Escape(start, Platform, PlatformRadius, hazards, {}, false, valid);
++        CHECK(escape.has_value());
++        if (escape)
++        {
++            CHECK(Distance(*escape, Platform) <= PlatformRadius);
++            CHECK(!Threatened(*escape, hazards));
++            CHECK(SafeSegment(start, *escape, hazards));
++        }
++    }
++    auto const boxed = Escape({0, 0}, {0, 0}, 30, {{{0, 0}, 100}}, {}, false, valid);
++    CHECK(!boxed); // No unsafe fallback to the original destination.
++    CHECK(!Escape({0, 0}, {0, 0}, 30, {{{0, 0}, 5}}, {}, false, [](Point) { return false; }));
++    auto const roomEscape = Escape(Frostmourne, Frostmourne, RoomRadius,
++                                  {{Frostmourne, 12}}, {}, false, valid);
++    CHECK(roomEscape && Distance(*roomEscape, Frostmourne) < RoomRadius);
++    auto const drop = Escape({0, 0}, {0, 0}, 43, {}, {{0, 0}, {0, 1}, {1, 0}}, true, valid);
++    CHECK(drop && Distance(*drop, {0, 0}) >= 12);
++
++    std::cout << checks << " checks, " << failures << " failures\n";
++    return failures ? 1 : 0;
++}
+-- 
+2.56.0.windows.2
+

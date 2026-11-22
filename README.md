@@ -408,6 +408,12 @@ output in `patches/`:
   Malygos works without a human master; Flame Leviathan's existing offline
   bypass is unchanged. See [vehicle validation](patches/mod-playerbots/VEHICLES.md)
   before enabling it for a raid.
+- **Lich King mechanics** (playerbots, opt-in): `Playerbots.LichKingMechanics = 1`
+  adds separate normal/heroic Frostmourne handling, growing Defile avoidance,
+  Val'kyr passenger rescue and Vile Spirit avoidance using ordinary casts and
+  movement. It disables the existing LK teleport, instant-kill and free-aura
+  shortcuts. The default is `0`; see the [supervised checks and limitations](patches/mod-playerbots/LICH_KING.md)
+  before enabling it after a native release.
 - **Valithria's healers** (playerbots): the one or two raid healers heal the
   dragon whenever nobody in range of them is below 80% and they keep 40% mana,
   a healer on the dragon
