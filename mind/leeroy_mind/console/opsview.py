@@ -709,7 +709,9 @@ class OpsView:
         if name == "drift":
             return drift_view(self.root, deadline)
         if name == 'switches':
+            from .native_switches import view as native_switches
             return {**switches_view(self.data,deadline,mind_started=runtime.get('mind_started')),
+                    'native': native_switches(self.root, read=_read, check=lambda: check(deadline)),
                     'gpu': runtime.get('gpu')}
         return schedules_view(self.root, deadline)
 

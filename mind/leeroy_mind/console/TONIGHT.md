@@ -43,9 +43,10 @@ counts show an unknown count, not zero. Calendar dates use the console host's
 local timezone, matching the existing calendar desk.
 
 Ops now includes the feature switchboard. It reads at most 64 KiB of mind.toml,
-shows only known switches as on, off or invalid, and lists dependencies. It does
-not show local config values, read native configs, or read the blocklist's
-contents. Native settings and rebuild requirements are informational; blocklist
+shows only known switches as on, off or invalid, and lists dependencies. Its
+native sections now read known boolean keys from the installed module configs,
+with configured and running state kept separate (see the console README).
+Other config values and the blocklist's contents stay private; only blocklist
 presence is checked. A newer mind.toml is marked for restart when the running
 process's start time is available. No toggle changes configuration from here.
 
