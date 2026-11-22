@@ -354,9 +354,20 @@ class Transition:
     value: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _Journal:
+    """One decoded journal and the exact stored rows it was decoded from."""
+    names: tuple[str, ...]
+    rows: tuple[tuple, ...]
+    records: tuple[ActionRecord, ...]
+    days: tuple[tuple[ActionRecord, dict], ...]  # day releases: their proof reads the day tables
+
+
 class ActionStore:
     def __init__(self, conn):
         self.conn = conn
+        self._journal_cache = None
+        self._holds_cache = None  # (journal, holds) for the cached journal only
 
     def _validate(self, r, *, stored=False):
         identity(r.command_id)
@@ -539,9 +550,42 @@ class ActionStore:
         except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
             raise ActionUnavailable("realm action evidence unavailable") from None
 
+    def _journal(self):
+        """The whole journal, validated, and decoded again only when a stored row changed.
+
+        A row's validation reads only realm_action itself (its children, its WG cleanup, its
+        completion proof), except a day release's proof, which reads day_step, day_permit and
+        day_plan. The cache is keyed on every stored row, read again each time: whatever wrote
+        the table (any store or connection, raw SQL, a rollback or savepoint rollback after a
+        read inside its transaction), a changed row is decoded again, and day release proofs are
+        proved again on every read. A cached read is what a fresh decode returns, and a bad row
+        or proof still fails closed. Only a decode made inside one transaction (one snapshot of
+        every table it read) is kept."""
+        try:
+            snapshot = self.conn.in_transaction
+            cursor = self.conn.execute("SELECT * FROM realm_action ORDER BY seq")
+            names = tuple(c[0] for c in cursor.description)
+            rows = tuple(map(tuple, cursor.fetchall()))
+            cached = self._journal_cache
+            if cached is not None and cached.names == names and cached.rows == rows:
+                for r, ev in cached.days:
+                    if not self._day_proof(r, ev): raise ValueError("invalid day release proof")
+                return cached
+            records = tuple(self._decode_row(names, row) for row in rows)
+            days = []
+            for r in records:
+                ev = json.loads(r.evidence)
+                if "day_release" in ev: days.append((r, ev))
+        except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
+            raise ActionUnavailable("realm action evidence unavailable") from None
+        journal = _Journal(names, rows, records, tuple(days))
+        if snapshot and self.conn.in_transaction:
+            self._journal_cache = journal
+        return journal
+
     def records(self):
         """Validated history, also used for durable 600s backoff; bounded but for grows and releases."""
-        return self._records()
+        return self._journal().records
 
     def unresolved(self, *, limit=128):
         integer(limit, 1, 128)
@@ -550,7 +594,16 @@ class ActionStore:
         return rows[:limit]
 
     def holds(self):
-        rows = self.records()
+        journal = self._journal()
+        cached = self._holds_cache
+        if cached is not None and cached[0] is journal:
+            return cached[1]
+        holds = self._holds(journal.records)
+        if journal is self._journal_cache:
+            self._holds_cache = (journal, holds)
+        return holds
+
+    def _holds(self, rows):
         by_id = {r.command_id: r for r in rows}
         for r in rows:
             data = json.loads(r.evidence)

@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -662,3 +663,62 @@ def test_lab_starts_only_on_a_native_that_forms_the_party_at_the_dummy(fake, lab
     fresh.feed(replace(old, ts=3, features=old.features + (module.DUMMY_FEATURE,)))
     asyncio.run(start(fresh))
     assert fresh.active and fresh.members() == set(fake.members)
+
+
+def _old_eligible(runner):
+    """The pre-batch rule, one holder() per member, as the reference."""
+    away, groups = runner.ports.away(), {}
+    desired = runner._desired(set(runner.ports.cast()))
+    for guid, member in sorted(runner.ports.cast().items()):
+        spec = (member.class_, member.spec_tab)
+        if (guid != runner.ports.human_guid and member.online is True and member.level == 80
+                and spec in module._DAMAGE_SPECS and guid not in away and guid not in desired
+                and runner.ports.holder(guid) is None):
+            groups.setdefault(spec, []).append(guid)
+    return {spec: guids[:min(10, runner.cfg.lab_bots)] for spec, guids in groups.items()
+            if len(guids) >= 2 and runner.cfg.lab_bots >= 2}
+
+
+def test_eligibility_reads_the_cast_bodies_in_one_batch(fake, lab, monkeypatch):
+    runner, _, _ = lab
+    for guid in range(105, 255):
+        fake.members[guid] = Member(guid, "Tester", 1, 8 if guid % 3 else 4, 0, 80, 0, guid % 7 != 0, 0, 0,
+                                    1 if guid % 3 else 2)
+    fake.holders.update({101: "raid", 104: "training", 110: "realm_day", 111: "offline_raid"})
+    fake.away_set = {103}
+    expected = _old_eligible(runner)
+    batches = []
+    real = fake.holders_of
+    monkeypatch.setattr(fake, "holder", lambda guid: pytest.fail("a body read per member"))
+    monkeypatch.setattr(fake, "holders_of", lambda guids: batches.append(set(guids)) or real(guids))
+    assert runner._eligible() == expected
+    assert expected[(8, 1)] == [102, 106, 107, 109] and expected[(4, 2)][:2] == [108, 114]
+    assert len(batches) == 1 and {101, 102, 104} <= batches[0] and 103 not in batches[0]
+    fake.members.clear()
+    batches.clear()
+    assert runner._eligible() == {} and batches == []  # nobody to ask about: no body read
+
+
+def test_eligibility_over_a_live_sized_journal_reads_it_once(fake, lab, monkeypatch):
+    from leeroy_mind.bodies import BodyLedger
+    from realm.journal import CAST, realistic_journal
+    runner, _, _ = lab
+    store, held = realistic_journal()
+    rows = store.conn.execute("SELECT count(*) FROM realm_action").fetchone()[0]
+    reads = []
+    ledger = BodyLedger(fake.clock)
+    ledger.add_holder_source("realm_actions", lambda: reads.append(1) or store.holds())
+    fake.members.clear()
+    for guid in CAST:
+        fake.members[guid] = Member(guid, "Tester", 1, 8, 0, 80, 0, True, 0, 0, 1)
+    monkeypatch.setattr(fake, "holder", ledger.holder)
+    monkeypatch.setattr(fake, "holders_of", ledger.holders_of)
+    decoded = []
+    real = store._decode_row
+    monkeypatch.setattr(store, "_decode_row", lambda names, row: decoded.append(1) or real(names, row))
+    started = time.perf_counter()
+    groups = runner._eligible()
+    elapsed = time.perf_counter() - started
+    assert groups == {(8, 1): sorted(set(CAST) - held)[:4]}
+    assert len(reads) == 1 and len(decoded) <= rows  # one read and decode, not one per member
+    assert elapsed < 1.0  # one holder() per member took about 7 s on this journal
