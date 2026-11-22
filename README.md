@@ -409,7 +409,8 @@ output in `patches/`:
   bypass is unchanged. See [vehicle validation](patches/mod-playerbots/VEHICLES.md)
   before enabling it for a raid.
 - **Valithria's healers** (playerbots): the one or two raid healers heal the
-  dragon whenever nobody in range of them is below 80%, a healer on the dragon
+  dragon whenever nobody in range of them is below 80% and they keep 40% mana,
+  a healer on the dragon
   no longer runs off after a hurt raid member (holy paladins' stock reach move
   outranked the dragon heal), and Beacon of Light is not tried on her. While
   her encounter runs, `Playerbots.log` gets a `valithria_watch` line every 5 s

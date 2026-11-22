@@ -1,6 +1,6 @@
-From a60fc154cc1ead1d2766fd4e017eecc3c6da5dfd Mon Sep 17 00:00:00 2001
+From e7b6af49cc39e740cfa274a55177413867357e13 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
-Date: Sun, 22 Nov 2026 13:49:50 -0500
+Date: Sun, 22 Nov 2026 13:55:24 -0500
 Subject: [PATCH] Keep healers on Valithria and log what they do each pull
 
 Raid healers stayed off the dragon even with the raid at full health, and
@@ -8,8 +8,9 @@ holy paladins' stock "reach party member to heal" (ACTION_EMERGENCY + 3)
 outranked the dragon heal (ACTION_RAID + 2), so they ran after any hurt
 member out of range instead of healing her. Reserved raid healers now heal
 her while every member within the party-heal search radius is at 80% or
-more, the reach move is suppressed for a healer on the dragon, and Beacon
-of Light (raid members only) is no longer offered on her.
+more and they keep 40% mana, the reach move is suppressed for a healer on
+the dragon, and Beacon of Light (raid members only) is no longer offered
+on her.
 
 Every 5 s while her encounter is in progress, Playerbots.log gets a
 valithria_watch line (her health, healer duties, dragon casts) and one
@@ -23,12 +24,12 @@ that lack the icc strategy.
  src/Ai/Raid/ICC/ICCMultipliers.cpp       |   5 +
  src/Ai/Raid/ICC/ICCScripts.cpp           |  14 ++
  src/Ai/Raid/ICC/ICCScripts.h             |  14 ++
- src/Ai/Raid/ICC/ICCShared.cpp            | 217 +++++++++++++++++++++--
+ src/Ai/Raid/ICC/ICCShared.cpp            | 219 +++++++++++++++++++++--
  src/Ai/Raid/ICC/ICCShared.h              |   8 +
  src/Ai/Raid/ICC/ICCTriggers.cpp          |  27 +--
- src/Ai/Raid/RaidInteractionPolicy.h      |  70 +++++++-
- tests/raid_interactions_test.cpp         |  60 ++++++-
- 9 files changed, 387 insertions(+), 51 deletions(-)
+ src/Ai/Raid/RaidInteractionPolicy.h      |  72 +++++++-
+ tests/raid_interactions_test.cpp         |  67 ++++++-
+ 9 files changed, 398 insertions(+), 51 deletions(-)
 
 diff --git a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
 index c7f1140c..952b7afe 100644
@@ -183,7 +184,7 @@ index 19c746a1..c4bfac25 100644
          Position gsbLastStarPos;
          std::map<ObjectGuid, uint32> gsbLastRocketPackUse;
 diff --git a/src/Ai/Raid/ICC/ICCShared.cpp b/src/Ai/Raid/ICC/ICCShared.cpp
-index 79ef001d..96997178 100644
+index 79ef001d..956e12c7 100644
 --- a/src/Ai/Raid/ICC/ICCShared.cpp
 +++ b/src/Ai/Raid/ICC/ICCShared.cpp
 @@ -7,13 +7,19 @@
@@ -206,7 +207,7 @@ index 79ef001d..96997178 100644
  #include "ThreatManager.h"
  #include "Timer.h"
  
-@@ -259,27 +265,210 @@ std::vector<RaidInteractions::Healer> ValithriaHealers(Player* bot)
+@@ -259,27 +265,212 @@ std::vector<RaidInteractions::Healer> ValithriaHealers(Player* bot)
      }
      return healers;
  }
@@ -261,7 +262,9 @@ index 79ef001d..96997178 100644
 +    auto const raidHealer = IccValithriaShouldHealRaid(bot);
 +    if (!raidHealer.has_value())
 +        return std::nullopt;
-+    return RaidInteractions::HealsDragon(*raidHealer, *raidHealer ? ValithriaLowestNearby(bot) : 100.0f);
++    if (!*raidHealer)
++        return true;
++    return RaidInteractions::HealsDragon(true, ValithriaLowestNearby(bot), bot->GetPowerPct(POWER_MANA));
 +}
 +
 +bool IccValithriaOnDragon(Player* bot)
@@ -491,7 +494,7 @@ index 2fb7b3a3..fcb59ca7 100644
  
  bool IccValithriaDreamCloudTrigger::IsActive()
 diff --git a/src/Ai/Raid/RaidInteractionPolicy.h b/src/Ai/Raid/RaidInteractionPolicy.h
-index 202e7572..5e22ef69 100644
+index 202e7572..848b47dd 100644
 --- a/src/Ai/Raid/RaidInteractionPolicy.h
 +++ b/src/Ai/Raid/RaidInteractionPolicy.h
 @@ -11,6 +11,7 @@
@@ -513,7 +516,7 @@ index 202e7572..5e22ef69 100644
  {
      std::sort(healers.begin(), healers.end(), [](Healer const& left, Healer const& right)
                { return left.druid != right.druid ? left.druid : left.guid < right.guid; });
-@@ -77,13 +80,72 @@ inline std::optional<bool> HealRaid(std::uint64_t guid, std::vector<Healer> heal
+@@ -77,13 +80,74 @@ inline std::optional<bool> HealRaid(std::uint64_t guid, std::vector<Healer> heal
      if (found == healers.end())
          return std::nullopt;
      if (healers.size() == 1)
@@ -526,14 +529,16 @@ index 202e7572..5e22ef69 100644
  }
  
 +// A reserved raid healer spends its casts on the dragon while everyone it could heal is at
-+// or above this health; below it, ordinary party healing takes over.
++// or above this health and it keeps this much mana for the raid; otherwise ordinary party
++// healing takes over.
 +inline constexpr float RaidHealerDragonFloorPct = 80.0f;
++inline constexpr float RaidHealerDragonManaPct = 40.0f;
 +
 +// lowestPct: the lowest health % among the group members this healer could heal (100 when
 +// nobody is hurt). Dragon healers always heal her; raid healers only while the raid is fine.
-+inline bool HealsDragon(bool raidHealer, float lowestPct)
++inline bool HealsDragon(bool raidHealer, float lowestPct, float manaPct)
 +{
-+    return !raidHealer || lowestPct >= RaidHealerDragonFloorPct;
++    return !raidHealer || (lowestPct >= RaidHealerDragonFloorPct && manaPct >= RaidHealerDragonManaPct);
 +}
 +
 +// What a Valithria healer is doing, in the order the strategy's triggers outrank each other
@@ -590,7 +595,7 @@ index 202e7572..5e22ef69 100644
  {
      auto const raidHealer = HealRaid(guid, healers);
 diff --git a/tests/raid_interactions_test.cpp b/tests/raid_interactions_test.cpp
-index 8caf2fa6..bd6e62ef 100644
+index 8caf2fa6..b07014c0 100644
 --- a/tests/raid_interactions_test.cpp
 +++ b/tests/raid_interactions_test.cpp
 @@ -5,6 +5,7 @@
@@ -612,7 +617,7 @@ index 8caf2fa6..bd6e62ef 100644
      CHECK(!CanUsePortal(101, {{101, true}}));
      CHECK(HealRaid(101, {{101, true}, {102, false}}) == true);
      CHECK(HealRaid(102, {{101, true}, {102, false}}) == false);
-@@ -79,13 +78,64 @@ int main()
+@@ -79,13 +78,71 @@ int main()
                  std::reverse(reversed.begin(), reversed.end());
                  CHECK(HealRaid(healer.guid, reversed) == assignment);
              }
@@ -625,28 +630,35 @@ index 8caf2fa6..bd6e62ef 100644
              CHECK(!CanUsePortal(1, roster));
          }
  
-+    // Dragon healers always heal her; raid healers only while nobody they could heal is hurt.
++    // Dragon healers always heal her; raid healers only while nobody they could heal is hurt
++    // and they keep mana for the raid.
 +    for (float lowest : {0.0f, 25.0f, 79.9f, 80.0f, 100.0f})
-+    {
-+        CHECK(HealsDragon(false, lowest));
-+        CHECK(HealsDragon(true, lowest) == (lowest >= RaidHealerDragonFloorPct));
-+    }
++        for (float mana : {0.0f, 39.9f, 40.0f, 100.0f})
++        {
++            CHECK(HealsDragon(false, lowest, mana));
++            CHECK(HealsDragon(true, lowest, mana) ==
++                  (lowest >= RaidHealerDragonFloorPct && mana >= RaidHealerDragonManaPct));
++        }
 +    // 25-man: six healers, one druid. The druid and the lowest guid heal the raid; on a quiet
-+    // raid every healer works on the dragon, and with someone hurt only the four dragon healers.
++    // raid every healer works on the dragon; with someone hurt, or the raid healers short of mana,
++    // only the four dragon healers do.
 +    {
 +        std::vector<Healer> const six = {{106, false}, {105, false}, {104, true}, {103, false}, {102, false},
 +                                         {101, false}};
 +        std::size_t quiet = 0;
 +        std::size_t hurt = 0;
++        std::size_t dry = 0;
 +        for (Healer const& healer : six)
 +        {
 +            bool const raid = *HealRaid(healer.guid, six);
 +            CHECK(raid == (healer.guid == 104 || healer.guid == 101));
-+            quiet += HealsDragon(raid, 100.0f);
-+            hurt += HealsDragon(raid, 50.0f);
++            quiet += HealsDragon(raid, 100.0f, 100.0f);
++            hurt += HealsDragon(raid, 50.0f, 100.0f);
++            dry += HealsDragon(raid, 100.0f, 20.0f);
 +        }
 +        CHECK(quiet == 6);
 +        CHECK(hurt == 4);
++        CHECK(dry == 4);
 +    }
 +
 +    // The reported duty follows the strategy's trigger order.
