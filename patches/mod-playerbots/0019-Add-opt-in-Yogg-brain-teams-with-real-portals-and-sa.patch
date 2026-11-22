@@ -1,0 +1,1122 @@
+From def4834c2b9d265929685f692d78dde8e1b8338c Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 14:48:49 -0500
+Subject: [PATCH] Add opt-in Yogg brain teams with real portals and sanity
+ guards
+
+---
+ conf/playerbots.conf.dist                 |   5 +
+ src/Ai/Base/Strategy/ReactionStrategy.cpp |   5 +
+ src/Ai/Raid/Uld/UldActionContext.h        |   2 +
+ src/Ai/Raid/Uld/UldActions.cpp            |  36 +-
+ src/Ai/Raid/Uld/UldStrategy.cpp           |   8 +
+ src/Ai/Raid/Uld/UldStrategy.h             |   1 +
+ src/Ai/Raid/Uld/UldTriggerContext.h       |   3 +
+ src/Ai/Raid/Uld/UldTriggers.cpp           |  16 +
+ src/Ai/Raid/Uld/YoggBrainActions.cpp      | 447 ++++++++++++++++++++++
+ src/Ai/Raid/Uld/YoggBrainActions.h        |  39 ++
+ src/Ai/Raid/Uld/YoggBrainPolicy.h         | 114 ++++++
+ src/PlayerbotAIConfig.cpp                 |   1 +
+ src/PlayerbotAIConfig.h                   |   1 +
+ tests/yogg_brain_test.cpp                 | 100 +++++
+ 14 files changed, 768 insertions(+), 10 deletions(-)
+ create mode 100644 src/Ai/Raid/Uld/YoggBrainActions.cpp
+ create mode 100644 src/Ai/Raid/Uld/YoggBrainActions.h
+ create mode 100644 src/Ai/Raid/Uld/YoggBrainPolicy.h
+ create mode 100644 tests/yogg_brain_test.cpp
+
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index 41196a64..771b82b5 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -498,6 +498,11 @@ Playerbots.RaidVehicleSupport = 0
+ # Default: 1 (enabled)
+ Playerbots.AutoAvoidAoe = 1
+ 
++# Real Yogg portal teams, illusion combat, timed exits and sanity conservation.
++# Disabled until a supervised 10/25-player pull validates local paths.
++# Never controls humans, enables Keepers, or uses raid-cheat completion.
++Playerbots.YoggBrainSupport = 0
++
+ # Only avoid aoe spells with a radius smaller than this value
+ Playerbots.MaxAoeAvoidRadius = 15.0
+ 
+diff --git a/src/Ai/Base/Strategy/ReactionStrategy.cpp b/src/Ai/Base/Strategy/ReactionStrategy.cpp
+index c44f1915..f6f70110 100644
+--- a/src/Ai/Base/Strategy/ReactionStrategy.cpp
++++ b/src/Ai/Base/Strategy/ReactionStrategy.cpp
+@@ -28,4 +28,9 @@ void ReactionStrategy::InitReactionTriggers(std::vector<TriggerNode*>& triggers)
+             }
+         )
+     );
++
++    // Main-engine emergency priority cannot wake a bot already casting. This
++    // opt-in encounter reaction can interrupt a cast for gaze or the exit deadline.
++    triggers.push_back(new TriggerNode("yogg brain emergency",
++        { NextAction("yogg brain support", ACTION_PASSTHROUGH) }));
+ }
+diff --git a/src/Ai/Raid/Uld/UldActionContext.h b/src/Ai/Raid/Uld/UldActionContext.h
+index a9a1a7f6..5f59b21f 100644
+--- a/src/Ai/Raid/Uld/UldActionContext.h
++++ b/src/Ai/Raid/Uld/UldActionContext.h
+@@ -11,12 +11,14 @@
+ #include "BossAuraActions.h"
+ #include "NamedObjectContext.h"
+ #include "UldActions.h"
++#include "YoggBrainActions.h"
+ 
+ class RaidUlduarActionContext : public NamedObjectContext<Action>
+ {
+ public:
+     RaidUlduarActionContext()
+     {
++        creators["yogg brain support"] = [](PlayerbotAI* ai) -> Action* { return new YoggBrainAction(ai); };
+         creators["flame leviathan vehicle"] = &RaidUlduarActionContext::flame_leviathan_vehicle;
+         creators["flame leviathan enter vehicle"] = &RaidUlduarActionContext::flame_leviathan_enter_vehicle;
+         creators["razorscale avoid devouring flames"] = &RaidUlduarActionContext::razorscale_avoid_devouring_flames;
+diff --git a/src/Ai/Raid/Uld/UldActions.cpp b/src/Ai/Raid/Uld/UldActions.cpp
+index 29ec319a..096093f3 100644
+--- a/src/Ai/Raid/Uld/UldActions.cpp
++++ b/src/Ai/Raid/Uld/UldActions.cpp
+@@ -2634,6 +2634,8 @@ bool VezaxMarkOfTheFacelessAction::Execute(Event /*event*/)
+ 
+ bool YoggSaronOminousCloudCheatAction::Execute(Event /*event*/)
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     YoggSaronTrigger yoggSaronTrigger(botAI);
+ 
+     Unit* boss = yoggSaronTrigger.GetSaraIfAlive();
+@@ -2673,7 +2675,7 @@ bool YoggSaronMarkTargetAction::Execute(Event /*event*/)
+     YoggSaronTrigger yoggSaronTrigger(botAI);
+     if (yoggSaronTrigger.IsPhase2())
+     {
+-        if (botAI->HasCheat(BotCheatMask::raid))
++        if (botAI->HasCheat(BotCheatMask::raid) && !sPlayerbotAIConfig.YoggBrainSupport)
+         {
+             Unit* crusherTentacle = bot->FindNearestCreature(NPC_CRUSHER_TENTACLE, 200.0f, true);
+             if (crusherTentacle)
+@@ -2744,7 +2746,7 @@ bool YoggSaronMarkTargetAction::Execute(Event /*event*/)
+         {
+             // Added because lunatic gaze freeze all bots and they can't attack
+             // If someone fix it then this cheat can be removed
+-            if (botAI->HasCheat(BotCheatMask::raid))
++            if (botAI->HasCheat(BotCheatMask::raid) && !sPlayerbotAIConfig.YoggBrainSupport)
+                 lowestHealthUnit->Kill(bot, lowestHealthUnit);
+             else
+                 group->SetTargetIcon(RtiTargetValue::skullIndex, bot->GetGUID(), lowestHealthUnit->GetGUID());
+@@ -2791,6 +2793,8 @@ bool YoggSaronBrainLinkAction::Execute(Event /*event*/)
+ 
+ bool YoggSaronMoveToEnterPortalAction::Execute(Event /*event*/)
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     Group* group = bot->GetGroup();
+     if (!group)
+         return false;
+@@ -2833,7 +2837,7 @@ bool YoggSaronMoveToEnterPortalAction::Execute(Event /*event*/)
+ 
+     botAI->GetAiObjectContext()->GetValue<std::string>("rti")->Set("diamond");
+ 
+-    if (botAI->HasCheat(BotCheatMask::raid))
++    if (botAI->HasCheat(BotCheatMask::raid) && !sPlayerbotAIConfig.YoggBrainSupport)
+     {
+         return bot->TeleportTo(bot->GetMapId(), assignedPortalPosition.GetPositionX(),
+                                       assignedPortalPosition.GetPositionY(),
+@@ -2850,6 +2854,8 @@ bool YoggSaronMoveToEnterPortalAction::Execute(Event /*event*/)
+ 
+ bool YoggSaronFallFromFloorAction::Execute(Event /*event*/)
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     std::string rtiMark = AI_VALUE(std::string, "rti");
+     if (rtiMark == "skull")
+     {
+@@ -2882,11 +2888,13 @@ bool YoggSaronFallFromFloorAction::Execute(Event /*event*/)
+ 
+ bool YoggSaronBossRoomMovementCheatAction::Execute(Event /*event*/)
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     FollowMasterStrategy followMasterStrategy(botAI);
+     if (botAI->HasStrategy(followMasterStrategy.getName(), BotState::BOT_STATE_NON_COMBAT))
+         botAI->ChangeStrategy(REMOVE_STRATEGY_CHAR + followMasterStrategy.getName(), BotState::BOT_STATE_NON_COMBAT);
+ 
+-    if (!botAI->HasCheat(BotCheatMask::raid))
++    if (!(botAI->HasCheat(BotCheatMask::raid) && !sPlayerbotAIConfig.YoggBrainSupport))
+         return false;
+ 
+     Group* group = bot->GetGroup();
+@@ -2909,6 +2917,8 @@ bool YoggSaronBossRoomMovementCheatAction::Execute(Event /*event*/)
+ 
+ bool YoggSaronUsePortalAction::Execute(Event /*event*/)
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     Creature* assignedPortal = bot->FindNearestCreature(NPC_DESCEND_INTO_MADNESS, 2.0f, true);
+     if (!assignedPortal)
+         return false;
+@@ -2922,6 +2932,8 @@ bool YoggSaronUsePortalAction::Execute(Event /*event*/)
+ 
+ bool YoggSaronIllusionRoomAction::Execute(Event /*event*/)
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     YoggSaronTrigger yoggSaronTrigger(botAI);
+ 
+     bool resultSetRtiMark = SetRtiMark(yoggSaronTrigger);
+@@ -2965,7 +2977,7 @@ bool YoggSaronIllusionRoomAction::SetIllusionRtiTarget(YoggSaronTrigger yoggSaro
+         return false;
+ 
+     // If proper adds handling in illusion room will be implemented, then this can be removed
+-    if (botAI->HasCheat(BotCheatMask::raid))
++    if (botAI->HasCheat(BotCheatMask::raid) && !sPlayerbotAIConfig.YoggBrainSupport)
+     {
+         bot->TeleportTo(bot->GetMapId(), nextRtiTarget->GetPositionX(), nextRtiTarget->GetPositionY(),
+                         nextRtiTarget->GetPositionZ(), bot->GetOrientation());
+@@ -3005,7 +3017,7 @@ bool YoggSaronIllusionRoomAction::SetBrainRtiTarget(YoggSaronTrigger yoggSaronTr
+ 
+     Position entrancePosition = yoggSaronTrigger.GetIllusionRoomEntrancePosition();
+ 
+-    if (botAI->HasCheat(BotCheatMask::raid))
++    if (botAI->HasCheat(BotCheatMask::raid) && !sPlayerbotAIConfig.YoggBrainSupport)
+     {
+         if (Unit const* master = botAI->GetMaster())
+         {
+@@ -3032,11 +3044,13 @@ bool YoggSaronIllusionRoomAction::SetBrainRtiTarget(YoggSaronTrigger yoggSaronTr
+ 
+ bool YoggSaronMoveToExitPortalAction::Execute(Event /*event*/)
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     GameObject* portal = bot->FindNearestGameObject(GO_FLEE_TO_THE_SURFACE_PORTAL, 100.0f);
+     if (!portal)
+         return false;
+ 
+-    if (botAI->HasCheat(BotCheatMask::raid))
++    if (botAI->HasCheat(BotCheatMask::raid) && !sPlayerbotAIConfig.YoggBrainSupport)
+         bot->TeleportTo(bot->GetMapId(), portal->GetPositionX(), portal->GetPositionY(), portal->GetPositionZ(),
+                                bot->GetOrientation());
+     else
+@@ -3055,6 +3069,8 @@ bool YoggSaronMoveToExitPortalAction::Execute(Event /*event*/)
+ 
+ bool YoggSaronLunaticGazeAction::Execute(Event /*event*/)
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     Unit* boss = AI_VALUE2(Unit*, "find target", "yogg-saron");
+     if (!boss || !boss->IsAlive())
+         return false;
+@@ -3075,7 +3091,7 @@ bool YoggSaronPhase3PositioningAction::Execute(Event /*event*/)
+ {
+     if (PlayerbotAI::IsRanged(bot))
+     {
+-        if (botAI->HasCheat(BotCheatMask::raid))
++        if (botAI->HasCheat(BotCheatMask::raid) && !sPlayerbotAIConfig.YoggBrainSupport)
+         {
+             return bot->TeleportTo(bot->GetMapId(), ULDUAR_YOGG_SARON_PHASE_3_RANGED_SPOT.GetPositionX(),
+                             ULDUAR_YOGG_SARON_PHASE_3_RANGED_SPOT.GetPositionY(),
+@@ -3093,7 +3109,7 @@ bool YoggSaronPhase3PositioningAction::Execute(Event /*event*/)
+ 
+     if (PlayerbotAI::IsMelee(bot) && !PlayerbotAI::IsTank(bot))
+     {
+-        if (botAI->HasCheat(BotCheatMask::raid))
++        if (botAI->HasCheat(BotCheatMask::raid) && !sPlayerbotAIConfig.YoggBrainSupport)
+         {
+             return bot->TeleportTo(bot->GetMapId(), ULDUAR_YOGG_SARON_PHASE_3_MELEE_SPOT.GetPositionX(),
+                             ULDUAR_YOGG_SARON_PHASE_3_MELEE_SPOT.GetPositionY(),
+@@ -3112,7 +3128,7 @@ bool YoggSaronPhase3PositioningAction::Execute(Event /*event*/)
+     {
+         if (bot->GetDistance(ULDUAR_YOGG_SARON_PHASE_3_MELEE_SPOT) > 30.0f)
+         {
+-            if (botAI->HasCheat(BotCheatMask::raid))
++            if (botAI->HasCheat(BotCheatMask::raid) && !sPlayerbotAIConfig.YoggBrainSupport)
+             {
+                 return bot->TeleportTo(bot->GetMapId(), ULDUAR_YOGG_SARON_PHASE_3_MELEE_SPOT.GetPositionX(),
+                                        ULDUAR_YOGG_SARON_PHASE_3_MELEE_SPOT.GetPositionY(),
+diff --git a/src/Ai/Raid/Uld/UldStrategy.cpp b/src/Ai/Raid/Uld/UldStrategy.cpp
+index 92ba7e76..f37a3251 100644
+--- a/src/Ai/Raid/Uld/UldStrategy.cpp
++++ b/src/Ai/Raid/Uld/UldStrategy.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "UldStrategy.h"
++#include "YoggBrainActions.h"
+ 
+ void RaidUlduarStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+ {
+@@ -252,6 +253,8 @@ void RaidUlduarStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+     //
+     // Yogg-Saron
+     //
++    triggers.push_back(new TriggerNode("yogg brain support",
++        { NextAction("yogg brain support", ACTION_EMERGENCY + 5) }));
+     triggers.push_back(new TriggerNode(
+         "sara shadow resistance trigger",
+         { NextAction("sara shadow resistance action", ACTION_RAID) }));
+@@ -320,3 +323,8 @@ void RaidUlduarStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+         "yogg-saron phase 3 positioning trigger",
+         { NextAction("yogg-saron phase 3 positioning action", ACTION_RAID) }));
+ }
++
++void RaidUlduarStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)
++{
++    multipliers.push_back(new YoggBrainMultiplier(botAI));
++}
+diff --git a/src/Ai/Raid/Uld/UldStrategy.h b/src/Ai/Raid/Uld/UldStrategy.h
+index 6469d856..8a2b60b5 100644
+--- a/src/Ai/Raid/Uld/UldStrategy.h
++++ b/src/Ai/Raid/Uld/UldStrategy.h
+@@ -14,6 +14,7 @@ class RaidUlduarStrategy : public Strategy
+ public:
+     RaidUlduarStrategy(PlayerbotAI* botAI) : Strategy(botAI) {}
+     virtual std::string const getName() override { return "ulduar"; }
++    void InitMultipliers(std::vector<Multiplier*>& multipliers) override;
+     virtual void InitTriggers(std::vector<TriggerNode*>& triggers) override;
+ };
+ 
+diff --git a/src/Ai/Raid/Uld/UldTriggerContext.h b/src/Ai/Raid/Uld/UldTriggerContext.h
+index a9988966..e1ebc412 100644
+--- a/src/Ai/Raid/Uld/UldTriggerContext.h
++++ b/src/Ai/Raid/Uld/UldTriggerContext.h
+@@ -10,12 +10,15 @@
+ #include "BossAuraTriggers.h"
+ #include "NamedObjectContext.h"
+ #include "UldTriggers.h"
++#include "YoggBrainActions.h"
+ 
+ class RaidUlduarTriggerContext : public NamedObjectContext<Trigger>
+ {
+ public:
+     RaidUlduarTriggerContext()
+     {
++        creators["yogg brain support"] = [](PlayerbotAI* ai) -> Trigger* { return new YoggBrainTrigger(ai); };
++        creators["yogg brain emergency"] = [](PlayerbotAI* ai) -> Trigger* { return new YoggBrainEmergencyTrigger(ai); };
+         creators["flame leviathan on vehicle"] = &RaidUlduarTriggerContext::flame_leviathan_on_vehicle;
+         creators["flame leviathan vehicle near"] = &RaidUlduarTriggerContext::flame_leviathan_vehicle_near;
+         creators["razorscale flying alone"] = &RaidUlduarTriggerContext::razorscale_flying_alone;
+diff --git a/src/Ai/Raid/Uld/UldTriggers.cpp b/src/Ai/Raid/Uld/UldTriggers.cpp
+index 63d6ce4b..9ca86885 100644
+--- a/src/Ai/Raid/Uld/UldTriggers.cpp
++++ b/src/Ai/Raid/Uld/UldTriggers.cpp
+@@ -1747,6 +1747,8 @@ Unit* YoggSaronTrigger::GetNextIllusionRoomRtiTarget()
+ 
+ bool YoggSaronOminousCloudCheatTrigger::IsActive()
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     if (!botAI->HasCheat(BotCheatMask::raid))
+         return false;
+ 
+@@ -1915,6 +1917,8 @@ bool YoggSaronBrainLinkTrigger::IsActive()
+ 
+ bool YoggSaronMoveToEnterPortalTrigger::IsActive()
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     if (!IsPhase2())
+         return false;
+ 
+@@ -1958,6 +1962,8 @@ bool YoggSaronMoveToEnterPortalTrigger::IsActive()
+ 
+ bool YoggSaronFallFromFloorTrigger::IsActive()
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     if (!IsYoggSaronFight())
+         return false;
+ 
+@@ -1974,6 +1980,8 @@ bool YoggSaronFallFromFloorTrigger::IsActive()
+ 
+ bool YoggSaronBossRoomMovementCheatTrigger::IsActive()
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     if (!IsYoggSaronFight() || !IsPhase2())
+         return false;
+ 
+@@ -2006,6 +2014,8 @@ bool YoggSaronBossRoomMovementCheatTrigger::IsActive()
+ 
+ bool YoggSaronUsePortalTrigger::IsActive()
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     if (!IsPhase2())
+         return false;
+ 
+@@ -2017,6 +2027,8 @@ bool YoggSaronUsePortalTrigger::IsActive()
+ 
+ bool YoggSaronIllusionRoomTrigger::IsActive()
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     if (!IsYoggSaronFight() || !IsInIllusionRoom() || AI_VALUE(std::string, "rti") == "square")
+         return false;
+ 
+@@ -2056,6 +2068,8 @@ bool YoggSaronIllusionRoomTrigger::SetRtiTargetRequired()
+ 
+ bool YoggSaronMoveToExitPortalTrigger::IsActive()
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     if (!IsYoggSaronFight() || !IsInBrainLevel())
+         return false;
+ 
+@@ -2085,6 +2099,8 @@ bool YoggSaronMoveToExitPortalTrigger::IsActive()
+ 
+ bool YoggSaronLunaticGazeTrigger::IsActive()
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport) return false;
++
+     Unit* yoggsaron = AI_VALUE2(Unit*, "find target", "yogg-saron");
+ 
+     if (yoggsaron && yoggsaron->IsAlive() && yoggsaron->HasUnitState(UNIT_STATE_CASTING))
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+new file mode 100644
+index 00000000..361b6f0a
+--- /dev/null
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -0,0 +1,447 @@
++/* GPL-2.0-or-later; part of mod-playerbots. */
++#include "YoggBrainActions.h"
++#include "YoggBrainPolicy.h"
++#include "CreatureAI.h"
++#include "GameObject.h"
++#include "GenericSpellActions.h"
++#include "Group.h"
++#include "InstanceScript.h"
++#include "Log.h"
++#include "MotionMaster.h"
++#include "PathGenerator.h"
++#include "Pet.h"
++#include "Playerbots.h"
++#include "Spell.h"
++#include "Timer.h"
++#include "UldBossHelper.h"
++#include <chrono>
++#include <map>
++#include <mutex>
++
++namespace
++{
++using Clock = std::chrono::steady_clock;
++bool Enabled(PlayerbotAI* ai)
++{
++    Player* bot = ai->GetBot();
++    if (!sPlayerbotAIConfig.YoggBrainSupport || !bot->IsInWorld() || bot->GetMapId() != 603 ||
++        !bot->IsAlive() || IsRealPlayer(bot) || IsSelfBot(bot) || bot->IsBeingTeleported() || bot->IsCharmed() ||
++        !bot->GetGroup() || !bot->GetGroup()->isRaidGroup() || bot->GetVehicle() ||
++        ai->HasStrategy("stay", BOT_STATE_COMBAT) || ai->HasStrategy("stay", BOT_STATE_NON_COMBAT) ||
++        ai->HasStrategy("passive", BOT_STATE_COMBAT))
++        return false;
++    InstanceScript* instance = bot->GetInstanceScript();
++    // Exact encounter and instance, including bots out of upstairs grid visibility.
++    return instance && instance->GetBossState(12) == IN_PROGRESS;
++}
++unsigned Sanity(Player* bot)
++{
++    Aura* aura = bot->GetAura(63050);
++    return aura ? aura->GetStackAmount() : 0;
++}
++bool Below(Player* bot) { return YoggBrain::InBrainArea(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ()); }
++
++struct Wave
++{
++    Clock::time_point expires;
++    std::map<uint64, ObjectGuid> portals;
++};
++// Only GUIDs cross calls; no Creature/Player pointers survive a map update.
++// Map updates can run on different workers. Freeze the roster until the 25s
++// portal window is over rather than admitting replacements when sanity falls.
++std::mutex waveMutex;
++std::map<std::pair<uint32, uint64>, Wave> waves;
++
++Creature* AssignedPortal(PlayerbotAI* ai, Creature* brain)
++{
++    Player* bot = ai->GetBot();
++    if (Below(bot) || Sanity(bot) < YoggBrain::EnterSanity || bot->HasAura(63802) || bot->HasAura(63830))
++        return nullptr;
++    Spell* cast = brain ? brain->GetCurrentSpell(CURRENT_GENERIC_SPELL) : nullptr;
++    if (!cast || cast->GetSpellInfo()->Id != 64059 || cast->GetCastTimeRemaining() < 35000)
++        return nullptr;
++    std::list<Creature*> nearby;
++    bot->GetCreatureListWithEntryInGrid(nearby, 34072, 150.0f);
++    nearby.remove_if([](Creature* portal) { return !portal->IsAlive() || !portal->HasNpcFlag(UNIT_NPC_FLAG_SPELLCLICK); });
++    if (nearby.empty())
++        return nullptr;
++    auto const now = Clock::now();
++    auto const key = std::make_pair(bot->GetMap()->GetInstanceId(), bot->GetGroup()->GetGUID().GetRawValue());
++    std::lock_guard<std::mutex> lock(waveMutex);
++    for (auto it = waves.begin(); it != waves.end();)
++        if (it->second.expires <= now) it = waves.erase(it); else ++it;
++    auto it = waves.find(key);
++    if (it == waves.end())
++    {
++        if (waves.size() >= 128) return nullptr;
++        std::vector<YoggBrain::Member> members;
++        Creature* yogg = bot->GetInstanceScript()->GetCreature(12);
++        for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
++        {
++            Player* member = ref->GetSource();
++            if (!member || !member->IsInWorld() || member->GetMap() != bot->GetMap() || !member->IsAlive())
++                continue;
++            PlayerbotAI* memberAI = GET_PLAYERBOT_AI(member);
++            bool const controlled = memberAI && !IsRealPlayer(member) && !IsSelfBot(member);
++            bool const available = yogg && member->IsWithinDistInMap(yogg, 150.0f) && member->GetPositionZ() > 300.0f &&
++                !member->GetVehicle() && !member->IsBeingTeleported() && !member->IsCharmed() &&
++                !member->HasAura(63802) && !member->HasAura(63830) &&
++                (!controlled || (!memberAI->HasStrategy("stay", BOT_STATE_COMBAT) &&
++                    !memberAI->HasStrategy("stay", BOT_STATE_NON_COMBAT) && !memberAI->HasStrategy("passive", BOT_STATE_COMBAT)));
++            members.push_back({member->GetGUID().GetRawValue(), controlled, PlayerbotAI::IsTank(member),
++                PlayerbotAI::IsHeal(member), PlayerbotAI::IsMelee(member), available, Sanity(member)});
++        }
++        auto const team = YoggBrain::Team(members, bot->GetMap()->Is25ManRaid());
++        nearby.sort([](Creature* a, Creature* b) { return a->GetGUID() < b->GetGUID(); });
++        Wave wave{now + std::chrono::seconds(60), {}};
++        auto portal = nearby.begin();
++        for (uint64 guid : team)
++        {
++            if (portal == nearby.end()) break;
++            wave.portals.emplace(guid, (*portal++)->GetGUID());
++        }
++        it = waves.emplace(key, std::move(wave)).first;
++        LOG_INFO("playerbots", "yogg_brain wave instance={} team={} portals={}", key.first, it->second.portals.size(), nearby.size());
++    }
++    auto const assignment = it->second.portals.find(bot->GetGUID().GetRawValue());
++    if (assignment == it->second.portals.end()) return nullptr;
++    for (Creature* portal : nearby)
++        if (portal->GetGUID() == assignment->second) return portal;
++    return nullptr; // A human may have used this portal. Never steal a teammate's.
++}
++
++struct GazeSource { Creature* unit; float radius; bool ignoreLos; };
++std::vector<GazeSource> Sources(Player* bot, bool below)
++{
++    std::vector<GazeSource> result;
++    std::list<Creature*> sources;
++    if (below)
++        bot->GetCreatureListWithEntryInGrid(sources, 33990, 150.0f);
++    else if (Creature* boss = bot->GetInstanceScript()->GetCreature(12))
++        sources.push_back(boss);
++    SpellInfo const* pulse = sSpellMgr->GetSpellInfo(below ? 64168 : 64164);
++    for (Creature* source : sources)
++    {
++        bool active = source->HasAura(below ? 64167 : 64163);
++        for (CurrentSpellTypes type : {CURRENT_GENERIC_SPELL, CURRENT_CHANNELED_SPELL})
++            if (Spell* cast = source->GetCurrentSpell(type))
++                active |= cast->GetSpellInfo()->Id == (below ? 64167u : 64163u);
++        if (!active || !source->IsAlive()) continue;
++        float radius = 0;
++        if (pulse)
++            for (auto const& effect : pulse->Effects) radius = std::max(radius, effect.CalcRadius(source));
++        result.push_back({source, (radius > 0 ? radius : 100.0f) + bot->GetObjectSize() + source->GetObjectSize(),
++            pulse && pulse->HasAttribute(SPELL_ATTR2_IGNORE_LINE_OF_SIGHT)});
++    }
++    return result;
++}
++std::vector<float> GazesAt(Player* bot, std::vector<GazeSource> const& sources, Position const& point)
++{
++    std::vector<float> angles;
++    for (auto const& source : sources)
++    {
++        if (point.GetExactDist(source.unit) > source.radius) continue;
++        Position eye(point.GetPositionX(), point.GetPositionY(), point.GetPositionZ() + bot->GetCollisionHeight());
++        Position const from = source.unit->GetHitSpherePointFor(eye);
++        // Match boss_yoggsaron's actual FilterTargets, including IGNORE_LOS and M2.
++        if (!source.ignoreLos && !bot->GetMap()->isInLineOfSight(from.GetPositionX(), from.GetPositionY(), from.GetPositionZ(),
++                eye.GetPositionX(), eye.GetPositionY(), eye.GetPositionZ(), bot->GetPhaseMask(),
++                LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::M2)) continue;
++        angles.push_back(point.GetAngle(source.unit));
++    }
++    return angles;
++}
++std::vector<float> Gazes(Player* bot, bool below) { return GazesAt(bot, Sources(bot, below), bot->GetPosition()); }
++
++bool AttackPoint(Player* bot, Unit* target, unsigned illusion, Position& best)
++{
++    if (illusion < 1 || illusion > 3) return false;
++    auto const sources = Sources(bot, true);
++    Position const center = illusion == 1 ? ULDUAR_YOGG_SARON_CHAMBER_OF_ASPECTS_MIDDLE :
++        illusion == 2 ? ULDUAR_YOGG_SARON_ICECROWN_CITADEL_MIDDLE : ULDUAR_YOGG_SARON_STORMWIND_KEEPER_MIDDLE;
++    float distance = 100000.0f;
++    bool found = false;
++    for (float radius : {3.0f, PlayerbotAI::IsMelee(bot) ? 3.0f : 20.0f})
++        for (unsigned i = 0; i < 24; ++i)
++        {
++            float const angle = i * 2 * YoggBrain::Pi / 24;
++            Position point(target->GetPositionX() + radius * std::cos(angle),
++                target->GetPositionY() + radius * std::sin(angle), bot->GetPositionZ());
++            bot->UpdateAllowedPositionZ(point.m_positionX, point.m_positionY, point.m_positionZ);
++            float const travel = bot->GetExactDist2d(point);
++            if (travel >= distance || point.GetExactDist2d(center) > 75.0f ||
++                std::abs(point.GetPositionZ() - bot->GetPositionZ()) > 8.0f ||
++                !bot->IsWithinLOS(point.GetPositionX(), point.GetPositionY(), point.GetPositionZ()) ||
++                !target->IsWithinLOS(point.GetPositionX(), point.GetPositionY(), point.GetPositionZ()) ||
++                !YoggBrain::CombatFacing(point.GetAngle(target), GazesAt(bot, sources, point))) continue;
++            best = point;
++            distance = travel;
++            found = true;
++        }
++    return found;
++}
++
++enum class Mode { None, Portal, Exit, Route, Fight, Face, Wait };
++struct Plan
++{
++    Mode mode = Mode::None;
++    Unit* target = nullptr;
++    GameObject* exit = nullptr;
++    Position destination;
++    float facing = 0;
++    bool below = false;
++    bool needsAction = false;
++};
++Plan Decide(PlayerbotAI* ai)
++{
++    Plan plan;
++    if (!Enabled(ai)) return plan;
++    Player* bot = ai->GetBot();
++    plan.below = Below(bot);
++    Creature* brain = bot->GetInstanceScript()->GetCreature(761);
++    auto const gazes = Gazes(bot, plan.below);
++    plan.facing = YoggBrain::SafeFacing(bot->GetOrientation(), gazes);
++    if (!plan.below)
++    {
++        if (!gazes.empty())
++        {
++            plan.mode = Mode::Face;
++            plan.needsAction = YoggBrain::Exposure(bot->GetOrientation(), gazes) != 0 || bot->GetVictim() ||
++                bot->IsNonMeleeSpellCast(false) || bot->isMoving();
++        }
++        else if (Creature* portal = AssignedPortal(ai, brain))
++        {
++            plan.mode = Mode::Portal;
++            plan.target = portal;
++            plan.needsAction = true;
++        }
++        return plan;
++    }
++    plan.needsAction = true;
++    plan.exit = bot->FindNearestGameObject(194625, 250.0f);
++    Spell* cast = brain ? brain->GetCurrentSpell(CURRENT_GENERIC_SPELL) : nullptr;
++    bool const inducing = cast && cast->GetSpellInfo()->Id == 64059;
++    unsigned const remaining = inducing ? std::max(0, cast->GetCastTimeRemaining()) : 0;
++    if (!brain || !brain->IsAlive() || YoggBrain::MustExit(inducing, remaining, Sanity(bot), brain->GetHealthPct(),
++        plan.exit ? bot->GetExactDist(plan.exit) : 1000.0f, bot->GetSpeed(MOVE_RUN)))
++    {
++        plan.mode = Mode::Exit;
++        return plan;
++    }
++    unsigned const illusion = brain->IsAIEnabled ? brain->AI()->GetData(2) : 0;
++    GameObject* door = illusion >= 1 && illusion <= 3 ? bot->FindNearestGameObject(194634 + illusion, 250.0f) : nullptr;
++    if (YoggBrain::BrainAllowed(illusion, door && door->GetGoState() == GO_STATE_ACTIVE, inducing, remaining, brain->GetHealthPct()))
++    {
++        // Do not aim MoveTo at the floating Brain's Z=265. Walk through the
++        // correct doorway onto the room's actual floor, then use normal attacks.
++        Position const entrance = illusion == 1 ? ULDUAR_YOGG_SARON_CHAMBER_OF_ASPECTS_ENTRANCE :
++            illusion == 2 ? ULDUAR_YOGG_SARON_ICECROWN_CITADEL_ENTRANCE : ULDUAR_YOGG_SARON_STORMWIND_KEEPER_ENTRANCE;
++        if (bot->GetExactDist2d(ULDUAR_YOGG_SARON_BRAIN_ROOM_MIDDLE) > 42.0f)
++        {
++            plan.mode = Mode::Route;
++            plan.destination = bot->GetExactDist2d(entrance) > 8.0f && bot->GetExactDist2d(brain) > entrance.GetExactDist2d(brain) ?
++                entrance : ULDUAR_YOGG_SARON_BRAIN_ROOM_MIDDLE;
++            return plan;
++        }
++        plan.target = brain;
++    }
++    else
++    {
++        // Only actual influence tentacles or their disguises. Never skulls,
++        // friendly cinematic actors, or the Brain behind an unproved door.
++        std::list<Creature*> adds;
++        for (uint32 entry : {33943u, 33716u, 33717u, 33718u, 33719u, 33720u, 33567u, 33433u})
++            bot->GetCreatureListWithEntryInGrid(adds, entry, 180.0f);
++        float best = 100000.0f;
++        for (Creature* add : adds)
++        {
++            if (!add->IsAlive() || add->GetPositionZ() >= 300.0f || !bot->IsValidAttackTarget(add)) continue;
++            float const score = 50.0f * YoggBrain::Exposure(bot->GetAngle(add), gazes) + bot->GetExactDist2d(add);
++            if (score < best) { best = score; plan.target = add; }
++        }
++    }
++    if (!plan.target)
++    {
++        plan.mode = Mode::Wait;
++        plan.needsAction = bot->GetVictim() || bot->IsNonMeleeSpellCast(false) ||
++            YoggBrain::AngleDistance(bot->GetOrientation(), plan.facing) > 0.1f;
++        return plan;
++    }
++    if (!YoggBrain::CombatFacing(bot->GetAngle(plan.target), gazes))
++    {
++        // Never spend the entire rotation facing a skull merely because that add
++        // scored best. Reposition for a safe attack angle; if none exists, turn
++        // away and wait, preserving sanity rather than inventing a restoration.
++        if (AttackPoint(bot, plan.target, illusion, plan.destination))
++            plan.mode = Mode::Route;
++        else
++        {
++            plan.mode = Mode::Face;
++            plan.needsAction = bot->GetVictim() || bot->IsNonMeleeSpellCast(false) || bot->isMoving() ||
++                YoggBrain::AngleDistance(bot->GetOrientation(), plan.facing) > 0.1f;
++        }
++        return plan;
++    }
++    plan.mode = Mode::Fight;
++    float const range = PlayerbotAI::IsMelee(bot) ? 3.0f : 25.0f;
++    plan.needsAction = ai->GetAiObjectContext()->GetValue<Unit*>("current target")->Get() != plan.target ||
++        bot->GetVictim() != plan.target ||
++        !bot->IsWithinLOSInMap(plan.target) || bot->GetDistance(plan.target) > range ||
++        !bot->HasInArc(1.0f, plan.target);
++    return plan;
++}
++void Stop(PlayerbotAI* ai)
++{
++    Player* bot = ai->GetBot();
++    bot->AttackStop();
++    bot->InterruptNonMeleeSpells(false);
++    if (Pet* pet = bot->GetPet())
++    {
++        pet->AttackStop();
++        pet->InterruptNonMeleeSpells(false);
++    }
++    ai->GetAiObjectContext()->GetValue<Unit*>("current target")->Set(nullptr);
++}
++}
++
++bool YoggBrainTrigger::IsActive() { return Decide(botAI).needsAction; }
++bool YoggBrainEmergencyTrigger::IsActive()
++{
++    Plan const plan = Decide(botAI);
++    return plan.needsAction && (plan.mode == Mode::Exit || plan.mode == Mode::Face ||
++        (plan.below && (bot->GetVictim() || bot->IsNonMeleeSpellCast(false)) &&
++            !YoggBrain::CombatFacing(bot->GetOrientation(), Gazes(bot, true))));
++}
++
++void YoggBrainAction::Note(unsigned mode, Unit* target)
++{
++    ObjectGuid const guid = target ? target->GetGUID() : ObjectGuid::Empty;
++    if (mode == lastMode && guid == lastTarget) return;
++    lastMode = mode;
++    lastTarget = guid;
++    LOG_INFO("playerbots", "yogg_brain transition instance={} bot={} mode={} target={} sanity={}",
++        bot->GetMap()->GetInstanceId(), bot->GetGUID().GetCounter(), mode, target ? target->GetEntry() : 0, Sanity(bot));
++}
++
++bool YoggBrainAction::Walk(Position const& destination)
++{
++    // Reject pathfinding fallbacks through closed illusion doors or the floor.
++    // No teleport and no unpathed straight line when the local mmap is missing.
++    PathGenerator path(bot);
++    path.SetPathLengthLimit(250.0f);
++    if (!path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ()) ||
++        path.GetPathType() != PATHFIND_NORMAL)
++    {
++        if (!lastPathLog || GetMSTimeDiffToNow(lastPathLog) >= 10000)
++        {
++            lastPathLog = getMSTime();
++            LOG_WARN("playerbots", "yogg_brain path_blocked instance={} bot={} mode={} path={}",
++                bot->GetMap()->GetInstanceId(), bot->GetGUID().GetCounter(), lastMode, unsigned(path.GetPathType()));
++        }
++        return false;
++    }
++    return MoveTo(bot->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(),
++        false, false, true, true, MovementPriority::MOVEMENT_FORCED);
++}
++
++bool YoggBrainAction::Execute(Event /*event*/)
++{
++    Plan const plan = Decide(botAI);
++    if (plan.mode == Mode::None) return false;
++    Note(static_cast<unsigned>(plan.mode), plan.target);
++    if (plan.mode == Mode::Fight)
++    {
++        if (!bot->IsWithinLOSInMap(plan.target) || bot->GetDistance(plan.target) > (PlayerbotAI::IsMelee(bot) ? 3.0f : 25.0f))
++        {
++            if (plan.target->GetEntry() == 33890)
++                return Walk(ULDUAR_YOGG_SARON_BRAIN_ROOM_MIDDLE);
++            Position point = plan.target->GetPosition();
++            float const angle = plan.target->GetAngle(bot);
++            point.m_positionX += 2.0f * std::cos(angle);
++            point.m_positionY += 2.0f * std::sin(angle);
++            bot->UpdateAllowedPositionZ(point.m_positionX, point.m_positionY, point.m_positionZ);
++            return Walk(point);
++        }
++        bot->SetFacingToObject(plan.target);
++        return Attack(plan.target);
++    }
++    Stop(botAI);
++    if (plan.mode == Mode::Portal)
++    {
++        if (bot->GetExactDist(plan.target) > 3.0f || !bot->IsWithinLOSInMap(plan.target))
++            return Walk(plan.target->GetPosition());
++        bool const used = plan.target->ToCreature()->HandleSpellClick(bot);
++        if (used) LOG_INFO("playerbots", "yogg_brain enter instance={} bot={} sanity={}", bot->GetMap()->GetInstanceId(), bot->GetGUID().GetCounter(), Sanity(bot));
++        return used;
++    }
++    if (plan.mode == Mode::Exit)
++    {
++        if (!plan.exit) return false;
++        if (!bot->IsWithinDistInMap(plan.exit, INTERACTION_DISTANCE) || !bot->IsWithinLOSInMap(plan.exit))
++            return Walk(plan.exit->GetPosition());
++        // Same use path as a real player. No cast, aura removal or teleport shortcut.
++        plan.exit->Use(bot);
++        LOG_INFO("playerbots", "yogg_brain exit instance={} bot={} sanity={}", bot->GetMap()->GetInstanceId(), bot->GetGUID().GetCounter(), Sanity(bot));
++        return true;
++    }
++    if (plan.mode == Mode::Route)
++        return Walk(plan.destination);
++    bot->StopMoving();
++    bot->SetFacingTo(plan.facing);
++    return true;
++}
++
++float YoggBrainMultiplier::GetValue(Action* action)
++{
++    if (!action || dynamic_cast<YoggBrainAction*>(action) || !Enabled(botAI)) return 1.0f;
++    bool const below = Below(bot);
++    if (!below)
++    {
++        // Do not repeat room/roster grid searches for each rotation candidate.
++        if (!Gazes(bot, false).empty()) return 0.0f;
++        auto const key = std::make_pair(bot->GetMap()->GetInstanceId(), bot->GetGroup()->GetGUID().GetRawValue());
++        std::lock_guard<std::mutex> lock(waveMutex);
++        auto const wave = waves.find(key);
++        if (wave == waves.end() || wave->second.expires <= Clock::now()) return 1.0f;
++        auto const assigned = wave->second.portals.find(bot->GetGUID().GetRawValue());
++        if (assigned == wave->second.portals.end()) return 1.0f;
++        Creature* portal = bot->GetMap()->GetCreature(assigned->second);
++        return portal && portal->HasNpcFlag(UNIT_NPC_FLAG_SPELLCLICK) &&
++            Sanity(bot) >= YoggBrain::EnterSanity && !bot->HasAura(63802) && !bot->HasAura(63830) ? 0.0f : 1.0f;
++    }
++    // A portal/exit/deadline/gaze move must not be undone by follow, charge,
++    // assist, a legacy raid action, or a cast that automatically turns us back.
++    if (dynamic_cast<MovementAction*>(action)) return 0.0f;
++    if (action->getName().find("yogg-saron") == 0) return 0.0f;
++    Unit* actionTarget = action->GetTarget();
++    if (actionTarget && actionTarget != bot &&
++        !YoggBrain::CombatFacing(bot->GetAngle(actionTarget), Gazes(bot, true))) return 0.0f;
++    if (auto* spell = dynamic_cast<CastSpellAction*>(action))
++    {
++        Creature* brain = bot->GetInstanceScript()->GetCreature(761);
++        Spell* cast = brain ? brain->GetCurrentSpell(CURRENT_GENERIC_SPELL) : nullptr;
++        bool const inducing = cast && cast->GetSpellInfo()->Id == 64059;
++        unsigned const remaining = inducing ? std::max(0, cast->GetCastTimeRemaining()) : 0;
++        GameObject* exit = bot->FindNearestGameObject(194625, 250.0f);
++        if (!brain || YoggBrain::MustExit(inducing, remaining, Sanity(bot), brain->GetHealthPct(),
++            exit ? bot->GetExactDist(exit) : 1000.0f, bot->GetSpeed(MOVE_RUN))) return 0.0f;
++        Unit* target = spell->GetTarget();
++        if (target && bot->IsHostileTo(target))
++        {
++            if (target == brain)
++            {
++                unsigned const illusion = brain->IsAIEnabled ? brain->AI()->GetData(2) : 0;
++                GameObject* door = illusion >= 1 && illusion <= 3 ? bot->FindNearestGameObject(194634 + illusion, 250.0f) : nullptr;
++                if (!YoggBrain::BrainAllowed(illusion, door && door->GetGoState() == GO_STATE_ACTIVE, inducing, remaining, brain->GetHealthPct())) return 0.0f;
++            }
++            else if (!YoggBrain::Influence(target->GetEntry())) return 0.0f;
++        }
++        uint32 const id = context->GetValue<uint32>("spell id", spell->getSpell())->Get();
++        SpellInfo const* info = sSpellMgr->GetSpellInfo(id);
++        if (info && info->IsTargetingArea()) return 0.0f;
++        unsigned const cost = info ? info->CalcCastTime(bot) + (info->IsChanneled() ? std::max(0, info->GetDuration()) : 0) : 0;
++        if (!YoggBrain::CastFits(remaining, YoggBrain::ExitBudget(exit ? bot->GetExactDist(exit) : 1000.0f,
++            bot->GetSpeed(MOVE_RUN)), cost)) return 0.0f;
++    }
++    return 1.0f;
++}
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.h b/src/Ai/Raid/Uld/YoggBrainActions.h
+new file mode 100644
+index 00000000..2266282e
+--- /dev/null
++++ b/src/Ai/Raid/Uld/YoggBrainActions.h
+@@ -0,0 +1,39 @@
++/* GPL-2.0-or-later; part of mod-playerbots. */
++#ifndef PLAYERBOTS_YOGGBRAINACTIONS_H
++#define PLAYERBOTS_YOGGBRAINACTIONS_H
++#include "AttackAction.h"
++#include "Multiplier.h"
++#include "Trigger.h"
++
++class YoggBrainAction : public AttackAction
++{
++public:
++    YoggBrainAction(PlayerbotAI* ai) : AttackAction(ai, "yogg brain support") {}
++    bool Execute(Event event) override;
++    bool ShouldReactionInterruptCast() const override { return true; }
++private:
++    bool Walk(Position const& destination);
++    void Note(unsigned mode, Unit* target = nullptr);
++    unsigned lastMode = 0;
++    ObjectGuid lastTarget;
++    uint32 lastPathLog = 0;
++};
++class YoggBrainTrigger : public Trigger
++{
++public:
++    YoggBrainTrigger(PlayerbotAI* ai) : Trigger(ai, "yogg brain support", 1) {}
++    bool IsActive() override;
++};
++class YoggBrainMultiplier : public Multiplier
++{
++public:
++    YoggBrainMultiplier(PlayerbotAI* ai) : Multiplier(ai, "yogg brain support") {}
++    float GetValue(Action* action) override;
++};
++class YoggBrainEmergencyTrigger : public Trigger
++{
++public:
++    YoggBrainEmergencyTrigger(PlayerbotAI* ai) : Trigger(ai, "yogg brain emergency", 1) {}
++    bool IsActive() override;
++};
++#endif
+diff --git a/src/Ai/Raid/Uld/YoggBrainPolicy.h b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+new file mode 100644
+index 00000000..7d6c8e2f
+--- /dev/null
++++ b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+@@ -0,0 +1,114 @@
++/* GPL-2.0-or-later; part of mod-playerbots. */
++#ifndef PLAYERBOTS_YOGGBRAINPOLICY_H
++#define PLAYERBOTS_YOGGBRAINPOLICY_H
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <vector>
++
++namespace YoggBrain
++{
++constexpr unsigned EnterSanity = 40;
++constexpr unsigned LeaveSanity = 25;
++constexpr float Pi = 3.141592654f;
++inline bool InBrainArea(float x, float y, float z)
++{
++    return x > 1830.0f && x < 2160.0f && y > -190.0f && y < 125.0f && z > 225.0f && z < 285.0f;
++}
++struct Member
++{
++    std::uint64_t guid;
++    bool bot, tank, healer, melee, available;
++    unsigned sanity;
++};
++
++// Freeze this selection for a portal wave. Humans choose for themselves; reserve
++// their slots without issuing them commands. Keep at least 1/2 healers upstairs.
++inline std::vector<std::uint64_t> Team(std::vector<Member> members, bool large)
++{
++    unsigned slots = large ? 10 : 4;
++    unsigned healers = 0;
++    for (auto const& member : members)
++    {
++        if (!member.available)
++            continue;
++        // Conservatively assume a human healer uses the slot reserved for them.
++        healers += member.healer && member.bot;
++        if (!member.bot && !member.tank && slots)
++            --slots;
++    }
++    std::sort(members.begin(), members.end(), [](Member const& a, Member const& b)
++    {
++        // One portal healer first, then melee before ranged, deterministic GUID ties.
++        if (a.healer != b.healer) return a.healer;
++        if (a.melee != b.melee) return a.melee;
++        return a.guid < b.guid;
++    });
++    std::vector<std::uint64_t> result;
++    bool haveHealer = false;
++    for (auto const& member : members)
++    {
++        if (!slots || !member.bot || !member.available || member.tank || member.sanity < EnterSanity)
++            continue;
++        if (member.healer && (haveHealer || healers <= (large ? 2u : 1u)))
++            continue;
++        haveHealer |= member.healer;
++        result.push_back(member.guid);
++        --slots;
++    }
++    return result;
++}
++
++inline bool Influence(std::uint32_t entry)
++{
++    return entry == 33943 || (entry >= 33716 && entry <= 33720) || entry == 33567 || entry == 33433;
++}
++inline bool BrainAllowed(unsigned illusion, bool doorOpen, bool casting, unsigned remaining, float health)
++{
++    return illusion >= 1 && illusion <= 3 && doorOpen && casting && remaining > 12000 && health > 30.0f;
++}
++inline unsigned ExitBudget(float distance, float speed)
++{
++    // Straight-line distance understates the door route. Budget a detour and the
++    // click/cast delay, never the old fixed eight seconds from a far illusion room.
++    if (!std::isfinite(distance) || !std::isfinite(speed) || distance < 0 || speed <= 0)
++        return 60000;
++    return static_cast<unsigned>(std::min(60000.0f, std::max(12000.0f, 5000.0f + distance * 1500.0f / speed)));
++}
++inline bool MustExit(bool casting, unsigned remaining, unsigned sanity, float health, float distance, float speed)
++{
++    return !casting || remaining <= ExitBudget(distance, speed) || sanity <= LeaveSanity || health <= 30.0f;
++}
++inline bool CastFits(unsigned remaining, unsigned exitBudget, unsigned castTime)
++{
++    return remaining > exitBudget && remaining - exitBudget > std::uint64_t(castTime) + 1000;
++}
++inline float AngleDistance(float a, float b) { return std::abs(std::remainder(a - b, 2.0f * Pi)); }
++inline unsigned Exposure(float facing, std::vector<float> const& gazes)
++{
++    unsigned result = 0;
++    for (float gaze : gazes)
++        // Keep a margin from the core's HasInArc(M_PI) boundary.
++        result += AngleDistance(facing, gaze) <= Pi / 2.0f + 0.05f;
++    return result;
++}
++inline bool CombatFacing(float facing, std::vector<float> const& gazes) { return Exposure(facing, gazes) == 0; }
++inline float SafeFacing(float current, std::vector<float> const& gazes)
++{
++    float best = current;
++    unsigned count = Exposure(current, gazes);
++    for (unsigned i = 0; i < 64; ++i)
++    {
++        float const candidate = i * 2.0f * Pi / 64.0f;
++        unsigned const exposed = Exposure(candidate, gazes);
++        if (exposed < count || (exposed == count && AngleDistance(candidate, current) < AngleDistance(best, current)))
++        {
++            best = candidate;
++            count = exposed;
++        }
++    }
++    return best;
++}
++}
++#endif
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index 91aa89ec..d3dd9a7f 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -168,6 +168,7 @@ bool PlayerbotAIConfig::Initialize()
+     ForceRebuffOnReadyCheck = sConfigMgr->GetOption<bool>("Playerbots.ForceRebuffOnReadyCheck", false);
+     ForceRebuffMarginSecs = std::min(sConfigMgr->GetOption<uint32>("Playerbots.ForceRebuffMarginSecs", 60), 3600u);
+     AutoAvoidAoe = sConfigMgr->GetOption<bool>("Playerbots.AutoAvoidAoe", true);
++    YoggBrainSupport = sConfigMgr->GetOption<bool>("Playerbots.YoggBrainSupport", false);
+     MaxAoeAvoidRadius = sConfigMgr->GetOption<float>("Playerbots.MaxAoeAvoidRadius", 15.0f);
+     LoadSet<std::set<uint32>>(sConfigMgr->GetOption<std::string>("Playerbots.AoeAvoidSpellWhitelist", "50759,57491,13810,29946"),
+                               AoeAvoidSpellWhitelist);
+diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
+index 0ca1ae02..7cf868b1 100644
+--- a/src/PlayerbotAIConfig.h
++++ b/src/PlayerbotAIConfig.h
+@@ -129,6 +129,7 @@ public:
+     bool ForceRebuffOnReadyCheck;
+     uint32 ForceRebuffMarginSecs;
+     bool AutoAvoidAoe;
++    bool YoggBrainSupport;
+     float MaxAoeAvoidRadius;
+     std::set<uint32> AoeAvoidSpellWhitelist;
+     bool TellWhenAvoidAoe;
+diff --git a/tests/yogg_brain_test.cpp b/tests/yogg_brain_test.cpp
+new file mode 100644
+index 00000000..3047c40f
+--- /dev/null
++++ b/tests/yogg_brain_test.cpp
+@@ -0,0 +1,100 @@
++/* GPL-2.0-or-later; part of mod-playerbots. */
++#include "../src/Ai/Raid/Uld/YoggBrainPolicy.h"
++#include <iostream>
++#include <limits>
++#include <numeric>
++
++namespace
++{
++unsigned checks = 0, failures = 0;
++void Check(bool ok, int line)
++{
++    ++checks;
++    if (!ok) { ++failures; std::cerr << "failed line " << line << '\n'; }
++}
++}
++#define CHECK(x) Check(bool(x), __LINE__)
++int main()
++{
++    using namespace YoggBrain;
++    CHECK(InBrainArea(1980, -25, 236));
++    CHECK(InBrainArea(2104, -25, 242));
++    CHECK(InBrainArea(1925, -121, 240));
++    CHECK(InBrainArea(1927, 68, 242));
++    CHECK(!InBrainArea(1980, -25, 329));
++    CHECK(!InBrainArea(0, 0, 240));
++    CHECK(!InBrainArea(1980, 500, 240));
++    CHECK(Team({}, false).empty());
++    for (bool large : {false, true})
++        for (unsigned humans = 0; humans < 4; ++humans)
++            for (unsigned healers = 0; healers < 7; ++healers)
++            {
++                std::vector<Member> roster;
++                for (unsigned i = 0; i < (large ? 25u : 10u); ++i)
++                    roster.push_back({100 + i, i >= humans, i >= 8 && i < 10, i < healers,
++                        i % 2 == 0, true, 100});
++                auto selected = Team(roster, large);
++                CHECK(selected.size() <= (large ? 10 : 4) - humans);
++                unsigned portalHealers = 0;
++                for (auto guid : selected)
++                {
++                    auto const member = roster.at(guid - 100);
++                    CHECK(member.bot && !member.tank && member.available && member.sanity >= EnterSanity);
++                    portalHealers += member.healer;
++                }
++                CHECK(portalHealers <= 1);
++                unsigned const botHealers = healers > humans ? healers - humans : 0;
++                CHECK(!portalHealers || botHealers - portalHealers >= (large ? 2u : 1u));
++                std::reverse(roster.begin(), roster.end());
++                CHECK(Team(roster, large) == selected);
++                // Admission facts must not accidentally admit dead/stay/low-sanity bots.
++                for (auto& member : roster) member.available = false;
++                CHECK(Team(roster, large).empty());
++            }
++    std::vector<Member> roster{{1,true,false,false,true,true,39}, {2,true,false,false,true,true,40},
++        {3,true,false,false,false,true,100}, {4,true,true,false,true,true,100}};
++    CHECK((Team(roster, false) == std::vector<std::uint64_t>{2,3}));
++    for (unsigned illusion = 0; illusion < 5; ++illusion)
++        for (bool door : {false, true})
++            for (bool cast : {false, true})
++                for (unsigned remaining : {0u, 10000u, 12000u, 12001u, 60000u})
++                    for (float health : {0.0f, 29.0f, 30.0f, 31.0f, 100.0f})
++                        CHECK(BrainAllowed(illusion, door, cast, remaining, health) ==
++                            (illusion >= 1 && illusion <= 3 && door && cast && remaining > 12000 && health > 30));
++    for (unsigned entry : {33943u,33716u,33717u,33718u,33719u,33720u,33567u,33433u}) CHECK(Influence(entry));
++    for (unsigned entry : {0u,33990u,33890u,33288u,33535u,33441u}) CHECK(!Influence(entry));
++    CHECK(ExitBudget(0, 7) == 12000);
++    CHECK(ExitBudget(140, 7) == 35000);
++    CHECK(ExitBudget(140, 3.5f) > ExitBudget(140, 7));
++    CHECK(ExitBudget(1, 0) == 60000);
++    CHECK(ExitBudget(std::numeric_limits<float>::quiet_NaN(), 7) == 60000);
++    CHECK(ExitBudget(0, std::numeric_limits<float>::infinity()) == 60000);
++    CHECK(MustExit(true, 34999, 100, 100, 140, 7));
++    CHECK(!MustExit(true, 35001, 100, 100, 140, 7));
++    CHECK(MustExit(false, 60000, 100, 100, 1, 7));
++    CHECK(MustExit(true, 60000, 25, 100, 1, 7));
++    CHECK(!MustExit(true, 60000, 26, 100, 1, 7));
++    CHECK(MustExit(true, 60000, 100, 30, 1, 7));
++    CHECK(CastFits(20000, 12000, 6000));
++    CHECK(!CastFits(20000, 12000, 7000));
++    CHECK(!CastFits(20000, 12000, 10000));
++    CHECK(!CastFits(12000, 12000, 0));
++    CHECK(!CastFits(1, 12000, 0));
++    CHECK(!CastFits(60000, 12000, std::numeric_limits<unsigned>::max()));
++    for (unsigned step = 0; step < 64; ++step)
++    {
++        float const current = step * 2 * Pi / 64;
++        CHECK(SafeFacing(current, {}) == current);
++        for (unsigned source = 0; source < 64; ++source)
++        {
++            float const gaze = source * 2 * Pi / 64;
++            CHECK(Exposure(SafeFacing(current, {gaze}), {gaze}) == 0);
++            CHECK(CombatFacing(SafeFacing(current, {gaze}), {gaze}));
++            CHECK(!CombatFacing(gaze, {gaze})); // Attack/cast facing cannot undo avoidance.
++            std::vector<float> const skulls{gaze, gaze + Pi};
++            CHECK(Exposure(SafeFacing(current, skulls), skulls) <= Exposure(current, skulls));
++        }
++    }
++    std::cout << checks << " checks, " << failures << " failures\n";
++    return failures ? 1 : 0;
++}

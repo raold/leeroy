@@ -43,6 +43,18 @@ WG, ACK/result commands, guild growth and other kinds remain excluded. The hello
 must match the current guild and owner. A hello from the same native process
 does nothing. If the new hello arrives while a transport is still in flight,
 its proof is rechecked when the transport actually settles.
+If the release transaction fails, the queue keeps the hold and retries after five
+seconds while the same adopted connection and process proof remain current. A
+successful transaction ends retries; idle ticks do not rescan the journal. An
+unrelated or malformed hello never supplies restart proof.
+
+Recall's admissible `bot_do` is exactly `nc -bg,-lfg`, without a target, training
+run or day permit. Native `Guild/BotCommands.cpp` owns that pending queue only in
+memory; its `ChangeStrategies` route changes the current AI after restoring its
+process-local play-style journal. This proof releases ownership, not the result
+of the interrupted command. It does not authorize other `bot_do` shapes: training
+mutations and their restoration bookkeeping, day fishing, and any persistent
+operation's hold must retain their own completion evidence.
 
 Such a root becomes `completed` with result `restart_released`, **not** successful.
 Its permanent `realm:action:restart_released:<id>` receipt stores the hello start,

@@ -47,6 +47,20 @@ def attempts(fake):
         "SELECT key,value FROM meta WHERE key LIKE ? ORDER BY key", (ATTEMPT_PREFIX + "%",))]
 
 
+def test_speakers_read_one_filtered_body_batch_and_missing_members_stay_held(fake, discovery, monkeypatch):
+    discoveries, _, _ = discovery
+    guids = sorted(fake.members)
+    fake.away_set.add(guids[-1])
+    calls = []
+    def batch(members):
+        calls.append(tuple(members))
+        return {guids[0]: None}  # omission is unknown, not a free member
+    monkeypatch.setattr(fake, "holders_of", batch)
+    monkeypatch.setattr(fake, "holder", lambda _: pytest.fail("per-member body refresh"))
+    assert discoveries._speakers(8, "2026-W44") == [guids[0]]
+    assert calls == [tuple(guids[:-1])]
+
+
 def change_meta(fake, key, transform):
     value = _get(fake.conn, key)
     transform(value)

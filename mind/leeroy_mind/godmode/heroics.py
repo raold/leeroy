@@ -309,17 +309,21 @@ class Heroics:
                 (guild, human),
             )
         }
-        states = {}
+        candidates = {}
         for g in cast if members is None else members:
             if g not in cast:
                 continue
             p = self.ports.persona(g)
             if g == self.ports.human_guid or p is None or g in busy or g not in self.app.world.online:
                 continue
-            try:
-                free = not self.realm.bodies.others(g, besides={OWNER, days[g]} if g in days else {OWNER})
-            except BodyEvidenceUnavailable:
-                free = False
+            candidates[g] = p
+        try:
+            competing = self.realm.bodies.others_of(candidates, besides={OWNER}) if candidates else {}
+        except BodyEvidenceUnavailable:
+            competing = {}
+        states = {}
+        for g, p in candidates.items():
+            free = g in competing and not (competing[g] - ({days[g]} if g in days else set()))
             states[g] = Candidate(free, p.play.raid_role)
         return cast, states
 
