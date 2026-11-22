@@ -1,0 +1,681 @@
+From a60fc154cc1ead1d2766fd4e017eecc3c6da5dfd Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 13:49:50 -0500
+Subject: [PATCH] Keep healers on Valithria and log what they do each pull
+
+Raid healers stayed off the dragon even with the raid at full health, and
+holy paladins' stock "reach party member to heal" (ACTION_EMERGENCY + 3)
+outranked the dragon heal (ACTION_RAID + 2), so they ran after any hurt
+member out of range instead of healing her. Reserved raid healers now heal
+her while every member within the party-heal search radius is at 80% or
+more, the reach move is suppressed for a healer on the dragon, and Beacon
+of Light (raid members only) is no longer offered on her.
+
+Every 5 s while her encounter is in progress, Playerbots.log gets a
+valithria_watch line (her health, healer duties, dragon casts) and one
+valithria_healer line per bot healer: allocation, current duty, the icc
+strategy, health, mana, distance, line of sight, dragon casts, the heal
+action's last result, the last spell cast and target, and the last action
+the bot executed. It runs from her own update, so it also reports bots
+that lack the icc strategy.
+---
+ src/Ai/Raid/ICC/Action/ICCActions_VT.cpp |  23 ++-
+ src/Ai/Raid/ICC/ICCMultipliers.cpp       |   5 +
+ src/Ai/Raid/ICC/ICCScripts.cpp           |  14 ++
+ src/Ai/Raid/ICC/ICCScripts.h             |  14 ++
+ src/Ai/Raid/ICC/ICCShared.cpp            | 217 +++++++++++++++++++++--
+ src/Ai/Raid/ICC/ICCShared.h              |   8 +
+ src/Ai/Raid/ICC/ICCTriggers.cpp          |  27 +--
+ src/Ai/Raid/RaidInteractionPolicy.h      |  70 +++++++-
+ tests/raid_interactions_test.cpp         |  60 ++++++-
+ 9 files changed, 387 insertions(+), 51 deletions(-)
+
+diff --git a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
+index c7f1140c..952b7afe 100644
+--- a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
++++ b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
+@@ -839,8 +839,7 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+     if (bot->GetMapId() != 631 || !bot->IsAlive() || !PlayerbotAI::IsHeal(bot) || bot->HasAura(SPELL_DREAM_STATE))
+         return false;
+     Creature* valithria = bot->FindNearestCreature(NPC_VALITHRIA_DREAMWALKER, 100.0f);
+-    auto const raidHealer = IccValithriaShouldHealRaid(bot);
+-    if (!valithria || !raidHealer.has_value() || *raidHealer)
++    if (!valithria || !IccValithriaHealsDragon(bot).value_or(false))
+         return false;
+ 
+     // Snap to floor Z first - healer may have just dropped Dream State and be
+@@ -851,7 +850,10 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+         bot->TeleportTo(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(), TARGET_Z, bot->GetOrientation());
+ 
+     if (bot->GetHealthPct() < 50.0f)
++    {
++        IccValithriaNoteHeal(bot, "low_hp", false);
+         return false;
++    }
+ 
+     if (!bot->HasAura(SPELL_DREAM_STATE))
+     {
+@@ -864,9 +866,15 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+     if (bot->HasAura(SPELL_DREAM_STATE) || !valithria->IsAlive() || valithria->IsFullHealth())
+         return false;
+     if (!bot->IsWithinLOSInMap(valithria))
++    {
++        IccValithriaNoteHeal(bot, "los", false);
+         return MoveToLOS(valithria, true);
++    }
+     if (!bot->IsWithinDistInMap(valithria, 30.0f))
++    {
++        IccValithriaNoteHeal(bot, "range", false);
+         return MoveNear(valithria, 25.0f);
++    }
+     if (bot->isMoving())
+         bot->StopMoving();
+ 
+@@ -899,7 +907,7 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+             offer("flash heal");
+             break;
+         case CLASS_PALADIN:
+-            offer("beacon of light", 1);
++            // No Beacon of Light: it only takes a party or raid member (TARGET_UNIT_TARGET_RAID).
+             offer("holy light");
+             offer("flash of light");
+             break;
+@@ -918,7 +926,14 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+                                                     bot->GetPower(POWER_MANA)) &&
+                    botAI->CanCastSpell(candidate, valithria, true);
+         });
+-    return spell && botAI->CastSpell(spell, valithria);
++    if (!spell)
++    {
++        IccValithriaNoteHeal(bot, "no_spell", false);
++        return false;
++    }
++    bool const cast = botAI->CastSpell(spell, valithria);
++    IccValithriaNoteHeal(bot, cast ? "cast" : "cast_failed", cast);
++    return cast;
+ }
+ 
+ bool IccValithriaDreamCloudAction::Execute(Event /*event*/)
+diff --git a/src/Ai/Raid/ICC/ICCMultipliers.cpp b/src/Ai/Raid/ICC/ICCMultipliers.cpp
+index 992853f8..ad997fc5 100644
+--- a/src/Ai/Raid/ICC/ICCMultipliers.cpp
++++ b/src/Ai/Raid/ICC/ICCMultipliers.cpp
+@@ -783,6 +783,11 @@ float IccValithriaDreamCloudMultiplier::GetValue(Action* action)
+         if (dynamic_cast<DpsAssistAction*>(action) || dynamic_cast<AttackRtiTargetAction*>(action))
+             return 0.0f;
+ 
++    // A healer on the dragon stays on her: stock "reach party member to heal" (holy paladins run it at
++    // ACTION_EMERGENCY + 3) would otherwise pull it off after any hurt member out of range.
++    if (boss && dynamic_cast<ReachPartyMemberToHealAction*>(action) && IccValithriaOnDragon(bot))
++        return 0.0f;
++
+     if (bot->HasAura(SPELL_DREAM_STATE) && !bot->HealthBelowPct(50))
+     {
+         if (dynamic_cast<IccValithriaDreamCloudAction*>(action))
+diff --git a/src/Ai/Raid/ICC/ICCScripts.cpp b/src/Ai/Raid/ICC/ICCScripts.cpp
+index f16b932d..34b55081 100644
+--- a/src/Ai/Raid/ICC/ICCScripts.cpp
++++ b/src/Ai/Raid/ICC/ICCScripts.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "ICCScripts.h"
+ #include "Creature.h"
++#include "ICCShared.h"
+ #include "ICCTriggers.h"
+ #include "Player.h"
+ #include "ScriptMgr.h"
+@@ -174,6 +175,18 @@ public:
+     }
+ };
+ 
++class IccValithriaWatchScript : public AllCreatureScript
++{
++public:
++    IccValithriaWatchScript() : AllCreatureScript("IccValithriaWatchScript") { }
++
++    void OnAllCreatureUpdate(Creature* creature, uint32 /*diff*/) override
++    {
++        if (creature && creature->GetEntry() == NPC_VALITHRIA_DREAMWALKER && creature->GetMapId() == ICC_MAP_ID)
++            IccValithriaWatch(creature);
++    }
++};
++
+ class IccMapCleanupScript : public AllMapScript
+ {
+ public:
+@@ -192,5 +205,6 @@ void AddSC_IcecrownBotScripts()
+     new IccRotfaceListenerScript();
+     new IccLichKingListenerScript();
+     new IccBossStateResetScript();
++    new IccValithriaWatchScript();
+     new IccMapCleanupScript();
+ }
+diff --git a/src/Ai/Raid/ICC/ICCScripts.h b/src/Ai/Raid/ICC/ICCScripts.h
+index 19c746a1..c4bfac25 100644
+--- a/src/Ai/Raid/ICC/ICCScripts.h
++++ b/src/Ai/Raid/ICC/ICCScripts.h
+@@ -60,6 +60,18 @@ namespace IcecrownHelpers
+         uint32 moveOnAfterMs = 0;
+     };
+ 
++    struct ValithriaHealNote
++    {
++        uint32 casts = 0;           // dragon heals cast since the last watch line
++        char const* outcome = "-";  // the heal action's last result
++    };
++
++    struct ValithriaWatch
++    {
++        bool engaged = false;
++        uint32 lastMs = 0;
++    };
++
+     struct SpreadSlotState
+     {
+         uint32 lastCallMs = 0;
+@@ -112,6 +124,8 @@ namespace IcecrownHelpers
+ 
+         ValithriaCloudSync vtCloudSync;
+         std::map<ObjectGuid, ObjectGuid> vtPortalClaim;
++        std::map<ObjectGuid, ValithriaHealNote> vtHealNotes;
++        ValithriaWatch vtWatch;
+ 
+         Position gsbLastStarPos;
+         std::map<ObjectGuid, uint32> gsbLastRocketPackUse;
+diff --git a/src/Ai/Raid/ICC/ICCShared.cpp b/src/Ai/Raid/ICC/ICCShared.cpp
+index 79ef001d..96997178 100644
+--- a/src/Ai/Raid/ICC/ICCShared.cpp
++++ b/src/Ai/Raid/ICC/ICCShared.cpp
+@@ -7,13 +7,19 @@
+ #include "ICCShared.h"
+ 
+ #include <algorithm>
++#include <list>
+ #include <map>
++#include <string>
+ 
++#include "Engine.h"
+ #include "ICCActions.h"
+ #include "ICCScripts.h"
+ #include "ICCTriggers.h"
++#include "InstanceScript.h"
++#include "LastSpellCastValue.h"
+ #include "Playerbots.h"
+ #include "RaidInteractionPolicy.h"
++#include "StringFormat.h"
+ #include "ThreatManager.h"
+ #include "Timer.h"
+ 
+@@ -259,27 +265,210 @@ std::vector<RaidInteractions::Healer> ValithriaHealers(Player* bot)
+     }
+     return healers;
+ }
++
++// Lowest health % of the living group members in this healer's phase within the radius the stock
++// "party member to heal" search covers (twice the heal distance); 100 when nobody there is hurt.
++float ValithriaLowestNearby(Player* bot)
++{
++    float lowest = 100.0f;
++    Group* group = bot->GetGroup();
++    if (!group)
++        return lowest;
++    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
++    {
++        Player* member = ref->GetSource();
++        if (!member || !member->IsInWorld() || !member->IsAlive() || member->GetMap() != bot->GetMap() ||
++            !member->InSamePhase(bot) || !bot->IsWithinDistInMap(member, sPlayerbotAIConfig.HealDistance * 2.0f))
++            continue;
++        lowest = std::min(lowest, member->GetHealthPct());
++    }
++    return lowest;
++}
++
++bool ValithriaChasedBy(Player* bot, uint32 entry)
++{
++    Creature* add = bot->FindNearestCreature(entry, 100.0f);
++    return add && add->GetVictim() == bot;
++}
+ }  // namespace
+ 
+ std::optional<bool> IccValithriaShouldHealRaid(Player* bot)
+ {
+-    auto const healers = ValithriaHealers(bot);
+-    bool partyNeedsHelp = false;
+-    if (healers.size() == 1)
+-        for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
+-        {
+-            Player* member = ref->GetSource();
+-            if (member && member->IsAlive() && member->HealthBelowPct(60) && member->InSamePhase(bot) &&
+-                bot->IsWithinDistInMap(member, 40.0f))
+-            {
+-                partyNeedsHelp = true;
+-                break;
+-            }
+-        }
+-    return RaidInteractions::HealRaid(bot->GetGUID().GetRawValue(), healers, partyNeedsHelp);
++    return RaidInteractions::HealRaid(bot->GetGUID().GetRawValue(), ValithriaHealers(bot));
++}
++
++std::optional<bool> IccValithriaHealsDragon(Player* bot)
++{
++    auto const raidHealer = IccValithriaShouldHealRaid(bot);
++    if (!raidHealer.has_value())
++        return std::nullopt;
++    return RaidInteractions::HealsDragon(*raidHealer, *raidHealer ? ValithriaLowestNearby(bot) : 100.0f);
++}
++
++bool IccValithriaOnDragon(Player* bot)
++{
++    if (!bot->IsAlive() || !PlayerbotAI::IsHeal(bot) || bot->HasAura(SPELL_DREAM_STATE) || bot->HealthBelowPct(50) ||
++        !bot->FindNearestCreature(NPC_VALITHRIA_DREAMWALKER, 100.0f))
++        return false;
++    if (ValithriaChasedBy(bot, NPC_ROT_WORM) || ValithriaChasedBy(bot, NPC_BLISTERING_ZOMBIE))
++        return false;
++    return IccValithriaHealsDragon(bot).value_or(false);
++}
++
++void IccValithriaNoteHeal(Player* bot, char const* outcome, bool cast)
++{
++    auto& note = IcecrownHelpers::IccState(bot->GetMap()->GetInstanceId()).vtHealNotes[bot->GetGUID()];
++    note.outcome = outcome;
++    if (cast)
++        ++note.casts;
+ }
+ 
+ bool IccValithriaCanUsePortal(Player* bot)
+ {
+     return RaidInteractions::CanUsePortal(bot->GetGUID().GetRawValue(), ValithriaHealers(bot));
+ }
++
++namespace
++{
++constexpr uint32 ICC_BOSS_VALITHRIA = 10;  // DATA_VALITHRIA_DREAMWALKER in the core's icecrown_citadel.h
++constexpr uint32 VALITHRIA_WATCH_MS = 5000;
++
++char const* ValithriaHealerClass(uint8 playerClass)
++{
++    switch (playerClass)
++    {
++        case CLASS_DRUID:
++            return "druid";
++        case CLASS_SHAMAN:
++            return "shaman";
++        case CLASS_PRIEST:
++            return "priest";
++        case CLASS_PALADIN:
++            return "paladin";
++        default:
++            return "other";
++    }
++}
++
++char const* ValithriaStrategyFlag(PlayerbotAI* ai)
++{
++    bool const combat = ai->HasStrategy("icc", BOT_STATE_COMBAT);
++    bool const nonCombat = ai->HasStrategy("icc", BOT_STATE_NON_COMBAT);
++    return combat ? (nonCombat ? "1" : "c") : (nonCombat ? "n" : "0");
++}
++
++// "<spell>><target>@<age>s": target "valithria", "p<guid>" for a player, "c<entry>" for a creature.
++std::string ValithriaLastCast(PlayerbotAI* ai, Creature* valithria)
++{
++    LastSpellCast const& last = ai->GetAiObjectContext()->GetValue<LastSpellCast&>("last spell cast")->Get();
++    if (!last.id)
++        return "-";
++    std::string target = "-";
++    if (last.target == valithria->GetGUID())
++        target = "valithria";
++    else if (last.target.IsPlayer())
++        target = "p" + std::to_string(last.target.GetCounter());
++    else if (!last.target.IsEmpty())
++        target = "c" + std::to_string(last.target.GetEntry());
++    return std::to_string(last.id) + ">" + target + "@" + std::to_string(time(nullptr) - last.timer) + "s";
++}
++
++bool ValithriaChases(std::list<Creature*> const& adds, Player* member)
++{
++    return std::any_of(adds.begin(), adds.end(),
++                       [member](Creature* add) { return add && add->IsAlive() && add->GetVictim() == member; });
++}
++}  // namespace
++
++void IccValithriaWatch(Creature* valithria)
++{
++    InstanceScript* instance = valithria->GetInstanceScript();
++    Map* map = valithria->GetMap();
++    if (!instance || !map)
++        return;
++    uint32 const instanceId = map->GetInstanceId();
++    IcecrownHelpers::IccInstanceState& state = IcecrownHelpers::IccState(instanceId);
++    IcecrownHelpers::ValithriaWatch& watch = state.vtWatch;
++    EncounterState const encounter = instance->GetBossState(ICC_BOSS_VALITHRIA);
++    if (encounter != IN_PROGRESS || !valithria->IsAlive())
++    {
++        if (watch.engaged)
++            LOG_INFO("playerbots", "valithria_watch instance={} end={} hp={:.1f}", instanceId,
++                     encounter == DONE ? "done" : "reset", valithria->GetHealthPct());
++        watch = IcecrownHelpers::ValithriaWatch{};
++        state.vtHealNotes.clear();
++        return;
++    }
++
++    uint32 const now = getMSTime();
++    if (watch.engaged && getMSTimeDiff(watch.lastMs, now) < VALITHRIA_WATCH_MS)
++        return;
++    watch.engaged = true;
++    watch.lastMs = now;
++
++    std::list<Creature*> zombies;
++    std::list<Creature*> worms;
++    valithria->GetCreatureListWithEntryInGrid(zombies, NPC_BLISTERING_ZOMBIE, 100.0f);
++    valithria->GetCreatureListWithEntryInGrid(worms, NPC_ROT_WORM, 100.0f);
++    bool const portalUp = !IccGetCreaturesByEntries(valithria,
++                                                    {NPC_DREAM_PORTAL, NPC_DREAM_PORTAL_PRE_EFFECT,
++                                                     NPC_NIGHTMARE_PORTAL, NPC_NIGHTMARE_PORTAL_PRE_EFFECT},
++                                                    100.0f)
++                               .empty();
++
++    std::vector<Player*> healers;
++    for (auto const& ref : map->GetPlayers())
++    {
++        Player* member = ref.GetSource();
++        if (member && member->IsInWorld() && GET_PLAYERBOT_AI(member) && PlayerbotAI::IsHeal(member) &&
++            member->GetDistance2d(valithria) <= 100.0f)
++            healers.push_back(member);
++    }
++    std::sort(healers.begin(), healers.end(),
++              [](Player const* left, Player const* right) { return left->GetGUID() < right->GetGUID(); });
++
++    std::map<std::string, uint32> duties;
++    uint32 casts = 0;
++    std::vector<std::string> lines;
++    for (Player* member : healers)
++    {
++        PlayerbotAI* ai = GET_PLAYERBOT_AI(member);
++        bool const alive = member->IsAlive();
++        auto const raidHealer = alive ? IccValithriaShouldHealRaid(member) : std::nullopt;
++        Aura* twisted = ai->GetAura("Twisted Nightmares", member, false, true);
++        RaidInteractions::ValithriaDutyInputs in;
++        in.alive = alive;
++        in.dream = member->HasAura(SPELL_DREAM_STATE);
++        in.kited = ValithriaChases(zombies, member);
++        in.wormed = ValithriaChases(worms, member);
++        in.portal = portalUp && alive && (!twisted || twisted->GetStackAmount() < 25) &&
++                    IccValithriaCanUsePortal(member);
++        in.lowHealth = member->HealthBelowPct(50);
++        in.dragon = alive && IccValithriaHealsDragon(member).value_or(false);
++        char const* duty = RaidInteractions::ValithriaDuty(in);
++        ++duties[duty];
++
++        IcecrownHelpers::ValithriaHealNote& note = state.vtHealNotes[member->GetGUID()];
++        casts += note.casts;
++        Engine* engine = ai->GetCurrentEngine();
++        std::string const trace = engine ? engine->GetLastAction() : std::string();
++        std::string const did(RaidInteractions::LastExecutedAction(trace));
++        lines.push_back(Acore::StringFormat(
++            "valithria_healer instance={} guid={} name={} class={} alloc={} now={} icc={} hp={:.0f} mana={:.0f} "
++            "dist={:.1f} los={} casts={} heal={} last={} did=\"{}\"",
++            instanceId, member->GetGUID().GetCounter(), member->GetName(), ValithriaHealerClass(member->getClass()),
++            !raidHealer.has_value() ? "-" : (*raidHealer ? "raid" : "boss"), duty, ValithriaStrategyFlag(ai),
++            member->GetHealthPct(), member->GetPowerPct(POWER_MANA), member->GetDistance(valithria),
++            member->IsWithinLOSInMap(valithria) ? 1 : 0, note.casts, note.outcome, ValithriaLastCast(ai, valithria),
++            did.empty() ? "-" : did));
++        note.casts = 0;
++    }
++
++    std::string summary;
++    for (auto const& [duty, count] : duties)
++        summary += " " + duty + "=" + std::to_string(count);
++    LOG_INFO("playerbots", "valithria_watch instance={} diff={} hp={:.1f} healers={}{} casts={}", instanceId,
++             uint32(map->GetDifficulty()), valithria->GetHealthPct(), healers.size(), summary, casts);
++    for (std::string const& line : lines)
++        LOG_INFO("playerbots", "{}", line);
++}
+diff --git a/src/Ai/Raid/ICC/ICCShared.h b/src/Ai/Raid/ICC/ICCShared.h
+index 647a8fa4..bf158381 100644
+--- a/src/Ai/Raid/ICC/ICCShared.h
++++ b/src/Ai/Raid/ICC/ICCShared.h
+@@ -93,8 +93,16 @@ bool IccBossHasRemorselessWinter(Unit* boss);
+ bool IccBossCastingRemorselessWinter(Unit* boss);
+ bool IccAnyGroupMemberHasAura(Player* bot, uint32 spellId);
+ bool IccAnyBloodPrincePresent(PlayerbotAI* botAI);
++// Valithria: reserved raid healer (nullopt when not one of her healers).
+ std::optional<bool> IccValithriaShouldHealRaid(Player* bot);
++// Whether this healer's casts go to the dragon this tick (raid healers only while the raid is fine).
++std::optional<bool> IccValithriaHealsDragon(Player* bot);
++// The dragon heal trigger's whole condition: a living, healthy healer outside the dream, not chased.
++bool IccValithriaOnDragon(Player* bot);
+ bool IccValithriaCanUsePortal(Player* bot);
++void IccValithriaNoteHeal(Player* bot, char const* outcome, bool cast);
++// Playerbots.log every 5 s while her encounter is in progress (ICCScripts.cpp calls it from her update).
++void IccValithriaWatch(Creature* valithria);
+ std::vector<Creature*> IccGetCreaturesByEntries(WorldObject* searcher, std::initializer_list<uint32> entries,
+                                                 float range);
+ 
+diff --git a/src/Ai/Raid/ICC/ICCTriggers.cpp b/src/Ai/Raid/ICC/ICCTriggers.cpp
+index 2fb7b3a3..fcb59ca7 100644
+--- a/src/Ai/Raid/ICC/ICCTriggers.cpp
++++ b/src/Ai/Raid/ICC/ICCTriggers.cpp
+@@ -717,30 +717,9 @@ bool IccValithriaPortalTrigger::IsActive()
+ 
+ bool IccValithriaHealTrigger::IsActive()
+ {
+-    Unit* boss = bot->FindNearestCreature(NPC_VALITHRIA_DREAMWALKER, 100.0f);
+-    if (!boss)
+-        return false;
+-
+-    // Only healers should use healing
+-    if (!PlayerbotAI::IsHeal(bot) || bot->HasAura(SPELL_DREAM_STATE) || bot->HealthBelowPct(50))
+-        return false;
+-
+-    Creature* worm = bot->FindNearestCreature(NPC_ROT_WORM, 100.0f);
+-    Creature* zombie = bot->FindNearestCreature(NPC_BLISTERING_ZOMBIE, 100.0f);
+-
+-    if ((worm && worm->GetVictim() == bot) || (zombie && zombie->GetVictim() == bot))
+-        return false;
+-
+-    auto const shouldHealRaid = IccValithriaShouldHealRaid(bot);
+-    if (!shouldHealRaid.has_value() || *shouldHealRaid)
+-        return false;
+-
+-    if (bot->GetHealthPct() < 50.0f)
+-        return false;
+-
+-    // The higher-priority portal action owns travel/clicks. A portal reserved
+-    // by another healer must not stop this healer from healing the dragon.
+-    return true;
++    // Dragon healers, and the raid healers while nobody they can reach is hurt. The higher-priority
++    // portal action owns travel/clicks; a portal reserved by another healer does not stop this one.
++    return IccValithriaOnDragon(bot);
+ }
+ 
+ bool IccValithriaDreamCloudTrigger::IsActive()
+diff --git a/src/Ai/Raid/RaidInteractionPolicy.h b/src/Ai/Raid/RaidInteractionPolicy.h
+index 202e7572..5e22ef69 100644
+--- a/src/Ai/Raid/RaidInteractionPolicy.h
++++ b/src/Ai/Raid/RaidInteractionPolicy.h
+@@ -11,6 +11,7 @@
+ #include <array>
+ #include <cstdint>
+ #include <optional>
++#include <string_view>
+ #include <vector>
+ 
+ namespace RaidInteractions
+@@ -68,7 +69,9 @@ struct Healer
+     bool druid;
+ };
+ 
+-inline std::optional<bool> HealRaid(std::uint64_t guid, std::vector<Healer> healers, bool partyNeedsHelp = false)
++// Whether this healer is one of Valithria's reserved raid healers (the first one or two,
++// druids first). A lone healer is reserved; the rest are dragon healers who may portal.
++inline std::optional<bool> HealRaid(std::uint64_t guid, std::vector<Healer> healers)
+ {
+     std::sort(healers.begin(), healers.end(), [](Healer const& left, Healer const& right)
+               { return left.druid != right.druid ? left.druid : left.guid < right.guid; });
+@@ -77,13 +80,72 @@ inline std::optional<bool> HealRaid(std::uint64_t guid, std::vector<Healer> heal
+     if (found == healers.end())
+         return std::nullopt;
+     if (healers.size() == 1)
+-        return partyNeedsHelp;
+-    // Even a reduced roster needs a dragon healer. With one healer, ordinary
+-    // emergency healing still wins and portals must be left alone.
++        return true;
+     std::size_t const reserve = std::min(healers.size() - 1, healers.size() > 3 ? std::size_t{2} : std::size_t{1});
+     return static_cast<std::size_t>(found - healers.begin()) < reserve;
+ }
+ 
++// A reserved raid healer spends its casts on the dragon while everyone it could heal is at
++// or above this health; below it, ordinary party healing takes over.
++inline constexpr float RaidHealerDragonFloorPct = 80.0f;
++
++// lowestPct: the lowest health % among the group members this healer could heal (100 when
++// nobody is hurt). Dragon healers always heal her; raid healers only while the raid is fine.
++inline bool HealsDragon(bool raidHealer, float lowestPct)
++{
++    return !raidHealer || lowestPct >= RaidHealerDragonFloorPct;
++}
++
++// What a Valithria healer is doing, in the order the strategy's triggers outrank each other
++// (zombie kite, portal, dream cloud, dragon heal; low health or a rot worm stops the heal).
++struct ValithriaDutyInputs
++{
++    bool alive = true;
++    bool dream = false;
++    bool kited = false;
++    bool wormed = false;
++    bool portal = false;
++    bool lowHealth = false;
++    bool dragon = false;
++};
++
++inline char const* ValithriaDuty(ValithriaDutyInputs const& in)
++{
++    if (!in.alive)
++        return "dead";
++    if (in.dream)
++        return "dream";
++    if (in.kited)
++        return "kite";
++    if (in.portal && !in.wormed)
++        return "portal";
++    if (in.lowHealth)
++        return "low_hp";
++    if (in.wormed)
++        return "worm";
++    return in.dragon ? "dragon" : "raid";
++}
++
++// The newest executed action in an engine trace ("|A:<name> - OK|..."), or empty.
++inline std::string_view LastExecutedAction(std::string_view trace)
++{
++    constexpr std::string_view head = "|A:";
++    constexpr std::string_view tail = " - OK";
++    std::size_t end = trace.size();
++    while (end > 0)
++    {
++        std::size_t const start = trace.rfind(head, end - 1);
++        if (start == std::string_view::npos)
++            break;
++        std::size_t const stop = std::min(trace.find('|', start + 1), end);
++        std::string_view const entry = trace.substr(start + head.size(), stop - start - head.size());
++        if (entry.size() > tail.size() && entry.substr(entry.size() - tail.size()) == tail)
++            return entry.substr(0, entry.size() - tail.size());
++        end = start;
++    }
++    return {};
++}
++
+ inline bool CanUsePortal(std::uint64_t guid, std::vector<Healer> const& healers)
+ {
+     auto const raidHealer = HealRaid(guid, healers);
+diff --git a/tests/raid_interactions_test.cpp b/tests/raid_interactions_test.cpp
+index 8caf2fa6..bd6e62ef 100644
+--- a/tests/raid_interactions_test.cpp
++++ b/tests/raid_interactions_test.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include <iostream>
++#include <string_view>
+ 
+ #include "../src/Ai/Raid/RaidInteractionPolicy.h"
+ 
+@@ -52,9 +53,7 @@ int main()
+     CHECK(WantedEssence(Colour::Light, 34496, Colour::None, Colour::Dark) == Colour::Dark);
+     CHECK(!HealRaid(101, {}).has_value());
+     CHECK(!CanUsePortal(101, {}));
+-    CHECK(HealRaid(101, {{101, true}}) == false);
+-    CHECK(HealRaid(101, {{101, true}}, true) == true);
+-    CHECK(HealRaid(101, {{101, true}}, false) == false);
++    CHECK(HealRaid(101, {{101, true}}) == true);  // A lone healer is the raid's, and tops the dragon when it can.
+     CHECK(!CanUsePortal(101, {{101, true}}));
+     CHECK(HealRaid(101, {{101, true}, {102, false}}) == true);
+     CHECK(HealRaid(102, {{101, true}, {102, false}}) == false);
+@@ -79,13 +78,64 @@ int main()
+                 std::reverse(reversed.begin(), reversed.end());
+                 CHECK(HealRaid(healer.guid, reversed) == assignment);
+             }
+-            CHECK(surface == (count == 1 ? 0u : count > 3 ? 2u : 1u));
+-            CHECK(surface < count);
++            CHECK(surface == (count > 3 ? 2u : 1u));
++            CHECK(count == 1 || surface < count);
+             CHECK(count == 1 ? portal == 0 : portal + surface == count);
+             CHECK(!HealRaid(1, roster).has_value());
+             CHECK(!CanUsePortal(1, roster));
+         }
+ 
++    // Dragon healers always heal her; raid healers only while nobody they could heal is hurt.
++    for (float lowest : {0.0f, 25.0f, 79.9f, 80.0f, 100.0f})
++    {
++        CHECK(HealsDragon(false, lowest));
++        CHECK(HealsDragon(true, lowest) == (lowest >= RaidHealerDragonFloorPct));
++    }
++    // 25-man: six healers, one druid. The druid and the lowest guid heal the raid; on a quiet
++    // raid every healer works on the dragon, and with someone hurt only the four dragon healers.
++    {
++        std::vector<Healer> const six = {{106, false}, {105, false}, {104, true}, {103, false}, {102, false},
++                                         {101, false}};
++        std::size_t quiet = 0;
++        std::size_t hurt = 0;
++        for (Healer const& healer : six)
++        {
++            bool const raid = *HealRaid(healer.guid, six);
++            CHECK(raid == (healer.guid == 104 || healer.guid == 101));
++            quiet += HealsDragon(raid, 100.0f);
++            hurt += HealsDragon(raid, 50.0f);
++        }
++        CHECK(quiet == 6);
++        CHECK(hurt == 4);
++    }
++
++    // The reported duty follows the strategy's trigger order.
++    auto duty = [](auto set)
++    {
++        ValithriaDutyInputs in;
++        set(in);
++        return std::string_view(ValithriaDuty(in));
++    };
++    CHECK(duty([](ValithriaDutyInputs&) {}) == "raid");
++    CHECK(duty([](ValithriaDutyInputs& in) { in.dragon = true; }) == "dragon");
++    CHECK(duty([](ValithriaDutyInputs& in) { in.alive = false; in.dream = true; }) == "dead");
++    CHECK(duty([](ValithriaDutyInputs& in) { in.dream = true; in.kited = true; in.portal = true; }) == "dream");
++    CHECK(duty([](ValithriaDutyInputs& in) { in.kited = true; in.portal = true; in.dragon = true; }) == "kite");
++    CHECK(duty([](ValithriaDutyInputs& in) { in.portal = true; in.lowHealth = true; in.dragon = true; }) == "portal");
++    CHECK(duty([](ValithriaDutyInputs& in) { in.wormed = true; in.portal = true; in.dragon = true; }) == "worm");
++    CHECK(duty([](ValithriaDutyInputs& in) { in.lowHealth = true; in.dragon = true; }) == "low_hp");
++
++    // The engine trace's newest executed action, skipping failed and useless entries.
++    CHECK(LastExecutedAction("").empty());
++    CHECK(LastExecutedAction("|--- AI Tick ---|T:icc valithria heal").empty());
++    CHECK(LastExecutedAction("|A:icc valithria heal - OK") == "icc valithria heal");
++    CHECK(LastExecutedAction("|A:icc valithria heal - OK|A:holy light on party - FAILED|T:x") ==
++          "icc valithria heal");
++    CHECK(LastExecutedAction("|A:a - OK|--- AI Tick ---|A:reach party member to heal - OK|A:b - USELESS") ==
++          "reach party member to heal");
++    CHECK(LastExecutedAction("A:not prefixed - OK").empty());
++    CHECK(LastExecutedAction("|A: - OK").empty());
++
+     // An absent talent, unknown rank or cooldown cannot swallow a usable heal.
+     for (std::uint32_t readiness = 0; readiness < 8; ++readiness)
+     {
