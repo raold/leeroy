@@ -87,6 +87,13 @@ def _snapshot_file(db: Path, dest: Path, label: str) -> Path:
 
 async def serve(root: Path, *, make_llm=None, ollama_conf: Path | None = None,
                 ready=None) -> int:
+    from .watchdog.loop import monitor
+    with monitor(root):
+        return await _serve(root, make_llm=make_llm, ollama_conf=ollama_conf, ready=ready)
+
+
+async def _serve(root: Path, *, make_llm=None, ollama_conf: Path | None = None,
+                 ready=None) -> int:
     """The `run` command inside asyncio.run: a "start" snapshot, the app, its startup checks,
     then MindApp.run() until Ctrl+C or stop(). `ready(app)` is told about the app (tests)."""
     from .app import MindApp, startup_checks
