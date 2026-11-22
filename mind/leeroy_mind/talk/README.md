@@ -1,3 +1,29 @@
+# Quiet game chat during combat
+
+`[talk] combat_quiet = true` drops ambient game lines if the owner or the speaking
+member is in combat when native executes the send. This covers ordinary combat,
+not just a reported boss encounter, and applies to every fragment of a typed
+burst. Banter, unsolicited whispers and greetings wait for a later opportunity;
+refused lines are dropped, never queued to flood chat when combat ends. Direct
+answers to him, raid callouts and urgent turns retain their existing rules.
+Discord and voice are unchanged.
+
+The default is false, and a malformed value leaves it off. It is available in
+Ops as **Quiet ambient game chat during combat**. Read at mind start and each
+login. It requires a native rebuild advertising `combat_quiet` in `hello`.
+If enabled with an older native, ambient game lines are refused with
+`combat_quiet_unavailable`; direct answers/callouts still work. A native combat
+refusal is `combat_quiet`, with no successful chat receipt or echo retry. These
+checks affect delivery; the mind can still compose a line that is later refused.
+
+Release the native and mind changes before enabling it. Disable it before
+rolling native back. No migration is needed. With it off, the optional wire
+field is omitted and delivery is unchanged. This does not control playerbots'
+own canned messages: the separate playerbots patch `0016` fixes the repeated
+Gunship rocket-pack equip whisper at its source.
+
+Run `python -m pytest -q tests/test_combat_quiet.py` for the fake-only checks.
+
 # Optional typing cadence
 
 `[talk] realism = true` enables bounded cadence for generated typed member turns.

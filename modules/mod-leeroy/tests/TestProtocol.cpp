@@ -15,7 +15,7 @@ LEEROY_TEST(Protocol_HelloShape)
     CHECK_EQ(j["guild_id"], 21); CHECK_EQ(j["human_guid"], 0);
     CHECK(j["features"].is_array());
     CHECK(j["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
-        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx"}));
+        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "combat_quiet"}));
     auto stockOnly = json::parse(EncodeHello(1, 21, 0, 0, {}, false, false, true))["features"];
     auto expected = j["features"];
     expected.push_back("bank_stock_target");
@@ -32,14 +32,14 @@ LEEROY_TEST(Protocol_HelloAppendsTheBuildsOwnFeaturesOnce)
 {
     auto j = json::parse(EncodeHello(1700000000000, 21, 0, 0, {"dc_toc", "dc_ulduar", "regear", "", "dc_toc"}));
     CHECK(j["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
-        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "dc_toc", "dc_ulduar"}));
+        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "combat_quiet", "dc_toc", "dc_ulduar"}));
     auto day = json::parse(EncodeHello(1700000000000, 21, 0, 0, {"dc_toc", "dc_ulduar", "day_plan_handoff_v1"}));
     j["features"].push_back("day_plan_handoff_v1");
     CHECK(day == j);
     CHECK(!j.contains("started_ms"));
     auto combined = json::parse(EncodeHello(1, 21, 0, 0, {"dc_toc", "dc_ulduar"}, true, true, true));
     CHECK(combined["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
-        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "bank_stock_target",
+        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "combat_quiet", "bank_stock_target",
         "member_bank_mail", "training_enabled", "dc_toc", "dc_ulduar"}));
 }
 
@@ -122,6 +122,25 @@ LEEROY_TEST(Decode_SayFields)
         "bad field: guid");
     CHECK_EQ(DecodeCommand(R"({"v":1,"type":"say","id":"s","guid":0,"channel":"guild","text":"x"})").error,
         "bad field: guid");
+}
+
+LEEROY_TEST(Decode_SayOptionalCombatFence)
+{
+    json line = {{"v", 1}, {"type", "say"}, {"id", "s"}, {"guid", 101},
+        {"channel", "guild"}, {"text", "Ready."}};
+    auto legacy = DecodeCommand(line.dump());
+    CHECK(legacy.command); CHECK(!legacy.command->quietInCombat);
+    for (bool enabled : {false, true})
+    {
+        line["quiet_in_combat"] = enabled;
+        auto result = DecodeCommand(line.dump());
+        CHECK(result.command); CHECK_EQ(result.command->quietInCombat, enabled);
+    }
+    for (json invalid : {json(1), json("false"), json(nullptr), json::array()})
+    {
+        line["quiet_in_combat"] = invalid;
+        CHECK_EQ(DecodeCommand(line.dump()).error, "bad field: quiet_in_combat");
+    }
 }
 
 LEEROY_TEST(Decode_OtherCommands)

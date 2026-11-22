@@ -14,6 +14,7 @@ SWITCHES = (
     ('guards','phrase_cooldown','Phrase cooldown','guards.enabled',True),
     ('claims','enabled','Claims',''), ('talk','realism','Typing realism',''),
     ('talk','texture','Typing texture',''),
+    ('talk','combat_quiet','Quiet ambient game chat during combat','native combat_quiet feature; native rebuild'),
     ('talk','recall_diversity','Recall diversity',''),
     ('talk','think_private','Private beat before answers to him','',True),
     ('talk','coherence','Conversations hold together (read at start and at his login)',''),
