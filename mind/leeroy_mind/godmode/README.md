@@ -203,6 +203,12 @@ Four different members of the final five must post through the guarded Discord c
 
 Normal entry, lockouts, independent ownership and the dedicated DC driver's eligibility are checked before anyone leaves a day activity. A cold driver may take up to eight preparations, spaced at least 60 seconds while login is pending. Each uses the same proposal and a short-lived native ticket. The owner handoff has its own 30-second deadline. A confirmed start uses the party tank as leader and normal heroic access and difficulty.
 
+Heroic eligibility reads all competing body owners for the candidate cohort in one
+`BodyLedger.others_of` snapshot. Only the member's own day permit is exempted; a
+lower-ranked competing hold still blocks her. Day blocks batch their initial and
+preemption checks, and `claim` independently refreshes before acquiring the cohort.
+An unavailable source or missing member never counts as free.
+
 His login leaves an accepted run active. An admitted add-from-guild, raid summon, join or come request for its members can stop it. The original request waits for its own day and dungeon handbacks before continuing. A full, fresh native heartbeat puts the five in play and shows “Playing — Halls of Lightning.” Kills and wipes from that party's instance can reach Discord. If a restart precedes the next heartbeat, the mind can still give witnesses an event memory from the encounter it recorded for that run and copy. Repeated deliveries count once. Personal memories give lower bounds from available evidence. If nobody knows the combined result, Discord can still use each encounter with its own witnesses.
 
 The mind migration is `0065_member_heroics.sql`. Native creates `leeroy_member_dungeon_receipt` in the characters database on the first admitted start. A restart queries the original start ID. Cleanup records the party and instance before disband, preserves the first terminal and retains unresolved bodies. At 600 seconds after a cleanup-failed report, native can release its job slot when it finds no member still under that job’s control. A later party can use disjoint bodies as soon as status confirms the slot was released. The original roster stays fenced until its handback is proved. External GM teleports can leave an unresolved receipt.

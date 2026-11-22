@@ -350,6 +350,34 @@ def test_week_runs_once_and_records_desired_provenance_without_social_or_applica
     assert not fake.sent and not fake.memories and not fake.proposed and not fake.said and not fake.claims
 
 
+def test_spread_uses_one_score_batch_and_one_fresh_commit_batch(fake, weekly, monkeypatch):
+    applier, proof, week = weekly
+    calls = []
+    def batch(members):
+        calls.append(set(members))
+        return {g: None for g in calls[-1]}
+    monkeypatch.setattr(fake, "holders_of", batch)
+    monkeypatch.setattr(fake, "holder", lambda _: pytest.fail("per-member body refresh"))
+    assert asyncio.run(run_week(fake, applier, week, schedule=lambda: proof, rng=NoExplore())) == 2
+    assert len(calls) == 2 and calls[0] == set(fake.members)
+    assert calls[1] == {g for c in _receipt(fake, week)["changes"]
+                        for g in (c["guid"], c["copied_from"]) if g is not None}
+
+
+def test_spread_commit_omission_cancels_instead_of_assuming_free(fake, weekly, monkeypatch):
+    applier, proof, week = weekly
+    calls = []
+    def batch(members):
+        calls.append(set(members))
+        return dict.fromkeys(calls[-1]) if len(calls) == 1 else {}
+    monkeypatch.setattr(fake, "holders_of", batch)
+    assert asyncio.run(run_week(fake, applier, week, schedule=lambda: proof, rng=NoExplore())) == 0
+    assert _receipt(fake, week)["reason"] == "planning_inputs_changed"
+    assert fake.conn.execute("SELECT COUNT(*) FROM tg_setup").fetchone()[0] == 8
+    assert fake.conn.execute("SELECT COUNT(*) FROM tg_setup WHERE applied IS NOT NULL").fetchone()[0] == 0
+    assert not fake.sent and not fake.memories and not fake.proposed and not fake.said and not fake.claims
+
+
 @pytest.mark.parametrize("field,value", [
     ("connected", False), ("connected", None), ("human_online", True), ("human_online", None),
     ("raid_active", True), ("raid_active", None), ("lab_active", True), ("benchmark_active", True),

@@ -1534,3 +1534,30 @@ def test_a_slow_refresh_is_logged_with_counts_once_a_minute(monkeypatch, caplog)
     assert lines == ["bodies_refresh_slow ms=80 rows=2 source=journal source_ms=80 refreshes=2 slow=1",
                      "bodies_refresh_slow ms=80 rows=2 source=journal source_ms=80 refreshes=2 slow=2"]
     assert "private-scope" not in caplog.text and "101" not in caplog.text
+
+
+def test_others_of_reads_once_and_preserves_every_competing_owner():
+    source = Snapshot(hold("raid", {101}, scope="raid"), hold("realm_day", {101, 102}, scope="day"),
+                      hold("training", ALL, retained=True, scope="training"))
+    ledger, _ = ledger_with(source)
+    batch = ledger.others_of((101, 102, 103), besides={"training"})
+    assert source.calls == 1
+    assert batch == {101: {"raid", "realm_day"}, 102: {"realm_day"}, 103: set()}
+    assert batch == {g: ledger.others(g, besides={"training"}) for g in batch}
+    assert source.calls == 4
+    batch[101].clear()  # a caller cannot mutate the ledger's evidence
+    assert ledger.others_of((101,), besides=set())[101] == {"raid", "realm_day", "training"}
+
+
+def test_others_of_fails_closed_and_validates_before_reading():
+    source = Snapshot(hold("training", {101}, retained=True))
+    ledger, _ = ledger_with(source)
+    for members, excluded in [((0,), set()), ((101,), {""}), (("101",), set())]:
+        with pytest.raises(ValueError):
+            ledger.others_of(members, besides=excluded)
+    assert source.calls == 0
+    source.failure = True
+    with pytest.raises(BodyEvidenceUnavailable):
+        ledger.others_of((101, 102), besides={"training"})
+    source.failure = False
+    assert ledger.others_of((101, 102), besides={"training"}) == {101: set(), 102: set()}

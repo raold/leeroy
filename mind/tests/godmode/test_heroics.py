@@ -17,6 +17,43 @@ def roster():
     }
 
 
+def test_heroic_candidates_batch_all_owners_with_only_the_members_own_day_exception(store, clock, monkeypatch):
+    from types import SimpleNamespace
+    from conftest import seed_test_cast
+    from leeroy_mind.bodies import BodyLedger, BodyHold, BodyEvidenceUnavailable
+    people = seed_test_cast(store)
+    bodies = BodyLedger(clock)
+    reads = []
+    def snapshot():
+        reads.append(1)
+        return (BodyHold("own", heroics.OWNER, 3, frozenset({101, 102}), True),
+                BodyHold("day", "day:1", 4, frozenset({101, 102}), True),
+                BodyHold("other", "training", 2, frozenset({102}), True))
+    bodies.add_holder_source("fixture", snapshot)
+    store.conn.execute("INSERT INTO day_plan(id,night,member,starts,ends,activity,status,action_ref) "
+                       "VALUES(1,'fixture',101,1,2,'fishing','running','day:1')")
+    store.conn.execute("INSERT INTO day_permit(plan,begin_id,guild,human,state) VALUES(1,'fixture',3,1,'open')")
+    service = heroics.Heroics.__new__(heroics.Heroics)
+    service.conn = store.conn
+    service.realm = SimpleNamespace(bodies=bodies)
+    service.context = lambda: (3, 1)
+    service.app = SimpleNamespace(world=SimpleNamespace(online=set(people)))
+    service.guild = SimpleNamespace(raid_night=SimpleNamespace(members_in_play=set),
+                                   offline=SimpleNamespace(members_in_play=set))
+    service.ports = SimpleNamespace(cast=lambda: dict.fromkeys(people), away=set, in_dungeon=set,
+                                    persona=people.get, human_guid=1)
+    monkeypatch.setattr(bodies, "others", lambda *a, **k: pytest.fail("per-member body refresh"))
+    _, states = service.states((101, 102, 103))
+    assert len(reads) == 1 and states[101].free and not states[102].free and states[103].free
+    # An unrelated holder is not hidden behind her own higher-ranked reservation.
+    monkeypatch.setattr(bodies, "others_of", lambda *a, **k: {101: set()})
+    assert not service.states((102,))[1][102].free
+    def unavailable(*a, **k):
+        raise BodyEvidenceUnavailable("body evidence unavailable")
+    monkeypatch.setattr(bodies, "others_of", unavailable)
+    assert not any(c.free for c in service.states((101, 102))[1].values())
+
+
 def propose(store):
     cast = roster()
     return heroics.propose_group(store.conn, cast, {g: heroics.Candidate(True) for g in cast}, now=NOW)
