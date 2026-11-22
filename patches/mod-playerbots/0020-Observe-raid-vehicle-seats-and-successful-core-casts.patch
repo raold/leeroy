@@ -1,17 +1,17 @@
-From 6f146214f1cedce08bac00e994e457d9e4b7a713 Mon Sep 17 00:00:00 2001
+From 395d131dfa4825a35d246d188c150d2c8724d686 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sun, 22 Nov 2026 15:03:27 -0500
 Subject: [PATCH] Observe raid vehicle seats and successful core casts
 
 ---
  conf/playerbots.conf.dist            |   4 +
- src/Ai/Raid/RaidVehicleTrace.cpp     | 245 +++++++++++++++++++++++++++
- src/Ai/Raid/RaidVehicleTracePolicy.h |  66 ++++++++
+ src/Ai/Raid/RaidVehicleTrace.cpp     | 241 +++++++++++++++++++++++++++
+ src/Ai/Raid/RaidVehicleTracePolicy.h |  77 +++++++++
  src/PlayerbotAIConfig.cpp            |   1 +
  src/PlayerbotAIConfig.h              |   1 +
  src/Script/Playerbots.cpp            |   2 +
- tests/raid_vehicle_trace_test.cpp    |  58 +++++++
- 7 files changed, 377 insertions(+)
+ tests/raid_vehicle_trace_test.cpp    | 110 ++++++++++++
+ 7 files changed, 436 insertions(+)
  create mode 100644 src/Ai/Raid/RaidVehicleTrace.cpp
  create mode 100644 src/Ai/Raid/RaidVehicleTracePolicy.h
  create mode 100644 tests/raid_vehicle_trace_test.cpp
@@ -33,10 +33,10 @@ index 41196a64..577d4620 100644
  # Tell which spell is avoiding (experimental)
 diff --git a/src/Ai/Raid/RaidVehicleTrace.cpp b/src/Ai/Raid/RaidVehicleTrace.cpp
 new file mode 100644
-index 00000000..4d3270f2
+index 00000000..409a074f
 --- /dev/null
 +++ b/src/Ai/Raid/RaidVehicleTrace.cpp
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,241 @@
 +/*
 + * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
 + * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
@@ -220,11 +220,7 @@ index 00000000..4d3270f2
 +    }
 +    Record& record = found->second;
 +    if (!record.view.SameSeat(view))
-+    {
-+        Emit(record, now, "seat_changed");
-+        record.view = view;
-+        Emit(record, now, "seated");
-+    }
++        ChangeSeat(record, view, now, Emit);
 +    record.view = view;
 +    record.seen = now;
 +    if (!spell)
@@ -284,10 +280,10 @@ index 00000000..4d3270f2
 +}
 diff --git a/src/Ai/Raid/RaidVehicleTracePolicy.h b/src/Ai/Raid/RaidVehicleTracePolicy.h
 new file mode 100644
-index 00000000..f267ae16
+index 00000000..d4d7bddc
 --- /dev/null
 +++ b/src/Ai/Raid/RaidVehicleTracePolicy.h
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,77 @@
 +/*
 + * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
 + * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
@@ -352,6 +348,17 @@ index 00000000..f267ae16
 +        return true;
 +    }
 +};
++
++template <class Record, class View, class Emit>
++void ChangeSeat(Record& record, View const& view, std::uint32_t now, Emit emit)
++{
++    emit(record, now, "seat_changed");
++    // A suppressed flush must not carry the previous seat's evidence into the new seat.
++    record.counts = {};
++    record.flushed = now;
++    record.view = view;
++    emit(record, now, "seated");
++}
 +} // namespace RaidVehicleTrace
 +#endif
 diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
@@ -398,17 +405,19 @@ index 8a656232..256667fa 100644
  }
 diff --git a/tests/raid_vehicle_trace_test.cpp b/tests/raid_vehicle_trace_test.cpp
 new file mode 100644
-index 00000000..f8a855cc
+index 00000000..3a38aa9e
 --- /dev/null
 +++ b/tests/raid_vehicle_trace_test.cpp
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,110 @@
 +/*
 + * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
 + * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
 + * or (at your option) any later version.
 + */
-+#include "../src/Ai/Raid/RaidVehicleTracePolicy.h"
 +#include <iostream>
++#include <vector>
++
++#include "../src/Ai/Raid/RaidVehicleTracePolicy.h"
 +
 +namespace
 +{
@@ -456,6 +465,56 @@ index 00000000..f8a855cc
 +    CHECK(budget.Take(5000));
 +    CHECK(budget.used == 1);
 +    CHECK(budget.suppressed == 2); // The next emitted record must report the gap.
++
++    // Both transition logs are throttled, and another rider reports the global gap first.
++    struct TestRecord
++    {
++        unsigned view;
++        Counts counts;
++        std::uint32_t flushed;
++    };
++    struct Emission
++    {
++        TestRecord record;
++        std::uint32_t window, suppressed;
++    };
++    std::vector<Emission> emitted;
++    LogBudget exhausted{1000, LogBudget::Limit, 0};
++    auto emit = [&exhausted, &emitted](TestRecord& record, std::uint32_t now, char const*)
++    {
++        if (!exhausted.Take(now))
++            return;
++        emitted.push_back({record, now - record.flushed, exhausted.suppressed});
++        exhausted.suppressed = 0;
++        record.counts = {};
++        record.flushed = now;
++    };
++    TestRecord rider{1, {}, 1000};
++    rider.counts.Add(Spells[0], false);
++    rider.counts.Add(Spells[0], true);
++    ChangeSeat(rider, 2u, 2000, emit);
++    CHECK(emitted.empty());
++    CHECK(exhausted.suppressed == 2);
++    CHECK(rider.view == 2);
++    CHECK(rider.flushed == 2000);
++    rider.counts.Add(Spells[1], false);
++    rider.counts.Add(Spells[1], true);
++    TestRecord other{3, {}, 1000};
++    emit(other, 6000, "sample");
++    CHECK(emitted.size() == 1);
++    CHECK(emitted.back().record.view == 3);
++    CHECK(emitted.back().suppressed == 2);
++    CHECK(exhausted.suppressed == 0);
++    emit(rider, 7000, "sample");
++    CHECK(emitted.size() == 2);
++    CHECK(emitted.back().record.view == 2);
++    CHECK(emitted.back().window == 5000);
++    CHECK(emitted.back().suppressed == 0);
++    for (std::size_t i = 0; i < Spells.size(); ++i)
++    {
++        CHECK(emitted.back().record.counts.cast[i] == (i == 1 ? 1u : 0u));
++        CHECK(emitted.back().record.counts.cancel[i] == (i == 1 ? 1u : 0u));
++    }
 +    CHECK(MaxRiders == 256);
 +    std::cout << checks << " checks, " << failures << " failures\n";
 +    return failures ? 1 : 0;

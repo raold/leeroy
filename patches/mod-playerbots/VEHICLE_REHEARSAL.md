@@ -57,7 +57,9 @@ interval as proof that nothing happened. Unknown spell IDs are excluded.
   vehicle. A turret's inherited movement alone cannot establish who steered
   its parent; also watch the owner's controls and the driver's seat.
 - `seat_changed`, `seat_lost`, `vehicle_dead`, `died`, `logout` and `map_changed`
-  flush the previous observed seat and clear its counters. `expired` means no
+  attempt to flush the previous observed seat and clear its counters even when
+  the log budget suppresses that flush. A new seat always starts a fresh window;
+  counts from the old seat are never attributed to it. `expired` means no
   observation arrived for 30 seconds, not proven logout. There are no cached
   game pointers. Disabling diagnostics clears pending windows without emitting
   them; mark the end time before switching it off.
