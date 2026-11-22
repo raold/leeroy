@@ -162,6 +162,21 @@ defaults once it succeeds. Native pure tests
 separately exercise every check code, wait expiration, partial current-step failures, scoped and
 continuation protection, and mutation-free forget refusals.
 
+## Reading the journal
+
+`ActionStore.records()` and `holds()` (the body ledger's `realm_actions` source) decode and validate
+the whole `realm_action` journal only when one of its stored rows changed. Every read fetches all
+rows again (about 0.6 ms for the 270 rows the journal held on 2026-11-22) and compares them with the
+rows the cached decode came from, so whatever wrote them (this store or another, raw SQL, another
+connection, a rollback or a savepoint rollback after a read inside the transaction) a changed row
+is decoded again. Day release proofs read `day_step`, `day_permit` and `day_plan`, so they are
+proved again on every read. Only a decode made inside one transaction is kept. A bad row or proof
+still raises `ActionUnavailable`. A full decode of that journal takes 25-50 ms; before this cache,
+every `holder()` call paid it, and the lab's 150-member eligibility pass held the event loop for
+about 7 s a tick (2026-11-22, 05:39-06:20: control endpoint, bridge pings and Ollama calls all timed
+out). The body ledger logs `bodies_refresh_slow ms= rows= source= source_ms= refreshes= slow=` (at
+most once a minute) for a refresh over 50 ms: counts and the slowest source's name only.
+
 # The calendar desk and body fences
 
 A calendar post, update or signup moves no body, so native refuses one only for identity (the

@@ -408,6 +408,14 @@ output in `patches/`:
   Malygos works without a human master; Flame Leviathan's existing offline
   bypass is unchanged. See [vehicle validation](patches/mod-playerbots/VEHICLES.md)
   before enabling it for a raid.
+- **Valithria's healers** (playerbots): the one or two raid healers heal the
+  dragon whenever nobody in range of them is below 80% and they keep 40% mana,
+  a healer on the dragon
+  no longer runs off after a hurt raid member (holy paladins' stock reach move
+  outranked the dragon heal), and Beacon of Light is not tried on her. While
+  her encounter runs, `Playerbots.log` gets a `valithria_watch` line every 5 s
+  with one `valithria_healer` line per bot healer (duty, `icc` strategy, health,
+  mana, range, heals cast on her, last spell and target).
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.

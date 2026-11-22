@@ -6,6 +6,9 @@ Guild composites are not a member's portrait. Missing tables and files read as e
 Only photos of her current looks are listed or served, by the photo request path's rule: her
 cover's set and sets rendered from a persona at least as new (store.looks_floor), and situations
 planned from the looks she has now. With no cover nothing is hidden. Rows and files are kept.
+`all_sets` (the gallery's "Show all sets") lifts that rule alone: the photos it hides are listed
+too, each marked `earlier`, and served when asked for with `all=1`; `earlier` in the view counts
+them either way. Every other rule (world sets, lust sets, the file checks) stays as it is.
 
 A candidate the photo critic flagged (selfies/critic.py) carries `flag`: its defect codes,
 comma-separated. It is listed, served and choosable as before.
@@ -69,7 +72,7 @@ def _snap_shown(floor, looks, stored) -> bool:
     return floor is None or (looks is not None and stored == looks)
 
 
-def _entry(data_dir, guid, kind, number, index, rendered, cover):
+def _entry(data_dir, guid, kind, number, index, rendered, cover, earlier=False):
     if kind == "candidate":
         full = files.candidate(data_dir, guid, number, index)
         thumb = files.candidate(data_dir, guid, number, index, thumb=True)
@@ -83,11 +86,14 @@ def _entry(data_dir, guid, kind, number, index, rendered, cover):
     root = Path(data_dir) / "selfies"
     if not _present(full, root):
         return None
-    url = "/api/selfies/photo?" + query
-    return {"id": ident, "kind": kind, "set": number if kind == "candidate" else None,
-            "index": index, "rendered": rendered, "cover": cover,
-            "thumbnail": url + "&thumb=1" if _present(thumb, root) else None,
-            "image": url}
+    url = "/api/selfies/photo?" + query + ("&all=1" if earlier else "")
+    entry = {"id": ident, "kind": kind, "set": number if kind == "candidate" else None,
+             "index": index, "rendered": rendered, "cover": cover,
+             "thumbnail": url + "&thumb=1" if _present(thumb, root) else None,
+             "image": url}
+    if earlier:
+        entry["earlier"] = True  # shows looks from before her current ones (#314's floor)
+    return entry
 
 
 def _world_set(conn, have, guid, number):
@@ -104,9 +110,10 @@ def _world_set(conn, have, guid, number):
         (row[1], f"{guid}:{number}")).fetchone() is not None
 
 
-def gallery(conn, data_dir, guid: int) -> dict:
+def gallery(conn, data_dir, guid: int, *, all_sets: bool = False) -> dict:
     have = _have(conn)
-    out = {"guid": guid, "missing": [t for t in TABLES if t not in have], "photos": []}
+    out = {"guid": guid, "missing": [t for t in TABLES if t not in have], "photos": [],
+           "all": all_sets, "earlier": 0}
     from leeroy_mind.personas.tiers import is_cast
     if not is_cast(conn,guid):
         return out
@@ -131,11 +138,14 @@ def gallery(conn, data_dir, guid: int) -> dict:
             is_cover = current == (row[0], row[1])
             if _world_set(conn, have, guid, row[0]):
                 continue
-            if not current_looks(row[3], floor):
-                continue  # rendered from an older persona than her cover's set: not listed
             if held and not is_cover and lust_set(conn, guid, row[0]):
                 continue  # a lust-style set of a member who left that style: not listed
-            entry = _entry(data_dir, guid, "candidate", row[0], row[1], row[2], is_cover)
+            earlier = not current_looks(row[3], floor)  # from an older persona than her cover's
+            entry = _entry(data_dir, guid, "candidate", row[0], row[1], row[2], is_cover, earlier)
+            if entry and earlier:
+                out["earlier"] += 1
+                if not all_sets:
+                    continue  # not listed unless he asked for all sets
             if entry:
                 look = _look(cover_look(conn, guid) if is_cover else None
                              ) or _look(varied_look(conn, guid, row[0], row[1]))
@@ -148,9 +158,12 @@ def gallery(conn, data_dir, guid: int) -> dict:
         looks = _looks(p)
         for row in conn.execute("SELECT id, rendered, looks FROM selfie_snap WHERE guid=? "
                                 "AND kind='situation' AND rendered IS NOT NULL", (guid,)):
-            if not _snap_shown(floor, looks, row[2]):
-                continue  # planned from looks she no longer has: not listed
-            entry = _entry(data_dir, guid, "snap", row[0], None, row[1], False)
+            earlier = not _snap_shown(floor, looks, row[2])  # planned from looks she no longer has
+            entry = _entry(data_dir, guid, "snap", row[0], None, row[1], False, earlier)
+            if entry and earlier:
+                out["earlier"] += 1
+                if not all_sets:
+                    continue  # not listed unless he asked for all sets
             if entry:
                 photos.append(entry)
     photos.sort(key=lambda p: (-(p["rendered"] or 0), p["id"]))
@@ -179,8 +192,10 @@ def _is_cover(conn, have, guid, number, index) -> bool:
     return row is not None and tuple(row) == (number, index)
 
 
-def photo(conn, data_dir, guid, kind, number, index, *, thumb=False) -> bytes | None:
-    """Only a rendered row belonging to this member can expose a bounded JPEG."""
+def photo(conn, data_dir, guid, kind, number, index, *, thumb=False,
+          all_sets=False) -> bytes | None:
+    """Only a rendered row belonging to this member can expose a bounded JPEG; one of her
+    earlier looks only with `all_sets` (the gallery's all=1)."""
     have = _have(conn)
     from leeroy_mind.personas.tiers import is_cast
     if not is_cast(conn,guid):
@@ -191,14 +206,14 @@ def photo(conn, data_dir, guid, kind, number, index, *, thumb=False) -> bytes | 
                 "SELECT s.persona_version FROM selfie_candidate c JOIN selfie_set s ON "
                 "s.guid=c.guid AND s.set_no=c.set_no WHERE c.guid=? AND c.set_no=? AND c.idx=? "
                 "AND s.status='ready'", (guid, number, index)).fetchone()
-            if found and not current_looks(found[0], _floor(conn, have, guid)):
+            if found and not all_sets and not current_looks(found[0], _floor(conn, have, guid)):
                 return None
             path = files.candidate(data_dir, guid, number, index, thumb=thumb)
         elif kind == "snap" and "selfie_snap" in have:
             found = conn.execute("SELECT looks FROM selfie_snap WHERE guid=? AND id=? AND "
                                  "kind='situation' AND rendered IS NOT NULL", (guid, number)).fetchone()
-            if found and not _snap_shown(_floor(conn, have, guid),
-                                         _looks(_persona(conn, have, guid)), found[0]):
+            if found and not all_sets and not _snap_shown(
+                    _floor(conn, have, guid), _looks(_persona(conn, have, guid)), found[0]):
                 return None
             path = files.snap(data_dir, guid, number, thumb=thumb)
         else:

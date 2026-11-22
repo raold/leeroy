@@ -381,10 +381,9 @@ async def _try(root, store, cfg, scfg, clock, args, make_llm) -> int:
                         p = ctx.base(guid)
                         kind_style = chosen_style(store, p)
                         light = photo_extra.light_for(store, p)
-                        from .outfit_reveal import profile, restyle_look
+                        from .outfit_reveal import profile, restyle_looks
                         if args.varied:
-                            plans[guid] = tuple(restyle_look(p, x, scfg.outfit_reveal, f'{guid}:{i}')
-                                                for i, x in enumerate(plans[guid]))
+                            plans[guid] = restyle_looks(p, plans[guid], scfg.outfit_reveal, guid)
                         else:
                             p = profile(p, scfg.outfit_reveal, guid, kind_style=kind_style)
                         spec = (tuple(build_varied_prompt(p, x) for x in plans[guid])

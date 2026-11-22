@@ -104,6 +104,64 @@ def test_photo_pick_undo_more_and_gallery_cover(rehearsal):
     asyncio.run(run())
 
 
+def test_gallery_show_all_sets_lists_earlier_looks_and_is_remembered(rehearsal):
+    async def run():
+        import base64
+        from playwright.async_api import expect
+        from console.rig import SYNTHETIC_JPEG_B64
+        from leeroy_mind.selfies import files
+        from selfies.fakes import ready
+        async with rehearsal() as r:
+            store = r.app.store
+            ready(store, r.data, 101, 2)  # her second set, from looks newer than set 1's
+            for index in range(4):
+                for thumb in (False, True):
+                    files.candidate(r.data, 101, 2, index, thumb=thumb).write_bytes(
+                        base64.b64decode(SYNTHETIC_JPEG_B64))
+            with store.transaction():
+                for set_no in (1, 2):
+                    store.conn.execute("UPDATE selfie_set SET persona_version=?, rendered=? "
+                                       "WHERE guid=101 AND set_no=?", (set_no, 1000 * set_no, set_no))
+            photos.pick(store, 101, 2, 0, source="console", now=3000)
+            await open_console(r)
+            await visit(r.page, "personas")
+            opener = r.page.get_by_role("button", name="Browse photos of Arkon").first
+            await opener.click()
+            gallery = r.page.get_by_role("dialog", name="Arkon", exact=True)
+            every = gallery.get_by_role("button", name="Show all sets", exact=True)
+            await expect(every).to_have_attribute("aria-pressed", "false")
+            await expect(gallery).to_contain_text("4 photos of earlier looks hidden.")
+            await expect(gallery.locator(".gallery-strip button")).to_have_count(4)
+            await every.click()
+            await expect(every).to_have_attribute("aria-pressed", "true")
+            await expect(gallery).to_contain_text("Showing 4 photos of earlier looks too.")
+            await expect(gallery.locator(".gallery-strip button")).to_have_count(8)
+            await expect(gallery.locator(".gallery-strip button.earlier")).to_have_count(4)
+            await gallery.get_by_role("button", name="Photo 6, earlier looks", exact=True).click()
+            await expect(gallery.locator(".gallery-nav")).to_contain_text("6 / 8")
+            await expect(gallery.locator(".gallery-nav")).to_contain_text("earlier looks")
+            await expect(gallery.locator(".gallery-image")).to_be_visible()
+            await expect(gallery.locator("#gallery-why")).to_contain_text("New photos take their face")
+            assert await r.page.evaluate("localStorage.getItem('guild-console-gallery-all')") == '"all"'
+            await gallery.get_by_role("button", name="Close", exact=True).click()
+            await expect(gallery).to_have_count(0)
+            await opener.click()  # remembered: opens with every set
+            await expect(every).to_have_attribute("aria-pressed", "true")
+            await expect(gallery.locator(".gallery-strip button")).to_have_count(8)
+            await gallery.get_by_role("button", name="Photo 6, earlier looks", exact=True).click()
+            await submit(r, gallery.get_by_role("button", name="Make cover"), "/api/selfie")
+            assert (photos.current(store, 101).set_no, photos.current(store, 101).idx) == (1, 1)
+            await expect(gallery).to_contain_text("No photos of earlier looks.")
+            await expect(gallery.locator(".gallery-strip button.earlier")).to_have_count(0)
+            await every.click()
+            await expect(every).to_have_attribute("aria-pressed", "false")
+            assert await r.page.evaluate("localStorage.getItem('guild-console-gallery-all')") == '"current"'
+            await expect(gallery.locator(".gallery-strip button")).to_have_count(8)  # set 2 is newer
+            await gallery.get_by_role("button", name="Close", exact=True).click()
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
 def test_tuning_set_preview_refused_and_undo(rehearsal):
     async def run():
         from playwright.async_api import expect

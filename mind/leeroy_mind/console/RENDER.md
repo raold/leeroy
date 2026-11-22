@@ -85,6 +85,14 @@ Free GPU stops it too. The worker's whole process tree ends before any live mode
 outcome names the cause: his post, an answer owed to him, a group DM's answer, his login and so
 on.
 
+**A run a lease stopped resumes by itself** (2026-11-21): the same local day, at least two
+minutes after it stopped (an offline raid's start refused as `driver_pending` tries again after
+one), once the click's own checks pass again; the mind looks every minute. Sets already ready
+stay ready, so the resumed run renders what is still queued. His Stop (also pressed while it
+waits, which cancels the resume), Free GPU and a shutdown never resume; a pause or an empty
+backlog met while it waits drops it; at most six resumes a day. Logs
+`selfies_manual_render_resumed tries=` and `selfies_manual_resume_dropped reason=`.
+
 While a run renders:
 
 - **no night falls due**: a night that would start waits for the run to end, then starts at the

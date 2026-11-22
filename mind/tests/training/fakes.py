@@ -146,6 +146,9 @@ class FakeTrainingPorts:
     def holder(self, guid):
         return self.holders.get(guid)
 
+    def holders_of(self, guids):
+        return {guid: self.holders.get(guid) for guid in guids}
+
     def benchmark_allowed(self, map_id, boss_id, size, heroic):
         return None if self.allowed is None else self.allowed.get((map_id, boss_id, size, heroic), False)
 

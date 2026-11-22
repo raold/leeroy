@@ -450,10 +450,8 @@ def _varied_specs(ctx: "NightContext", cfg: SelfieCfg, p: Persona, guid: int,
     looks = varied.looks_for(ctx.store, p, guid, set_no)
     if looks is not None:
         try:
-            from .outfit_reveal import restyle_look
-            updated = tuple(None if x is None else restyle_look(
-                p, x, getattr(cfg, 'outfit_reveal', None), f'{guid}:{set_no}:{i}')
-                for i, x in enumerate(looks))
+            from .outfit_reveal import restyle_looks
+            updated = restyle_looks(p, looks, getattr(cfg, 'outfit_reveal', None), f'{guid}:{set_no}')
             if updated != looks:
                 with ctx.store.transaction():
                     varied.write_plan(ctx.store, guid, set_no, updated, varied._day(ctx.store, guid, set_no))

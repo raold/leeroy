@@ -30,22 +30,27 @@ export function durationWords(seconds) {
 export function renderModel(value, {busy=false, keyLost=false} = {}) {
   const v = renderStatus(value);
   const running = v?.running === true, stopping = running && v.stopping === true;
+  const resuming = !running && v?.resume === true;  // a stopped run waits for the GPU to resume
   const p = v?.progress && typeof v.progress === 'object' ? v.progress : {};
   const total = Math.max(1, count(p.total) ? p.total : 0), done = count(p.done) ? p.done : 0;
   const backlog = v?.backlog && count(v.backlog.total) ? v.backlog : null;
   const label = stopping ? 'Stopping…' :
     running ? 'Rendering ' + Math.min(done + 1, total) + ' of ' + total + ' · Stop' :
+    resuming ? 'Render resumes when the GPU is free · Cancel' :
     backlog && backlog.total && v.selfies ? 'Render selfies (' + backlog.total + ')' : 'Render selfies';
   const why = keyLost ? "Open the console URL again to restore this page's key." :
     busy ? 'Waiting for the render control to finish.' :
     !v ? 'Render status has not answered yet.' :
     !v.enabled ? v.refusal || 'Render selfies is disabled in this read-only console.' :
     running ? (stopping ? 'The photo worker is shutting down.' : '') :
-    v.refusal || '';
-  // A run can always be stopped (until it is stopping); a new one only without a refusal.
-  const disabled = busy || keyLost || !v || !v.enabled || (running ? stopping : !!v.refusal);
-  return {action: running ? 'stop' : 'render', running, stopping, label, why, disabled,
+    resuming ? '' : v.refusal || '';
+  // A run, or one waiting to resume, can always be stopped (until it is stopping); a new one
+  // only without a refusal.
+  const disabled = busy || keyLost || !v || !v.enabled ||
+    (running ? stopping : resuming ? false : !!v.refusal);
+  return {action: running || resuming ? 'stop' : 'render', running, stopping, label, why, disabled,
           title: why || (running ? 'Stop rendering: a photo mid-render stays queued.' :
+            resuming ? 'Cancel the stopped render: it would resume once the GPU is free.' :
             'Render the queued selfies now: ' + (backlog ? kindsWords(backlog) : 'the backlog') + '.')};
 }
 

@@ -53,6 +53,17 @@ test('refusals stay readable on a disabled button', () => {
     refusal: 'Selfies are off ([selfies] enabled in mind.toml).'}).label, 'Render selfies');
 });
 
+test('a render waiting to resume offers its cancel, even while the GPU is held', () => {
+  for (const refusal of [null, 'An offline raid holds the GPU. Wait for it to end (Raid tab).']) {
+    const view = renderModel({...idle, resume: true, refusal});
+    assert.equal(view.action, 'stop'); assert.equal(view.disabled, false);
+    assert.equal(view.label, 'Render resumes when the GPU is free · Cancel');
+    assert.match(view.title, /^Cancel the stopped render/);
+  }
+  assert.equal(renderModel({...idle, resume: false}).action, 'render');
+  assert.equal(renderModel({...running, resume: true}).label, 'Rendering 3 of 11 · Stop');
+});
+
 test('a run shows its progress and becomes Stop, never refused', () => {
   const view = renderModel({...running, refusal: 'Nothing is queued to render.'});
   assert.equal(view.label, 'Rendering 3 of 11 · Stop'); assert.equal(view.action, 'stop');
