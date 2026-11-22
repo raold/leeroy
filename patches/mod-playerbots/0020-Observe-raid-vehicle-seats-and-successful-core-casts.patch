@@ -1,0 +1,465 @@
+From 6f146214f1cedce08bac00e994e457d9e4b7a713 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 15:03:27 -0500
+Subject: [PATCH] Observe raid vehicle seats and successful core casts
+
+---
+ conf/playerbots.conf.dist            |   4 +
+ src/Ai/Raid/RaidVehicleTrace.cpp     | 245 +++++++++++++++++++++++++++
+ src/Ai/Raid/RaidVehicleTracePolicy.h |  66 ++++++++
+ src/PlayerbotAIConfig.cpp            |   1 +
+ src/PlayerbotAIConfig.h              |   1 +
+ src/Script/Playerbots.cpp            |   2 +
+ tests/raid_vehicle_trace_test.cpp    |  58 +++++++
+ 7 files changed, 377 insertions(+)
+ create mode 100644 src/Ai/Raid/RaidVehicleTrace.cpp
+ create mode 100644 src/Ai/Raid/RaidVehicleTracePolicy.h
+ create mode 100644 tests/raid_vehicle_trace_test.cpp
+
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index 41196a64..577d4620 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -2622,6 +2622,10 @@ Playerbots.CommandServerPort = 8888
+ Playerbots.SpellDump = 0
+ Playerbots.LogInGroupOnly = 1
+ Playerbots.LogValuesPerTick = 0
++
++# Bounded vehicle seat/cast observations for a supervised raid; also requires RaidVehicleSupport.
++# No behavior change. Successful core casts are counted, not helper return values or damage.
++Playerbots.RaidVehicleDiagnostics = 0
+ Playerbots.RandomChangeMultiplier = 1
+ 
+ # Tell which spell is avoiding (experimental)
+diff --git a/src/Ai/Raid/RaidVehicleTrace.cpp b/src/Ai/Raid/RaidVehicleTrace.cpp
+new file mode 100644
+index 00000000..4d3270f2
+--- /dev/null
++++ b/src/Ai/Raid/RaidVehicleTrace.cpp
+@@ -0,0 +1,245 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#include "RaidVehicleTracePolicy.h"
++#include "RaidVehicleActions.h"
++#include "AllSpellScript.h"
++#include "Group.h"
++#include "Log.h"
++#include "PlayerScript.h"
++#include "Playerbots.h"
++#include "Spell.h"
++#include "Timer.h"
++#include "Vehicle.h"
++#include <algorithm>
++#include <atomic>
++#include <map>
++#include <mutex>
++#include <sstream>
++
++namespace
++{
++using namespace RaidVehicleTrace;
++struct Snapshot
++{
++    uint64 rider = 0, vehicle = 0, parent = 0, parentDriver = 0;
++    uint32 map = 0, instance = 0, entry = 0, seat = 0, energy = 0, combo = 0;
++    bool control = false, canCast = false, ready = false, parentHuman = false;
++    float x = 0, y = 0, z = 0;
++    bool SameSeat(Snapshot const& rhs) const
++    {
++        return map == rhs.map && instance == rhs.instance && vehicle == rhs.vehicle && seat == rhs.seat &&
++            parent == rhs.parent && parentDriver == rhs.parentDriver;
++    }
++};
++struct Record
++{
++    Snapshot view;
++    Counts counts;
++    uint32 sampled = 0, flushed = 0, seen = 0;
++};
++std::mutex traceMutex;
++std::map<uint64, Record> records;
++std::atomic<bool> tracking{false};
++uint32 lastSweep = 0;
++LogBudget budget;
++
++bool Enabled()
++{
++    if (sPlayerbotAIConfig.RaidVehicleSupport && sPlayerbotAIConfig.RaidVehicleDiagnostics)
++        return true;
++    if (tracking.load() && tracking.exchange(false))
++    {
++        std::lock_guard<std::mutex> lock(traceMutex);
++        records.clear();
++        budget = {};
++    }
++    return false;
++}
++
++// All game pointers are used on their owning callback thread, before taking the
++// cache lock. Only IDs/numbers survive the callback; other maps may update in parallel.
++bool Capture(Player* player, Snapshot& view)
++{
++    if (!player || !player->IsInWorld() || !player->IsAlive() || IsRealPlayer(player) || IsSelfBot(player))
++        return false;
++    Unit* base = player->GetVehicleBase();
++    Vehicle* kit = player->GetVehicle();
++    auto const* seat = kit ? kit->GetSeatForPassenger(player) : nullptr;
++    PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
++    if (!ai || !base || !base->IsAlive() || !seat || !Supported(player->GetMapId(), base->GetEntry()))
++        return false;
++    view.rider = player->GetGUID().GetRawValue();
++    view.vehicle = base->GetGUID().GetRawValue();
++    view.map = player->GetMapId();
++    view.instance = player->GetInstanceId();
++    view.entry = base->GetEntry();
++    view.seat = seat->m_ID;
++    view.control = seat->CanControl();
++    view.canCast = (seat->m_flags & VEHICLE_SEAT_FLAG_CAN_CAST) != 0;
++    view.energy = base->GetPower(POWER_ENERGY);
++    view.combo = base->GetComboPoints();
++    view.ready = view.map == 616 ? RaidVehicles::MalygosDrake(ai) : RaidVehicles::LeviathanRaid(ai);
++    view.x = base->GetPositionX();
++    view.y = base->GetPositionY();
++    view.z = base->GetPositionZ();
++    if (Unit* parent = base->GetVehicleBase())
++    {
++        view.parent = parent->GetGUID().GetRawValue();
++        Unit* driver = parent->GetVehicleKit() ? parent->GetVehicleKit()->GetPassenger(0) : nullptr;
++        if (driver)
++        {
++            view.parentDriver = driver->GetGUID().GetRawValue();
++            if (Player* human = driver->ToPlayer())
++                view.parentHuman = IsRealPlayer(human);
++        }
++    }
++    return true;
++}
++
++void Emit(Record& record, uint32 now, char const* code)
++{
++    if (!budget.Take(now))
++        return;
++    std::ostringstream casts, cancels;
++    for (std::size_t i = 0; i < Spells.size(); ++i)
++    {
++        if (record.counts.cast[i]) casts << Spells[i] << ':' << record.counts.cast[i] << ',';
++        if (record.counts.cancel[i]) cancels << Spells[i] << ':' << record.counts.cancel[i] << ',';
++    }
++    Snapshot const& v = record.view;
++    LOG_INFO("playerbots", "raid_vehicle code={} map={} instance={} rider={} vehicle={} entry={} seat={} control={} "
++        "can_cast={} ready={} parent={} parent_driver={} parent_human={} energy={} combo={} x={:.1f} y={:.1f} z={:.1f} "
++        "window_ms={} suppressed={} casts={} cancels={}", code, v.map, v.instance, v.rider, v.vehicle, v.entry, v.seat,
++        v.control, v.canCast, v.ready, v.parent, v.parentDriver, v.parentHuman, v.energy, v.combo, v.x, v.y, v.z,
++        static_cast<uint32>(now - record.flushed), budget.suppressed, casts.str(), cancels.str());
++    budget.suppressed = 0;
++    record.counts = {};
++    record.flushed = now;
++}
++
++void End(Player* player, char const* code)
++{
++    if (!player || !tracking.load())
++        return;
++    uint32 const now = getMSTime();
++    uint64 const rider = player->GetGUID().GetRawValue();
++    std::lock_guard<std::mutex> lock(traceMutex);
++    auto const found = records.find(rider);
++    if (found == records.end())
++        return;
++    if (sPlayerbotAIConfig.RaidVehicleDiagnostics && sPlayerbotAIConfig.RaidVehicleSupport)
++        Emit(found->second, now, code); // Last observed seat, with an explicit terminal event code.
++    records.erase(found);
++}
++
++void Observe(Player* player, uint32 spell = 0, bool cancelled = false)
++{
++    if (!Enabled() || !player || (player->GetMapId() != 616 && player->GetMapId() != 603) ||
++        IsRealPlayer(player) || IsSelfBot(player))
++        return;
++    uint32 const now = getMSTime();
++    uint64 const rider = player->GetGUID().GetRawValue();
++    if (!spell)
++    {
++        std::lock_guard<std::mutex> lock(traceMutex);
++        auto const found = records.find(rider);
++        if (found != records.end() && !Due(now, found->second.sampled, SampleMs))
++            return;
++    }
++    Snapshot view;
++    if (!Capture(player, view))
++    {
++        End(player, player->GetVehicleBase() && !player->GetVehicleBase()->IsAlive() ? "vehicle_dead" : "seat_lost");
++        return;
++    }
++    std::lock_guard<std::mutex> lock(traceMutex);
++    if (Due(now, lastSweep, FlushMs))
++    {
++        lastSweep = now;
++        for (auto it = records.begin(); it != records.end();)
++            if (Due(now, it->second.seen, ExpireMs))
++            {
++                Emit(it->second, now, "expired");
++                it = records.erase(it);
++            }
++            else ++it;
++    }
++    auto found = records.find(view.rider);
++    if (found == records.end())
++    {
++        if (records.size() >= MaxRiders)
++        {
++            if (budget.suppressed != std::numeric_limits<uint32>::max()) ++budget.suppressed;
++            return;
++        }
++        found = records.emplace(view.rider, Record{view, {}, now, now, now}).first;
++        tracking.store(true);
++        Emit(found->second, now, "seated");
++    }
++    Record& record = found->second;
++    if (!record.view.SameSeat(view))
++    {
++        Emit(record, now, "seat_changed");
++        record.view = view;
++        Emit(record, now, "seated");
++    }
++    record.view = view;
++    record.seen = now;
++    if (!spell)
++        record.sampled = now;
++    else
++        record.counts.Add(spell, cancelled);
++    if (Due(now, record.flushed, FlushMs))
++        Emit(record, now, "sample");
++}
++
++class RaidVehicleTracePlayerScript : public PlayerScript
++{
++public:
++    RaidVehicleTracePlayerScript() : PlayerScript("RaidVehicleTracePlayerScript",
++        {PLAYERHOOK_ON_AFTER_UPDATE, PLAYERHOOK_ON_PLAYER_JUST_DIED, PLAYERHOOK_ON_LOGOUT, PLAYERHOOK_ON_MAP_CHANGED}) {}
++    void OnPlayerAfterUpdate(Player* player, uint32 /*diff*/) override { Observe(player); }
++    void OnPlayerJustDied(Player* player) override { End(player, "died"); }
++    void OnPlayerLogout(Player* player) override { End(player, "logout"); }
++    void OnPlayerMapChanged(Player* player) override { End(player, "map_changed"); }
++};
++
++class RaidVehicleTraceSpellScript : public AllSpellScript
++{
++public:
++    RaidVehicleTraceSpellScript() : AllSpellScript("RaidVehicleTraceSpellScript",
++        {ALLSPELLHOOK_ON_CAST, ALLSPELLHOOK_ON_CAST_CANCEL}) {}
++    void Note(Unit* caster, SpellInfo const* info, bool cancelled)
++    {
++        if (!Enabled() || !caster || !info || !Supported(caster->GetMapId(), caster->GetEntry()))
++            return;
++        if (std::find(Spells.begin(), Spells.end(), info->Id) == Spells.end())
++            return;
++        Vehicle* kit = caster->GetVehicleKit();
++        Unit* rider = kit ? kit->GetPassenger(0) : nullptr;
++        if (rider)
++            Observe(rider->ToPlayer(), info->Id, cancelled);
++    }
++    void OnSpellCast(Spell* spell, Unit* caster, SpellInfo const* info, bool /*skipCheck*/) override
++    {
++        // This core hook runs after successful Spell::cast, unlike the vehicle
++        // helper's bool (which does not check Spell::prepare's result).
++        if (spell && !spell->IsTriggered())
++            Note(caster, info, false);
++    }
++    void OnSpellCastCancel(Spell* spell, Unit* caster, SpellInfo const* info, bool /*bySelf*/) override
++    {
++        if (spell && !spell->IsTriggered())
++            Note(caster, info, true);
++    }
++};
++}
++
++void AddSC_RaidVehicleTraceScripts()
++{
++    new RaidVehicleTracePlayerScript();
++    new RaidVehicleTraceSpellScript();
++}
+diff --git a/src/Ai/Raid/RaidVehicleTracePolicy.h b/src/Ai/Raid/RaidVehicleTracePolicy.h
+new file mode 100644
+index 00000000..f267ae16
+--- /dev/null
++++ b/src/Ai/Raid/RaidVehicleTracePolicy.h
+@@ -0,0 +1,66 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#ifndef PLAYERBOTS_RAIDVEHICLETRACEPOLICY_H
++#define PLAYERBOTS_RAIDVEHICLETRACEPOLICY_H
++#include <array>
++#include <cstdint>
++#include <limits>
++
++namespace RaidVehicleTrace
++{
++inline constexpr std::uint32_t SampleMs = 1000, FlushMs = 5000, ExpireMs = 30000;
++inline constexpr std::size_t MaxRiders = 256;
++inline constexpr std::array<std::uint32_t, 16> Spells = {
++    56091, 56092, 57090, 57143, 57108, 57092, // Malygos
++    62490, 62306, 62479, 64979, 62634, 62522, 62345, 62358, 62286, 62974 // Leviathan
++};
++inline bool Supported(std::uint32_t map, std::uint32_t entry)
++{
++    return (map == 616 && entry == 30161) ||
++        (map == 603 && (entry == 33060 || entry == 33109 || entry == 33062 || entry == 33067 || entry == 33167));
++}
++inline bool Due(std::uint32_t now, std::uint32_t previous, std::uint32_t interval)
++{
++    return static_cast<std::uint32_t>(now - previous) >= interval;
++}
++struct Counts
++{
++    std::array<std::uint32_t, Spells.size()> cast{};
++    std::array<std::uint32_t, Spells.size()> cancel{};
++    void Add(std::uint32_t spell, bool cancelled)
++    {
++        for (std::size_t i = 0; i < Spells.size(); ++i)
++            if (Spells[i] == spell)
++            {
++                auto& count = cancelled ? cancel[i] : cast[i];
++                if (count != std::numeric_limits<std::uint32_t>::max())
++                    ++count;
++                return;
++            }
++    }
++};
++struct LogBudget
++{
++    static constexpr unsigned Limit = 512;
++    std::uint32_t started = 0, used = 0, suppressed = 0;
++    bool Take(std::uint32_t now)
++    {
++        if (Due(now, started, FlushMs))
++        {
++            started = now;
++            used = 0;
++        }
++        if (used >= Limit)
++        {
++            if (suppressed != std::numeric_limits<std::uint32_t>::max()) ++suppressed;
++            return false;
++        }
++        ++used;
++        return true;
++    }
++};
++} // namespace RaidVehicleTrace
++#endif
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index 91aa89ec..e08f3089 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -434,6 +434,7 @@ bool PlayerbotAIConfig::Initialize()
+         sConfigMgr->GetOption<int32>("Playerbots.RandomBotAutoJoinBGRatedArena5v5Count", 0);
+     LogInGroupOnly = sConfigMgr->GetOption<bool>("Playerbots.LogInGroupOnly", true);
+     LogValuesPerTick = sConfigMgr->GetOption<bool>("Playerbots.LogValuesPerTick", false);
++    RaidVehicleDiagnostics = sConfigMgr->GetOption<bool>("Playerbots.RaidVehicleDiagnostics", false);
+     SummonAtInnkeepersEnabled = sConfigMgr->GetOption<bool>("Playerbots.SummonAtInnkeepersEnabled", true);
+     RandomBotMinLevel = sConfigMgr->GetOption<int32>("Playerbots.RandomBotMinLevel", 1);
+     RandomBotMaxLevel = sConfigMgr->GetOption<int32>("Playerbots.RandomBotMaxLevel", 80);
+diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
+index 0ca1ae02..34a528ac 100644
+--- a/src/PlayerbotAIConfig.h
++++ b/src/PlayerbotAIConfig.h
+@@ -282,6 +282,7 @@ public:
+     uint32 RandomBotTeleLowerLevel, RandomBotTeleHigherLevel;
+     std::map<uint32, std::pair<uint32, uint32>> ZoneBrackets;
+     bool LogInGroupOnly, LogValuesPerTick;
++    bool RaidVehicleDiagnostics;
+     bool SummonAtInnkeepersEnabled;
+     std::string CombatStrategies, NonCombatStrategies;
+     std::string RandomBotCombatStrategies, RandomBotNonCombatStrategies;
+diff --git a/src/Script/Playerbots.cpp b/src/Script/Playerbots.cpp
+index 8a656232..256667fa 100644
+--- a/src/Script/Playerbots.cpp
++++ b/src/Script/Playerbots.cpp
+@@ -620,6 +620,7 @@ void AddSC_RubySanctumBotScripts();
+ void AddSC_SerpentshrineCavernBotScripts();
+ void AddSC_TempestKeepBotScripts();
+ void AddSC_randombot_level_mgr();
++void AddSC_RaidVehicleTraceScripts();
+ 
+ void AddPlayerbotsScripts()
+ {
+@@ -646,4 +647,5 @@ void AddPlayerbotsScripts()
+     AddSC_SerpentshrineCavernBotScripts();
+     AddSC_TempestKeepBotScripts();
+     AddSC_randombot_level_mgr();
++    AddSC_RaidVehicleTraceScripts();
+ }
+diff --git a/tests/raid_vehicle_trace_test.cpp b/tests/raid_vehicle_trace_test.cpp
+new file mode 100644
+index 00000000..f8a855cc
+--- /dev/null
++++ b/tests/raid_vehicle_trace_test.cpp
+@@ -0,0 +1,58 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#include "../src/Ai/Raid/RaidVehicleTracePolicy.h"
++#include <iostream>
++
++namespace
++{
++int checks = 0, failures = 0;
++void Check(bool value, int line)
++{
++    ++checks;
++    if (!value) { ++failures; std::cerr << "Failed at line " << line << '\n'; }
++}
++}
++#define CHECK(expr) Check(static_cast<bool>(expr), __LINE__)
++int main()
++{
++    using namespace RaidVehicleTrace;
++    CHECK(Supported(616, 30161));
++    CHECK(!Supported(603, 30161));
++    CHECK(!Supported(616, 33113));
++    CHECK(!Supported(0, 33060));
++    for (auto entry : {33060u, 33109u, 33062u, 33067u, 33167u}) CHECK(Supported(603, entry));
++    Counts counts;
++    for (auto spell : Spells)
++    {
++        counts.Add(spell, false);
++        counts.Add(spell, false);
++        counts.Add(spell, true);
++    }
++    counts.Add(12345, false);
++    for (std::size_t i = 0; i < Spells.size(); ++i)
++    {
++        CHECK(counts.cast[i] == 2);
++        CHECK(counts.cancel[i] == 1);
++    }
++    counts.cast[0] = std::numeric_limits<std::uint32_t>::max();
++    counts.Add(Spells[0], false);
++    CHECK(counts.cast[0] == std::numeric_limits<std::uint32_t>::max());
++    CHECK(!Due(5999, 1000, FlushMs));
++    CHECK(Due(6000, 1000, FlushMs));
++    CHECK(Due(10, std::numeric_limits<std::uint32_t>::max() - 20, 30)); // Clock rollover.
++    CHECK(!Due(10, std::numeric_limits<std::uint32_t>::max() - 20, 32));
++    LogBudget budget;
++    for (unsigned i = 0; i < LogBudget::Limit; ++i) CHECK(budget.Take(100));
++    CHECK(!budget.Take(100));
++    CHECK(!budget.Take(4999));
++    CHECK(budget.suppressed == 2);
++    CHECK(budget.Take(5000));
++    CHECK(budget.used == 1);
++    CHECK(budget.suppressed == 2); // The next emitted record must report the gap.
++    CHECK(MaxRiders == 256);
++    std::cout << checks << " checks, " << failures << " failures\n";
++    return failures ? 1 : 0;
++}
+-- 
+2.56.0.windows.2
+
