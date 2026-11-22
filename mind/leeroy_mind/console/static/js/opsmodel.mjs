@@ -98,6 +98,9 @@ export function lines(name, value) {
     arr(p.rows).forEach(r => out.push(str(r.label)+' · '+switchState(r)
       +(r.needs ? ' · needs '+str(r.needs) : '')+(arr(r.unmet).length ? ' · unmet: '+r.unmet.join(', ') : '')
       +(r.blocklist ? ' · blocklist '+str(r.blocklist) : '')+(r.restart ? ' · config changed since the mind started; restart to apply' : '')));
+    if (p.native) {
+      out.push(str(p.native.note));
+    }
   }
   if (p.note) { out.push(str(p.note)); }
   return out;

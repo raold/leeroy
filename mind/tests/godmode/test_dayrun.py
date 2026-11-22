@@ -131,6 +131,34 @@ class Rehearsal:
         return next(c for c in self.app.sent if isinstance(c,RealmMove))
 
 
+@pytest.mark.parametrize("complete", [True, False])
+def test_day_cohort_checks_one_batch_and_requires_every_member(tmp_path, store, clock, monkeypatch, complete):
+    import asyncio
+    async def go():
+        rig = Rehearsal(tmp_path, store, clock)
+        await rig.connect()
+        rig.plan(members=(101, 102))
+        batches = []
+        original = rig.realm.bodies.holders_of
+        def batch(members):
+            batches.append(tuple(members))
+            return original(members) if complete else {101: None}
+        monkeypatch.setattr(rig.realm.bodies, "holders_of", batch)
+        monkeypatch.setattr(rig.realm.bodies, "holder", lambda _: pytest.fail("per-member body refresh"))
+        row = store.conn.execute("SELECT * FROM day_plan ORDER BY id LIMIT 1").fetchone()
+        rig.day.start(row, clock.now(), 0)
+        assert batches == [(101, 102)]
+        permit = rig.day.permit(1)
+        if complete:
+            assert permit["state"] == "opening"
+        else:
+            assert permit is None
+            assert [tuple(r) for r in store.conn.execute("SELECT status,reason FROM day_plan")] == [
+                ("preempted", "held"), ("preempted", "held")]
+        await rig.realm.close()
+    asyncio.run(go())
+
+
 def test_plan_block_reaches_card_and_memory(tmp_path, store, clock):
     import asyncio
     from leeroy_mind.awareness.card import CardContext, card

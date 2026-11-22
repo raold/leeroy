@@ -17,6 +17,7 @@
 # with AC_SERVER_WINDOW=1, each gets its own console window as before.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+service_scripts=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 running() { tasklist //FI "IMAGENAME eq $1" 2>/dev/null | grep -qi "$1"; }
 
@@ -50,14 +51,14 @@ mind() {
         return 0
     fi
     PYTHONPATH="$(cygpath -w "$AC_ROOT/mind")" \
-        "$python" "$AC_ROOT/scripts/ac-mind.py" "$action" \
+        "$python" "$service_scripts/ac-mind.py" "$action" \
         --root "$(cygpath -w "$AC_ROOT")" --data-dir "$(cygpath -w "$data")"
 }
 
 # 0 when worldserver saved and exited on SOAP's `server shutdown`; 1 when SOAP is not set up,
 # did not answer, or the server was still running after the wait (the caller terminates it).
 soap_shutdown() {
-    local python="$AC_ROOT/mind/.venv/Scripts/python.exe" soap="$AC_ROOT/scripts/ac-soap.py"
+    local python="$AC_ROOT/mind/.venv/Scripts/python.exe" soap="$service_scripts/ac-soap.py"
     local info rc players delay="${AC_SHUTDOWN_DELAY:-}" wait="${AC_SHUTDOWN_WAIT:-180}" i
     [ -x "$python" ] || return 1
     info=$("$python" -I "$soap" "server info" 2>/dev/null) && rc=0 || rc=$?
@@ -100,7 +101,7 @@ start)
     prune_python="$AC_ROOT/mind/.venv/Scripts/python.exe"
     if [ ! -x "$prune_python" ]; then prune_python=$(command -v python || command -v python3 || true); fi
     if [ -n "$prune_python" ]; then
-        "$prune_python" "$AC_ROOT/scripts/prune-native-logs.py" "$AC_BIN" || warn "native log pruning failed"
+        "$prune_python" "$service_scripts/prune-native-logs.py" "$AC_BIN" || warn "native log pruning failed"
     else
         warn "Python unavailable; native log pruning skipped"
     fi

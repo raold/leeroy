@@ -137,6 +137,13 @@ jobs:
             -o "$RUNNER_TEMP/equipment-protection-tests"
           "$RUNNER_TEMP/equipment-protection-tests"
 
+      - name: Check Yogg brain decisions
+        run: |
+          c++ -std=c++20 -O2 -Wall -Wextra -Werror \
+            core/modules/mod-playerbots/tests/yogg_brain_test.cpp \
+            -o "$RUNNER_TEMP/yogg-brain-tests"
+          "$RUNNER_TEMP/yogg-brain-tests"
+
       - name: Configure
         shell: bash
         run: >

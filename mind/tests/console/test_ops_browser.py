@@ -10,6 +10,54 @@ from test_opscontrol import app, add_root, ROOT_ID
 from leeroy_mind.console import opsview
 
 
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_native_switches_show_file_values_without_runtime_claims(app, tmp_path, theme):
+    from console.test_native_switches import files, read
+    pw = pytest.importorskip("playwright.async_api")
+    async def go():
+        root = tmp_path / "install"
+        files(root, leeroy="Leeroy.MemberDungeon.Enable = 1", playerbots="Playerbots.Enabled = 0")
+        payload = read(root)
+        async with served(app) as (c, endpoint), pw.async_playwright() as playwright:
+            try:
+                browser = await playwright.chromium.launch(**({"channel":"msedge"} if sys.platform=="win32" else {}))
+            except pw.Error as error:
+                pytest.skip("Optional browser executable is unavailable: " + type(error).__name__)
+            sources = {name:lambda:opsview.panel() for name in opsview.PANELS}
+            sources["switches"] = lambda:payload
+            c._ops = opsview.OpsView(root,app.data_dir,sources=sources)
+            page = await browser.new_page(viewport={"width":390,"height":900})
+            await page.add_init_script(f"localStorage.setItem('guild-console-theme', '{theme}');")
+            errors = []
+            page.on("pageerror",lambda error:errors.append(str(error)))
+            async def guard(route):
+                if not route.request.url.startswith(c.origin+"/"):
+                    errors.append("outside fixture")
+                    return await route.abort()
+                await route.continue_()
+            await page.route("**/*",guard)
+            try:
+                await page.goto(c.url)
+                await page.locator("#t-ops").click()
+                sections = page.locator(".native-switches")
+                await pw.expect(sections).to_have_count(2)
+                first = sections.nth(0)
+                await first.locator("summary").focus()
+                await page.keyboard.press("Enter")
+                await pw.expect(first.get_by_text("Leeroy.MemberDungeon.Enable · configured on · running state unknown",exact=True)).to_be_visible()
+                await pw.expect(first.get_by_text("Source: build/bin/RelWithDebInfo/configs/modules/mod_leeroy.conf",exact=True)).to_be_visible()
+                second = sections.nth(1)
+                await second.locator("summary").click()
+                await pw.expect(second.get_by_text("Playerbots.Enabled · configured off · running state unknown",exact=True)).to_be_visible()
+                assert await page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                assert not await page.locator(".native-switches button,.native-switches input").count()
+                await sections.nth(0).screenshot(path=str(tmp_path/f"native-switches-{theme}.png"))
+                assert not errors
+            finally:
+                await browser.close()
+    run(go())
+
+
 def test_raid_debrief_keyboard_details_and_mobile_layout(app, tmp_path):
     pw = pytest.importorskip("playwright.async_api")
     async def go():

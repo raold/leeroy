@@ -1,0 +1,405 @@
+From ee9825c49d2a303bdc5d30cce229328c337d7b9c Mon Sep 17 00:00:00 2001
+From: raold <oldham@hey.com>
+Date: Sun, 22 Nov 2026 14:42:06 -0500
+Subject: [PATCH] Drive autonomous Valithria raids through real healing
+ completion
+
+---
+ conf/mod_dungeon_clear.conf.dist              |  5 +
+ .../Data/Events/DungeonEventTables.h          |  1 +
+ .../Data/Events/IcecrownCitadelEvents.cpp     | 92 +++++++++++++++++++
+ .../Overrides/BossRosterRegistry.cpp          |  6 +-
+ .../Overrides/BossRosterRegistry.h            |  7 +-
+ .../Settings/DcSettingsRegistry.h             |  2 +
+ src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h |  1 +
+ .../DungeonClear/Util/DcValithriaDecision.h   | 28 ++++++
+ .../DungeonClear/Value/DungeonBossesValue.cpp |  4 +-
+ t/TestIcecrown.cpp                            | 63 +++++++++++++
+ 10 files changed, 206 insertions(+), 3 deletions(-)
+ create mode 100644 src/Ai/Dungeon/DungeonClear/Util/DcValithriaDecision.h
+
+diff --git a/conf/mod_dungeon_clear.conf.dist b/conf/mod_dungeon_clear.conf.dist
+index 317270e..b54117a 100644
+--- a/conf/mod_dungeon_clear.conf.dist
++++ b/conf/mod_dungeon_clear.conf.dist
+@@ -1,5 +1,10 @@
+ [worldserver]
+ 
++# Opt-in autonomous Valithria driver. Requires playerbots Valithria healing
++# support. Waits for real core healing completion; does not award fake credit.
++# No human-controlled player may be in the instance when the driver pulls.
++DungeonClear.OfflineValithria = 0
++
+ ########################################
+ # mod-dungeon-clear configuration
+ ########################################
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h b/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
+index 69dfde3..43d6958 100644
+--- a/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
++++ b/src/Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h
+@@ -5417,6 +5417,7 @@ namespace DcUlduar
+ // commander (anchored). See UlduarEvents.cpp.
+ void RegisterUlduarEvents(std::vector<DungeonEvent>& out);
+ void RegisterIcecrownEvents(std::vector<DungeonEvent>& out);
++void RegisterIcecrownRoster(std::vector<BossRosterPatch>& t);
+ 
+ // --- The Oculus (map 578) ---------------------------------------------------
+ //
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/IcecrownCitadelEvents.cpp b/src/Ai/Dungeon/DungeonClear/Data/Events/IcecrownCitadelEvents.cpp
+index 5ff221f..8d4da16 100644
+--- a/src/Ai/Dungeon/DungeonClear/Data/Events/IcecrownCitadelEvents.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Data/Events/IcecrownCitadelEvents.cpp
+@@ -2,8 +2,11 @@
+  * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license.
+  */
+ #include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonRosterBuilders.h"
+ #include "Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Settings/DcSettings.h"
+ #include "Ai/Dungeon/DungeonClear/Util/DcIcecrownPassDecision.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcValithriaDecision.h"
+ #include "Ai/Dungeon/DungeonClear/Util/DcPlayerbotCompat.h"
+ #include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
+ #include "Ai/Dungeon/DungeonClear/Util/DcPartyState.h"
+@@ -11,6 +14,7 @@
+ #include "Ai/Dungeon/DungeonClear/Util/DcThrottle.h"
+ #include "Ai/Dungeon/DungeonClear/Util/DungeonEventExecutor.h"
+ #include "Creature.h"
++#include "CreatureAI.h"
+ #include "GameObject.h"
+ #include "Group.h"
+ #include "InstanceScript.h"
+@@ -23,6 +27,8 @@
+ #include "SpellMgr.h"
+ #include "TypeContainerVisitor.h"
+ #include <unordered_map>
++#include <algorithm>
++#include <list>
+ #include <vector>
+ 
+ namespace
+@@ -148,15 +154,101 @@ namespace
+         }
+         return ObjectiveArriveResult::Running;
+     }
++
++    ObjectiveArriveResult StartValithria(Player* bot, AiObjectContext* context, DungeonBossInfo const&)
++    {
++        namespace V = DcValithria;
++        if (!bot || !context || bot->GetMapId() != V::Map || !DcSettings::GetBool(bot, V::Setting))
++            return ObjectiveArriveResult::Running;
++        auto* inst = bot->GetInstanceScript();
++        auto* ai = GET_PLAYERBOT_AI(bot);
++        if (!inst || !ai) return ObjectiveArriveResult::Running;
++        if (inst->GetBossState(V::Slot) == IN_PROGRESS || inst->GetBossState(V::Slot) == DONE)
++            return ObjectiveArriveResult::Done;
++        if (inst->IsEncounterInProgress()) return ObjectiveArriveResult::Running;
++        std::vector<Player*> members;
++        bool const idle = Census(bot, members);
++        bool const together = idle && std::all_of(members.begin(), members.end(), [bot](Player* m)
++        {
++            return V::InRoom(m->GetPositionX(), m->GetPositionY(), m->GetPositionZ())
++                && m->GetExactDist(bot) <= 45.0f && bot->InSamePhase(m);
++        });
++        bool const healer = idle && std::any_of(members.begin(), members.end(), [ai](Player* m)
++        {
++            return ai->IsHeal(m);
++        });
++        if (!V::MayPull(true, inst->GetBossState(V::Slot), idle, together, healer, LootPending(bot, context)))
++            return ObjectiveArriveResult::Running;
++        // Core still enforces Lower Spire prerequisites; don't pull a raid into
++        // the script's reject-and-evade path when its saved progression is wrong.
++        if (!inst->CheckRequiredBosses(V::Slot, bot)) return ObjectiveArriveResult::Running;
++        Creature* dragon = bot->FindNearestCreature(V::Dragon, 45.0f, true);
++        if (!dragon || !V::InRoom(dragon->GetPositionX(), dragon->GetPositionY(), dragon->GetPositionZ()))
++            return ObjectiveArriveResult::Running;
++        if (DcRun::Of(context).Throttled(DcThrottle::IccValithria, 3000))
++            return ObjectiveArriveResult::Running;
++
++        std::list<Creature*> archmages;
++        bot->GetCreatureListWithEntryInGrid(archmages, V::Archmage, 40.0f);
++        // Stable nearest target with GUID tie-breaking; no discovery of unloaded
++        // grids or remote starts. Never target the friendly dragon as a kill.
++        archmages.sort([bot](Creature* a, Creature* b)
++        {
++            float const da = bot->GetExactDist(a), db = bot->GetExactDist(b);
++            return da == db ? a->GetGUID() < b->GetGUID() : da < db;
++        });
++        for (Creature* target : archmages)
++        {
++            if (!target->IsAlive() || target->IsInCombat() || target->IsInEvadeMode()
++                || !bot->IsValidAttackTarget(target) || !bot->IsWithinLOSInMap(target)
++                || !V::InRoom(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ())) continue;
++            target->EngageWithTarget(bot);
++            if (target->AI()) target->AI()->AttackStart(bot);
++            bot->SetSelection(target->GetGUID());
++            context->GetValue<Unit*>(DcKey::Stock::CurrentTarget)->Set(target);
++            bot->Attack(target, ai->IsMelee(bot));
++            ai->ChangeEngine(BOT_STATE_COMBAT);
++            LOG_INFO("playerbots.dungeonclear", "dc_icc_valithria_start instance={} members={}",
++                bot->GetInstanceId(), members.size());
++            return ObjectiveArriveResult::Done;
++        }
++        // The hold alone finishes on core DONE. The actual playerbots ICC
++        // heal/portal strategy supplies every heal and the script awards credit.
++        return ObjectiveArriveResult::Running;
++    }
+ }
+ 
+ void RegisterIcecrownEvents(std::vector<DungeonEvent>& out)
+ {
+     out.push_back(EventBuilder(DcIcecrownPass::MapId, DcIcecrownPass::Event, "Gunship pass and Saurfang intro")
+         .Conditional(&PassDue).Repeatable().Optional().StepsOwnMovement().Custom(DcIcecrownPass::Hook).Build());
++    namespace V = DcValithria;
++    out.push_back(EventBuilder(V::Map, V::Event, "Valithria: heal to full")
++        .Anchored(V::Order).Persistent()
++        .MoveTo(V::X, V::Y, V::Z, 6.0f)
++        .Custom(DC_HOOK_RAID_MUSTER).Timeout(240000)
++        .Custom(V::Hook).Timeout(240000)
++        .MoveToHoldUntilBossState(V::X, V::Y, V::Z, 12.0f, V::Slot, DcBossStateBit(DONE))
++            .RestartOnBossState(DcBossStateBit(NOT_STARTED) | DcBossStateBit(FAIL)).Timeout(1800000)
++        .Build());
+ }
+ 
+ void RegisterIcecrownHooks(ObjectiveHookRegistry::HookTable& out)
+ {
+     ObjectiveHookRegistry::AddHook(out, DcIcecrownPass::Hook, &Pass);
++    ObjectiveHookRegistry::AddHook(out, DcValithria::Hook, &StartValithria);
++}
++
++void RegisterIcecrownRoster(std::vector<BossRosterPatch>& out)
++{
++    namespace V = DcValithria;
++    BossRosterPatch patch;
++    patch.mapId = V::Map;
++    patch.enabledSetting = V::Setting;
++    patch.remove = {V::Dragon}; // also safe if upstream later adds spell-credit rows
++    auto objective = DcRoster::MakeObjective(DcRoster::OBJ(V::Event), V::Order, V::Map,
++        "Valithria: heal to full", V::X, V::Y, V::Z, 6.0f, 0, 0, V::Event);
++    objective.doneBossStateIndex = V::Slot;
++    patch.add.push_back(objective);
++    out.push_back(std::move(patch));
+ }
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp b/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp
+index 9eac5ad..b1cf645 100644
+--- a/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.cpp
+@@ -77,6 +77,7 @@ namespace
+             RegisterTrialOfTheChampionRoster(t);
+             RegisterTrialOfTheCrusaderRoster(t);
+             RegisterUlduarRoster(t);
++            RegisterIcecrownRoster(t);
+             RegisterOculusRoster(t);
+             RegisterKarazhanRoster(t);
+             return t;
+@@ -195,12 +196,15 @@ bool BossRosterRegistry::HasPatch(uint32 mapId)
+ }
+ 
+ std::vector<DungeonBossInfo> BossRosterRegistry::Apply(uint32 mapId, DcDiffKey key,
+-                                                       std::vector<DungeonBossInfo> base)
++                                                       std::vector<DungeonBossInfo> base,
++                                                       std::function<bool(char const*)> const& enabled)
+ {
+     for (BossRosterPatch const& patch : PatchTable())
+     {
+         if (patch.mapId != mapId || !DcGateMatches(patch.gate, key))
+             continue;
++        if (patch.enabledSetting && (!enabled || !enabled(patch.enabledSetting)))
++            continue;
+         base = ApplyOne(patch, std::move(base));
+     }
+     return base;
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.h b/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.h
+index 7b8a70d..92b1cd5 100644
+--- a/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.h
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.h
+@@ -6,6 +6,7 @@
+ #ifndef _PLAYERBOT_BOSSROSTERREGISTRY_H
+ #define _PLAYERBOT_BOSSROSTERREGISTRY_H
+ 
++#include <functional>
+ #include <utility>
+ #include <vector>
+ 
+@@ -57,6 +58,9 @@ struct BossRosterPatch
+     // for the same map with gate HeroicOnly — Apply applies every patch whose
+     // gate matches the run's difficulty key, in registration order.
+     DcDifficultyGate gate{DcDifficultyGate::Any};
++    // Optional runtime switch. An absent provider leaves gated patches off;
++    // registry transforms remain usable without global config or world state.
++    char const* enabledSetting{nullptr};
+ };
+ 
+ class BossRosterRegistry
+@@ -81,7 +85,8 @@ public:
+     // registration order (a map typically has one Any patch, optionally plus a
+     // HeroicOnly one). If none match, the base list is returned unchanged.
+     static std::vector<DungeonBossInfo> Apply(uint32 mapId, DcDiffKey key,
+-                                              std::vector<DungeonBossInfo> base);
++                                              std::vector<DungeonBossInfo> base,
++                                              std::function<bool(char const*)> const& enabled = {});
+ 
+     // Apply ONE explicit patch to `base` — the same transform Apply runs per
+     // matching table row, exposed for kernel tests (an unregistered patch can
+diff --git a/src/Ai/Dungeon/DungeonClear/Settings/DcSettingsRegistry.h b/src/Ai/Dungeon/DungeonClear/Settings/DcSettingsRegistry.h
+index f643ad0..0b25b8c 100644
+--- a/src/Ai/Dungeon/DungeonClear/Settings/DcSettingsRegistry.h
++++ b/src/Ai/Dungeon/DungeonClear/Settings/DcSettingsRegistry.h
+@@ -89,6 +89,8 @@ inline bool DcHasHeroicDefault(DcSettingDef const& d)
+ // rejects overrides for them and the addon hides them).
+ inline constexpr DcSettingDef kDcSettings[] =
+ {
++    // Start Valithria's real heal encounter for autonomous raids; no fake kill.
++    {"OfflineValithria", DcType::Bool, 0, 0, 1, false},
+     // Module master switch. 1 (default): mod-dungeon-clear runs. 0: the module
+     // is compiled in but completely inert — it registers NO strategies, actions,
+     // triggers or values into mod-playerbots' shared contexts, installs no
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h b/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
+index 3ec983f..4a40879 100644
+--- a/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
+@@ -126,6 +126,7 @@ enum class DcThrottle : uint8
+                          // takes ~1s to read IN_PROGRESS)
+ 
+     IccIntro,
++    IccValithria,
+ 
+     Count
+ };
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcValithriaDecision.h b/src/Ai/Dungeon/DungeonClear/Util/DcValithriaDecision.h
+new file mode 100644
+index 0000000..6197824
+--- /dev/null
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcValithriaDecision.h
+@@ -0,0 +1,28 @@
++#ifndef DC_VALITHRIA_DECISION_H
++#define DC_VALITHRIA_DECISION_H
++
++#include <cmath>
++
++// Core ICC boss-state slot 10 is NOT her DBC encounter-order key (9).
++namespace DcValithria
++{
++    inline constexpr unsigned Map = 631, Slot = 10, Order = 9, Event = 2, Hook = 71;
++    inline constexpr unsigned Dragon = 36789, Archmage = 37868;
++    inline constexpr char Setting[] = "OfflineValithria";
++    inline constexpr float X = 4190.0f, Y = 2484.443f, Z = 364.956f;
++
++    inline bool InRoom(float x, float y, float z)
++    {
++        return std::isfinite(x) && std::isfinite(y) && std::isfinite(z)
++            && std::abs(z - Z) <= 8.0f && std::hypot(x - X, y - Y) <= 70.0f;
++    }
++
++    inline bool MayPull(bool enabled, unsigned state, bool idleAutonomousRaid,
++                        bool together, bool healer, bool lootPending)
++    {
++        // NOT_STARTED or FAIL only. Missing actors/reset timers simply defer.
++        return enabled && (state == 0 || state == 2) && idleAutonomousRaid
++            && together && healer && !lootPending;
++    }
++}
++#endif
+diff --git a/src/Ai/Dungeon/DungeonClear/Value/DungeonBossesValue.cpp b/src/Ai/Dungeon/DungeonClear/Value/DungeonBossesValue.cpp
+index 01718cc..e33568a 100755
+--- a/src/Ai/Dungeon/DungeonClear/Value/DungeonBossesValue.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Value/DungeonBossesValue.cpp
+@@ -14,6 +14,7 @@
+ #include "Ai/Dungeon/DungeonClear/Data/DcFactionEntrySwapRegistry.h"
+ #include "Ai/Dungeon/DungeonClear/Data/DungeonWingRegistry.h"
+ #include "Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Settings/DcSettings.h"
+ #include "Ai/Dungeon/DungeonClear/Util/DcRunWing.h"
+ #include "Ai/Dungeon/DungeonClear/Util/DcTargeting.h"
+ #include "Ai/Dungeon/DungeonClear/Util/NavmeshSnap.h"
+@@ -257,7 +258,8 @@ namespace
+         // add real bosses or travel objectives) before wing-filtering and snapping.
+         std::vector<DungeonBossInfo> roster =
+             BossRosterRegistry::Apply(mapId, DcDifficulty::Of(map),
+-                                      BossSpawnIndex::Get(mapId, map->GetDifficulty()));
++                                      BossSpawnIndex::Get(mapId, map->GetDifficulty()),
++                                      [bot](char const* key) { return DcSettings::GetBool(bot, key); });
+ 
+         // Per-team faction reclassification (friendly-faction bosses -> flyby
+         // objectives) before wing-filtering and snapping.
+diff --git a/t/TestIcecrown.cpp b/t/TestIcecrown.cpp
+index 86d6b21..69bbb4d 100644
+--- a/t/TestIcecrown.cpp
++++ b/t/TestIcecrown.cpp
+@@ -2,6 +2,11 @@
+ #include "Ai/Dungeon/DungeonClear/Data/DungeonEventRegistry.h"
+ #include "Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h"
+ #include "Ai/Dungeon/DungeonClear/Util/DcIcecrownPassDecision.h"
++#include "Ai/Dungeon/DungeonClear/Util/DcValithriaDecision.h"
++#include "Ai/Dungeon/DungeonClear/Overrides/BossRosterRegistry.h"
++#include "Ai/Dungeon/DungeonClear/Data/Events/DungeonRosterBuilders.h"
++#include <limits>
++#include <string>
+ using namespace DcIcecrownPass;
+ TEST(Icecrown, RequiresBothRealPredecessorsAndAnIdleSaurfang)
+ {
+@@ -52,3 +57,61 @@ TEST(Icecrown, RelocksBothFactionsAndAllSizesWithoutTouchingOtherLoot)
+     EXPECT_FALSE(IsArmory(202239)); // Saurfang cache
+     EXPECT_FALSE(IsArmory(195046)); // Kologarn cache
+ }
++
++TEST(Icecrown, ValithriaRequiresAnIdlePresentRaidAndHealer)
++{
++    for (unsigned bits = 0; bits < 32; ++bits)
++        for (unsigned state = 0; state < 6; ++state)
++            EXPECT_EQ(DcValithria::MayPull(bits & 1, state, bits & 2, bits & 4, bits & 8, bits & 16),
++                bits == 15 && (state == 0 || state == 2));
++    EXPECT_TRUE(DcValithria::InRoom(DcValithria::X, DcValithria::Y, DcValithria::Z));
++    EXPECT_FALSE(DcValithria::InRoom(DcValithria::X, DcValithria::Y, DcValithria::Z + 15));
++    EXPECT_FALSE(DcValithria::InRoom(DcValithria::X + 100, DcValithria::Y, DcValithria::Z));
++    EXPECT_FALSE(DcValithria::InRoom(std::numeric_limits<float>::quiet_NaN(), DcValithria::Y, DcValithria::Z));
++}
++
++TEST(Icecrown, ValithriaRosterIsOffByDefaultAndPrecedesSindragosa)
++{
++    namespace V = DcValithria;
++    for (unsigned difficulty = 0; difficulty < 4; ++difficulty)
++    {
++        auto const key = DcDiffKey::Raid(difficulty);
++        auto sindragosa = DcRoster::MakeBossWithBit(36853, V::Map, "Sindragosa", 0, 0, 0, 10);
++        auto lichKing = DcRoster::MakeBossWithBit(36597, V::Map, "The Lich King", 0, 0, 0, 11);
++        std::vector<DungeonBossInfo> base{sindragosa, lichKing};
++        auto off = BossRosterRegistry::Apply(V::Map, key, base);
++        ASSERT_EQ(off.size(), 2u);
++        EXPECT_EQ(off[0].entry, sindragosa.entry);
++        EXPECT_EQ(BossRosterRegistry::Apply(V::Map, key, base, [](char const*) { return false; }).size(), 2u);
++        auto on = BossRosterRegistry::Apply(V::Map, key, base,
++            [](char const* setting) { return std::string(setting) == V::Setting; });
++        ASSERT_EQ(on.size(), 3u);
++        EXPECT_EQ(on[0].kind, DungeonAnchorKind::Objective);
++        EXPECT_EQ(on[0].doneBossStateIndex, 10);
++        EXPECT_EQ(on[0].eventId, V::Event);
++        EXPECT_FALSE(on[0].skipByDesign);
++        EXPECT_EQ(on[1].entry, sindragosa.entry);
++        EXPECT_EQ(on[2].entry, lichKing.entry);
++        EXPECT_EQ(on[1].encounterIndex, 10u); // earned kill bits unchanged
++        EXPECT_EQ(on[2].encounterIndex, 11u);
++    }
++}
++
++TEST(Icecrown, ValithriaWaitsForRealCompletionAndRemustersAfterWipes)
++{
++    namespace V = DcValithria;
++    auto const* event = DungeonEventRegistry::Find(V::Map, V::Event);
++    ASSERT_NE(event, nullptr);
++    EXPECT_TRUE(event->persistent);
++    EXPECT_EQ(event->activation, EventActivation::Anchored);
++    EXPECT_FALSE(event->stepsOwnMovement);
++    EXPECT_FALSE(event->drivesInCombat);
++    ASSERT_EQ(event->steps.size(), 4u);
++    EXPECT_EQ(event->steps[0].kind, EventStepKind::MoveTo);
++    EXPECT_EQ(event->steps[1].hookId, DC_HOOK_RAID_MUSTER);
++    EXPECT_EQ(event->steps[2].hookId, V::Hook);
++    EXPECT_TRUE(ObjectiveHookRegistry::Has(V::Hook));
++    EXPECT_EQ(event->steps[3].bossStateId, 10);
++    EXPECT_EQ(event->steps[3].bossStateClearMask, DcBossStateBit(3));
++    EXPECT_EQ(event->steps[3].restartOnBossStateMask, DcBossStateBit(0) | DcBossStateBit(2));
++}
+-- 
+2.56.0.windows.2
+
