@@ -422,6 +422,19 @@ output in `patches/`:
 - **Trial of the Crusader** (mod-dungeon-clear): the tank runs the raid stage by
   stage from Barrett Ramsey's gossip, pulls the faction champions and the twins,
   and takes the bots down into Anub'arak's chamber when the floor breaks.
+- **Offline Valithria** (mod-dungeon-clear patch 0005):
+  `DungeonClear.OfflineValithria = 1` adds her missing healing objective before
+  Sindragosa. The default is off. After arrival and the normal raid muster, an
+  idle autonomous raid with a healer pulls a nearby Risen Archmage. Playerbots'
+  Valithria strategy supplies the actual heals and portal work; the objective
+  waits for the core's `DONE` and remusters after a wipe. There is no fake kill,
+  healing, loot or achievement credit. A human anywhere in the instance,
+  absent/dead/remote members, missing healer or pending loot prevents the pull.
+  Requires a native rebuild with playerbots patch 0016 and dungeon-clear 0005.
+  After release, validate a supervised offline run using `dc_icc_valithria_start`
+  and the `valithria_watch`/`valithria_healer` logs, then prove her core completion
+  and progression to Sindragosa. Local policy/registry checks are not a live raid
+  rehearsal. Roll back by disabling the setting; it has no saved-state mutation.
 - **Ulduar's Flame Leviathan** (mod-dungeon-clear): the offline siege-vehicle
   bypass. He is never fought or credited there; a raid of bots only is taken past
   his gate by the Ulduar Teleporter's Colossal Forge destination, which the
