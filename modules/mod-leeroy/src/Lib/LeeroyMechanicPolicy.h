@@ -75,6 +75,7 @@ enum class MechanicArea : std::uint8_t
     Nearest,
     CasterReach, // a growing cloud: use its current combat reach, with radius as a minimum
     IceBlock,   // Sapphiron's frozen players shield a narrow strip behind them, not ordinary map LOS
+    CastRadius, // a periodic ground effect's actual cast radius, including SPELLVALUE_RADIUS_MOD
 };
 
 inline constexpr std::uint8_t kMechanicTank = 1;
@@ -159,6 +160,7 @@ struct MechanicCast
     std::uint32_t spellDurationMs = 0;
     std::optional<HazardPoint> nearest; // for one bot: its `nearest` area's anchor, when one is within reach
     float casterReach = 0;
+    float effectRadius = 0; // native Spell effect radius * this cast's RadiusMod; never inferred from a summon
 };
 
 std::uint32_t MechanicLifetimeMs(MechanicRule const& rule, std::uint32_t castMs, std::uint32_t spellDurationMs);
