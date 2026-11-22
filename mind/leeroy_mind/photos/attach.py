@@ -25,5 +25,6 @@ def attach_photos(app):
         from leeroy_mind.nightly.wiring import enable_borrow
         from .requests import RequestPhotos
         enable_borrow(app)
-        sender.requests = RequestPhotos(app, sender, words=config.scene_from_words)
+        sender.requests = RequestPhotos(app, sender, words=config.scene_from_words,
+                                        priority=config.request_priority)
     return sender

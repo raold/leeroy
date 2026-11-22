@@ -107,6 +107,109 @@ def test_budget_refusal_never_unloads_or_closes_admission(h):
     assert not admin.calls and not arb.live_admission.blocked
 
 
+@pytest.mark.parametrize('already_online', [False, True])
+def test_priority_borrow_preserves_human_lease_and_survives_login(h, already_online):
+    arb, admin, worker = rig(h)
+    if already_online:
+        arb.hold('human')
+    async def go():
+        async with arb.borrow('request:1', priority=True) as room:
+            room.own_worker(worker)
+            await worker.start()
+            await arb.acquire_live('human')
+            await settle()
+            room.check()
+            assert not room.blockers() and arb.live_admission.blocked
+            assert admin.loaded == [h.EMB]
+        assert arb.holders == frozenset({'human'})
+        assert not worker.running and not arb.live_admission.blocked
+        assert admin.calls[-2:] == [('stop',), ('preload', h.LIVE, -1)]
+    run(go())
+
+
+@pytest.mark.parametrize('holder', ['offline_raid', 'voice_gpu', 'preview', 'unknown'])
+def test_priority_never_overrides_other_live_owners(h, holder):
+    arb, admin, _ = rig(h)
+    arb.hold('human')
+    arb.hold(holder)
+    async def go():
+        with pytest.raises(LiveLeaseHeld):
+            async with arb.borrow('request:1', priority=True):
+                pytest.fail('admitted conflicting GPU owner')
+    run(go())
+    assert not admin.calls and arb.borrow_holder is None
+
+
+@pytest.mark.parametrize('cause', ['voice_gpu', 'offline_raid', 'pause'])
+def test_priority_borrow_is_still_interruptible(h, cause):
+    arb, admin, worker = rig(h)
+    async def go():
+        entered = asyncio.Event()
+        async def render():
+            async with arb.borrow('request:1', priority=True) as room:
+                room.own_worker(worker)
+                await worker.start()
+                entered.set()
+                await asyncio.Event().wait()
+        task = asyncio.create_task(render())
+        await entered.wait()
+        if cause == 'pause':
+            arb.paused = True
+            arb.cancel_borrow('gpu_pause')
+        else:
+            arb.hold(cause)
+        with pytest.raises(BorrowInterrupted):
+            await task
+        assert not worker.running and arb.borrow_holder is None
+        if cause == 'pause':
+            assert arb.live_admission.blocked
+            assert not any(c[0] == 'preload' for c in admin.calls)
+        else:
+            assert admin.calls[-2:] == [('stop',), ('preload', h.LIVE, -1)]
+    run(go())
+
+
+@pytest.mark.parametrize('ending', ['done', 'timeout', 'cancel'])
+def test_priority_preemption_joins_background_before_model_operations(h, ending):
+    arb, admin, _ = rig(h)
+    busy = True
+    arb.borrow_busy = lambda: busy
+    async def go():
+        stopping, release = asyncio.Event(), asyncio.Event()
+        async def preempt():
+            nonlocal busy
+            assert 'request:1' in arb.holders and not arb.reflection_allowed()
+            stopping.set()
+            await release.wait()
+            busy = False
+        arb.set_preempt(preempt)
+        if ending == 'timeout':
+            arb._preempt_timeout = .01
+        async def render():
+            async with arb.borrow('request:1', priority=True):
+                assert not busy
+        task = asyncio.create_task(render())
+        await stopping.wait()
+        assert not admin.calls and not arb.live_admission.blocked
+        if ending == 'done':
+            release.set()
+            await task
+            assert ('unload', h.LIVE) in admin.calls
+        elif ending == 'cancel':
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert not admin.calls
+        else:
+            with pytest.raises(LiveLeaseHeld) as caught:
+                await task
+            assert caught.value.holders == frozenset({'image_work'})
+            assert not admin.calls
+        assert arb.borrow_holder is None and 'request:1' not in arb.holders
+        assert not arb.live_admission.blocked
+    run(go())
+
+
 def test_borrow_drains_active_chat_and_blocks_new_chat_but_not_embeddings(h):
     arb,admin,w=rig(h)
     async def go():
@@ -453,18 +556,20 @@ def test_cancelled_recovery_handback_keeps_lock_until_preload_finishes(h):
     run(go())
 
 
+@pytest.mark.parametrize('priority', [False, True])
 @pytest.mark.parametrize('change',['connection','presence'])
-def test_request_service_losing_known_offline_cancels_borrow_before_reload(tmp_path,change):
+def test_request_service_losing_known_offline_cancels_borrow_before_reload(tmp_path,change,priority):
     from photos.test_request_service import make_app,offline
     async def go():
         app=make_app(tmp_path)
         try:
             await offline(app)
             service=app.photos.requests
+            service.priority = priority
             w=Worker(app.arbiter.admin.calls)
             entered=asyncio.Event()
             async def render():
-                async with app.arbiter.borrow('request:1') as room:
+                async with app.arbiter.borrow('request:1', priority=priority) as room:
                     room.own_worker(w)
                     await w.start()
                     entered.set()

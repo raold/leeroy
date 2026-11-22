@@ -70,6 +70,7 @@ SWITCHES = (
     ('photos','enabled','Discord photos','restart the console too'), ('selfies','enabled','Selfies',''),
     ('photos','send','Members send photos','selfies.enabled; selfies.snaps; server.enabled'),
     ('photos','requests','Selfie requests','photos.send; selfies.enabled; selfies.snaps; server.enabled'),
+    ('photos','request_priority','Priority selfie requests while playing','photos.requests; chat waits during rendering'),
     ('photos','scene_from_words','Selfie scenes from his words','photos.requests'),
     ('selfies','snaps','Situational photos','selfies.enabled; identity adapter fetched'),
     ('selfies','booth','Photo booth','selfies.enabled'), ('looks','diversity','Looks diversity',''),

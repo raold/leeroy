@@ -24,7 +24,7 @@ def valid_table(name, table, raw):
         return False
     simple = {'claims':{'enabled'},'signals':{'enabled'},'fingerprint':{'enabled'},
               'callbacks':{'enabled'},'looks':{'diversity'},'personas':{'auto_newcomers'},
-              'playstyle':{'enabled'},'photos':{'enabled','send','requests','scene_from_words'},
+              'playstyle':{'enabled'},'photos':{'enabled','send','requests','request_priority','scene_from_words'},
               'raidlead':{'enabled','briefs'},
               'raidplay':{'respond'},'drama':{'member_romance'},'bakeoff':{'capture'},
               'outreach':{'enabled'},'godmode':{'enabled'},'tuning':{'nudge_memories'},
