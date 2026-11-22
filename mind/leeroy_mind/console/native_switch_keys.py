@@ -1,7 +1,8 @@
 """Named native booleans only; never infer a switch from a numeric config value.
 
 Leeroy keys come from GetOption<bool> in modules/mod-leeroy/src. Playerbots keys
-come from GetOption<bool> in the pinned mod-playerbots source (2026-11-22).
+come from GetOption<bool> in the pinned mod-playerbots source and the reviewed
+raid additions queued with this console change (2026-11-22).
 Keep this allowlist when updating that pin; numeric modes, counts, identifiers,
 connection strings and arbitrary newly added keys are deliberately not exposed.
 This is a key catalogue, not evidence of the running binary or its defaults.
@@ -131,6 +132,9 @@ Playerbots.PreQuests
 Playerbots.PreferClassArmorType
 Playerbots.PreferredSpecWeapons
 Playerbots.RaidVehicleSupport
+Playerbots.RaidVehicleDiagnostics
+Playerbots.LichKingMechanics
+Playerbots.YoggBrainSupport
 Playerbots.RandomBotAutoJoinBG
 Playerbots.RandomBotAutologin
 Playerbots.RandomBotConcentrateInPlayerZone

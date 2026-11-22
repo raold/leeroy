@@ -94,5 +94,7 @@ def test_all_literal_leeroy_boolean_switches_are_catalogued():
     found = {key for path in (root / "modules/mod-leeroy/src").rglob("*.cpp")
              for key in re.findall(r'GetOption<bool>\s*\(\s*"(Leeroy\.[A-Za-z0-9_.]+)"', path.read_text())}
     assert found and found == LEEROY
-    assert {"Playerbots.Enabled", "Playerbots.AutoAvoidAoe", "Playerbots.RaidVehicleSupport"} <= PLAYERBOTS
+    assert {"Playerbots.Enabled", "Playerbots.AutoAvoidAoe", "Playerbots.RaidVehicleSupport",
+            "Playerbots.RaidVehicleDiagnostics", "Playerbots.LichKingMechanics",
+            "Playerbots.YoggBrainSupport"} <= PLAYERBOTS
     assert "Playerbots.MinRandomBots" not in PLAYERBOTS
