@@ -472,7 +472,7 @@ Apply them to a checkout of each module with
 ./ac-update.sh [--dry-run]   # pull core + git modules, rebasing local patches
 ./ac-backup.sh [label]       # mysqldump all four databases
 ./ac-build.sh                # preflight checks, configure, build
-./ac-release.sh [--native] <commit>...  # deploy merged main commits, with snapshot and rollback
+./ac-release.sh [--native] [--allow-scripts] [--dry-run] <commit>...  # deploy merged main commits
 ./ac-server.sh start|stop|status # the game servers and the mind; stops the worldserver cleanly over local SOAP
 ./ac-voice.sh start|stop|status  # the voice service
 ./ac-health.sh [--json]      # read-only health check of the live install
@@ -490,6 +490,51 @@ accepts a positive retention period; startup uses 14 days.
 
 They assume this repo is the install root, with the core checked out in
 `azerothcore-wotlk/` and the build in `build/`.
+
+`ac-release.sh` takes commits from the local `origin/main`; fetch first. It
+rehearses the complete release in temporary Git checkouts before stopping any
+service. `.github/` and `mind/tests/` are accepted, and conflicts in those paths
+take the version from the main tip captured at the start of the release. Runtime
+conflicts still refuse the release. Changes under `scripts/` require
+`--allow-scripts`; native modules, config and patches require `--native`.
+Both flags acquire the native-build lock, so scripts cannot be replaced during
+a separate native build.
+Commits already in the live branch and confirmed empty cherry-picks are skipped,
+including merge commits whose constituent changes were already released.
+
+For a native release, numbered `.patch` files in `patches/mod-playerbots/` and
+`patches/mod-dungeon-clear/` are checked against each module's Git history.
+Missing patches are rehearsed, then applied with `git am` in filename order
+before the build. Original commit ancestry or an equivalent stable patch ID
+counts as installed, preserving later local edits and intentional reverts.
+Reapplying a reverted change requires a new patch entry. The playerbot pin guard
+is checked before services stop and again before building. Dirty module repos,
+unfinished Git operations and failed rehearsal refuse the release. Even if all
+requested commits are already live, missing module patches still trigger the
+native release and build; a complete no-op leaves services alone.
+
+After preflight, the tool stops services, snapshots the mind database, applies
+the release, and builds native code with `AC_JOBS=4` when requested. A failed
+release restores the prior checkout, both affected module heads, database and
+saved binaries. It refuses to discard commits or edits made by another process.
+Recovery helpers, journals and the original service-stop code remain beside the
+database snapshot in `mind-data/snapshots/pre-release-*-recovery/`; keep these
+with the snapshot until the release is accepted. The printed recovery command
+uses these copies, so it survives an update to the release scripts themselves.
+It acquires the same release and native-build locks before stopping services.
+Preflight refusals and dry runs print that no rollback is needed.
+A health-check failure after successful restart leaves the running release in
+place and prints the recovery command.
+
+When installing this release-tool update for the first time, install its bundled
+`ac-server.sh` along with `ac-release.sh` and both new Python helpers. Its service
+helper paths must be relative to its own script directory so the retained stop
+code keeps working after a checkout change. Subsequent script releases can use
+`--allow-scripts`. Existing owner-offline, raid, voice and release/build-lock
+checks still apply; `--dry-run` never changes services or the real checkouts.
+Run `bash scripts/tests/ac-release.sh` and
+`python scripts/tests/test_ac_release_patches.py` for isolated verification using
+temporary repositories, synthetic databases and stub services.
 
 ### CI
 
