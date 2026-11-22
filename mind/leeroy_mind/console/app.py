@@ -87,13 +87,14 @@ run nothing else.
     GET  /api/selfies/images  ?guid=&set=: a ready set's four thumbnails as data URLs (404
                        unless that set is ready and the member's)
     GET  /api/selfies/member  ?guid=: one member's photo in force, sets and change history
-    GET  /api/selfies/gallery ?guid=: retained candidates and rendered situations, newest first,
-                       with cover flags and keyed thumbnail/full-image URLs; only photos of her
-                       current looks (galleryview: her cover's set, sets from a persona at
-                       least as new, situations of her looks now)
+    GET  /api/selfies/gallery ?guid=[&all=1]: retained candidates and rendered situations,
+                       newest first, with cover flags and keyed thumbnail/full-image URLs; only
+                       photos of her current looks (galleryview: her cover's set, sets from a
+                       persona at least as new, situations of her looks now), and with all=1
+                       her earlier looks' too, each marked `earlier`
     GET  /api/selfies/photo ?guid=&kind=candidate&set=&index= (or kind=snap&id=), optional
-                       thumb=1: one rendered photo belonging to the member and listed by the
-                       gallery's rule, JPEG or 404
+                       thumb=1 and all=1: one rendered photo belonging to the member and listed
+                       by the gallery's rule, JPEG or 404
     POST /api/selfie   a selfie action ({"action": "status"|"pick"|"more"|"undo", ...}),
                        checked as the endpoint checks it, then on to the mind's selfie op,
                        refused as raid actions are; a pick, undo or "4 more" is announced as a
@@ -1766,9 +1767,13 @@ class ConsoleApp:
     async def _api_selfie_gallery(self, req: Request):
         values = req.query.get("guid", [])
         guid = digits(values[0], 10) if len(values) == 1 else None
+        every = req.query.get("all", [])
         if guid is None or not 0 < guid < 1 << 32:
             return json_response(400, {"ok": False, "error": "guid: one member's guid"})
-        view, failed = await self._read_selfies("gallery", galleryview.gallery, guid)
+        if every not in ([], ["1"]):
+            return json_response(400, {"ok": False, "error": "all: 1 or nothing"})
+        view, failed = await self._read_selfies("gallery", galleryview.gallery, guid,
+                                                all_sets=bool(every))
         if failed is not None:
             return failed
         return json_response(200, {"view": view, "mind": await self._selfie_status(),
@@ -1782,14 +1787,15 @@ class ConsoleApp:
         guid, kind = digits(one("guid"), 10), one("kind")
         number = digits(one("set") if kind == "candidate" else one("id"), 19)
         index = digits(one("index"), 1) if kind == "candidate" else None
-        thumb = req.query.get("thumb", [])
+        thumb, every = req.query.get("thumb", []), req.query.get("all", [])
         if (guid is None or not 0 < guid < 1 << 32 or kind not in ("candidate", "snap")
                 or number is None or not 0 < number < 1 << 63
                 or (kind == "candidate" and (number >= 1 << 31 or index not in range(4)))
-                or thumb not in ([], ["1"])):
+                or thumb not in ([], ["1"]) or every not in ([], ["1"])):
             return json_response(400, {"ok": False, "error": "invalid photo id"})
         data, failed = await self._read_selfies("gallery_photo", galleryview.photo, guid,
-                                               kind, number, index, thumb=bool(thumb))
+                                               kind, number, index, thumb=bool(thumb),
+                                               all_sets=bool(every))
         if failed is not None:
             return failed
         if data is None:
