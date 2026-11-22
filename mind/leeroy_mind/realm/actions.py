@@ -77,6 +77,7 @@ class ActionQueue:
         self._body_times = deque(maxlen=2); self._query_times = deque(maxlen=2)
         self._cleanup_wanted = set(); self._probe_ids = set(); self._probe_at = 0.0
         self._native_start = None  # adopted connection identity and its native started_ms
+        self._restart_retry_at = None
         self._wake = asyncio.Event(); self._running = False
         self._context()
 
@@ -304,6 +305,7 @@ class ActionQueue:
                 and ev.guild_id == c.guild and ev.human_guid in (0, c.human)):
             self.off = False
             self._native_start = None
+            self._restart_retry_at = None
             try:
                 started = integer(getattr(ev, 'started_ms', 0), 0, 0x7FFFFFFFFFFFFFFF)
                 self._native_start = (self._native_context(c), started)
@@ -330,9 +332,11 @@ class ActionQueue:
                 return
         try:
             released = self.store.restart_release(started_ms=started, guild=c.guild, human=c.human, now=self.clock.now())
+            self._restart_retry_at = None
             for command_id in released:
                 self._deliver(Transition(True, True, command_id, True, False, "restart_released", 0))
         except Exception as e:  # receipt failure must not cost Recall or the rest of the hello
+            self._restart_retry_at = self.clock.now() + 5
             log.warning("realm_action_restart_release_failed: %s", type(e).__name__)
 
     def _paced(self, times, now):
@@ -381,6 +385,8 @@ class ActionQueue:
         self.context_changed(_wake=False)
         c = self._context(); now = self.clock.now()
         if self.closed or not _live(c): return
+        if self._restart_retry_at is not None and now >= self._restart_retry_at:
+            self._restart_release()
         self.store.prune(now=now)
         self._cleanup_wanted.intersection_update(r.command_id for r in self.store.unresolved())
         self._recovery(c, now)
