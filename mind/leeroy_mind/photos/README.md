@@ -88,6 +88,12 @@ by a request or by a spontaneous photo: a snap copied for a request stays ready,
 opener, answer or channel seed offers it to that audience again in that time.
 The attachment, chat mirror, snap and request delivery receipts commit together. A failed
 render gets one ordinary answer in the member's words. No retained photo file is deleted.
+Changing looks or selecting a new cover while a request is pending refreshes its photo plan,
+up to twice per request, including across restart. The replacement keeps the screened scene,
+audience, availability delay and original expiry. A stale image never gets delivered; its
+files stay retained. Refreshes use the usual GPU allowance and rendering checks. Already
+failed, cancelled or delivered requests are not reopened. Render logs include the failure
+code so a profile change can be distinguished from a worker or image-check failure.
 A fresh photo renders as the night's situational photos do: the anatomy negative at priority 0,
 her face at 0.75 of `identity_scale` on a waist-up or three-quarter scene, and no hand or limb face
 details (`selfies/style_variety.md`, "Situational photos: anatomy and the face on wide shots").

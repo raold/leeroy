@@ -261,6 +261,7 @@ class RequestPhotos:
                                       not_before=not_before)
         else:
             photo = records.snap(app.store, request.fresh_snap)
+        photo = self._refresh_profile(request, photo)
         # A photo her day plan puts off (not_before) is neither rendered nor replaced by a
         # retained one now: she says she can't yet.
         due = photo is None or photo.not_before <= app.clock.now()
@@ -334,12 +335,29 @@ class RequestPhotos:
             return None
         return fresh.scene.get('wait') if fresh.scene.get('wait') in CANT_NOW else None
 
+    def _refresh_profile(self, request, photo):
+        """Keep a pending request usable after an owner edits looks or picks a new cover."""
+        if photo is None or photo.id in self._reserved or not self._source_open(request):
+            return photo
+        ready = self._ready_member(request.guid)
+        if ready is None:
+            return photo
+        p, pick = ready
+        replacement = records.refresh_fresh(self.app.store, request, photo, pick=pick.pick,
+            looks=snaps.looks_hash(p.appearance), now=self.app.clock.now())
+        if replacement is not None:
+            log('selfie_request_profile_refreshed', request=request.message, guid=request.guid,
+                previous=photo.id, snap=replacement.id)
+            return replacement
+        return photo
+
     async def _render(self, request, photo):
         from leeroy_mind.llm.borrow import LiveReloadFailed
         from leeroy_mind.llm.client import GpuPaused
         from leeroy_mind.nightly.gpu import LiveLeaseHeld
         from leeroy_mind.selfies.request_render import render_request
         app = self.app
+        photo = self._refresh_profile(request, photo)
         if (not self.render_allowed() or app.gpu.paused
                 or not self.priority and app.nightly.running is not None):
             return False
@@ -361,6 +379,11 @@ class RequestPhotos:
                 result = await render_request(app, photo, room, worker_factory=self.worker_factory)
                 outcome = result.outcome
                 if outcome != 'ready':
+                    if result.code in {'looks_changed', 'photo_changed'}:
+                        replacement = self._refresh_profile(request, photo)
+                        if replacement.id != photo.id:
+                            outcome = 'profile_refreshed'
+                            return False
                     if result.code == 'critic' and self._critic_fallback(request):
                         outcome = 'critic_fallback'
                         return False
@@ -394,7 +417,8 @@ class RequestPhotos:
                 start_ms=round(getattr(result, 'start_ms', timings.get('start_ms', 0))),
                 render_ms=round(getattr(result, 'render_ms', timings.get('render_ms', 0))),
                 unload_ms=round(timings.get('unload_ms', 0)), stop_ms=round(timings.get('stop_ms', 0)),
-                reload_ms=round(timings.get('reload_ms', 0)), outcome=outcome)
+                reload_ms=round(timings.get('reload_ms', 0)), outcome=outcome,
+                code=getattr(result, 'code', None))
 
     def _critic_fallback(self, request) -> bool:
         """[selfies] critic refused every seed of the fresh render: a ready-made photo of hers
@@ -540,6 +564,9 @@ class RequestPhotos:
         if part == 'failure' and (not latest.failure or latest.failure_message):
             return
         photo = records.snap(app.store, latest.fresh_snap)
+        if part != 'failure':
+            photo = self._refresh_profile(latest, photo)
+            latest = records.get(app.store, latest.message)
         fallback = records.snap(app.store, latest.fallback_snap)
         if part != 'failure' and not any(p and p.status == 'ready' for p in (photo, fallback if part == 'private' else None)):
             return
@@ -619,6 +646,7 @@ class RequestPhotos:
                 await self._send(request, 'failure')
                 continue
             photo = records.snap(app.store, request.fresh_snap)
+            photo = self._refresh_profile(request, photo)
             if photo is not None and photo.status == 'expired':
                 records.fail(app.store, request.message, 'photo_unavailable', now=app.clock.now())
                 await self._send(records.get(app.store, request.message), 'failure')
