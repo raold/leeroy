@@ -26,6 +26,7 @@ from leeroy_mind.protocol import Ack, Boss
 from leeroy_mind.realm.ports import (LivePorts, RealmDisabled, RealmEvidenceUnavailable,
                                       TITLE_WORDS, title_holders)
 from leeroy_mind.testing.fake_clock import FakeClock
+from leeroy_mind.testing.fake_llm import check_chat
 from leeroy_mind.training import protocol as training_protocol
 from leeroy_mind.training.benchmark import BenchmarkSchedule, Benchmarks
 from leeroy_mind.training.config import TrainingConfig
@@ -743,6 +744,8 @@ class FakeLLM:
         self.text, self.calls, self.error = text, [], None
 
     async def chat(self, model, messages, *, options, think=None, format=None, keep_alive=None, timeout=None):
+        check_chat(model, messages, options=options, think=think, format=format,
+                   keep_alive=keep_alive)
         self.calls.append(dict(model=model, messages=messages, options=options, think=think,
                                format=format, timeout=timeout))
         if self.error is not None:

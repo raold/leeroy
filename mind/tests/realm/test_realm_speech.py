@@ -15,6 +15,7 @@ import pytest
 from conftest import run, seed_test_cast
 from leeroy_mind.config import HumanCfg
 from leeroy_mind.llm.client import ChatResult
+from leeroy_mind.testing.fake_llm import check_chat
 from leeroy_mind.llm.presets import LIVE
 from leeroy_mind.llm.scheduler import LLMScheduler, Priority
 from leeroy_mind.protocol import Ack, Hello, Logout
@@ -45,6 +46,8 @@ class FakeLLM:
 
     async def chat(self, model, messages, *, options, think=None, format=None, keep_alive=None,
                    timeout=None):
+        check_chat(model, messages, options=options, think=think, format=format,
+                   keep_alive=keep_alive)
         self.calls.append(dict(model=model, messages=messages, options=options, think=think,
                                format=format, timeout=timeout))
         text = self.texts.pop(0) if len(self.texts) > 1 else self.texts[0]
