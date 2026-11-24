@@ -106,7 +106,7 @@ struct RaidRun
 
     std::string Start(std::string const& name, std::string const& id, bool negative)
     {
-        if (active) return "refused: a raid run or cleanup is active";
+        if (active || state == "cleanup_failed") return "refused: a raid run or unproved cleanup is active";
         if (Dojo::State().plan.state != Dojo::RuntimeState::Armed || Dojo::State().manifest)
             return "refused: use an armed isolated training realm with no arena manifest";
         if (name != "valithria" && name != "twins" && name != "poison") return "refused: unknown scenario";
@@ -233,6 +233,7 @@ struct RaidRun
 
     void Observe(uint32 diff)
     {
+        if (scenario == "poison" && control && damageHits > 0) { Phase("cleanup"); return; }
         Player* bot = Actor(0);
         Player* owner = Actor(1);
         if (!bot || !owner || !bot->IsAlive() || !owner->IsAlive()) { Fail("fixture died or disconnected"); return; }
