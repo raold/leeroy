@@ -121,9 +121,13 @@ class CultureLive:
         if app.world.human_online:
             return  # his own raid's loot reads use the same armory; wishes can wait
         event = loot.next_raid(app.store.conn, now)
-        cached = loot.load_wishes(app.store.get_meta(loot.WISH_KEY))
+        raw = app.store.get_meta(loot.WISH_KEY)
+        cached = loot.load_wishes(raw)
         if not loot.wish_due(cached, event, now):
             return
+        if cached is None and event is not None and loot.wish_version(raw) not in (
+                None, loot.WISH_VERSION):  # other code computed it (a release): never read again
+            log.info("culture_loot_wish_outdated event=%d", event)
         if self.armory is None:
             self._once("loot")
             self._wish_retry = now + wowcal.RETRY_S

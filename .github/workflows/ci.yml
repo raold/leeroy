@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: shellcheck
-        run: shellcheck --severity=warning --external-sources --source-path=scripts scripts/*.sh scripts/tests/*.sh
+        run: shellcheck --severity=warning --external-sources --source-path=scripts scripts/*.sh scripts/tests/*.sh scripts/verify/*.sh
       - name: config key report self-test
         run: bash scripts/tests/ac-update-keys.sh
       - name: guild backup self-test (synthetic data only)
@@ -38,6 +38,8 @@ jobs:
         run: bash scripts/tests/ac-prune-native-logs.sh
       - name: zip module to git self-test (temporary repositories only)
         run: bash scripts/tests/ac-module-to-git.sh
+      - name: verify runner self-test (temporary repositories and a stub mind)
+        run: bash scripts/tests/verify-run.sh
       - name: flaky report self-test (invented runs only)
         run: python3 scripts/tests/test_flaky_report.py
 

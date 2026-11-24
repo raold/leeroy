@@ -217,6 +217,7 @@ class TalkEngine(EmoteReactions):
         self.whispers = WhisperPlanner(rng, per_hour=whisper_rate(cfg),
                                        events=whisper_rate(cfg) > 0)
         self._to_him_at: dict[int, float] = {}  # a member's last opener to him (TO_HIM_GAP_S)
+        self._public_flirt_at = -math.inf  # the last public flirt planned (_flirt_turn)
         self._guild_used: dict[str, set[str]] = {}  # tonight's guild opener topics (_open_to_guild)
         self._item_names: dict[int, str] | None = None  # item id -> name (_item_name)
         self.human = human_identity(cfg, store, human_guid)
@@ -1193,8 +1194,9 @@ class TalkEngine(EmoteReactions):
             chance *= self.heat.starts(p)
         if hg and chance > 0 and self.world.human_online and not self.world.human_idle(
                 now, HUMAN_ACTIVE_S) and self.rng.random() < chance:
-            return Turn(kind=TurnKind.FLIRT, speaker=speaker, channel=channel, addressee=hg,
-                        max_lines=min(2, room), delay=delay), meta
+            flirt = self._flirt_turn(speaker, channel, room=room, delay=delay, now=now)
+            if flirt is not None:
+                return flirt, meta
         if kind is TurnKind.OPEN and self._game_opener(channel):
             # [talk] wow_topic: on the raid's or party's channel while he raids, an opener brings
             # up the game (what she wants in it), never her life; the topic hold holds it
@@ -1203,6 +1205,30 @@ class TalkEngine(EmoteReactions):
             meta.topic = self._open_topic(p, now)
         return Turn(kind=kind, speaker=speaker, channel=channel, addressee=addressee,
                     trigger_line=trigger, max_lines=min(2, room), delay=delay), meta
+
+    def _flirt_turn(self, speaker: int, channel: str, *, room: int, delay: float,
+                    now: float) -> Turn | None:
+        """Her social turn as a FLIRT at him, once her flirt chance has landed; None when the turn
+        stays what it was. [talk] wow_topic off: the flirt on the burst's channel, as ever. On
+        (talk/wowtopic.py, the re-measure of 2026-11-24): while he raids (WorldView.human_raiding)
+        never on a public channel, she whispers him instead when the planner has room
+        (_raid_flirt); on a public game channel only at PUBLIC_FLIRT_SHARE, at most one every
+        PUBLIC_FLIRT_GAP_S guild-wide, as one line told to stay light (public_flirt_line), which
+        the pipeline generates short (Pipeline._public_flirt)."""
+        hg = self.human.guid
+        if (getattr(self.cfg.talk, "wow_topic", False) is not True
+                or not wowtopic.public_flirt(TurnKind.FLIRT, channel)):
+            return Turn(kind=TurnKind.FLIRT, speaker=speaker, channel=channel, addressee=hg,
+                        max_lines=min(2, room), delay=delay)
+        if self.world.human_raiding():
+            self._raid_flirt(speaker, now)
+            return None
+        if (self.rng.random() >= wowtopic.PUBLIC_FLIRT_SHARE
+                or now - self._public_flirt_at < wowtopic.PUBLIC_FLIRT_GAP_S):
+            return None
+        self._public_flirt_at = now
+        return Turn(kind=TurnKind.FLIRT, speaker=speaker, channel=channel, addressee=hg,
+                    instruction=wowtopic.public_flirt_line(channel), max_lines=1, delay=delay)
 
     def _game_opener(self, channel: str) -> bool:
         """[talk] wow_topic on, and an opener on the raid's or party's channel while he is in his
