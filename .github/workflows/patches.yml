@@ -52,6 +52,12 @@ jobs:
         working-directory: playerbots
         run: python ./apps/codestyle/codestyle-cpp.py
 
+      - name: Playerbots patch regression tests
+        run: |
+          cmake -S leeroy/patches/mod-playerbots/tests -B patch-tests -DPLAYERBOTS_SOURCE="$PWD/playerbots"
+          cmake --build patch-tests --parallel 2
+          ctest --test-dir patch-tests --output-on-failure
+
       - name: Open or update the drift issue
         if: failure() && github.event_name == 'schedule'
         env:

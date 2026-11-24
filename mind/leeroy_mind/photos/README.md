@@ -5,7 +5,7 @@ members who answer look at it first.
 
 ## Switches
 
-`[photos]` in `mind.toml`; all three switches default false, and an invalid table means off.
+`[photos]` in `mind.toml`; all switches default false, and an invalid table means off.
 
 - `enabled = true` allows owner uploads. Restart both the mind and the console after
   changing it.
@@ -16,6 +16,13 @@ members who answer look at it first.
 - `requests = true` lets a member make a new selfie when the owner asks in Discord.
   It requires `send` and all its prerequisites. Restart the mind after changing it.
   With requests off, no request recognizer, queue, or GPU borrow gate is attached.
+- `request_priority = true` (with `requests`) lets explicit photo requests render while
+  the owner is in WoW and skips the offline grace for queued requests. It interrupts a
+  background night, booth or bulk render and waits for its worker to stop before loading
+  the requested-image worker. Restart the mind after changing it. Missing/false keeps
+  the offline-only policy. Remove the key before rolling back to older code, which
+  treats an unknown `[photos]` key as an invalid table.
+  Ops lists it as **Priority selfie requests while playing**.
 - `scene_from_words = true` (with `requests`) reads his words into the requested photo's scene
   (below, "His words as her scene"). Read at mind start; off keeps today's enum path byte for
   byte. Older code reads the key as an invalid table and turns all of `[photos]` off, so remove
@@ -27,7 +34,8 @@ Ask in the member's DM, or name/reply to the member in a guild channel: for exam
 "send me a selfie" or "pic?". An unnamed channel request and a question about a photo
 already sent keep the ordinary answer path. Group DMs are outside this feature.
 
-When the bridge confirms the owner is out of WoW, the member chooses a scene using the
+When the bridge confirms the owner is out of WoW (or online with `request_priority`),
+the member chooses a scene using the
 existing allowed choices and makes the photo before answering. Comms shows her composing
 while she prepares it. The request's words provide context to the live model; with
 `scene_from_words` off they never become image-prompt text (on, see "His words as her scene").
@@ -37,16 +45,17 @@ delivery commits. Adult age 25+, clothing, name, NSFW and caption checks still a
 
 The render temporarily borrows the GPU despite the server/Discord presence leases. All
 mind chat clients wait, including background extraction; embeddings remain available.
-Existing chat calls finish before any model unload. The work budget is 180 seconds for
-drain, unload, worker startup and rendering. Worker shutdown and live-model reload must
+Existing chat calls finish before any model unload. The work budget is 180 seconds
+(600 for FLUX) for drain, unload, worker startup and rendering. Worker shutdown and live-model reload must
 finish safely even after that timeout. Waiting turns receive deadline credit for the full
-admission wait, including cleanup, so that wait alone cannot expire an answer. A login,
-hard GPU lease, Free GPU pause or shutdown interrupts the render. Free GPU pause wins and
+admission wait, including cleanup, so that wait alone cannot expire an answer. A login
+interrupts an ordinary request but not a priority request. Other hard GPU leases,
+Free GPU pause or shutdown interrupt either kind of render. Free GPU pause wins and
 does not reload the live model until use resumes. A reload that still fails keeps chat
 waiting until a live turn, the next borrow or the night recovers it: while that closed
 admission alone holds a due night back, the night scheduler retries the recovery each tick.
 
-While the owner is in WoW, presence is unknown, or borrowing is unavailable, the member
+While the owner is in WoW with priority off, presence is unknown, or borrowing is unavailable, the member
 uses an audience-fit retained photo if available: a ready snap first, then her gallery.
 A Free GPU pause, or a live-model reload still failing from an earlier borrow, makes
 borrowing unavailable; it never fails the request. A scene the paused model cannot choose is
@@ -62,7 +71,13 @@ only (`all=1` on its list and photo URLs): older sets and situations are listed 
 marked "earlier looks"; the lust-set, world-set and file rules stay. Sending is unchanged.
 The retained image is copied; its original is never moved or consumed. Its caption describes
 that retained photo, not the new scene being planned. The new photo waits for ten continuous
-minutes of confirmed offline presence and no running night. Unrendered requests expire
+minutes of confirmed offline presence and no running night unless `request_priority` is on.
+Priority requests retry without that grace once the GPU is available; a current bridge
+hello is still required. Offline raids, voice GPU work, explicit Free GPU pause and
+unknown leases keep their exclusion. The member's day-plan delay, request budgets and
+image/content checks still apply. Chat may wait for the full render and model reload
+while the owner continues playing; this setting cannot reserve VRAM against the game
+client or another external process. Unrendered requests expire
 after 24 hours; a rendered photo survives restart until its delivery receipt commits.
 
 Requested photos have separate limits: one request per member per two minutes, six admitted
@@ -73,6 +88,12 @@ by a request or by a spontaneous photo: a snap copied for a request stays ready,
 opener, answer or channel seed offers it to that audience again in that time.
 The attachment, chat mirror, snap and request delivery receipts commit together. A failed
 render gets one ordinary answer in the member's words. No retained photo file is deleted.
+Changing looks or selecting a new cover while a request is pending refreshes its photo plan,
+up to twice per request, including across restart. The replacement keeps the screened scene,
+audience, availability delay and original expiry. A stale image never gets delivered; its
+files stay retained. Refreshes use the usual GPU allowance and rendering checks. Already
+failed, cancelled or delivered requests are not reopened. Render logs include the failure
+code so a profile change can be distinguished from a worker or image-check failure.
 A fresh photo renders as the night's situational photos do: the anatomy negative at priority 0,
 her face at 0.75 of `identity_scale` on a waist-up or three-quarter scene, and no hand or limb face
 details (`selfies/style_variety.md`, "Situational photos: anatomy and the face on wide shots").

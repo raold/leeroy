@@ -25,6 +25,7 @@ openers_to_him = 0.35         # 0-1: the share of those openers addressed to him
 selfies = 3                    # 0-10, member photos in your DMs and guild channels (rendered at night)
 aware = false                  # include a bounded card of visible observations in talk
 realism = false                # bounded member typing, small bursts and rare corrections
+combat_quiet = false           # native drops ambient game chat during ordinary combat too
 texture = false                # members type like people: apostrophes, run-ons, shorthand and slips some of the time
 dm_own_time = false            # members answer his Discord DMs when their presence says they'd see them
 discord_words = 90             # 0-200: most words in a member's Discord channel message (0: one short line, as in game)
@@ -134,6 +135,7 @@ class TalkCfg:
     selfies: int = 3
     aware: bool = False
     realism: bool = False
+    combat_quiet: bool = False
     texture: bool = False  # [talk] texture; talk/style.py texture_of
     dm_own_time: bool = False
     discord_words: int = 90  # [talk] discord_words; talk/discord_length.py
@@ -266,6 +268,7 @@ _RULES = {
     "talk": {
         "aware": (lambda v: type(v) is bool, "a boolean"),
         "realism": (lambda v: type(v) is bool, "a boolean"),
+        "combat_quiet": (lambda v: type(v) is bool, "a boolean"),
         "texture": (lambda v: type(v) is bool, "a boolean"),
         "dm_own_time": (lambda v: type(v) is bool, "a boolean"),
         "chattiness": (lambda v: _int_in(v, 0, 10), "an integer 0-10"),
@@ -362,7 +365,7 @@ def _build(data: dict, source: str) -> MindConfig:
         values = {}
         for key, (check, want) in rules.items():
             v = given.get(key, defaults[section][key])
-            if (section == "talk" and key in ("realism", "texture", "dm_own_time",
+            if (section == "talk" and key in ("realism", "texture", "combat_quiet", "dm_own_time",
                                               "think_private", "recall_diversity",
                                               "coherence", "coherence_length")
                     and type(v) is not bool):
