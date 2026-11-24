@@ -55,7 +55,7 @@ def lines(result: dict) -> list[str]:
                 out.append(pad + "switches: " + "; ".join(
                     f"{s['key']} {s['state']} (configured {s['configured']}, default "
                     f"{'on' if s['default'] else 'off'})" for s in off))
-            for kind in ("failed", "working", "ran"):
+            for kind in ("failed", "working", "observed"):
                 said = _evidence_line(kind, f["evidence"])
                 if said:
                     out.append(pad + said)

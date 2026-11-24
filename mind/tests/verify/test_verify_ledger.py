@@ -53,7 +53,7 @@ pattern = '^group_rez_blocked reason=(?P<code>\S+)'
 
 [[feature.evidence]]
 id = "approach"
-kind = "ran"
+kind = "observed"
 what = "a rezzer walked in"
 log = "server"
 token = "group_rez_approach "
@@ -168,7 +168,7 @@ def test_the_shipped_ledger_loads_and_covers_the_unverified_features():
     assert len(fs) >= 20
     assert USER_LIST <= {f.id for f in fs}
     for f in fs:
-        assert any(e.kind != "ran" for e in f.evidence) or f.note, f.id
+        assert any(e.kind != "observed" for e in f.evidence) or f.note, f.id
 
 
 def test_every_log_signature_matches_its_own_example():
@@ -299,12 +299,58 @@ def test_evidence_before_since_is_ignored(install, tmp_path):
     assert evidence(feature(result, "invites"), "done")["count"] == 0
 
 
-def test_ran_evidence_is_shown_but_never_decides(install, tmp_path):
+def test_observed_evidence_is_shown_but_never_decides(install, tmp_path):
     data, folder = install
     append(folder / "Server.log", native(NOW - 10, "group_rez_approach guid=1 body=2 yards=30 path=1"))
     item = feature(run(install, features(tmp_path)), "rez")
     assert item["status"] == "unverified"
-    assert item["ran"]["signatures"] == 1 and evidence(item, "approach")["count"] == 1
+    assert item["observed"]["signatures"] == 1 and evidence(item, "approach")["count"] == 1
+
+
+def pull(conn, ident, boss, outcome, start, end, *, map_id=631, kind="his"):
+    conn.execute("INSERT INTO tg_pull(id,context,map,instance_id,boss_id,difficulty,size,outcome,start_ms,end_ms,"
+                 "members,assisted,boss_entry,upd_mean_ms,kind,complete,scoreable,received) "
+                 "VALUES (?,?,?,1,?,0,10,?,?,?,10,0,0,0,?,1,1,?)",
+                 (ident, f"{map_id}:{boss}:0", map_id, boss, outcome, int(start * 1000), int(end * 1000), kind, end))
+
+
+def test_a_pull_outcome_counts_when_the_fight_ended(install, store):
+    """A mechanic handled early in a pull that then wiped: the wipe is the newer evidence."""
+    data, folder = install
+    pull(store.conn, "lk-1", 12, "wiped", NOW - 600, NOW - 100)
+    store.conn.commit()
+    append(folder / "Playerbots.log", native(NOW - 500, "lk_mechanic instance=1 bot=2 room=1 code=defile_drop ok=true entry=0"))
+    item = feature(run(install, L.load_features()), "lich_king")
+    assert int(evidence(item, "wiped")["last"]) == int(NOW - 100)
+    assert item["working"]["last"] < item["failed"]["last"]
+
+
+def test_deaths_by_a_spell_never_decide(install, store):
+    pull(store.conn, "tw-1", 3, "killed", NOW - 900, NOW - 800, map_id=649)
+    store.conn.execute("INSERT INTO tg_death(pull,guid,at_ms,spell,source,x,y,hits) VALUES ('tw-1',101,?,66046,0,0,0,'[]')",
+                       (int((NOW - 700) * 1000),))
+    store.conn.commit()
+    item = feature(run(install, L.load_features()), "twin_essences")
+    assert evidence(item, "vortex_deaths")["kind"] == "observed" and evidence(item, "vortex_deaths")["count"] == 1
+    assert item["failed"]["last"] is None
+
+
+def test_day_plans_need_a_witnessed_physical_block(install, store):
+    conn = store.conn
+    conn.execute("INSERT INTO game_event(id,ts,type,payload) VALUES (1,?,'job','{}')", (NOW - 300,))
+    for n, activity, reason, evidence_id in ((1, "offline", "no_game_action", None), (2, "fishing", "ended", None),
+                                             (3, "fishing", "no_game_action", 1)):
+        conn.execute("INSERT INTO day_plan(id,night,member,starts,ends,activity,status,reason,evidence) "
+                     "VALUES (?,'2026-11-24',101,?,?,?,'done',?,?)", (n, NOW - 400 + n, NOW + 3600, activity, reason, evidence_id))
+    conn.commit()
+    fs = tuple(dataclasses.replace(f, switches=()) for f in L.load_features() if f.id == "day_plans")
+    assert evidence(feature(run(install, fs), "day_plans"), "done")["count"] == 0
+    conn.execute("INSERT INTO day_plan(id,night,member,starts,ends,activity,status,reason,evidence) "
+                 "VALUES (4,'2026-11-24',102,?,?,'inn','done','ended',1)", (NOW - 900, NOW - 200))
+    conn.commit()
+    done = evidence(feature(run(install, fs), "day_plans"), "done")
+    assert done["count"] == 1 and int(done["last"]) == int(NOW - 300)  # the witness's time, never a future end
+    assert done["codes"] == [{"code": "inn", "count": 1}]
 
 
 def test_switches_from_the_module_files_and_mind_toml(install, tmp_path):
@@ -428,6 +474,27 @@ def test_nul_padding_crlf_and_oversized_lines(tmp_path):
     tally, coverage = scan_one(tmp_path)
     assert tally.count == 2
     assert coverage["issues"] == {"oversized_line": 1}
+
+
+@pytest.mark.parametrize("chunk", [64, 4 * 1024 * 1024])
+def test_a_capped_scan_keeps_the_newest_records(tmp_path, monkeypatch, chunk):
+    """Read from the end: a cap drops the oldest lines, never the completion that came last."""
+    monkeypatch.setattr(logscan, "MAX_LINES", 3)
+    monkeypatch.setattr(logscan, "CHUNK", chunk)
+    text = "".join(native(NOW - 100 + n, f"group_rez_cast guid={n}") for n in range(6))
+    (tmp_path / "Server.log").write_bytes(text.encode() + b"2026-11-24 10:00:00 group_rez_cast guid=99 still being writ")
+    tally, coverage = scan_one(tmp_path)
+    assert tally.count == 3 and int(tally.last) == int(NOW - 95) and int(tally.first) == int(NOW - 97)
+    assert coverage["issues"] == {"match_limit": 1} and coverage["complete"] is False
+
+
+def test_lines_across_small_chunks_are_read_whole(tmp_path, monkeypatch):
+    monkeypatch.setattr(logscan, "CHUNK", 7)
+    text = "".join(native(NOW - 100 + n, f"group_rez_cast guid={n}") for n in range(5))
+    (tmp_path / "Server.log").write_bytes(b"\0" * 50 + text.encode())
+    tally, coverage = scan_one(tmp_path)
+    assert tally.count == 5 and coverage["complete"] is True and coverage["issues"] == {}
+    assert int(coverage["from"]) == int(NOW - 100)
 
 
 def test_a_spent_deadline_reads_nothing_and_says_so(tmp_path):

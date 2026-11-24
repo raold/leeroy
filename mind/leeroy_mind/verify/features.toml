@@ -7,7 +7,8 @@
 #                 .conf counts as its compiled default, `default` below);
 #   failed        failure evidence, and nothing working seen after it;
 #   seen working  working evidence, and no failure after it;
-#   unverified    neither (`ran` evidence, such as an engage with no outcome, never changes this).
+#   unverified    neither (`observed` evidence, such as an engage with no outcome or a death whose
+#                 last hit names a spell, never changes this).
 # Evidence older than `since` (when the change reached the live install, local time) is ignored.
 # Counts are lower bounds: log budgets, rotation and retention drop old lines, while mind.db rows
 # stay until something prunes them.
@@ -17,13 +18,14 @@
 #                       it takes), "native" (a Leeroy.* key) or "playerbots" (a Playerbots.* key);
 #                       native and Playerbots keys come from console/native_switch_keys.py and
 #                       name their compiled `default`.
-#   [[feature.evidence]] id, kind ("working", "failed" or "ran"), what (shown as is), and either
+#   [[feature.evidence]] id, kind ("working", "failed" or "observed"), what (shown as is), and either
 #     log = "server" | "playerbots" | "mind", token (a literal every matching line carries: the
 #       scan's prefilter), pattern (a Python regex searched in the line after its timestamp; for
 #       mind.log in the record read back as "event key=value ..."; a group named `code` is
 #       tallied when it is a short identifier) and example (a synthetic line the tests match);
 #     or db = { from, where, time, unit = "s" | "ms", code }: counts, first and last `time` of
-#       `SELECT ... FROM <from> WHERE <where>`, grouped by the optional `code` expression.
+#       `SELECT ... FROM <from> WHERE <where>`, grouped by the optional `code` expression. A pull's
+#       outcome is timed by its end (tg_pull.end_ms), when it became known.
 # Only ids, counts, times, switch keys and short codes ever leave the ledger: never a log line,
 # a name or any text a member or the owner wrote.
 
@@ -176,18 +178,18 @@ default = false
 id = "killed"
 kind = "working"
 what = "a Twin Val'kyr pull ended in a kill (tg_pull 649:3)"
-db = { from = "tg_pull", where = "map = 649 AND boss_id = 3 AND outcome = 'killed'", time = "start_ms", unit = "ms", code = "kind" }
+db = { from = "tg_pull", where = "map = 649 AND boss_id = 3 AND outcome = 'killed'", time = "end_ms", unit = "ms", code = "kind" }
 
 [[feature.evidence]]
 id = "wiped"
 kind = "failed"
 what = "a Twin Val'kyr pull ended in a wipe (tg_pull 649:3)"
-db = { from = "tg_pull", where = "map = 649 AND boss_id = 3 AND outcome = 'wiped'", time = "start_ms", unit = "ms", code = "kind" }
+db = { from = "tg_pull", where = "map = 649 AND boss_id = 3 AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "kind" }
 
 [[feature.evidence]]
 id = "vortex_deaths"
-kind = "failed"
-what = "a member died to a Light or Dark Vortex (tg_death)"
+kind = "observed"
+what = "a member's last recorded hit before death was a Light or Dark Vortex (tg_death; the cause is not proven)"
 db = { from = "tg_death d JOIN tg_pull p ON p.id = d.pull", where = "p.map = 649 AND p.boss_id = 3 AND d.spell IN (66046, 66058, 67206, 67182, 67207, 67183, 67208, 67184)", time = "d.at_ms", unit = "ms" }
 
 [[feature]]
@@ -209,7 +211,7 @@ example = "2026-11-23 01:12:40 valithria_watch instance=812 end=done hp=100.0"
 id = "killed"
 kind = "working"
 what = "a Valithria pull ended in success (tg_pull 631:10 killed)"
-db = { from = "tg_pull", where = "map = 631 AND boss_id = 10 AND outcome = 'killed'", time = "start_ms", unit = "ms", code = "kind" }
+db = { from = "tg_pull", where = "map = 631 AND boss_id = 10 AND outcome = 'killed'", time = "end_ms", unit = "ms", code = "kind" }
 
 [[feature.evidence]]
 id = "watch_reset"
@@ -224,14 +226,14 @@ example = "2026-11-23 01:02:10 valithria_watch instance=812 end=reset hp=31.5"
 id = "wiped"
 kind = "failed"
 what = "a Valithria pull ended in a wipe (tg_pull 631:10)"
-db = { from = "tg_pull", where = "map = 631 AND boss_id = 10 AND outcome = 'wiped'", time = "start_ms", unit = "ms", code = "kind" }
+db = { from = "tg_pull", where = "map = 631 AND boss_id = 10 AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "kind" }
 
 [[feature]]
 id = "living_poison"
 name = "Naxxramas: his group keeps clear of the Living Poison slimes"
 prs = [424]
 since = "2026-11-21T16:08"
-note = "No direct telemetry: hazard lines carry no npc or map, and trash is not recorded as a pull. A Grobbulus pull only shows the group crossed the hall; watch it in game before claiming it works."
+note = "No direct telemetry: hazard lines carry no npc or map, trash is not recorded as a pull, and a death's spell is only its last recorded hit. A Grobbulus pull only shows the group crossed the hall; watch it in game before claiming it works."
 
 [[feature.switch]]
 source = "native"
@@ -240,14 +242,14 @@ default = false
 
 [[feature.evidence]]
 id = "crossed"
-kind = "ran"
+kind = "observed"
 what = "a Grobbulus pull after the Living Poison hall (tg_pull 533:1)"
-db = { from = "tg_pull", where = "map = 533 AND boss_id = 1", time = "start_ms", unit = "ms", code = "kind" }
+db = { from = "tg_pull", where = "map = 533 AND boss_id = 1", time = "end_ms", unit = "ms", code = "kind" }
 
 [[feature.evidence]]
 id = "explode_deaths"
-kind = "failed"
-what = "a member died to a Living Poison's Explode inside a recorded pull (tg_death spell 28433)"
+kind = "observed"
+what = "a member's last recorded hit before death inside a pull was a Living Poison's Explode (tg_death spell 28433; the cause is not proven)"
 db = { from = "tg_death d JOIN tg_pull p ON p.id = d.pull", where = "p.map = 533 AND d.spell = 28433", time = "d.at_ms", unit = "ms" }
 
 [[feature]]
@@ -282,7 +284,7 @@ example = "2026-11-23 21:40:12 mechanic_response id=toc.beasts.slime_pool spell=
 id = "standing_in"
 kind = "failed"
 what = "a proven check failure: members hit by Slime Pool past the allowance (tg_failure)"
-db = { from = "tg_failure f JOIN tg_pull p ON p.id = f.pull", where = "p.map = 649 AND p.boss_id = 0 AND f.key = 'Slime Pool' AND f.count > 0", time = "p.start_ms", unit = "ms" }
+db = { from = "tg_failure f JOIN tg_pull p ON p.id = f.pull", where = "p.map = 649 AND p.boss_id = 0 AND f.key = 'Slime Pool' AND f.count > 0", time = "p.end_ms", unit = "ms" }
 
 [[feature.evidence]]
 id = "unsupported"
@@ -323,7 +325,7 @@ example = "2026-11-23 00:20:36 mechanic_response id=naxx.anubrekhan.impale spell
 
 [[feature.evidence]]
 id = "tables"
-kind = "ran"
+kind = "observed"
 what = "the mind sent a raid's mechanics to native (mechanic_table)"
 log = "server"
 token = "mechanic_table "
@@ -361,7 +363,7 @@ example = "2026-11-23 18:07:00 hazards_minute aware=12 zones=2 spot_members=0 de
 
 [[feature.evidence]]
 id = "avoid_on"
-kind = "ran"
+kind = "observed"
 what = "a member of his group got avoid aoe out of combat (hazard_avoid_on)"
 log = "server"
 token = "hazard_avoid_on "
@@ -432,7 +434,7 @@ example = "2026-11-23 20:00:00 owner_aura_reapplied spell=6560 why=death"
 
 [[feature.evidence]]
 id = "listed"
-kind = "ran"
+kind = "observed"
 what = "the worldserver read his aura list (owner_auras spells=)"
 log = "server"
 token = "owner_auras spells="
@@ -458,11 +460,11 @@ since = "2026-11-20T22:20"
 id = "killed"
 kind = "working"
 what = "an offline ToC pull ended in a kill (tg_pull kind=offline, map 649)"
-db = { from = "tg_pull", where = "kind = 'offline' AND map = 649 AND outcome = 'killed'", time = "start_ms", unit = "ms" }
+db = { from = "tg_pull", where = "kind = 'offline' AND map = 649 AND outcome = 'killed'", time = "end_ms", unit = "ms" }
 
 [[feature.evidence]]
 id = "staged"
-kind = "ran"
+kind = "observed"
 what = "dungeon-clear moved an offline ToC run to its next stage ([DC:...] ToC raid)"
 log = "playerbots"
 token = "] ToC raid "
@@ -485,11 +487,11 @@ since = "2026-11-20T22:20"
 id = "killed"
 kind = "working"
 what = "an offline Ulduar pull ended in a kill (tg_pull kind=offline, map 603)"
-db = { from = "tg_pull", where = "kind = 'offline' AND map = 603 AND outcome = 'killed'", time = "start_ms", unit = "ms" }
+db = { from = "tg_pull", where = "kind = 'offline' AND map = 603 AND outcome = 'killed'", time = "end_ms", unit = "ms" }
 
 [[feature.evidence]]
 id = "leviathan_passed"
-kind = "ran"
+kind = "observed"
 what = "dungeon-clear took bots past Flame Leviathan to the Colossal Forge"
 log = "playerbots"
 token = "is passed, not fought"
@@ -521,7 +523,7 @@ example = "2026-11-24 00:40:00 dc_icc_gunship_pass instance=901 earned=0"
 id = "saurfang"
 kind = "working"
 what = "an offline run pulled Deathbringer Saurfang (tg_pull kind=offline, 631:3)"
-db = { from = "tg_pull", where = "kind = 'offline' AND map = 631 AND boss_id = 3", time = "start_ms", unit = "ms" }
+db = { from = "tg_pull", where = "kind = 'offline' AND map = 631 AND boss_id = 3", time = "end_ms", unit = "ms" }
 
 [[feature.evidence]]
 id = "stuck"
@@ -539,11 +541,11 @@ since = "2026-11-22T16:26"
 id = "killed"
 kind = "working"
 what = "an offline Valithria pull ended in success (tg_pull kind=offline, 631:10)"
-db = { from = "tg_pull", where = "kind = 'offline' AND map = 631 AND boss_id = 10 AND outcome = 'killed'", time = "start_ms", unit = "ms" }
+db = { from = "tg_pull", where = "kind = 'offline' AND map = 631 AND boss_id = 10 AND outcome = 'killed'", time = "end_ms", unit = "ms" }
 
 [[feature.evidence]]
 id = "started"
-kind = "ran"
+kind = "observed"
 what = "dungeon-clear engaged Valithria for an offline run (dc_icc_valithria_start)"
 log = "playerbots"
 token = "dc_icc_valithria_start "
@@ -554,7 +556,7 @@ example = "2026-11-24 01:00:00 dc_icc_valithria_start instance=901 members=10"
 id = "wiped"
 kind = "failed"
 what = "an offline Valithria pull ended in a wipe (tg_pull kind=offline, 631:10)"
-db = { from = "tg_pull", where = "kind = 'offline' AND map = 631 AND boss_id = 10 AND outcome = 'wiped'", time = "start_ms", unit = "ms" }
+db = { from = "tg_pull", where = "kind = 'offline' AND map = 631 AND boss_id = 10 AND outcome = 'wiped'", time = "end_ms", unit = "ms" }
 
 [[feature]]
 id = "offline_reliability"
@@ -570,7 +572,7 @@ db = { from = "guild_raid", where = "offline = 1 AND ended IS NOT NULL AND kills
 
 [[feature.evidence]]
 id = "full_wipe"
-kind = "ran"
+kind = "observed"
 what = "a whole offline raid died and was restarted at the entrance (full_wipe)"
 log = "server"
 token = " full_wipe "
@@ -662,8 +664,8 @@ default = false
 [[feature.evidence]]
 id = "done"
 kind = "working"
-what = "a member's planned activity ran to its end (day_plan status done)"
-db = { from = "day_plan", where = "status = 'done'", time = "ends", unit = "s", code = "activity" }
+what = "a member's planned activity in the world ended as planned after her arrival was witnessed (day_plan done, ended, with evidence; offline blocks excluded)"
+db = { from = "day_plan d JOIN game_event g ON g.id = d.evidence", where = "d.status = 'done' AND d.reason = 'ended' AND d.activity <> 'offline'", time = "g.ts", unit = "s", code = "d.activity" }
 
 [[feature]]
 id = "member_heroics"
@@ -710,7 +712,7 @@ example = "2026-11-25 22:10:00 lk_mechanic instance=950 bot=1618 room=1 code=val
 id = "killed"
 kind = "working"
 what = "a Lich King pull ended in a kill (tg_pull 631:12)"
-db = { from = "tg_pull", where = "map = 631 AND boss_id = 12 AND outcome = 'killed'", time = "start_ms", unit = "ms", code = "kind" }
+db = { from = "tg_pull", where = "map = 631 AND boss_id = 12 AND outcome = 'killed'", time = "end_ms", unit = "ms", code = "kind" }
 
 [[feature.evidence]]
 id = "not_handled"
@@ -725,7 +727,7 @@ example = "2026-11-25 22:10:00 lk_mechanic instance=950 bot=1618 room=0 code=no_
 id = "wiped"
 kind = "failed"
 what = "a Lich King pull ended in a wipe (tg_pull 631:12)"
-db = { from = "tg_pull", where = "map = 631 AND boss_id = 12 AND outcome = 'wiped'", time = "start_ms", unit = "ms", code = "kind" }
+db = { from = "tg_pull", where = "map = 631 AND boss_id = 12 AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "kind" }
 
 [[feature]]
 id = "yogg_brain"
@@ -751,11 +753,11 @@ example = "2026-11-25 22:10:00 yogg_brain exit instance=960 bot=1618 sanity=71"
 id = "killed"
 kind = "working"
 what = "a Yogg-Saron pull ended in a kill (tg_pull 603:12)"
-db = { from = "tg_pull", where = "map = 603 AND boss_id = 12 AND outcome = 'killed'", time = "start_ms", unit = "ms", code = "kind" }
+db = { from = "tg_pull", where = "map = 603 AND boss_id = 12 AND outcome = 'killed'", time = "end_ms", unit = "ms", code = "kind" }
 
 [[feature.evidence]]
 id = "entered"
-kind = "ran"
+kind = "observed"
 what = "a brain team member went through a portal (yogg_brain enter)"
 log = "playerbots"
 token = "yogg_brain enter "
@@ -775,7 +777,7 @@ example = "2026-11-25 22:09:30 yogg_brain path_blocked instance=960 bot=1618 mod
 id = "wiped"
 kind = "failed"
 what = "a Yogg-Saron pull ended in a wipe (tg_pull 603:12)"
-db = { from = "tg_pull", where = "map = 603 AND boss_id = 12 AND outcome = 'wiped'", time = "start_ms", unit = "ms", code = "kind" }
+db = { from = "tg_pull", where = "map = 603 AND boss_id = 12 AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "kind" }
 
 [[feature]]
 id = "raid_vehicles"
@@ -792,10 +794,10 @@ default = false
 id = "killed"
 kind = "working"
 what = "a Malygos or Flame Leviathan pull ended in a kill (tg_pull 616:0, 603:0; code: the boss)"
-db = { from = "tg_pull", where = "((map = 616 AND boss_id = 0) OR (map = 603 AND boss_id = 0)) AND outcome = 'killed'", time = "start_ms", unit = "ms", code = "CASE map WHEN 616 THEN 'malygos' ELSE 'flame_leviathan' END" }
+db = { from = "tg_pull", where = "((map = 616 AND boss_id = 0) OR (map = 603 AND boss_id = 0)) AND outcome = 'killed'", time = "end_ms", unit = "ms", code = "CASE map WHEN 616 THEN 'malygos' ELSE 'flame_leviathan' END" }
 
 [[feature.evidence]]
 id = "wiped"
 kind = "failed"
 what = "a Malygos or Flame Leviathan pull ended in a wipe (tg_pull 616:0, 603:0; code: the boss)"
-db = { from = "tg_pull", where = "((map = 616 AND boss_id = 0) OR (map = 603 AND boss_id = 0)) AND outcome = 'wiped'", time = "start_ms", unit = "ms", code = "CASE map WHEN 616 THEN 'malygos' ELSE 'flame_leviathan' END" }
+db = { from = "tg_pull", where = "((map = 616 AND boss_id = 0) OR (map = 603 AND boss_id = 0)) AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "CASE map WHEN 616 THEN 'malygos' ELSE 'flame_leviathan' END" }

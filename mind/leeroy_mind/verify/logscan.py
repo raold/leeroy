@@ -184,7 +184,7 @@ class _Source:
                     end = block.find(b"\n", pos)
                     spans[start] = end = len(block) if end == -1 else end
                 pos = block.find(token, end)
-        for start in sorted(spans):
+        for start in sorted(spans, reverse=True):  # newest first, as the blocks come
             if self.lines >= MAX_LINES:
                 self.issues["match_limit"] += 1
                 self.stopped = True
@@ -216,6 +216,51 @@ class _Source:
                     continue
                 code = found.groupdict().get("code")
                 self.tallies[sig.key].add(at, code if isinstance(code, str) and CODE.fullmatch(code) else None)
+
+    def read_region(self, stream, lo: int, hi: int) -> int:
+        """Whole lines of [lo, hi) to block(), the newest chunk first, so a match cap or the
+        deadline drops the oldest evidence, never the newest. A partial line at lo (when lo > 0),
+        the line still being written at hi and an oversized line are left out; NUL padding a crash
+        left before a line is not part of it. Returns the bytes read."""
+        pos, carry, read, skip = hi, b"", 0, True  # skip: drop bytes back to the previous newline
+        while pos > lo and not self.stopped:
+            if time.monotonic() >= self.deadline:
+                self.issues["deadline"] += 1
+                self.stopped = True
+                break
+            start = max(lo, pos - CHUNK)
+            stream.seek(start)
+            chunk = stream.read(pos - start)
+            if not chunk:
+                break
+            read += len(chunk)
+            pos = start
+            buf, carry = chunk + carry, b""
+            if skip:
+                last = buf.rfind(b"\n")
+                if last < 0:
+                    continue
+                buf, skip = buf[:last + 1], False
+            if start == 0:
+                body = buf
+            else:
+                # the bytes up to the first newline end a line that began further back
+                cut = buf.find(b"\n") + 1
+                head, body = (buf[:cut], buf[cut:]) if cut else (buf, b"")
+                if start > lo:
+                    carry = head
+            if len(carry) > MAX_LINE:
+                nul = carry.rfind(b"\0")
+                line = carry[nul + 1:] if nul >= 0 else carry
+                if len(line) <= MAX_LINE:
+                    body = line + body  # a whole line after NUL padding
+                elif nul < 0 or line.strip(b"\r\n"):
+                    self.issues["oversized_line"] += 1
+                carry, skip = b"", True
+            if body:
+                self.note_start(body)
+                self.block(body)
+        return read
 
 
 def scan(directories: dict[str, Path], signatures, *, deadline: float, budgets=None, tz=None):
@@ -251,40 +296,12 @@ def scan(directories: dict[str, Path], signatures, *, deadline: float, budgets=N
                         whole = False
                         continue
                     take = min(opened.st_size, remaining)
-                    offset = opened.st_size - take
-                    stream.seek(offset)
+                    lo = opened.st_size - take
                     scanned += 1
-                    left, carry, first = take, b"", True
-                    if offset:
+                    if lo:
                         whole = False
                         source.issues["truncated_file"] += 1
-                        # a partial first line is never read as a record
-                        skipped = stream.readline(MAX_LINE + 1)
-                        left -= len(skipped)
-                    while left > 0 and not source.stopped:
-                        if time.monotonic() >= deadline:
-                            source.issues["deadline"] += 1
-                            source.stopped, whole = True, False
-                            break
-                        chunk = stream.read(min(CHUNK, left))
-                        if not chunk:
-                            break
-                        left -= len(chunk)
-                        read_bytes += len(chunk)
-                        # whole lines only: a line still being written at the end is left out
-                        buf = carry + chunk
-                        cut = buf.rfind(b"\n") + 1
-                        if cut == 0 and len(buf) > MAX_LINE:
-                            # NUL padding a crash left in the file is not a line
-                            buf = buf[buf.rfind(b"\0") + 1:]
-                            if len(buf) > MAX_LINE:
-                                source.issues["oversized_line"] += 1
-                                buf = b""
-                        body, carry = buf[:cut], buf[cut:]
-                        if first and body:
-                            source.note_start(body)
-                            first = False
-                        source.block(body)
+                    read_bytes += source.read_region(stream, lo, opened.st_size)
                     remaining -= take
             except FileNotFoundError:
                 continue  # rotated away meanwhile

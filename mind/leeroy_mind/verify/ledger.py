@@ -4,8 +4,9 @@ switches. Nothing is written, nothing is connected to, no model is loaded.
 
 Status, in this order: `switched_off` when a switch is configured off; `failed` when failure
 evidence is the newest; `seen_working` when working evidence is the newest; else `unverified`.
-`ran` evidence (an engage, a stage) is shown but never decides a status. Only ids, counts, times,
-switch keys and short codes leave this module, never a log line or any text anyone wrote."""
+`observed` evidence (an engage, a stage, a death's last recorded hit) is shown but never decides
+a status. Only ids, counts, times, switch keys and short codes leave this module, never a log
+line or any text anyone wrote."""
 import math
 import re
 import sqlite3
@@ -24,7 +25,7 @@ from .logscan import CODE, SOURCES, Signature, Tally, scan
 
 FEATURES = Path(__file__).with_name("features.toml")
 STATUSES = ("failed", "seen_working", "unverified", "switched_off")
-KINDS = ("working", "failed", "ran")
+KINDS = ("working", "failed", "observed")
 LOGS = tuple(SOURCES)
 CONF = {"native": "mod_leeroy.conf", "playerbots": "playerbots.conf"}
 CONF_BYTES = 512 * 1024
@@ -163,8 +164,8 @@ def load_features(path: Path = FEATURES) -> tuple[Feature, ...]:
         evidence = tuple(_evidence(e, f"{where} evidence {i + 1}") for i, e in enumerate(raw.get("evidence") or ()))
         if not evidence or len({e.id for e in evidence}) != len(evidence):
             raise ValueError(f"features.toml: {where}: needs evidence, each with its own id")
-        if not any(e.kind != "ran" for e in evidence) and not raw.get("note"):
-            raise ValueError(f"features.toml: {where}: with only ran evidence a note must say why")
+        if not any(e.kind != "observed" for e in evidence) and not raw.get("note"):
+            raise ValueError(f"features.toml: {where}: with only observed evidence a note must say why")
         switches = tuple(_switch(s, f"{where} switch {i + 1}") for i, s in enumerate(raw.get("switch") or ()))
         out.append(Feature(ident, _text(raw.get("name"), where, "name", 100), tuple(prs), since,
                            _text(raw.get("note"), where, "note", 400, required=False) or "",
@@ -343,6 +344,6 @@ def ledger(data: Path, native_dir: Path, *, features=None, now=None, deadline=No
         counts[status] += 1
         out.append({"id": f.id, "name": f.name, "prs": list(f.prs), "since": f.since_at(),
                     "note": f.note, "status": status, "switches": switches, "working": working,
-                    "failed": failed, "ran": _summary(by_kind["ran"]), "evidence": evidence})
+                    "failed": failed, "observed": _summary(by_kind["observed"]), "evidence": evidence})
     return {"checked_at": now, "features": out, "counts": {s: counts[s] for s in STATUSES},
             "coverage": coverage, "database": database, "basis": BASIS}

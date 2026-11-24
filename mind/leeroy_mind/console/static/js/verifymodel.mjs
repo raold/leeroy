@@ -9,7 +9,7 @@ const mb = x => typeof x === "number" && Number.isFinite(x) ? (x / 1048576).toFi
 
 export const ORDER = ["failed", "seen_working", "unverified", "switched_off"];
 export const LABEL = { failed: "Failed", seen_working: "Seen working", unverified: "Unverified", switched_off: "Switched off" };
-const KIND = { working: "Working", failed: "Failed", ran: "Ran" };
+const KIND = { working: "Working", failed: "Failed", observed: "Observed" };
 
 export function summary(p) {
   const counts = obj(p.counts);
