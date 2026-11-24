@@ -1,4 +1,4 @@
-From bc7120cf38dbc5f4959f8212ca38f6e768a8beca Mon Sep 17 00:00:00 2001
+From fabdfb54d1fdb0bc2c2ce4108a12b7c9fbca8a7d Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Wed, 4 Nov 2026 13:53:07 -0500
 Subject: [PATCH] Let an external controller own a bot's tactics
@@ -23,20 +23,30 @@ PlayerbotHolder are untouched. Inert until a caller acquires a bot.
  2 files changed, 122 insertions(+), 6 deletions(-)
 
 diff --git a/src/Bot/PlayerbotAI.cpp b/src/Bot/PlayerbotAI.cpp
-index 5bd3437f..3ed5de81 100644
+index 5bd3437f..0e1d74ec 100644
 --- a/src/Bot/PlayerbotAI.cpp
 +++ b/src/Bot/PlayerbotAI.cpp
-@@ -58,2 +58,3 @@
- #include "WsgRouteState.h"
+@@ -62,6 +62,7 @@
+ #include <mutex>
+ #include <sstream>
+ #include <string>
 +#include <atomic>
- #include <algorithm>
-@@ -72,2 +73,5 @@ constexpr uint32 SPELL_GRAVITY_LAPSE_MGT = 44226;
+ 
+ namespace
+ {
+@@ -70,6 +71,9 @@ constexpr uint32 SPELL_DK_FROST_PRESENCE = 48263;
+ constexpr uint32 SPELL_GRAVITY_LAPSE_TK = 39432;
+ constexpr uint32 SPELL_GRAVITY_LAPSE_MGT = 44226;
  constexpr uint32 VEHICLE_FLAG_FIXED_POSITION = 0x00200000;
 +
 +// Epochs of external control are unique for the process lifetime, across every bot.
 +std::atomic<uint64> lastExternalControlEpoch{0};
  }
-@@ -270,2 +274,8 @@ void PlayerbotAI::UpdateAI(uint32 elapsed, bool minimal)
+ 
+ std::vector<std::string> PlayerbotAI::dispel_whitelist = {
+@@ -268,6 +272,12 @@ void PlayerbotAI::UpdateAI(uint32 elapsed, bool minimal)
+     if (!bot->Unit::IsFalling())
+         bot->SetFallInformation(0, bot->GetPositionZ());
  
 +    if (IsExternallyControlled())
 +    {
@@ -45,7 +55,11 @@ index 5bd3437f..3ed5de81 100644
 +    }
 +
      // Handle cheat options (set bot health and power if cheats are enabled)
-@@ -488,2 +498,50 @@ void PlayerbotAI::SetActionDuration(Action const* action)
+     if (bot->IsAlive() &&
+         (static_cast<uint32>(GetCheat()) > 0 || static_cast<uint32>(sPlayerbotAIConfig.BotCheatMask) > 0))
+@@ -486,6 +496,54 @@ void PlayerbotAI::SetActionDuration(Action const* action)
+         PlayerbotAIBase::SetActionDuration(action->GetDuration());
+ }
  
 +uint64 PlayerbotAI::AcquireExternalControl(std::string const& owner)
 +{
@@ -96,18 +110,30 @@ index 5bd3437f..3ed5de81 100644
 +}
 +
  // Helper function for UpdateAI to check group membership and handle removal if necessary
-@@ -687,3 +745,3 @@ void PlayerbotAI::HandleCommand(uint32 type, std::string const& text, Player& fr
+ void PlayerbotAI::UpdateAIGroupMaster()
+ {
+@@ -685,7 +743,7 @@ void PlayerbotAI::HandleCommands()
+ std::map<std::string, ChatMsg> chatMap;
+ void PlayerbotAI::HandleCommand(uint32 type, std::string const& text, Player& fromPlayer, const uint32 lang)
  {
 -    if (!bot)
 +    if (!bot || RefuseWhileExternallyControlled())
          return;
-@@ -1046,2 +1104,5 @@ void PlayerbotAI::HandleCommand(uint32 type, std::string const text, Player* fro
+ 
+     std::string filtered = text;
+@@ -1044,6 +1102,9 @@ bool PlayerbotAI::IsAllowedCommand(std::string const text)
+ 
+ void PlayerbotAI::HandleCommand(uint32 type, std::string const text, Player* fromPlayer)
  {
 +    if (RefuseWhileExternallyControlled())
 +        return;
 +
      if (!GetSecurity()->CheckLevelFor(PLAYERBOT_SECURITY_INVITE, type != CHAT_MSG_WHISPER, fromPlayer))
-@@ -1227,3 +1288,13 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
+         return;
+ 
+@@ -1225,7 +1286,17 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
+     if (!bot || !bot->IsInWorld() || bot->IsDuringRemoveFromWorld())
+         return;
  
 -    switch (packet.GetOpcode())
 +    // An external owner decides; only the client's root, knockback and dismount handling below still runs.
@@ -122,52 +148,86 @@ index 5bd3437f..3ed5de81 100644
 +
 +    switch (opcode)
      {
-@@ -1527,2 +1598,5 @@ void PlayerbotAI::HandleMasterIncomingPacket(WorldPacket const& packet)
+         case SMSG_SPELL_FAILURE:
+         {
+@@ -1525,11 +1596,17 @@ int32 PlayerbotAI::CalculateGlobalCooldown(uint32 spellid)
+ 
+ void PlayerbotAI::HandleMasterIncomingPacket(WorldPacket const& packet)
  {
 +    if (masterIncomingPacketHandlers.HasHandler(packet.GetOpcode()) && RefuseWhileExternallyControlled())
 +        return;
 +
      masterIncomingPacketHandlers.AddPacket(packet);
-@@ -1532,2 +1606,5 @@ void PlayerbotAI::HandleMasterOutgoingPacket(WorldPacket const& packet)
+ }
+ 
+ void PlayerbotAI::HandleMasterOutgoingPacket(WorldPacket const& packet)
  {
 +    if (masterOutgoingPacketHandlers.HasHandler(packet.GetOpcode()) && RefuseWhileExternallyControlled())
 +        return;
 +
      masterOutgoingPacketHandlers.AddPacket(packet);
-@@ -1587,2 +1664,5 @@ void PlayerbotAI::DoNextAction(bool min)
+ }
+ 
+@@ -1585,6 +1662,9 @@ void PlayerbotAI::ChangeEngineOnNonCombat()
+ 
+ void PlayerbotAI::DoNextAction(bool min)
  {
 +    if (IsExternallyControlled())
 +        return;
 +
      if (!bot->IsInWorld() || bot->IsBeingTeleported() || (GetMaster() && GetMaster()->IsBeingTeleported()))
-@@ -1916,2 +1996,5 @@ bool PlayerbotAI::DoSpecificAction(std::string const name, Event event, bool sil
+     {
+         SetNextCheckDelay(sPlayerbotAIConfig.GlobalCoolDown);
+@@ -1914,6 +1994,9 @@ bool PlayerbotAI::HasTargetExclusions() const
+ 
+ bool PlayerbotAI::DoSpecificAction(std::string const name, Event event, bool silent, std::string const qualifier)
  {
 +    if (RefuseWhileExternallyControlled())
 +        return false;
 +
      std::ostringstream out;
-@@ -3697,3 +3780,3 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget)
+ 
+     for (uint8 i = 0; i < BOT_STATE_MAX; i++)
+@@ -3695,7 +3778,7 @@ bool PlayerbotAI::CastSpell(std::string const name, Unit* target, Item* itemTarg
+ 
+ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget)
  {
 -    if (!spellId)
 +    if (!spellId || RefuseWhileExternallyControlled())
          return false;
-@@ -3999,3 +4082,3 @@ bool PlayerbotAI::CastSpell(uint32 spellId, float x, float y, float z, Item* ite
+ 
+     if (!target)
+@@ -3997,7 +4080,7 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget)
+ 
+ bool PlayerbotAI::CastSpell(uint32 spellId, float x, float y, float z, Item* itemTarget)
  {
 -    if (!spellId)
 +    if (!spellId || RefuseWhileExternallyControlled())
          return false;
-@@ -4238,3 +4321,3 @@ bool PlayerbotAI::CastVehicleSpell(uint32 spellId, Unit* target)
+ 
+     Pet* pet = bot->GetPet();
+@@ -4236,7 +4319,7 @@ bool PlayerbotAI::CanCastVehicleSpell(uint32 spellId, Unit* target)
+ 
+ bool PlayerbotAI::CastVehicleSpell(uint32 spellId, Unit* target)
  {
 -    if (!spellId)
 +    if (!spellId || RefuseWhileExternallyControlled())
          return false;
-@@ -4440,2 +4523,5 @@ void PlayerbotAI::RequestSpellInterrupt()
+ 
+     if (IsSiegeShot(bot, aiObjectContext, spellId))
+@@ -4438,6 +4521,9 @@ void PlayerbotAI::RemoveAura(std::string const name)
+ 
+ void PlayerbotAI::RequestSpellInterrupt()
  {
 +    if (RefuseWhileExternallyControlled())
 +        return;
 +
      Spell* currentSpell = bot->GetCurrentSpell(CURRENT_GENERIC_SPELL);
-@@ -6295,3 +6381,9 @@ bool PlayerbotAI::IsInRealGuild()
+     if (currentSpell && currentSpell->getState() == SPELL_STATE_PREPARING)
+     {
+@@ -6293,7 +6379,13 @@ bool PlayerbotAI::IsInRealGuild()
+     return PlayerbotGuildMgr::instance().IsRealGuild(bot->GetGuildId());
+ }
  
 -void PlayerbotAI::QueueChatResponse(const ChatQueuedReply chatReply) { chatReplies.push_back(std::move(chatReply)); }
 +void PlayerbotAI::QueueChatResponse(const ChatQueuedReply chatReply)
@@ -178,16 +238,24 @@ index 5bd3437f..3ed5de81 100644
 +    chatReplies.push_back(std::move(chatReply));
 +}
  
+ bool PlayerbotAI::EqualLowercaseName(std::string s1, std::string s2)
+ {
 diff --git a/src/Bot/PlayerbotAI.h b/src/Bot/PlayerbotAI.h
 index d8d7c978..399bbde3 100644
 --- a/src/Bot/PlayerbotAI.h
 +++ b/src/Bot/PlayerbotAI.h
-@@ -359,2 +359,4 @@ public:
+@@ -357,6 +357,8 @@ public:
+     void AddHandler(uint16 opcode, std::string const handler);
+     void Handle(ExternalEventHelper& helper);
      void AddPacket(WorldPacket const& packet);
 +    bool HasHandler(uint16 opcode) const { return handlers.find(opcode) != handlers.end(); }
 +    void Clear() { queue = std::stack<WorldPacket>(); }
  
-@@ -409,2 +411,16 @@ public:
+ private:
+     std::map<uint16, std::string> handlers;
+@@ -407,6 +409,20 @@ public:
+     void UpdateAI(uint32 elapsed, bool minimal = false) override;
+     void UpdateAIInternal(uint32 elapsed, bool minimal = false) override;
      bool UpdateAIReaction(uint32 elapsed, bool minimal, bool canControlSelf);
 +
 +    // Exclusive external control of this bot's tactics, for a training controller such as mod-dojo. World thread
@@ -204,7 +272,11 @@ index d8d7c978..399bbde3 100644
 +    uint32 GetExternalControlSkippedUpdates() const { return _externalControlSkippedUpdates; }
 +    uint32 GetExternalControlRefusedInputs() const { return _externalControlRefusedInputs; }
      Engine* GetCurrentEngine() const { return currentEngine; }
-@@ -690,2 +706,10 @@ protected:
+     void SetActionDuration(Action const* action);
+     using PlayerbotAIBase::SetActionDuration;
+@@ -688,6 +704,14 @@ protected:
+     Position jumpDestination = Position();
+     uint32 nextTransportCheck = 0;
      bool spellInterruptRequested = false;
 +
 +private:
@@ -215,3 +287,5 @@ index d8d7c978..399bbde3 100644
 +    uint32 _externalControlSkippedUpdates = 0;
 +    uint32 _externalControlRefusedInputs = 0;
  };
+ 
+ #endif
