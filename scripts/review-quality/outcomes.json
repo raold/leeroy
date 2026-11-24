@@ -1,6 +1,7 @@
 {
   "format": 1,
   "repository": "raold/leeroy",
+  "review_receipts": [],
   "outcomes": [
     {
       "id": "msvc-near-390",

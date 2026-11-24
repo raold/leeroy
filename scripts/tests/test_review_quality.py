@@ -53,6 +53,18 @@ class Outcomes(unittest.TestCase):
         self.assertEqual(a["release_build_fix"], ["one"])
         self.assertEqual(a["mature_affected_rate"], 0)
 
+    def test_explicit_local_reviewer_receipt_and_postmerge_exclusion(self):
+        l = ledger()
+        receipt = dict(pr=1, reviewer="claude-local", at="2026-11-01T00:00:00Z", commit="a"*40,
+                       evidence="https://github.com/raold/leeroy/pull/1#issuecomment-123")
+        l["review_receipts"] = [receipt, dict(receipt, reviewer="late-local", at="2026-11-02T00:00:00Z")]
+        rows = {r["reviewer"]: r for r in q.report(snapshot(), l)["reviewers"]}
+        self.assertEqual(rows["claude-local"]["post_release_fix"], ["one"])
+        self.assertNotIn("late-local", rows)
+        l["review_receipts"][0]["commit"] = "abc"
+        with self.assertRaises(ValueError):
+            q.report(snapshot(), l)
+
     def test_future_outcomes_excluded(self):
         self.assertEqual(q.report(snapshot(), ledger(), as_of="2026-11-20T00:00:00Z")["reviewers"][0]["affected_prs"], [])
 

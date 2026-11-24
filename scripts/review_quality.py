@@ -82,6 +82,16 @@ def collect(repo, since, until):
 def validate_ledger(ledger):
     if ledger.get("format") != 1:
         raise ValueError("unsupported ledger format")
+    for receipt in ledger.get("review_receipts", []):
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,63}", receipt.get("reviewer", "")):
+            raise ValueError("manual review receipts need an explicit reviewer identity")
+        if type(receipt.get("pr")) is not int or receipt["pr"] <= 0:
+            raise ValueError("manual review receipts need a positive PR number")
+        if not re.fullmatch(r"[0-9a-f]{40}", receipt.get("commit", "")):
+            raise ValueError("manual review receipts need the reviewed commit's full SHA")
+        if not receipt.get("evidence", "").startswith(f"https://github.com/{ledger['repository']}/pull/{receipt['pr']}"):
+            raise ValueError("manual review receipts need a public attestation on that PR")
+        date(receipt["at"])
     seen = set()
     for item in ledger["outcomes"]:
         if item["id"] in seen or item["kind"] not in KINDS:
@@ -111,6 +121,11 @@ def report(snapshot, ledger, *, as_of=None, mature_days=14):
     reviewers = {}
     for number, pr in pulls.items():
         names = {r["reviewer"] for r in pr["reviews"] if date(r["at"]) <= date(pr["mergedAt"])}
+        # Local reviewers often share the PR author's login. Count a named local
+        # reviewer only from an explicit, evidence-backed receipt, never by guessing
+        # from branch prefixes, author identity or a claim that 'review passed'.
+        names.update(r["reviewer"] for r in ledger.get("review_receipts", [])
+                     if r["pr"] == number and date(r["at"]) <= date(pr["mergedAt"]))
         reviewers[number] = names or {"unknown / no recorded review"}
         for name in reviewers[number]:
             rows[name]["reviewed_prs"].add(number)
@@ -147,8 +162,8 @@ def markdown(result):
     lines = ["# Review outcomes", "", f"As of {result['as_of']}; merged cohort "
              f"{result['cohort']['since']} through {result['cohort']['until']}.", "",
              "Counts associate an outcome with every recorded pre-merge reviewer of the original PR. "
-             "They are not causal blame or approval counts. Account names do not identify an agent using a shared login.", "",
-             "| Reviewer account | Reviewed PRs | Reverts | Post-release fixes | Release-build fixes | Mature affected / reviewed |",
+             "They are not causal blame or approval counts. Identities come from GitHub accounts or explicit local-review receipts; shared logins alone do not identify agents.", "",
+             "| Reviewer identity | Reviewed PRs | Reverts | Post-release fixes | Release-build fixes | Mature affected / reviewed |",
              "|---|---:|---:|---:|---:|---:|"]
     for r in result["reviewers"]:
         mature = f"{len(r['mature_affected_prs'])} / {len(r['mature_prs'])}" if r["mature_prs"] else "pending"

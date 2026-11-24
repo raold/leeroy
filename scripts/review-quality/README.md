@@ -21,6 +21,15 @@ by the same account count once per PR. A review may have found issues; these are
 review-participation counts, not approvals. Shared accounts cannot establish an
 agent identity. Missing review records stay in an explicit unknown bucket.
 
+For a local peer review conducted through a shared account, add an explicit
+`review_receipts` row to the ledger: `pr`, `reviewer` (for example `claude-local`),
+`at` (UTC), `commit` (full reviewed SHA), and `evidence` (the public PR attestation
+URL). The identity must be stated in that attestation; do not infer it from the
+branch name or PR author. Receipts after merging do not count. Use the same stable
+identity across local reviews, and do not add a receipt for a review already
+attributed by the collector. None of the initial incidents establishes a named
+local reviewer, so the initial receipt list is intentionally empty.
+
 Add a ledger row with a stable ID, kind, original PR (or null), fixing PR,
 observed UTC timestamp and public evidence. Post-release fixes additionally need
 release evidence; do not infer deployment from merging. Deduplicate one incident
