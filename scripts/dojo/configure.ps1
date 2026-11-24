@@ -45,7 +45,8 @@ pwsh -NoProfile -File scripts/dojo/configure.ps1 -Layout layout.json -Variant tr
 param(
     [Parameter(Mandatory = $true)][string] $Layout,
     [ValidateSet('disabled', 'training')][string] $Variant = 'disabled',
-    [switch] $ApplyPatches
+    [switch] $ApplyPatches,
+    [switch] $RaidAcceptance
 )
 
 Set-StrictMode -Version 3.0
@@ -55,6 +56,7 @@ $env:GIT_OPTIONAL_LOCKS = '0'
 
 $DojoGenerator = 'Visual Studio 17 2022'
 $DojoModules = @('mod_dojo', 'mod_playerbots')
+if ($RaidAcceptance) { $DojoModules += 'mod_leeroy' }
 
 function Stop-DojoConfigure([string] $Message) {
     Write-Output "configure: $Message"
@@ -107,6 +109,9 @@ if ($null -eq $patches -or $patchCode -ne 0 -or -not $patches.ok) {
 foreach ($name in @($patches.applied)) { Write-Output "configure: applied $name to roots.playerbots" }
 
 $DojoLayout = Get-Content -LiteralPath $Layout -Raw | ConvertFrom-Json -AsHashtable
+if ($RaidAcceptance -and ($Variant -ne 'training' -or 'mod-leeroy' -notin $DojoLayout.modules)) {
+    Stop-DojoConfigure 'RaidAcceptance requires Variant training and an isolated mod-leeroy in layout.modules'
+}
 $core = [System.IO.Path]::GetFullPath($DojoLayout.roots.core).Replace('\', '/').TrimEnd('/')
 $build = [System.IO.Path]::GetFullPath($DojoLayout.roots.build).Replace('\', '/').TrimEnd('/')
 $toolchain = if ($DojoLayout.Contains('toolchain') -and $DojoLayout.toolchain -is [System.Collections.IDictionary]) { $DojoLayout.toolchain } else { @{} }
@@ -136,7 +141,8 @@ $cmakeArgs.AddRange([string[]] @(
         '-DBUILD_TESTING=OFF', '-DUSE_COREPCH=ON', '-DUSE_SCRIPTPCH=ON',
         "-DCMAKE_INSTALL_PREFIX=$build/install",
         "-DBOOST_ROOT=$boost",
-        "-DAC_ENABLE_DOJO=$(if ($Variant -eq 'training') { 'ON' } else { 'OFF' })"))
+        "-DAC_ENABLE_DOJO=$(if ($Variant -eq 'training') { 'ON' } else { 'OFF' })",
+        "-DAC_DOJO_RAID_ACCEPTANCE=$(if ($RaidAcceptance) { 'ON' } else { 'OFF' })"))
 if ($toolchain.Contains('mysql') -and $toolchain.mysql) {
     $mysql = ([string] $toolchain.mysql).Replace('\', '/').TrimEnd('/')
     $cmakeArgs.AddRange([string[]] @("-DMYSQL_INCLUDE_DIR=$mysql/include", "-DMYSQL_LIBRARY=$mysql/lib/libmysql.lib"))
@@ -208,6 +214,7 @@ $receipt = [ordered]@{
     layout      = [System.IO.Path]::GetFullPath($Layout).Replace('\', '/')
     instance    = $DojoLayout.instance
     variant     = $Variant
+    raid_acceptance = [bool] $RaidAcceptance
     fresh       = $fresh
     core        = [ordered]@{ path = $core; head = Get-DojoHead $core }
     playerbots  = [ordered]@{ path = $DojoLayout.roots.playerbots; head = Get-DojoHead $DojoLayout.roots.playerbots;

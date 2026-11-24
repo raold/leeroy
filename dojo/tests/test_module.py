@@ -53,7 +53,7 @@ class RegistrationTest(unittest.TestCase):
         self.assertIn("AddSC_dojo_world();\n}", loader)
         runtime = (MODULE / "src" / "Runtime" / "DojoWorldScript.cpp").read_text(encoding="utf-8")
         self.assertRegex(runtime, r"(?m)^void AddSC_dojo_world\(\)\s*\{\s*new DojoWorldScript\(\);\s*"
-                                  r"AddSC_dojo_commands\(\);\s*\}")
+                                  r"AddSC_dojo_commands\(\);\s*AddSC_dojo_raid\(\);\s*\}")
         commands = (MODULE / "src" / "Runtime" / "DojoCommands.cpp").read_text(encoding="utf-8")
         disabled = commands.split("#else", 1)[1]
         self.assertRegex(disabled, r"void AddSC_dojo_commands\(\)\s*\{\s*\}")   # the disabled variant registers nothing
@@ -139,7 +139,7 @@ class BoundaryTest(unittest.TestCase):
     def test_only_the_director_logs_bots_in_and_only_the_manifests_fixtures(self):
         fixtures = (MODULE / "src" / "Runtime" / "DojoFixtures.cpp").read_text(encoding="utf-8")
         for path in sources("src", "Runtime"):
-            if path.name != "DojoFixtures.cpp":
+            if path.name not in ("DojoFixtures.cpp", "DojoRaid.cpp"):
                 text = path.read_text(encoding="utf-8")
                 self.assertNotIn("AddPlayerBot", text, path.name)
                 self.assertNotIn("LogoutPlayerBot", text, path.name)

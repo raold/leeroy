@@ -22,6 +22,10 @@ if (TARGET modules)
     # declares it in conf/dist/config.cmake (and reports it in src/cmake/showoptions.cmake), it is declared here, and
     # this option() then does nothing.
     option(AC_ENABLE_DOJO "Build the dojo training variant of mod-dojo (never for a live server)" OFF)
+    option(AC_DOJO_RAID_ACCEPTANCE "Include mod-leeroy in the isolated raid acceptance realm" OFF)
+    if (AC_DOJO_RAID_ACCEPTANCE AND NOT AC_ENABLE_DOJO)
+        message(FATAL_ERROR "Raid acceptance requires the isolated dojo training variant")
+    endif()
     if (AC_ENABLE_DOJO)
         set(DOJO_TRAINING_BUILD 1)
         # The training runtime logs fixture actors in through mod-playerbots, so it needs it in the same core.
@@ -33,6 +37,7 @@ if (TARGET modules)
         foreach(DOJO_MODULE ${MODULES_MODULE_LIST})
             string(TOUPPER "${DOJO_MODULE}" DOJO_MODULE_UPPER)
             if (NOT DOJO_MODULE MATCHES "^(mod-dojo|mod-playerbots)$"
+                AND NOT (AC_DOJO_RAID_ACCEPTANCE AND DOJO_MODULE STREQUAL "mod-leeroy")
                 AND NOT ";${DISABLED_AC_MODULES};" MATCHES ";${DOJO_MODULE};"
                 AND NOT "${MODULE_${DOJO_MODULE_UPPER}}" STREQUAL "disabled")
                 message(FATAL_ERROR "[mod-dojo] AC_ENABLE_DOJO builds only mod-playerbots and mod-dojo; "
@@ -48,6 +53,14 @@ if (TARGET modules)
     file(GLOB DOJO_RUNTIME_SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/Runtime/*.cpp")
     set_property(SOURCE ${DOJO_RUNTIME_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS
         DOJO_TRAINING_BUILD=${DOJO_TRAINING_BUILD})
+    if (AC_DOJO_RAID_ACCEPTANCE)
+        if (NOT ";${MODULES_MODULE_LIST};" MATCHES ";mod-leeroy;")
+            message(FATAL_ERROR "Raid acceptance needs the isolated source's mod-leeroy")
+        endif()
+        set_property(SOURCE ${DOJO_RUNTIME_SOURCES}
+            "${CMAKE_SOURCE_DIR}/modules/mod-leeroy/src/Guild/HazardJob.cpp"
+            APPEND PROPERTY COMPILE_DEFINITIONS DOJO_RAID_ACCEPTANCE=1)
+    endif()
 
     if (AC_ENABLE_DOJO)
         message(STATUS "[mod-dojo] training variant (AC_ENABLE_DOJO=ON)")
