@@ -25,7 +25,9 @@ from leeroy_voice import config
 
 @contextlib.contextmanager
 def owned_listener(live_guard, monkeypatch, need: str = "live"):
-    """A listener on a free port this test owns, guarded like a live port for this test."""
+    """A listener on a free port this test owns, guarded like a live port until the block ends.
+    Its port is free again then, and the OS may hand it straight back to the next port-0 bind
+    (CI, 2026-11-14): it is unguarded with it, not at the test's teardown."""
     listener = socket.create_server(("127.0.0.1", 0))
     listener.setblocking(False)
     port = listener.getsockname()[1]
@@ -34,6 +36,7 @@ def owned_listener(live_guard, monkeypatch, need: str = "live"):
         yield listener, port
     finally:
         listener.close()
+        del live_guard.ports[port]
 
 
 def nothing_reached(listener) -> bool:

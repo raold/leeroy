@@ -40,6 +40,8 @@ jobs:
         run: bash scripts/tests/ac-module-to-git.sh
       - name: verify runner self-test (temporary repositories and a stub mind)
         run: bash scripts/tests/verify-run.sh
+      - name: flaky report self-test (invented runs only)
+        run: python3 scripts/tests/test_flaky_report.py
 
   secrets:
     runs-on: ubuntu-latest
