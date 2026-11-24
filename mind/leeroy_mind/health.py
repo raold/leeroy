@@ -1632,14 +1632,25 @@ def _training_lab(conn, now: float) -> Check:
             guids = owned.get("guids")
             held = len(guids) if isinstance(guids, list) else 0
             current = owned.get("current")
-            trial = current.get("id") if isinstance(current, dict) else None
-            trial = f", trial {trial}" if isinstance(trial, str) and re.fullmatch(r"[0-9a-f]{32}", trial) else ""
+            ident = current.get("id") if isinstance(current, dict) else None
+            ident = ident if isinstance(ident, str) and re.fullmatch(r"[0-9a-f]{32}", ident) else None
+            trial = f", trial {ident}" if ident else ""
+            receipt = None
+            if ident:
+                found = conn.execute("SELECT value FROM meta WHERE key=?", ("tg:lab:native:" + ident,)).fetchone()
+                stored = json.loads(found[0]) if found else None
+                state = stored.get("state") if isinstance(stored, dict) else None
+                receipt = state if state in ("released", "restored") else None
         except (ValueError, TypeError, RecursionError):
             return Check(name, FAIL, "training lab: invalid lab record; inspect it with training lab")
         text = (f"training lab: blocked since {_when(since)} (halt={code}, night {night}{trial}, "
                 f"{held} members held)")
         if now - since <= LAB_HALT_S:
             return Check(name, NOTE, text)
+        if receipt:
+            return Check(name, FAIL, text + f"; native's dummy_cleanup receipt ({receipt}) is recorded: a running "
+                         "mind clears the lab on it unless a member has a standing setup (training lab shows it); "
+                         "with the mind stopped: training lab-clear")
         return Check(name, FAIL, text + "; once native's dummy_cleanup receipt or a worldserver restart is "
                      "recorded (training lab shows them), with the mind stopped: training lab-clear")
     return _table_check(name, check)
