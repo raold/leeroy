@@ -1,3 +1,16 @@
+# Ambient chat combat fence
+
+Native advertises `combat_quiet` in `hello`. A `say` command may include
+`"quiet_in_combat": true`; it is strictly boolean and defaults to false.
+`ExecuteSay` checks the current owner and speaker `IsInCombat()` on the world
+thread immediately before any chat transport. Combat refuses the command with
+`combat_quiet` and publishes no chat echo. An offline owner does not block an
+idle speaker. Commands without the flag retain their previous behavior.
+
+The mind sets this for ambient game turns when `[talk] combat_quiet` is enabled;
+direct answers, tactical callouts, urgent turns and Discord retain their own
+delivery rules. See `mind/leeroy_mind/talk/README.md` for release/rollback steps.
+
 # Offline raid stop and progress
 
 `offline_raid_stop` is a bridge command with the normal `v`, `type`, `ts` and

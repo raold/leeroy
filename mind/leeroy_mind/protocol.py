@@ -242,6 +242,7 @@ class Say:
     channel: str
     text: str
     to_guid: int = 0
+    quiet_in_combat: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,6 +465,11 @@ def encode_command(cmd, ts_ms: int) -> bytes:
     if type_name is None:
         raise ValueError(f"not a registered command: {type(cmd).__name__}")
     body = _jsonable(cmd)
+    if isinstance(cmd, Say):
+        if type(cmd.quiet_in_combat) is not bool:
+            raise ValueError('quiet_in_combat must be a boolean')
+        if not cmd.quiet_in_combat:
+            body.pop('quiet_in_combat')  # off keeps the existing wire message byte-for-byte
     # Old native guild handlers ignore optional fields. They must reject a read-only day check by type.
     if type_name == "start_offline_raid" and body.get("day_driver_ticket"):
         if not body.get("day_check") or body.get("day_prepared"):

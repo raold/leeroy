@@ -936,6 +936,7 @@ class Pipeline:
     def _init_pipeline(self, now: float) -> None:
         self.timing = TurnTiming()
         self.realism = Realism()
+        self.native_combat_quiet = False
         self.live_admission: Callable[[], Awaitable[None]] | None = None
         self._instruction_hooks: list[Callable[[Turn, TurnMeta, str], str]] = []
         self._session_id: int | None = None
@@ -5448,12 +5449,16 @@ class Pipeline:
             return "transport_refused"
         if is_discord(turn.channel):  # never a Say: its message is stored, then recorded
             return self._deliver_discord(turn, meta, p, text, memory_ids)
+        quiet = self.cfg.talk.combat_quiet and turn.kind not in {
+            TurnKind.REPLY_HUMAN, TurnKind.CALLOUT, TurnKind.URGENT}
+        if quiet and not self.native_combat_quiet:
+            return 'combat_quiet_unavailable'
         try:
             self.timing.typed_send(meta.timing_trace)
             with self.timing.span(meta.timing_trace, "bridge_ack"):
                 ack = await self.send(Say(id="", guid=turn.speaker, channel=turn.channel,
                                           text=self._wire_items(turn, meta, text),
-                                          to_guid=turn.to_guid))
+                                          to_guid=turn.to_guid, quiet_in_combat=quiet))
         except (AckTimeout, ConnectionLost) as e:
             # The bridge may still have said it: its echo can confirm it (is_echo).
             why = _CAMEL.sub("_", type(e).__name__).lower()

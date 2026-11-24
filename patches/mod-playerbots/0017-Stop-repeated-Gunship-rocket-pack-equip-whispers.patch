@@ -1,0 +1,93 @@
+From 98d48d532eb0a3d46c9e6810f3a1a3222d13eb58 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 13:25:50 -0500
+Subject: [PATCH] Stop repeated Gunship rocket-pack equip whispers
+
+---
+ src/Ai/Raid/ICC/Action/ICCActions_GSB.cpp | 22 ++++++++++++++--------
+ src/Ai/Raid/ICC/ICCTriggers.cpp           | 16 +++++++++++++---
+ 2 files changed, 27 insertions(+), 11 deletions(-)
+
+diff --git a/src/Ai/Raid/ICC/Action/ICCActions_GSB.cpp b/src/Ai/Raid/ICC/Action/ICCActions_GSB.cpp
+index 77753346..a24be4c7 100644
+--- a/src/Ai/Raid/ICC/Action/ICCActions_GSB.cpp
++++ b/src/Ai/Raid/ICC/Action/ICCActions_GSB.cpp
+@@ -4,10 +4,10 @@
+  * or (at your option) any later version.
+  */
+ 
+-#include "EquipAction.h"
+ #include "GenericSpellActions.h"
+ #include "ICCActions.h"
+ #include "ICCTriggers.h"
++#include "Item.h"
+ #include "Multiplier.h"
+ #include "NearestNpcsValue.h"
+ #include "ObjectAccessor.h"
+@@ -974,6 +974,9 @@ bool IccGunshipRocketJumpAction::UpdateBossSkullIcon(Unit* boss, uint8 skullIcon
+ 
+ bool IccGunshipRocketPackSetupAction::Execute(Event /*event*/)
+ {
++    // A fight or encounter completion may have happened after trigger selection.
++    if (!IccGunshipRocketPackSetupTrigger(botAI).IsActive())
++        return false;
+     Item* rocketPack = FindRocketPack();
+     if (!rocketPack)
+         return AcquireRocketPack();
+@@ -1018,12 +1021,15 @@ bool IccGunshipRocketPackSetupAction::AcquireRocketPack()
+ 
+ bool IccGunshipRocketPackSetupAction::EquipRocketPack()
+ {
+-    EquipAction* equipAction = dynamic_cast<EquipAction*>(botAI->GetAiObjectContext()->GetAction("equip"));
+-    if (!equipAction)
++    Item* pack = FindRocketPack();
++    if (!pack || bot->IsInCombat())
+         return false;
+-
+-    ItemIds ids;
+-    ids.insert(ITEM_GOBLIN_ROCKET_PACK);
+-    equipAction->EquipItems(ids);
+-    return true;
++    if (pack->IsEquipped())
++        return false;
++    uint16 destination = 0;
++    if (bot->CanEquipItem(NULL_SLOT, destination, pack, true) != EQUIP_ERR_OK)
++        return false;
++    // Automatic encounter setup is silent and reports actual equipped state.
++    bot->SwapItem(pack->GetPos(), destination);
++    return pack->IsEquipped();
+ }
+diff --git a/src/Ai/Raid/ICC/ICCTriggers.cpp b/src/Ai/Raid/ICC/ICCTriggers.cpp
+index fcb59ca7..a0292aad 100644
+--- a/src/Ai/Raid/ICC/ICCTriggers.cpp
++++ b/src/Ai/Raid/ICC/ICCTriggers.cpp
+@@ -9,6 +9,8 @@
+ #include "GridNotifiers.h"
+ #include "ICCActions.h"
+ #include "ICCScripts.h"
++#include "InstanceScript.h"
++#include "Item.h"
+ #include "NearestNpcsValue.h"
+ #include "ObjectAccessor.h"
+ #include "PlayerbotAIConfig.h"
+@@ -117,9 +119,17 @@ bool IccGunshipRocketJumpTrigger::IsActive()
+ 
+ bool IccGunshipRocketPackSetupTrigger::IsActive()
+ {
+-    // Fires any time a bot is standing on a friendly gunship deck, regardless of
+-    // combat state. Lets bots walk to Zafod and equip the rocket pack before the
+-    // encounter starts (and keep it ready if they acquire it mid-fight).
++    // Setup is preparation, not a combat action: the core refuses this equipment
++    // swap in combat. Friendly cannons remain after the encounter is complete.
++    constexpr uint32 gunshipEncounter = 2; // DATA_ICECROWN_GUNSHIP_BATTLE
++    InstanceScript* instance = bot->GetInstanceScript();
++    if (bot->GetMapId() != 631 || !instance || instance->GetBossState(gunshipEncounter) == DONE ||
++        !bot->IsAlive() || bot->IsInCombat() || bot->GetVehicle() || bot->IsNonMeleeSpellCast(false))
++        return false;
++    if (Item* pack = bot->GetItemByEntry(ITEM_GOBLIN_ROCKET_PACK); pack && pack->IsEquipped())
++        return false;
++
++    // Prepare near the friendly deck before the pull, including after a wipe.
+     Unit* cannonA = bot->FindNearestCreature(NPC_CANNONA, 100.0f);
+     if (cannonA && cannonA->IsFriendlyTo(bot))
+         return true;

@@ -117,6 +117,12 @@ std::string_view ExecuteSay(Leeroy::Command const& cmd)
     Speaker const speaker = FindSpeaker(cmd.guid);
     if (!speaker.error.empty())
         return speaker.error;
+    if (cmd.quietInCombat)
+    {
+        Player* human = FindHuman();
+        if (speaker.bot->IsInCombat() || (human && human->IsInCombat()))
+            return Leeroy::Err::CombatQuiet;
+    }
     std::string const text = LeeroyBotChatText(speaker.bot, cmd.text);
     if (text.empty())
         return Leeroy::Err::EmptyText;

@@ -865,6 +865,7 @@ class MindApp:
             self.world.human_online = False
             if self.engine.items is not None:  # the next worldserver says again what it has
                 self.engine.items.native = False
+            self.engine.native_combat_quiet = False
         await self._call_hooks("connection", self._connection_hooks, up)
 
     # -- the dispatch ------------------------------------------------------------------------
@@ -1022,6 +1023,7 @@ class MindApp:
             self.engine.realism.observe(ev, now)
         if self.engine.items is not None:  # native expands item placeholders: talk/items.py
             self.engine.items.native = NATIVE_FEATURE in ev.features
+        self.engine.native_combat_quiet = 'combat_quiet' in ev.features
         log_event("bridge_hello", server=ev.server, version=ev.version,
                   human_online=bool(ev.human_guid), features=",".join(ev.features) or "-")
         if self.heat is not None:
