@@ -135,7 +135,8 @@ def write_configs(layout: Layout, manifest: tuple[Path, str] | None = None, only
         name = "modules/mod_leeroy.conf"
         if only is None or name in only:
             dist = dist_dir / (name + ".dist")
-            text = conf.render(dist.read_text(encoding="utf-8"), {"Leeroy.Enable": "0"})
+            text = conf.render(dist.read_text(encoding="utf-8"),
+                               {"Leeroy.Enable": "0", "Leeroy.HumanGuid": "0", "Leeroy.GuildId": "0"})
             target = layout.configs / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")

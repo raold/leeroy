@@ -168,6 +168,12 @@ struct RaidRun
         ai->ResetStrategies(false);
         ai->ChangeStrategy("+heal", BOT_STATE_COMBAT);
         ai->SetMaster(owner);
+        // Learning/resetting talents recalculates stats. Apply the fixture
+        // reserves afterwards, so the Touch stimulus does not kill an ungeared bot.
+        bot->SetMaxHealth(100000);
+        bot->SetFullHealth();
+        bot->SetMaxPower(POWER_MANA, 30000);
+        bot->SetPower(POWER_MANA, 30000);
         GET_PLAYERBOT_AI(owner)->ChangeStrategy("+passive,+stay", BOT_STATE_COMBAT);
         GET_PLAYERBOT_AI(owner)->ChangeStrategy("+passive,+stay", BOT_STATE_NON_COMBAT);
         Group* group = new Group();
@@ -340,13 +346,21 @@ struct RaidRun
     json Status()
     {
         std::lock_guard<std::recursive_mutex> lock(events);
+        json fixtures = json::array();
+        for (std::size_t i = 0; i < actors.size(); ++i)
+            if (Player* p = Actor(i))
+                fixtures.push_back({{"slot", i}, {"map", p->GetMapId()}, {"instance", p->GetInstanceId()},
+                    {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
+                    {"health", p->GetHealth()}, {"max_health", p->GetMaxHealth()}, {"mana", p->GetPower(POWER_MANA)},
+                    {"teleporting", p->IsBeingTeleported()}, {"healer", PlayerbotAI::IsHeal(p)},
+                    {"icc", GET_PLAYERBOT_AI(p)->HasStrategy("icc", BOT_STATE_COMBAT)}});
         return {{"format", 1}, {"kind", "dojo-raid-observation"}, {"scenario", scenario}, {"token", token},
             {"state", state}, {"control", control}, {"setup", setup}, {"cleanup", cleanup}, {"failure", failure},
             {"map", map}, {"instance", instance}, {"elapsed_ms", elapsed}, {"samples", samples}, {"max_gap_ms", maxGap},
             {"combat_observed", combatObserved}, {"reach_competitor", competition}, {"effective_healing", effectiveHealing},
             {"heal_events", heals}, {"light_samples", lightSamples}, {"dark_samples", darkSamples},
             {"switch_ms", switchMs}, {"crossings", crossings}, {"hazard_samples", hazardsSeen},
-            {"minimum_clearance", minimumClearance}, {"poison_hits", damageHits}};
+            {"minimum_clearance", minimumClearance}, {"poison_hits", damageHits}, {"fixtures", fixtures}};
     }
 };
 RaidRun run;

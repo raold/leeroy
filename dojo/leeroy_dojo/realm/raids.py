@@ -100,7 +100,9 @@ def provenance(layout):
     digest = fingerprint(binary)
     if digest != fingerprint(built) or digest != linked["artifacts"]["worldserver.exe"]["sha256"]:
         raise LayoutError("staged worldserver differs from the candidate build")
-    return dict(revisions=revisions, worldserver_sha256=digest, layout_sha256=fingerprint(layout.path))
+    configs = {name: fingerprint(layout.configs / name) for name in (
+        "worldserver.conf", "modules/playerbots.conf", "modules/mod_dojo.conf", "modules/mod_leeroy.conf")}
+    return dict(revisions=revisions, worldserver_sha256=digest, layout_sha256=fingerprint(layout.path), configs=configs)
 
 
 def run(layout, *, log=print):
@@ -113,8 +115,9 @@ def run(layout, *, log=print):
     source = provenance(layout)
     dojo = read_conf(layout.configs / "modules/mod_dojo.conf")
     leeroy = read_conf(layout.configs / "modules/mod_leeroy.conf")
-    if dojo.get("Dojo.Scenario.Manifest") or leeroy.get("Leeroy.Enable") != "0":
-        raise LayoutError("raid realm needs no arena manifest and Leeroy.Enable = 0 (no bridge or live guild)")
+    if dojo.get("Dojo.Scenario.Manifest") or any(leeroy.get(key) != "0" for key in (
+            "Leeroy.Enable", "Leeroy.HumanGuid", "Leeroy.GuildId")):
+        raise LayoutError("raid realm needs no arena manifest and Leeroy Enable/HumanGuid/GuildId = 0")
     out = layout.data / "runs" / (time.strftime("%Y%m%d_%H%M%S") + "-raids-" + uuid.uuid4().hex[:8])
     out.mkdir(parents=True, exist_ok=False)
     results = []
