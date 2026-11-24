@@ -1,0 +1,996 @@
+# The verification ledger: shipped features and the evidence that shows each one working live.
+#
+# `python -m leeroy_mind verify status [--json]` and the console's Ops panel "Verification" read
+# this file and the live install read-only: bounded tails of the native logs and mind.log, and
+# mind.db opened read-only. Nothing is ever written. A feature's status:
+#   switched off  one of its switches is configured off (a native or Playerbots key unset in its
+#                 .conf counts as its compiled default, `default` below);
+#   failed        failure evidence, and nothing working seen after it;
+#   seen working  working evidence, and no failure after it;
+#   unverified    neither (`observed` evidence, such as an engage with no outcome or a death whose
+#                 last hit names a spell, never changes this).
+# Evidence older than `since` (when the change reached the live install, local time) is ignored.
+# Counts are lower bounds: log budgets, rotation and retention drop old lines, while mind.db rows
+# stay until something prunes them.
+#
+# [[feature]]: id, name, prs, since (optional), note (optional), then
+#   [[feature.switch]]  source = "mind" (a `table.key` row of console/switches.py, whose default
+#                       it takes), "native" (a Leeroy.* key) or "playerbots" (a Playerbots.* key);
+#                       native and Playerbots keys come from console/native_switch_keys.py and
+#                       name their compiled `default`. A feature mod-leeroy carries lists
+#                       Leeroy.Enable too: the module's own switch stops all of them; offline
+#                       raids, heroics, dummy trials and death-loop rescue also need
+#                       Leeroy.KeepCast.
+#   [[feature.evidence]] id, kind ("working", "failed" or "observed"), what (shown as is), and either
+#     log = "server" | "playerbots" | "mind", token (a literal every matching line carries: the
+#       scan's prefilter), pattern (a Python regex searched in the line after its timestamp; for
+#       mind.log in the record read back as "event key=value ..."; a group named `code` is
+#       tallied when it is a short identifier) and example (a synthetic line the tests match);
+#     or db = { from, where, time, unit = "s" | "ms", code }: counts, first and last `time` of
+#       `SELECT ... FROM <from> WHERE <where>`, grouped by the optional `code` expression. A pull's
+#       outcome is timed by its end (tg_pull.end_ms, guild_raid.ended), when it became known.
+# Only ids, counts, times, switch keys and short codes ever leave the ledger: never a log line,
+# a name or any text a member or the owner wrote.
+
+[[feature]]
+id = "group_rez"
+name = "Group resurrection: a rezzer with the mana walks in and rezzes"
+prs = [276, 405]
+since = "2026-11-21T10:10"
+note = "Waits for combat, a fence, a pending answer or a soulstone are expected and not counted as failures."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.GroupRez.Enable"
+default = true
+
+[[feature.evidence]]
+id = "cast"
+kind = "working"
+what = "a bot of his group cast its resurrection on a dead member (group_rez_cast)"
+log = "server"
+token = "group_rez_cast "
+pattern = '^group_rez_cast guid=\d+ body=\d+ spell=\d+'
+example = "2026-11-23 21:14:05 group_rez_cast guid=1649 body=1618 spell=20773"
+
+[[feature.evidence]]
+id = "blocked"
+kind = "failed"
+what = "a body left lying: no rezzer alive, in reach, with the mana or able to walk in (group_rez_blocked)"
+log = "server"
+token = "group_rez_blocked "
+pattern = '^group_rez_blocked reason=(?P<code>no_caster|no_caster_in_range|all_oom|unreachable) dead=\d+ casters=\d+'
+example = "2026-11-23 21:15:00 group_rez_blocked reason=all_oom dead=2 casters=1"
+
+[[feature]]
+id = "loot_handout"
+name = "DKP loot hand-out reaches the winner and is charged"
+prs = [406, 420]
+since = "2026-11-21T12:26"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.evidence]]
+id = "charged"
+kind = "working"
+what = "an item handed out in game and charged to the winner (dkp_ledger item rows)"
+db = { from = "dkp_ledger", where = "reason = 'item'", time = "ts", unit = "s" }
+
+[[feature.evidence]]
+id = "give_unknown"
+kind = "failed"
+what = "the mind lost track of a give: no answer, a wrong one or no link (guild_loot_give_unknown; code: why)"
+log = "mind"
+token = "guild_loot_give_unknown "
+pattern = '^guild_loot_give_unknown raid=\d+ item=\d+ to=\d+ command=\S+ attempt=\d+ code=(?P<code>[A-Za-z][A-Za-z0-9_]*)'
+example = '{"ts": "2026-11-23T20:01:02.123-05:00", "level": "WARNING", "event": "log", "msg": "guild_loot_give_unknown raid=24 item=50274 to=1618 command=guild-loot-24-0123456789abcdef01234567 attempt=0 code=TimeoutError"}'
+
+[[feature.evidence]]
+id = "give_refused"
+kind = "failed"
+what = "the game refused a give or the item was gone (guild_loot_give_refused)"
+log = "mind"
+token = "guild_loot_give_refused "
+pattern = '^guild_loot_give_refused raid=\d+ item=\d+ command=\S+ attempt=\d+ gone=(?:True|False)'
+example = '{"ts": "2026-11-23T20:01:02.123-05:00", "level": "INFO", "event": "log", "msg": "guild_loot_give_refused raid=24 item=50274 command=guild-loot-24-0123456789abcdef01234567 attempt=1 gone=True"}'
+
+[[feature.evidence]]
+id = "unsettled"
+kind = "observed"
+what = "loot receipts still uncertain or refused (meta guild:loot; timed by the drop, so they never decide)"
+db = { from = "meta", where = "key LIKE 'guild:loot:%' AND json_valid(value) AND json_extract(value, '$.state') IN ('uncertain', 'failed')", time = "json_extract(value, '$.received')", unit = "s", code = "coalesce(json_extract(value, '$.error'), json_extract(value, '$.state'))" }
+
+[[feature]]
+id = "invitations"
+name = "His invitations in game carried out (come, meet, sit, follow, join, fish)"
+prs = [388]
+since = "2026-11-20T17:43"
+note = "A move native refuses for a reason she can say (combat, a fence, too far) is an honest answer, not a failure."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "mind"
+key = "talk.invites"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Invites.Enable"
+default = false
+
+[[feature.evidence]]
+id = "body_done"
+kind = "working"
+what = "an invited member's body did the step (invite_body outcome=done)"
+log = "mind"
+token = "invite_body"
+pattern = '^invite_body .*\bkind=(?P<code>[a-z_]+) outcome=done\b'
+example = '{"ts": "2026-11-23T20:01:02.123-05:00", "level": "INFO", "event": "invite_body", "line": 41, "guid": 1618, "kind": "go_to", "outcome": "done", "code": "-"}'
+
+[[feature.evidence]]
+id = "body_lost"
+kind = "failed"
+what = "a step sent with no answer or no link (invite_body outcome=unknown or no_link)"
+log = "mind"
+token = "invite_body"
+pattern = '^invite_body .*\boutcome=(?P<code>unknown|no_link)\b'
+example = '{"ts": "2026-11-23T20:01:02.123-05:00", "level": "INFO", "event": "invite_body", "line": 41, "guid": 1618, "kind": "fish", "outcome": "unknown", "code": "unknown"}'
+
+[[feature.evidence]]
+id = "error"
+kind = "failed"
+what = "an invitation broke off with an error (invite_failed)"
+log = "mind"
+token = "invite_failed"
+pattern = '^invite_failed error=(?P<code>\w+)'
+example = '{"ts": "2026-11-23T20:01:02.123-05:00", "level": "WARNING", "event": "invite_failed", "error": "TimeoutError"}'
+
+[[feature]]
+id = "you_lead"
+name = "\"You lead\": a member leads his group while he follows"
+prs = [393]
+since = "2026-11-20T21:23"
+note = "Ends he chose, arrivals, his leaving and the 60-minute cap are ordinary ends."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "mind"
+key = "talk.lead"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Lead.Enable"
+default = false
+
+[[feature.evidence]]
+id = "started"
+kind = "working"
+what = "a member took his group's lead (lead_started)"
+log = "server"
+token = "lead_started "
+pattern = '^mod-leeroy: lead_started guid=\d+ activity=(?P<code>[a-z_]+) followers=\d+'
+example = "2026-11-23 20:05:00 mod-leeroy: lead_started guid=1618 activity=questing followers=3"
+
+[[feature.evidence]]
+id = "ended_badly"
+kind = "failed"
+what = "a lead that found no path or failed after it was accepted (lead_ended why=no_path or failed)"
+log = "server"
+token = "lead_ended "
+pattern = '^mod-leeroy: lead_ended guid=\d+ why=(?P<code>no_path|failed) followers=\d+'
+example = "2026-11-23 20:25:00 mod-leeroy: lead_ended guid=1618 why=no_path followers=3"
+
+[[feature.evidence]]
+id = "error"
+kind = "failed"
+what = "the mind's lead broke off with an error (lead_failed)"
+log = "mind"
+token = "lead_failed"
+pattern = '^lead_failed error=(?P<code>\w+)'
+example = '{"ts": "2026-11-23T20:01:02.123-05:00", "level": "WARNING", "event": "lead_failed", "error": "TimeoutError"}'
+
+[[feature]]
+id = "twin_essences"
+name = "Twin Val'kyr: bots take essences and swap them for vortexes"
+prs = [416]
+since = "2026-11-21T11:26"
+
+[[feature.switch]]
+source = "playerbots"
+key = "Playerbots.TwinValkyrInteractions"
+default = false
+
+[[feature.evidence]]
+id = "killed"
+kind = "working"
+what = "a Twin Val'kyr pull ended in a kill (tg_pull 649:3)"
+db = { from = "tg_pull", where = "map = 649 AND boss_id = 3 AND outcome = 'killed'", time = "end_ms", unit = "ms", code = "kind" }
+
+[[feature.evidence]]
+id = "wiped"
+kind = "failed"
+what = "a Twin Val'kyr pull ended in a wipe (tg_pull 649:3)"
+db = { from = "tg_pull", where = "map = 649 AND boss_id = 3 AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "kind" }
+
+[[feature.evidence]]
+id = "vortex_deaths"
+kind = "observed"
+what = "a member's last recorded hit before death was a Light or Dark Vortex (tg_death; the cause is not proven)"
+db = { from = "tg_death d JOIN tg_pull p ON p.id = d.pull", where = "p.map = 649 AND p.boss_id = 3 AND d.spell IN (66046, 66058, 67206, 67182, 67207, 67183, 67208, 67184)", time = "p.start_ms + d.at_ms", unit = "ms" }
+
+[[feature]]
+id = "valithria_healers"
+name = "Valithria: healers stay on her through portals and adds"
+prs = [416, 439]
+since = "2026-11-22T16:26"
+
+[[feature.evidence]]
+id = "watch_done"
+kind = "working"
+what = "a watched Valithria pull ended with her healed (valithria_watch end=done)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ end=done '
+example = "2026-11-23 01:12:40 valithria_watch instance=812 end=done hp=100.0"
+
+[[feature.evidence]]
+id = "killed"
+kind = "working"
+what = "a Valithria pull ended in success (tg_pull 631:10 killed)"
+db = { from = "tg_pull", where = "map = 631 AND boss_id = 10 AND outcome = 'killed'", time = "end_ms", unit = "ms", code = "kind" }
+
+[[feature.evidence]]
+id = "watch_reset"
+kind = "failed"
+what = "a watched Valithria pull reset (valithria_watch end=reset)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ end=reset '
+example = "2026-11-23 01:02:10 valithria_watch instance=812 end=reset hp=31.5"
+
+[[feature.evidence]]
+id = "wiped"
+kind = "failed"
+what = "a Valithria pull ended in a wipe (tg_pull 631:10)"
+db = { from = "tg_pull", where = "map = 631 AND boss_id = 10 AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "kind" }
+
+[[feature]]
+id = "living_poison"
+name = "Naxxramas: his group keeps clear of the Living Poison slimes"
+prs = [424]
+since = "2026-11-21T16:08"
+note = "No direct telemetry: hazard lines carry no npc or map, trash is not recorded as a pull, and a death's spell is only its last recorded hit. A Grobbulus pull only shows the group crossed the hall; watch it in game before claiming it works."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Hazards.Enable"
+default = false
+
+[[feature.evidence]]
+id = "crossed"
+kind = "observed"
+what = "a Grobbulus pull after the Living Poison hall (tg_pull 533:1)"
+db = { from = "tg_pull", where = "map = 533 AND boss_id = 1", time = "end_ms", unit = "ms", code = "kind" }
+
+[[feature.evidence]]
+id = "explode_deaths"
+kind = "observed"
+what = "a member's last recorded hit before death inside a pull was a Living Poison's Explode (tg_death spell 28433; the cause is not proven)"
+db = { from = "tg_death d JOIN tg_pull p ON p.id = d.pull", where = "p.map = 533 AND d.spell = 28433", time = "p.start_ms + d.at_ms", unit = "ms" }
+
+[[feature]]
+id = "toc_slime_pools"
+name = "Northrend Beasts: bots leave the growing slime pools"
+prs = [448]
+since = "2026-11-22T16:26"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Mechanics.Enable"
+default = false
+
+[[feature.switch]]
+source = "mind"
+key = "raidplay.respond"
+
+[[feature.switch]]
+source = "mind"
+key = "training.playbooks"
+
+[[feature.evidence]]
+id = "response"
+kind = "working"
+what = "the responder moved bots out of a slime pool (mechanic_response toc.beasts.slime_pool)"
+log = "server"
+token = "toc.beasts.slime_pool"
+pattern = '^mechanic_response id=toc\.beasts\.slime_pool spell=\d+ kind=\S+ members=[1-9]\d* map=649 instance=\d+ cancelled=(?:0|false)'
+example = "2026-11-23 21:40:12 mechanic_response id=toc.beasts.slime_pool spell=66881 kind=avoid_ground members=3 map=649 instance=77 cancelled=0"
+
+[[feature.evidence]]
+id = "standing_in"
+kind = "failed"
+what = "a proven check failure: members hit by Slime Pool past the allowance (tg_failure)"
+db = { from = "tg_failure f JOIN tg_pull p ON p.id = f.pull", where = "p.map = 649 AND p.boss_id = 0 AND f.key = 'Slime Pool' AND f.count > 0", time = "p.end_ms", unit = "ms" }
+
+[[feature.evidence]]
+id = "unsupported"
+kind = "failed"
+what = "the worldserver lacks the growing cast radius, so the pools were sent at a fixed size (raidplay_respond_cast_radius_unsupported)"
+log = "mind"
+token = "raidplay_respond_cast_radius_unsupported"
+pattern = '^raidplay_respond_cast_radius_unsupported\b'
+example = '{"ts": "2026-11-23T20:01:02.123-05:00", "level": "INFO", "event": "raidplay_respond_cast_radius_unsupported"}'
+
+[[feature]]
+id = "mechanic_responder"
+name = "Mechanic responder: cast members moved out of boss mechanics"
+prs = [301, 392, 396, 428]
+since = "2026-11-14T12:03"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Mechanics.Enable"
+default = false
+
+[[feature.switch]]
+source = "mind"
+key = "raidplay.respond"
+
+[[feature.switch]]
+source = "mind"
+key = "training.playbooks"
+
+[[feature.evidence]]
+id = "response"
+kind = "working"
+what = "the responder moved bots for a mechanic (mechanic_response; code: the mechanic)"
+log = "server"
+token = "mechanic_response "
+pattern = '^mechanic_response id=(?P<code>[a-z0-9_.]+) spell=\d+ kind=\S+ members=[1-9]\d* map=\d+ instance=\d+ cancelled=(?:0|false)'
+example = "2026-11-23 00:20:36 mechanic_response id=naxx.anubrekhan.impale spell=28783 kind=move_out_cone members=6 map=533 instance=476 cancelled=0"
+
+[[feature.evidence]]
+id = "tables"
+kind = "observed"
+what = "the mind sent a raid's mechanics to native (mechanic_table)"
+log = "server"
+token = "mechanic_table "
+pattern = '^mechanic_table map=\d+ difficulty=\d+ rules=\d+'
+example = "2026-11-22 17:04:07 mechanic_table map=533 difficulty=0 rules=9"
+
+[[feature.evidence]]
+id = "guard_missing"
+kind = "failed"
+what = "the worldserver started without the playerbots mechanic guard"
+log = "server"
+token = "mechanic guard unavailable"
+pattern = '^mod-leeroy: mechanic guard unavailable'
+example = "2026-11-22 17:02:58 mod-leeroy: mechanic guard unavailable: playerbots lacks PlayerbotMechanicGuard"
+
+[[feature]]
+id = "hazard_filter"
+name = "Hazard filter: his group's bots keep out of ground hazards while following"
+prs = [296, 424]
+since = "2026-11-14T08:52"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Hazards.Enable"
+default = false
+
+[[feature.evidence]]
+id = "moved"
+kind = "working"
+what = "a minute in which members took a safe spot, a detour or an exit (hazards_minute with members moved)"
+log = "server"
+token = "hazards_minute "
+pattern = '^hazards_minute aware=\d+ zones=\d+ (?:spot_members=[1-9]|spot_members=\d+ detour_members=[1-9]|spot_members=\d+ detour_members=\d+ exit_members=[1-9])'
+example = "2026-11-23 18:07:00 hazards_minute aware=12 zones=2 spot_members=0 detour_members=3 exit_members=0"
+
+[[feature.evidence]]
+id = "avoid_on"
+kind = "observed"
+what = "a member of his group got avoid aoe out of combat (hazard_avoid_on)"
+log = "server"
+token = "hazard_avoid_on "
+pattern = '^hazard_avoid_on guid=\d+'
+example = "2026-11-23 18:06:24 hazard_avoid_on guid=1649"
+
+[[feature.evidence]]
+id = "loop_guard"
+kind = "failed"
+what = "a member kept walking back into a hazard and the loop guard yielded (hazard_exit_yield)"
+log = "server"
+token = "hazard_exit_yield "
+pattern = '^hazard_exit_yield guid=\d+ zones=\d+'
+example = "2026-11-23 18:08:10 hazard_exit_yield guid=1649 zones=1"
+
+[[feature.evidence]]
+id = "filter_missing"
+kind = "failed"
+what = "the worldserver started without the playerbots hazard filter"
+log = "server"
+token = "hazard filter unavailable"
+pattern = '^mod-leeroy: hazard filter unavailable'
+example = "2026-11-22 17:02:58 mod-leeroy: hazard filter unavailable: playerbots lacks PlayerbotHazardFilter"
+
+[[feature]]
+id = "cast_death_loop"
+name = "Cast death loop rescue: a member dying over and over goes home"
+prs = [241]
+since = "2026-11-11"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.CastDeathLoop.Enable"
+default = false
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
+[[feature.evidence]]
+id = "rescued"
+kind = "working"
+what = "a looping member was sent to her homebind (cast_death_loop_rescued)"
+log = "server"
+token = "cast_death_loop_rescued "
+pattern = '^cast_death_loop_rescued guid=\d+ deaths=\d+'
+example = "2026-11-23 10:00:01 cast_death_loop_rescued guid=2201 deaths=3"
+
+[[feature.evidence]]
+id = "refused"
+kind = "failed"
+what = "a rescue the game refused (cast_death_loop_refused)"
+log = "server"
+token = "cast_death_loop_refused "
+pattern = '^cast_death_loop_refused guid=\d+ reason=(?P<code>\S+)'
+example = "2026-11-23 10:00:01 cast_death_loop_refused guid=2201 reason=invalid_homebind"
+
+[[feature]]
+id = "owner_auras"
+name = "His listed auras kept on him (Leeroy.OwnerAuras)"
+prs = [423]
+since = "2026-11-21T16:08"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.evidence]]
+id = "reapplied"
+kind = "working"
+what = "an aura he lost was put back (owner_aura_reapplied; code: why it went)"
+log = "server"
+token = "owner_aura_reapplied "
+pattern = '^owner_aura_reapplied spell=\d+ why=(?P<code>[a-z_]+)'
+example = "2026-11-23 20:00:00 owner_aura_reapplied spell=6560 why=death"
+
+[[feature.evidence]]
+id = "refused"
+kind = "failed"
+what = "putting an aura back failed or it did not stay on him (owner_aura_refused; code: why it went)"
+log = "server"
+token = "owner_aura_refused "
+pattern = '^owner_aura_refused spell=\d+ why=(?P<code>[a-z_]+)'
+example = "2026-11-23 20:00:01 owner_aura_refused spell=6560 why=dispelled"
+
+[[feature.evidence]]
+id = "listed"
+kind = "observed"
+what = "the worldserver read his aura list (owner_auras spells=)"
+log = "server"
+token = "owner_auras spells="
+pattern = '^owner_auras spells='
+example = "2026-11-22 17:03:01 owner_auras spells=6560"
+
+[[feature.evidence]]
+id = "invalid"
+kind = "failed"
+what = "an entry of the list is not an aura spell (owner_aura_invalid)"
+log = "server"
+token = "owner_aura_invalid "
+pattern = '^owner_aura_invalid (?:spell=\d+ reason=(?P<code>[a-z_]+)|entry=)'
+example = "2026-11-22 17:03:01 owner_aura_invalid spell=12345 reason=not_an_aura"
+
+[[feature]]
+id = "offline_toc"
+name = "Offline raids in Trial of the Crusader"
+prs = [397, 410]
+since = "2026-11-20T22:20"
+note = "Dungeon-clear's own lines reach Playerbots.log only while its channel falls back there; mod_dungeon_clear.conf routes it to DungeonClear.log, which has no times and is not read, so they are observed only. The pulls and raid rows in mind.db decide."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
+[[feature.evidence]]
+id = "killed"
+kind = "working"
+what = "an offline ToC pull ended in a kill (tg_pull kind=offline, map 649)"
+db = { from = "tg_pull", where = "kind = 'offline' AND map = 649 AND outcome = 'killed'", time = "end_ms", unit = "ms" }
+
+[[feature.evidence]]
+id = "staged"
+kind = "observed"
+what = "dungeon-clear moved an offline ToC run to its next stage ([DC:...] ToC raid)"
+log = "playerbots"
+token = "] ToC raid "
+pattern = '^\[DC:[^\]]*\] ToC raid '
+example = "2026-11-21 15:45:00 [DC:Botname] ToC raid — fighting (progress 1)"
+
+[[feature.evidence]]
+id = "no_kills"
+kind = "failed"
+what = "an offline ToC run that ended with no kill (guild_raid; code: its outcome)"
+db = { from = "guild_raid", where = "offline = 1 AND raid_key = 'toc' AND ended IS NOT NULL AND kills = 0", time = "ended", unit = "s", code = "outcome" }
+
+[[feature]]
+id = "offline_ulduar"
+name = "Offline raids in Ulduar (Flame Leviathan passed)"
+prs = [397]
+since = "2026-11-20T22:20"
+note = "Dungeon-clear's own lines reach Playerbots.log only while its channel falls back there; mod_dungeon_clear.conf routes it to DungeonClear.log, which has no times and is not read, so they are observed only. The pulls and raid rows in mind.db decide."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
+[[feature.evidence]]
+id = "killed"
+kind = "working"
+what = "an offline Ulduar pull ended in a kill (tg_pull kind=offline, map 603)"
+db = { from = "tg_pull", where = "kind = 'offline' AND map = 603 AND outcome = 'killed'", time = "end_ms", unit = "ms" }
+
+[[feature.evidence]]
+id = "leviathan_passed"
+kind = "observed"
+what = "dungeon-clear took bots past Flame Leviathan to the Colossal Forge"
+log = "playerbots"
+token = "is passed, not fought"
+pattern = 'Flame Leviathan \(state \d+\) is passed, not fought'
+example = "2026-11-22 00:50:00 [DC:Botname] Ulduar — Flame Leviathan (state 0) is passed, not fought: 9 bot(s) taken to the Colossal Forge by the Ulduar Teleporter's destination (1.0, 2.0, 3.0); 0 outside still waiting (combat, a vehicle)"
+
+[[feature.evidence]]
+id = "no_kills"
+kind = "failed"
+what = "an offline Ulduar run that ended with no kill (guild_raid; code: its outcome)"
+db = { from = "guild_raid", where = "offline = 1 AND raid_key = 'ulduar' AND ended IS NOT NULL AND kills = 0", time = "ended", unit = "s", code = "outcome" }
+
+[[feature]]
+id = "offline_icc_gunship"
+name = "Offline ICC passes the gunship and starts Saurfang"
+prs = [409]
+since = "2026-11-21T10:10"
+note = "Dungeon-clear's own lines reach Playerbots.log only while its channel falls back there; mod_dungeon_clear.conf routes it to DungeonClear.log, which has no times and is not read, so they are observed only. The pulls and raid rows in mind.db decide."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
+[[feature.evidence]]
+id = "passed"
+kind = "observed"
+what = "dungeon-clear passed the gunship for an offline run (dc_icc_gunship_pass)"
+log = "playerbots"
+token = "dc_icc_gunship_pass "
+pattern = '^dc_icc_gunship_pass instance=\d+ earned=\d+'
+example = "2026-11-24 00:40:00 dc_icc_gunship_pass instance=901 earned=0"
+
+[[feature.evidence]]
+id = "saurfang"
+kind = "working"
+what = "an offline run pulled Deathbringer Saurfang (tg_pull kind=offline, 631:3)"
+db = { from = "tg_pull", where = "kind = 'offline' AND map = 631 AND boss_id = 3", time = "end_ms", unit = "ms" }
+
+[[feature.evidence]]
+id = "stuck"
+kind = "failed"
+what = "an offline ICC run killed Deathwhisper and ended without reaching Saurfang (guild_raid; code: its outcome)"
+db = { from = "guild_raid r", where = "r.offline = 1 AND r.raid_key = 'icc' AND r.ended IS NOT NULL AND EXISTS (SELECT 1 FROM tg_pull p WHERE p.raid_id = r.raid_id AND p.map = 631 AND p.boss_id = 1 AND p.outcome = 'killed') AND NOT EXISTS (SELECT 1 FROM tg_pull p WHERE p.raid_id = r.raid_id AND p.map = 631 AND p.boss_id >= 3)", time = "r.ended", unit = "s", code = "r.outcome" }
+
+[[feature]]
+id = "offline_icc_valithria"
+name = "Offline ICC drives Valithria through real healing"
+prs = [442]
+since = "2026-11-22T16:26"
+note = "Dungeon-clear's own lines reach Playerbots.log only while its channel falls back there; mod_dungeon_clear.conf routes it to DungeonClear.log, which has no times and is not read, so they are observed only. The pulls and raid rows in mind.db decide."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
+[[feature.evidence]]
+id = "killed"
+kind = "working"
+what = "an offline Valithria pull ended in success (tg_pull kind=offline, 631:10)"
+db = { from = "tg_pull", where = "kind = 'offline' AND map = 631 AND boss_id = 10 AND outcome = 'killed'", time = "end_ms", unit = "ms" }
+
+[[feature.evidence]]
+id = "started"
+kind = "observed"
+what = "dungeon-clear engaged Valithria for an offline run (dc_icc_valithria_start)"
+log = "playerbots"
+token = "dc_icc_valithria_start "
+pattern = '^dc_icc_valithria_start instance=\d+ members=\d+'
+example = "2026-11-24 01:00:00 dc_icc_valithria_start instance=901 members=10"
+
+[[feature.evidence]]
+id = "wiped"
+kind = "failed"
+what = "an offline Valithria pull ended in a wipe (tg_pull kind=offline, 631:10)"
+db = { from = "tg_pull", where = "kind = 'offline' AND map = 631 AND boss_id = 10 AND outcome = 'wiped'", time = "end_ms", unit = "ms" }
+
+[[feature]]
+id = "offline_reliability"
+name = "Offline raids survive dungeon-clear teleports, full wipes and restarts"
+prs = [404]
+since = "2026-11-21T10:10"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
+[[feature.evidence]]
+id = "ran_its_course"
+kind = "working"
+what = "an offline run with kills that ended by an ordinary rule: cleared, a wipe cap, a stall, its deadline or a stop (guild_raid; code: its outcome)"
+db = { from = "guild_raid", where = "offline = 1 AND ended IS NOT NULL AND kills > 0 AND outcome IN ('cleared', 'cleared_reachable', 'wipe_cap', 'boss_wipe_cap', 'stalled', 'dc_stalled', 'dc_door_blocked', 'dc_paused', 'timeout', 'stopped', 'operator_stopped', 'human_login')", time = "ended", unit = "s", code = "outcome" }
+
+[[feature.evidence]]
+id = "full_wipe"
+kind = "observed"
+what = "a whole offline raid died and was restarted at the entrance (full_wipe)"
+log = "server"
+token = " full_wipe "
+pattern = '^leeroy: raid [0-9a-f]{32} full_wipe dead=\d+ inside=\d+ restarts=\d+ kills=\d+'
+example = "2026-11-24 00:30:00 leeroy: raid 0123456789abcdef0123456789abcdef full_wipe dead=10 inside=10 restarts=1 kills=1"
+
+[[feature.evidence]]
+id = "fell_apart"
+kind = "failed"
+what = "an offline run that fell apart, lost its terminal or failed its cleanup (guild_raid too_few, leader_lost, terminal_lost, failed, cleanup_failed:*; code: its outcome)"
+db = { from = "guild_raid", where = "offline = 1 AND (outcome IN ('too_few', 'leader_lost', 'terminal_lost', 'failed') OR outcome LIKE 'cleanup_failed:%')", time = "ended", unit = "s", code = "outcome" }
+
+[[feature]]
+id = "offline_reserves"
+name = "Offline raids fill admission losses from a bounded bench"
+prs = [413]
+since = "2026-11-21T11:26"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
+[[feature.evidence]]
+id = "filled"
+kind = "working"
+what = "reserves joined an offline run at admission (reserves=)"
+log = "server"
+token = " reserves="
+pattern = '^leeroy: raid [0-9a-f]{32} reserves=[1-9]\d* members=\d+ minimum=\d+'
+example = "2026-11-24 00:01:20 leeroy: raid 0123456789abcdef0123456789abcdef reserves=2 members=10 minimum=8"
+
+[[feature]]
+id = "dummy_lab"
+name = "Nightly dummy lab: trials form their party at the dummy and clean up"
+prs = [384]
+since = "2026-11-20T17:43"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "mind"
+key = "training.enabled"
+
+[[feature.switch]]
+source = "mind"
+key = "training.lab"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Training.Enable"
+default = false
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
+[[feature.evidence]]
+id = "complete"
+kind = "working"
+what = "a lab night ran its dummy rounds to the end (tg:lab:summary reason dummy_rounds_complete)"
+db = { from = "meta", where = "key LIKE 'tg:lab:summary:%' AND json_valid(value) AND json_extract(value, '$.reason') = 'dummy_rounds_complete'", time = "json_extract(value, '$.ts')", unit = "s" }
+
+[[feature.evidence]]
+id = "blocked"
+kind = "failed"
+what = "the lab is blocked now, holding its members (tg:lab:owned phase blocked; code: its halt)"
+db = { from = "meta", where = "key = 'tg:lab:owned' AND json_valid(value) AND json_extract(value, '$.phase') = 'blocked'", time = "json_extract(value, '$.halted_at')", unit = "s", code = "json_extract(value, '$.halt')" }
+
+[[feature.evidence]]
+id = "halted"
+kind = "failed"
+what = "a lab night halted on a native refusal, an unproved cleanup or a lost link (tg:lab:summary; code: its reason)"
+db = { from = "meta", where = "key LIKE 'tg:lab:summary:%' AND json_valid(value) AND json_extract(value, '$.reason') IN ('native_cleanup_unproved', 'dummy_command_rejected', 'custom_strategy_rejected', 'rotation_identity_conflict', 'attempt_manifest_unavailable', 'connection_lost')", time = "json_extract(value, '$.ts')", unit = "s", code = "json_extract(value, '$.reason')" }
+
+[[feature]]
+id = "raid_browser"
+name = "Idle random bots listed in the Raid Browser"
+prs = []
+note = "A local mod-playerbots commit (patch 0001), not a pull request."
+
+[[feature.evidence]]
+id = "listed"
+kind = "working"
+what = "a random bot listed itself in the Raid Browser"
+log = "playerbots"
+token = "lists in the raid browser"
+pattern = 'lists in the raid browser for \d+ raid'
+example = "2026-11-22 17:05:07 Bot GUID Full: 0x0000000000000bab Type: Player Low: 2987 H:80 <Botname>: lists in the raid browser for 3 raid(s)"
+
+[[feature]]
+id = "day_plans"
+name = "Members live planned days in the world"
+prs = [399]
+since = "2026-11-21T10:10"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "mind"
+key = "life.day_plans"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.DayPlans.Enable"
+default = false
+
+[[feature.switch]]
+source = "mind"
+key = "realm.enabled"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Realm.Enable"
+default = false
+
+[[feature.evidence]]
+id = "done"
+kind = "working"
+what = "a member's planned activity in the world ended as planned after her arrival was witnessed (day_plan done, ended, with evidence; offline blocks excluded)"
+db = { from = "day_plan d JOIN game_event g ON g.id = d.evidence", where = "d.status = 'done' AND d.reason = 'ended' AND d.activity <> 'offline'", time = "g.ts", unit = "s", code = "d.activity" }
+
+[[feature]]
+id = "member_heroics"
+name = "Members run heroics together when they agree to"
+prs = [401, 415]
+since = "2026-11-21T10:10"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "mind"
+key = "life.dungeons"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.MemberDungeon.Enable"
+default = false
+
+[[feature.switch]]
+source = "mind"
+key = "server.enabled"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
+[[feature.evidence]]
+id = "boss_killed"
+kind = "working"
+what = "a heroic the members agreed to killed a boss (member_heroic_encounter killed)"
+db = { from = "member_heroic_encounter", where = "state = 'killed'", time = "ts", unit = "ms" }
+
+[[feature]]
+id = "lich_king"
+name = "Lich King: Frostmourne room and platform mechanics"
+prs = [443]
+since = "2026-11-24T15:15"
+
+[[feature.switch]]
+source = "playerbots"
+key = "Playerbots.LichKingMechanics"
+default = false
+
+[[feature.evidence]]
+id = "handled"
+kind = "working"
+what = "a bot carried out a Lich King mechanic (lk_mechanic ok=true; code: the mechanic)"
+log = "playerbots"
+token = "lk_mechanic "
+pattern = '^lk_mechanic instance=\d+ bot=\d+ room=\d+ code=(?P<code>[a-z_]+) ok=true '
+example = "2026-11-25 22:10:00 lk_mechanic instance=950 bot=1618 room=1 code=valkyr_rescue ok=true entry=36609"
+
+[[feature.evidence]]
+id = "killed"
+kind = "working"
+what = "a Lich King pull ended in a kill (tg_pull 631:12)"
+db = { from = "tg_pull", where = "map = 631 AND boss_id = 12 AND outcome = 'killed'", time = "end_ms", unit = "ms", code = "kind" }
+
+[[feature.evidence]]
+id = "not_handled"
+kind = "failed"
+what = "a bot could not carry out a Lich King mechanic (lk_mechanic ok=false; code: the mechanic)"
+log = "playerbots"
+token = "lk_mechanic "
+pattern = '^lk_mechanic instance=\d+ bot=\d+ room=\d+ code=(?P<code>[a-z_]+) ok=false '
+example = "2026-11-25 22:10:00 lk_mechanic instance=950 bot=1618 room=0 code=no_safe_path ok=false entry=0"
+
+[[feature.evidence]]
+id = "wiped"
+kind = "failed"
+what = "a Lich King pull ended in a wipe (tg_pull 631:12)"
+db = { from = "tg_pull", where = "map = 631 AND boss_id = 12 AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "kind" }
+
+[[feature]]
+id = "yogg_brain"
+name = "Yogg-Saron: brain teams through the portals, sanity kept"
+prs = [445]
+since = "2026-11-22T16:26"
+
+[[feature.switch]]
+source = "playerbots"
+key = "Playerbots.YoggBrainSupport"
+default = false
+
+[[feature.evidence]]
+id = "came_back"
+kind = "working"
+what = "a brain team member came back out of the brain (yogg_brain exit)"
+log = "playerbots"
+token = "yogg_brain exit "
+pattern = '^yogg_brain exit instance=\d+ bot=\d+ sanity=\d+'
+example = "2026-11-25 22:10:00 yogg_brain exit instance=960 bot=1618 sanity=71"
+
+[[feature.evidence]]
+id = "killed"
+kind = "working"
+what = "a Yogg-Saron pull ended in a kill (tg_pull 603:12)"
+db = { from = "tg_pull", where = "map = 603 AND boss_id = 12 AND outcome = 'killed'", time = "end_ms", unit = "ms", code = "kind" }
+
+[[feature.evidence]]
+id = "entered"
+kind = "observed"
+what = "a brain team member went through a portal (yogg_brain enter)"
+log = "playerbots"
+token = "yogg_brain enter "
+pattern = '^yogg_brain enter instance=\d+ bot=\d+ sanity=\d+'
+example = "2026-11-25 22:09:00 yogg_brain enter instance=960 bot=1618 sanity=80"
+
+[[feature.evidence]]
+id = "path_blocked"
+kind = "failed"
+what = "a brain team member found no path (yogg_brain path_blocked)"
+log = "playerbots"
+token = "yogg_brain path_blocked "
+pattern = '^yogg_brain path_blocked instance=\d+ bot=\d+ '
+example = "2026-11-25 22:09:30 yogg_brain path_blocked instance=960 bot=1618 mode=2 path=4"
+
+[[feature.evidence]]
+id = "wiped"
+kind = "failed"
+what = "a Yogg-Saron pull ended in a wipe (tg_pull 603:12)"
+db = { from = "tg_pull", where = "map = 603 AND boss_id = 12 AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "kind" }
+
+[[feature]]
+id = "raid_vehicles"
+name = "Malygos and Flame Leviathan vehicles flown and driven by bots"
+prs = [422]
+since = "2026-11-21T16:08"
+
+[[feature.switch]]
+source = "playerbots"
+key = "Playerbots.RaidVehicleSupport"
+default = false
+
+[[feature.evidence]]
+id = "killed"
+kind = "working"
+what = "a Malygos or Flame Leviathan pull ended in a kill (tg_pull 616:0, 603:0; code: the boss)"
+db = { from = "tg_pull", where = "((map = 616 AND boss_id = 0) OR (map = 603 AND boss_id = 0)) AND outcome = 'killed'", time = "end_ms", unit = "ms", code = "CASE map WHEN 616 THEN 'malygos' ELSE 'flame_leviathan' END" }
+
+[[feature.evidence]]
+id = "wiped"
+kind = "failed"
+what = "a Malygos or Flame Leviathan pull ended in a wipe (tg_pull 616:0, 603:0; code: the boss)"
+db = { from = "tg_pull", where = "((map = 616 AND boss_id = 0) OR (map = 603 AND boss_id = 0)) AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "CASE map WHEN 616 THEN 'malygos' ELSE 'flame_leviathan' END" }

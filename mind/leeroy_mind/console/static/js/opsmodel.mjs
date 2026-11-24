@@ -4,7 +4,7 @@ import { outcomeWords } from "./rendermodel.mjs";
 import { isoMinute } from "./dates.mjs";
 export const PANELS = [
   ["health", "Health"], ["night", "Night"], ["realm", "Realm holds"], ["raids", "Raids"],
-  ["debrief", "Raid debrief"],
+  ["debrief", "Raid debrief"], ["verify", "Verification"],
   ["selfies", "Selfies and snaps"], ["backups", "Backups"], ["drift", "Release drift"], ["schedules", "Scheduled tasks"], ["switches", "Feature switchboard"]
 ];
 const obj = x => x && typeof x === "object" && !Array.isArray(x) ? x : {};

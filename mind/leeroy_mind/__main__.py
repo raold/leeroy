@@ -1664,6 +1664,9 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     if argv and argv[0] == "health":
         from .health import main as health_main
         return health_main(argv[1:])
+    if argv and argv[0] == "verify":
+        from .verify.cli import verify_main
+        return verify_main(argv[1:])
     if argv and argv[0] == "turing":
         from .turing.cli import turing_main
         return turing_main(argv[1:])
@@ -1720,6 +1723,8 @@ def main(argv: list[str] | None = None, *, make_llm=None) -> int:
     sub.add_parser("health", help="a read-only check of the live install: the servers, the "
                                   "mind, its endpoint, the console, voice and Ollama; one ok, "
                                   "note or FAIL line each")
+    sub.add_parser("verify", help="the verification ledger: which shipped features have been "
+                                  "seen working live (read-only)")
     sub.add_parser("raidplay", help="raid playbooks per boss: show, check against the spell "
                                     "book, and extract local DBM facts")
     sub.add_parser("memory", help="rescope: make stored memory scopes as strict as their "

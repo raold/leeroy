@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { PANELS, badge, lines, panelWords } from "../../../leeroy_mind/console/static/js/opsmodel.mjs";
 
-test("all ten independent panels have missing and error words", () => {
-  assert.equal(PANELS.length, 10);
+test("all eleven independent panels have missing and error words", () => {
+  assert.equal(PANELS.length, 11);
   PANELS.forEach(([name]) => {
     assert.deepEqual(lines(name, { status: "missing", why: "older database" }), ["Not set up yet: older database"]);
     assert.deepEqual(lines(name, { status: "error", why: "Skipped: budget" }), ["Skipped: budget"]);
