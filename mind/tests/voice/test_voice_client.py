@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,7 @@ from leeroy_mind.voice.brief import load_specs
 from leeroy_mind.voice.client import VoiceClient, VoiceDown
 from leeroy_mind.voice.config import VoiceCfg, load_voice_config
 
+GOLDEN_DIR = Path(__file__).resolve().parents[3] / "voice" / "tests" / "fixtures"
 
 async def until(pred, limit=3.0):
     end = asyncio.get_running_loop().time() + limit
@@ -178,6 +180,79 @@ def test_fake_voice_client_sends_only_when_greeted():
     f.greeted = True
     f.send(wire.Raid("none", 0))
     assert f.sent == [wire.Raid("none", 0)] and f.status is None
+
+
+SPEAK = wire.Speak("s1", 101, "hi", "guild_hall", False, "p2", "banter", "none", "sober", 1)
+UNSENDABLE = {
+    "a word off the list": wire.Raid("pull", 0),
+    "a tier off the list": wire.Speak(**{**wire.as_fields(SPEAK), "priority": "urgent"}),
+    "a cancel naming two": wire.Cancel(id="s1", guid=101),
+    "a guid as text": wire.Moved("101", "raid"),
+    "a spec that is not JSON": wire.VoiceDef(101, "Arkon", {"pitch": float("nan")}),
+    "a line over the limit": wire.Speak(**{**wire.as_fields(SPEAK), "text": "x" * 70000}),
+    "not a message": {"type": "raid", "phase": "none", "lead": 0},
+}
+
+
+@pytest.mark.parametrize("msg", UNSENDABLE.values(), ids=UNSENDABLE.keys())
+def test_the_fake_client_refuses_what_the_real_one_cannot_send(msg):
+    with pytest.raises(wire.WireError):
+        wire.encode(msg, 1)  # VoiceClient.send's own step
+    f = FakeVoiceClient()
+    f.greeted = True
+    with pytest.raises(wire.WireError):
+        f.send(msg)
+    assert f.sent == [] and len(f.refused) == 1
+
+
+def test_the_fake_client_refuses_a_message_only_the_service_sends():
+    f = FakeVoiceClient()
+    f.greeted = True
+    with pytest.raises(wire.WireError, match="unknown type: played"):
+        f.send(wire.Played("s1", "started"))
+    assert f.sent == []
+
+
+PORT_GOLDEN = GOLDEN_DIR / "mind_port_golden.json"
+
+
+def port_line(item) -> bytes:
+    if isinstance(item, dict):
+        return item["repeat"].encode() * item["times"] + b"\n"
+    return item.encode() + b"\n"
+
+
+@pytest.mark.parametrize("case", json.loads(PORT_GOLDEN.read_text(encoding="utf-8")),
+                         ids=lambda c: c["name"])
+def test_the_fake_service_answers_the_port_golden_cases_as_leeroy_voice_does(case):
+    """voice/tests/test_server.py holds the real MindServer to the same file."""
+    async def go():
+        fake = FakeVoice()
+        await fake.start()
+        reader, writer = await asyncio.open_connection("127.0.0.1", fake.port,
+                                                       limit=wire.MAX_LINE_BYTES + 1)
+        assert isinstance(wire.parse(await reader.readline()), wire.Hello)
+        writer.write(b"".join(port_line(x) for x in case["send"]))
+        await writer.drain()
+        replies = []
+
+        async def read_replies():
+            while line := await reader.readline():
+                replies.append(wire.parse(line))
+        reading = asyncio.create_task(read_replies())
+        if case["closed"]:
+            await asyncio.wait_for(reading, 3)
+        else:
+            await until(lambda: len(fake.received) == len(case["handled"]))
+            await until(lambda: len(replies) == len(case["replies"]))
+        assert replies == [wire.Error(r) for r in case["replies"]]
+        assert fake.refused == case["replies"]
+        assert [wire.type_name(m) for m in fake.received] == case["handled"]
+        writer.close()
+        reading.cancel()
+        await asyncio.gather(reading, return_exceptions=True)
+        await fake.close()
+    run(go())
 
 
 def test_load_specs(tmp_path):
