@@ -616,7 +616,7 @@ def test_a_record_blocked_before_halted_at_existed_dates_from_its_start(fake, la
     assert restarted._owned["halted_at"] == owned["started"]
 
 
-def test_native_cleanup_receipt_is_kept_for_the_labs_own_trial_without_unblocking(fake, lab):
+def test_native_cleanup_receipt_is_kept_only_for_the_labs_own_trial(fake, lab):
     runner, _, _ = lab
     ident = blocked(fake, runner)
     now = int(fake.clock.now() * 1000)
@@ -624,12 +624,88 @@ def test_native_cleanup_receipt_is_kept_for_the_labs_own_trial_without_unblockin
     runner.feed(DummyCleanup(now, ident, "pending", (101,), 600000))     # Not a known state.
     assert _get(fake.conn, module.NATIVE_PREFIX + "f" * 32) is None
     assert _get(fake.conn, module.NATIVE_PREFIX + ident) is None
+    asyncio.run(runner.tick())
+    assert runner._owned["phase"] == "blocked" and runner.members() == set(fake.members)
     runner.feed(DummyCleanup(now, ident, "released", (101,), 600123))
     runner.feed(DummyCleanup(now + 1, ident, "restored", (), 700000))  # The first word stays.
     receipt = _get(fake.conn, module.NATIVE_PREFIX + ident)
     assert receipt["state"] == "released" and receipt["unfinished"] == [101] and receipt["after_ms"] == 600123
+
+
+def assert_recovered(fake, runner, ident, kind, caplog):
+    owned = _get(fake.conn, OWNED_KEY)
+    assert owned["phase"] == "complete" and owned["current"] is None and runner._owned == owned
+    assert owned["recovered"]["by"] == "native" and owned["recovered"]["evidence"]["kind"] == kind
+    assert owned["gaps"] == [ident] and owned["attempts"] == len(owned["attempt_ids"]) == 1
+    attempt = _get(fake.conn, ATTEMPT_PREFIX + ident)
+    assert attempt["restoration"] == "native_recovered" and attempt["results"]
+    summary = _get(fake.conn, SUMMARY_PREFIX + owned["night"])
+    assert summary["reason"] == owned["halt"] and summary["recovered"] and summary["winner"] is None
+    assert _get(fake.conn, module.CLEARED_PREFIX + owned["id"])["by"] == "native"
+    assert not runner.active and runner.members() == set() and runner.body_holds() == ()
+    assert not fake.holders and fake.released[-1][0] == "training"
+    assert set(fake.released[-1][1]) == {101, 102, 103, 104}
+    assert fake.conn.execute("SELECT count(*) FROM tg_dummy").fetchone()[0] == 0  # Never a measurement.
+    assert f"training_lab_recovered id={owned['id']} trial={ident} evidence={kind} members=4" in caplog.text
+    sent = len(fake.sent)
+    asyncio.run(runner.tick())
+    assert len(fake.sent) == sent and not runner.active  # The night is over: no new lab, no command.
+
+
+@pytest.mark.parametrize("state", ["released", "restored"])
+def test_natives_cleanup_receipt_frees_a_blocked_lab_on_the_next_tick(fake, lab, caplog, state):
+    # 2026-11-23: native released its trial at 07:01 (unfinished=1507) and the lab still held its
+    # 8 members until an operator stopped the mind for `training lab-clear`.
+    caplog.set_level("INFO")
+    runner, _, _ = lab
+    ident = blocked(fake, runner)
+    assert set(fake.holders) == {101, 102, 103, 104}
+    runner.feed(DummyCleanup(int(fake.clock.now() * 1000), ident, state,
+                             (101,) if state == "released" else (), 600000))
+    assert runner._owned["phase"] == "blocked"  # The receipt alone writes nothing but itself.
+    asyncio.run(runner.tick())
+    assert_recovered(fake, runner, ident, "dummy_cleanup", caplog)
+
+
+def test_a_worldserver_started_after_the_trial_frees_a_blocked_lab(fake, lab, caplog):
+    caplog.set_level("INFO")
+    runner, _, _ = lab
+    ident = blocked(fake, runner)
+    current = runner._owned["current"]
+    runner.feed(Hello(2, "mod-leeroy", "0.1.0", 21, 0, features=(module.DUMMY_FEATURE,),
+                      started_ms=current["sent_ms"] - 1))  # The process that ran it.
     asyncio.run(runner.tick())
     assert runner._owned["phase"] == "blocked" and runner.members() == set(fake.members)
+    runner.feed(Hello(3, "mod-leeroy", "0.1.0", 21, 0, features=(module.DUMMY_FEATURE,),
+                      started_ms=current["terminal"]["ts"] + 1))
+    asyncio.run(runner.tick())
+    assert_recovered(fake, runner, ident, "native_restart", caplog)
+
+
+def test_a_restarted_mind_frees_a_lab_whose_receipt_came_before_it_stopped(fake, lab, caplog):
+    caplog.set_level("INFO")
+    runner, _, _ = lab
+    ident = blocked(fake, runner)
+    runner.feed(DummyCleanup(int(fake.clock.now() * 1000), ident, "released", (101,), 600000))
+    restarted = LabRunner(fake, fake.cfg, runner.ground, runner.applier, schedule=runner.schedule)
+    assert restarted._owned["phase"] == "blocked" and restarted._owned["halt"] == "process_restart"
+    asyncio.run(restarted.tick())
+    assert_recovered(fake, restarted, ident, "dummy_cleanup", caplog)
+
+
+def test_a_standing_setup_keeps_the_lab_blocked_and_is_said_once(fake, lab, caplog):
+    caplog.set_level("INFO")
+    runner, _, _ = lab
+    ident = blocked(fake, runner)
+    runner.feed(DummyCleanup(int(fake.clock.now() * 1000), ident, "released", (101,), 600000))
+    store.put_setup(fake.conn, dict(guid=103, since=fake.clock.now(), toggles=["+damage"]))
+    before = dict(fake.conn.execute("SELECT key,value FROM meta WHERE key GLOB 'tg:lab:*'").fetchall())
+    asyncio.run(runner.tick())
+    asyncio.run(runner.tick())
+    assert runner._owned["phase"] == "blocked" and runner.members() == set(fake.members)
+    after = dict(fake.conn.execute("SELECT key,value FROM meta WHERE key GLOB 'tg:lab:*'").fetchall())
+    assert after.keys() == before.keys() and _get(fake.conn, SUMMARY_PREFIX + runner._night()) is None
+    assert caplog.text.count("training_lab_recovery_refused reason=standing_setup members=1\n") == 1
 
 
 def test_hello_records_the_worldserver_start_once_per_process(fake, lab):
