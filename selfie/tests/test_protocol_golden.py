@@ -57,11 +57,16 @@ def test_render_and_grid_answers_have_the_golden_keys(tmp_path, monkeypatch):
     stub_pil(monkeypatch)
     for i in range(4):
         (tmp_path / f"t{i}.jpg").write_bytes(JPEG)
-    got = answers(make_renderer(), "render", "render with the detailer on hands only", "grid",
-                  folder=tmp_path)
+    got = answers(make_renderer(), "render", "grid", folder=tmp_path)
     want = golden()["answers"]
-    assert [keys(a) for a in got[1:]] == [want["render"], want["render with the detailer"],
-                                          want["grid"]]
+    assert [keys(a) for a in got[1:]] == [want["render"], want["grid"]]
+
+
+def test_a_detailed_render_answer_has_the_golden_keys(tmp_path, monkeypatch):
+    pytest.importorskip("numpy")  # the detailer's pass
+    stub_pil(monkeypatch)
+    got = answers(make_renderer(), "render with the detailer on hands only", folder=tmp_path)
+    assert keys(got[1]) == golden()["answers"]["render with the detailer"]
 
 
 def test_caption_critic_and_embed_answers_have_the_golden_keys(tmp_path, monkeypatch):
