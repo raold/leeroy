@@ -100,8 +100,11 @@ class LazyArmory:
             raise RosterError("guild armory unavailable")
         if self._backend is None:
             try:
+                from .talents import read_data_dir
+                data = read_data_dir(self.cfg.worldserver_conf)
                 self._backend = MysqlArmory(read_db_info(self.cfg.worldserver_conf),
-                    read_db_info(self.cfg.worldserver_conf, "WorldDatabaseInfo"), self.cfg.mysql_exe)
+                    read_db_info(self.cfg.worldserver_conf, "WorldDatabaseInfo"), self.cfg.mysql_exe,
+                    dbc_dir=data / "dbc" if data is not None else None)
             except (OSError, ValueError, RosterError):
                 self.unavailable()
                 raise RosterError("guild armory unavailable") from None
@@ -119,6 +122,9 @@ class LazyArmory:
 
     def equipped(self, guids):
         return self._call("equipped", guids)
+
+    def spec_tabs(self, guids):
+        return self._call("spec_tabs", guids)
 
     def human_tier(self, guid):
         return self._call("human_tier", guid)

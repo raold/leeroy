@@ -7,7 +7,7 @@ from leeroy_mind.guild.roles import (
     is_achievement_hunter, is_cook, is_loot_officer, is_pvp_lead, is_raid_lead,
     premade_spec_no, reliability, role_of, spec_tab_for, stat_family,
 )
-from leeroy_mind.guild.upgrades import ItemInfo, upgrade_gain
+from leeroy_mind.guild.upgrades import TWO_HANDED, ItemInfo, suits, upgrade_gain
 
 
 def card(*, title="", guild_role="raider", score=5):
@@ -233,3 +233,54 @@ def test_physical_and_tank_stats_keep_to_their_wearers():
     # no role given (an older caller): only the stat families decide
     assert upgrade_gain(DODGE_CLOAK, 1, "str", {14: 200}) == 64
     assert upgrade_gain(AP_RING, 8, "int", {10: 200}) is None
+
+
+# The three shapes of the spot check of 2026-11-24 (invented items, item_template's stat types):
+# wishes that followed her persona's raid role or a stale tree instead of her talents
+KRYSS = ItemInfo(20, "Invented Kryss", 4, 277, 13, 2, 15, -1, frozenset({7, 38}))  # one-hand dagger
+GREATAXE = ItemInfo(21, "Invented Greataxe", 4, 264, 17, 2, 1, -1, frozenset({4, 7, 32}))
+AGI_LEGS = ItemInfo(22, "Invented Leggings", 4, 277, 7, 4, 2, -1, frozenset({3, 7, 38}))
+INT_LEGS = ItemInfo(23, "Invented Kilt", 4, 277, 7, 4, 2, -1, frozenset({5, 6, 7, 45}))
+TANK_NECK = ItemInfo(24, "Invented Gorget", 4, 277, 2, 4, 0, -1, frozenset({7, 12, 13}))
+CASTER_NECK = ItemInfo(25, "Invented Pendant", 4, 277, 2, 4, 0, -1, frozenset({5, 7, 45}))
+
+
+def wish(cls, tab, persona_role, item, worn):
+    """upgrade_gain as the wishes ask it: role and stat family from her talent tree."""
+    role = role_of(cls, tab, persona_role)
+    return upgrade_gain(item, cls, stat_family(cls, tab, role), worn, role=role, spec_tab=tab)
+
+
+def test_an_arms_warrior_wants_no_one_hand_dagger():
+    two_hander = {15: 245}  # nothing in the off hand
+    assert wish(1, 0, "melee", KRYSS, two_hander) is None
+    assert wish(1, 0, "melee", GREATAXE, two_hander) == 19
+    assert wish(1, 1, "melee", KRYSS, {15: 245, 16: 245}) == 32  # Fury wields two
+
+
+def test_a_restoration_druid_wants_no_agility_legs():
+    assert wish(11, 2, "melee", AGI_LEGS, {6: 251}) is None  # her talents: Restoration
+    assert wish(11, 2, "melee", INT_LEGS, {6: 251}) == 26
+    assert wish(11, 1, "melee", AGI_LEGS, {6: 251}) == 26  # a Feral one does
+
+
+def test_a_balance_druid_wants_no_tank_neck():
+    assert wish(11, 0, "tank", TANK_NECK, {1: 251}) is None  # her persona says tank
+    assert wish(11, 0, "tank", CASTER_NECK, {1: 251}) == 26
+    assert wish(11, -1, "tank", TANK_NECK, {1: 251}) == 26  # no tree known: her role, as before
+
+
+@pytest.mark.parametrize(("cls", "tab"), sorted(TWO_HANDED))
+def test_a_two_handed_tree_wears_no_one_hand_or_off_hand(cls, tab):
+    for inv in (13, 14, 21, 22, 23):
+        item = dataclasses.replace(KRYSS, inventory_type=inv, stats=frozenset())
+        assert not suits(item, "str", "damage", cls=cls, spec_tab=tab)
+    assert suits(dataclasses.replace(GREATAXE, stats=frozenset()), "str", "damage", cls=cls,
+                 spec_tab=tab)
+    assert suits(dataclasses.replace(KRYSS, stats=frozenset()), "str", "damage")  # tree unknown
+
+
+def test_an_empty_off_hand_beside_a_two_hander_is_no_gap():
+    assert upgrade_gain(KRYSS, 3, "agi", {15: 264}, role="damage") == 13  # not 277 - 200
+    assert upgrade_gain(KRYSS, 4, "agi", {15: 264, 16: 251}, role="damage") == 26
+    assert upgrade_gain(KRYSS, 4, "agi", {}, role="damage") == 77  # nothing worn: a real gap

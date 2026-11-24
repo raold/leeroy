@@ -54,15 +54,26 @@ _TANK = frozenset({12, 13, 14, 15, 48})
 _FAMILY_MARKS = {"str": _PHYSICAL, "agi": _PHYSICAL, "int": _CASTER}
 _NOT_HEALING = frozenset({31, 37, 44})  # hit, expertise, armour penetration: no healer's stats
 _TRINKET = 12
+# The talent trees (class, tab) that fight with a two-handed weapon: Arms, Retribution, Blood,
+# Unholy and Feral (the spot check of 2026-11-24: a one-hand dagger was an Arms warrior's wish).
+# A one-hand or off-hand weapon, a shield or an off-hand item is none of theirs.
+TWO_HANDED = frozenset({(1, 0), (2, 2), (6, 0), (6, 2), (11, 1)})
+_ONE_HANDED = frozenset({13, 14, 21, 22, 23})  # one-hand, shield, main hand, off hand, held
 
 
-def suits(item: ItemInfo, family: str, role: str | None) -> bool:
+def suits(item: ItemInfo, family: str, role: str | None, *, cls: int | None = None,
+          spec_tab: int | None = None) -> bool:
     """The item's stats are hers (culture's loot wishes and the raid's bids, 2026-11-20: a physical
     damage trinket of crit rating alone, its attack power a proc, went to healers and casters):
     no stat of another family's and none of hers is no item of hers, a tank's stats are a tank's
     alone, a healer wears no hit, expertise or armour penetration, and a trinket must show a stat
     of hers: its worth is its proc, which nothing here reads, so a trinket of shared stats alone
-    is nobody's (nothing is guessed). `role` None (a caller without one) skips the role rules."""
+    is nobody's (nothing is guessed). `role` None (a caller without one) skips the role rules.
+    `cls` and `spec_tab`, her class and talent tree (the tree her talents say: guild/talents.py),
+    when the caller knows them: a tree that fights with a two-hander (TWO_HANDED) wears no
+    one-hand or off-hand weapon, shield or off-hand item."""
+    if (cls, spec_tab) in TWO_HANDED and item.inventory_type in _ONE_HANDED:
+        return False
     mine = _FAMILY_MARKS.get(family, frozenset()) | (_TANK if role == "tank" else frozenset())
     others = (_PHYSICAL | _CASTER) - mine
     if item.stats & others and not item.stats & mine:
@@ -89,9 +100,11 @@ def _tier_pieces(item: ItemInfo, cls: int) -> tuple[ItemInfo, ...] | None:
 
 
 def upgrade_gain(item: ItemInfo, cls: int, family: str, equipped: dict[int, int], *,
-                 role: str | None = None) -> int | None:
-    """The item levels `item` would gain her (a member of class `cls`, stat `family` and raid
-    `role`) over what she wears; None when it is no upgrade or none of hers (suits)."""
+                 role: str | None = None, spec_tab: int | None = None) -> int | None:
+    """The item levels `item` would gain her (a member of class `cls`, stat `family`, raid `role`
+    and, when the caller knows it, talent tree `spec_tab`) over what she wears; None when it is no
+    upgrade or none of hers (suits). A one-hand weapon beside an empty off hand is measured
+    against her main hand (a two-hander there leaves the off hand empty, which is no gap)."""
     if type(cls) is not int or cls not in _ARMOUR or family not in _FAMILY_STATS:
         return None
     if item.allowable_class != -1 and not item.allowable_class & (1 << (cls - 1)):
@@ -100,7 +113,8 @@ def upgrade_gain(item: ItemInfo, cls: int, family: str, equipped: dict[int, int]
     if pieces is not None:
         # A tier token is worth the tier piece it buys her, in the slot it gains her most
         return max((gain for piece in pieces
-                    if (gain := upgrade_gain(piece, cls, family, equipped, role=role)) is not None), default=None)
+                    if (gain := upgrade_gain(piece, cls, family, equipped, role=role,
+                                             spec_tab=spec_tab)) is not None), default=None)
     if item.item_class == 15 and item.inventory_type == 0:
         baseline = round(mean(equipped.values())) if equipped else 200
         gain = item.item_level - baseline
@@ -119,10 +133,12 @@ def upgrade_gain(item: ItemInfo, cls: int, family: str, equipped: dict[int, int]
         return None
     if item.stats & _PRIMARY and not item.stats & _FAMILY_STATS[family]:
         return None
-    if not suits(item, family, role):
+    if not suits(item, family, role, cls=cls, spec_tab=spec_tab):
         return None
     slots = _SLOTS.get(item.inventory_type)
     if slots is None:
         return None
+    if item.inventory_type == 13 and 16 not in equipped and 15 in equipped:
+        slots = (15,)
     gain = item.item_level - min(equipped.get(slot, 200) for slot in slots)
     return gain if gain > 0 else None
