@@ -58,6 +58,8 @@ constexpr float kScanYards = 70.0f;              // zones that can reach a spot 
 constexpr float kAnchorYards = 15.0f;            // a member this far from every scan centre gets its own
 
 std::atomic<bool> enabled{false};
+// The master whose bots the last pass made aware (0: none), so map threads turn every other bot away at once.
+std::atomic<std::uint32_t> awareMaster{0};
 std::uint32_t untilPass = 0;
 std::uint32_t passes = 0;
 std::uint64_t version = 0;
@@ -424,6 +426,7 @@ void Publish(Player* owner, std::vector<Player*> const& aware, bool on)
     std::lock_guard<std::mutex> lock(snapshotLock);
     // A new version only when the zones changed, so the answers memoised against them hold between passes.
     next->version = snapshot && snapshot->zones == next->zones ? snapshot->version : ++version;
+    awareMaster.store(owner && !next->aware.empty() ? owner->GetGUID().GetCounter() : 0, std::memory_order_relaxed);
     snapshot = std::move(next);
 }
 
@@ -477,7 +480,8 @@ std::vector<HazardZone> const* ZonesFor(Player* bot, PlayerbotAI*& ai, std::shar
         return nullptr;
     ai = GET_PLAYERBOT_AI(bot);
     Player* master = ai ? ai->GetMaster() : nullptr;
-    if (!master || master->GetGUID().GetCounter() != HumanGuid())
+    std::uint32_t const owner = awareMaster.load(std::memory_order_relaxed);
+    if (!master || !owner || master->GetGUID().GetCounter() != owner)
         return nullptr; // every other bot, at once
     {
         std::lock_guard<std::mutex> lock(snapshotLock);
@@ -567,9 +571,16 @@ public:
 
         HazardPoint target = goal.answer;
         bool changed = goal.moved;
-        if (auto const waypoint = Detour(bot, guid, at, goal.answer, *zones, reach, selection))
+        std::optional<HazardPoint> const waypoint = Detour(bot, guid, at, goal.answer, *zones, reach, selection);
+        if (waypoint)
         {
             target = *waypoint;
+            changed = true;
+        }
+        // Near a moving npc, short legs (or a wait), so follow plans again from each fresh pass.
+        if (auto const leg = HazardMovingLeg(at, goal.answer, waypoint, *zones, reach))
+        {
+            target = *leg;
             changed = true;
         }
         if (!changed)
@@ -686,7 +697,8 @@ private:
             return std::nullopt; // the straight way is clear, or stepping out comes first
         {
             std::lock_guard<std::mutex> lock(memoLock);
-            if (!HazardDetourAllowed(detourTracks[guid], at, goal))
+            // A moving npc in the way passes: no pocket to give up on.
+            if (!HazardFirstCrossingMoves(at, goal, zones, reach) && !HazardDetourAllowed(detourTracks[guid], at, goal))
                 return std::nullopt; // circling in a pocket between hazards: straight, as stock
         }
         auto const waypoints = HazardDetour(at, goal, zones, reach, reached);

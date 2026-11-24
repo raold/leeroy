@@ -929,3 +929,188 @@ LEEROY_TEST(Hazard_AFollowerCrossesTheLivingPoisonLanesWithoutSettingOneOff)
     CHECK_EQ(yields, 0);   // a slime walking onto a bot never counts as the bot walking back in
     CHECK_EQ(reached, runs);
 }
+
+namespace
+{
+constexpr float kRunSpeed = 7.0f;
+
+// A bot as playerbots moves it (MovementAction::MoveTo): each move sets out on one leg and commits to it for the
+// leg's walk time less the react delay (0.1 s), at most MaxWaitForMove (5 s). Until then a move of the same or a
+// lower priority waits (IsWaitingForLastMove), and a move to the same spot is a duplicate for 5 s.
+struct Mover
+{
+    HazardPoint at;
+    std::optional<HazardPoint> dest;
+    float until = -1.0f;
+    float issued = -10.0f;
+    int priority = 0; // 1 follow, 2 avoid aoe
+
+    bool Move(HazardPoint to, int moveAt, float now)
+    {
+        if (moveAt <= priority && now < until)
+            return false;
+        if (dest && Dist(*dest, to) < 0.01f && now < issued + 5.0f)
+            return false;
+        float const length = Dist(at, to);
+        if (length < 0.01f)
+            return false;
+        dest = to;
+        issued = now;
+        priority = moveAt;
+        until = now + std::clamp(length / kRunSpeed - 0.1f, 0.0f, 5.0f);
+        return true;
+    }
+
+    void Step(float dt)
+    {
+        if (!dest)
+            return;
+        float const left = Dist(at, *dest);
+        float const move = std::min(left, kRunSpeed * dt);
+        if (left > 0.001f)
+        {
+            at.x += (dest->x - at.x) / left * move;
+            at.y += (dest->y - at.y) / left * move;
+        }
+        if (left - move < 0.001f)
+            dest.reset();
+    }
+};
+
+struct HallRun
+{
+    int crossings = 0;
+    int hits = 0;            // slimes the bot set off
+    float nearest = 1000.0f; // the closest any slime's centre came to the bot's
+};
+
+// The dojo's Living Poison case (PR #452): the leader stands at one end of the hall, the bot follows him across,
+// and once it is within 6 yards he is put at the other end; 70 s. A slime goes off (and is gone) when the bot's
+// centre comes within 1.5 yards. Every 0.1 s the bot's AI first steps out of a zone it stands in (avoid aoe, at most
+// once a second), else follows: the formation spot beside him moved off the zones, a detour waypoint kept until
+// reached or the zones change, and, with `movingRules`, the moving-npc rules (HazardMovingLeg, and no pocket
+// given up while a moving npc is the one in the way); without them, as #424 released it. `aware` false walks as stock.
+HallRun DojoHall(float start, bool aware, bool movingRules)
+{
+    float const reach = 1.5f;
+    float const step = HazardDetourStep(1.5f, reach);
+    HazardPoint const ends[2]{{3108.0f, -3141.0f, 293.34f}, {3195.0f, -3148.0f, 293.34f}};
+    Mover bot{ends[0]};
+    int side = 1; // where he stands
+    HallRun out;
+    std::vector<HazardZone> zones;
+    std::vector<std::uint64_t> gone;
+    std::optional<HazardPoint> kept, leave;
+    HazardDetourTrack track;
+    HazardExitGuard guard;
+    float lastAvoid = -10.0f;
+    float const dt = 0.05f;
+    for (int tick = 0; tick < 1400; ++tick)
+    {
+        float const t = start + static_cast<float>(tick) * dt;
+        auto const now = static_cast<std::uint64_t>(t * 1000.0f);
+        for (Poison const& p : PoisonsAt(t))
+        {
+            if (std::find(gone.begin(), gone.end(), p.id) != gone.end())
+                continue;
+            float const d = Dist(bot.at, p.at);
+            out.nearest = std::min(out.nearest, d);
+            if (d <= 1.5f)
+            {
+                ++out.hits;
+                gone.push_back(p.id);
+            }
+        }
+        HazardPoint const he = ends[side];
+        if (Dist(bot.at, he) < 6.0f)
+        {
+            ++out.crossings;
+            side = 1 - side;
+            kept.reset();
+        }
+        if (aware && tick % 10 == 0)
+        {
+            zones.clear();
+            for (HazardZone const& zone : PoisonZones(t))
+                if (std::find(gone.begin(), gone.end(), zone.id) == gone.end())
+                    zones.push_back(zone);
+            kept.reset(); // a new version: the memoised waypoint is asked again
+        }
+        if (tick % 2 == 0)
+        {
+            float const toBot = Dist(he, bot.at);
+            HazardPoint goal = toBot > 0.01f ? HazardPoint{he.x + (bot.at.x - he.x) / toBot * 1.5f,
+                he.y + (bot.at.y - he.y) / toBot * 1.5f, he.z} : he;
+            if (auto const spots = HazardSafeSpots(goal, bot.at, zones, reach, 1); !spots.empty())
+                goal = spots.front();
+            std::vector<HazardZone> inside;
+            for (HazardZone const& zone : zones)
+                if (InHazard(bot.at, zone, reach))
+                    inside.push_back(zone);
+            bool avoided = false;
+            if (inside.empty())
+            {
+                leave.reset();
+                guard.standing.clear();
+            }
+            else if (t - lastAvoid >= 1.0f && NoteHazardZoneEntry(guard, inside, now) == HazardEntry::Exit)
+            {
+                if (!leave || !HazardClear(*leave, zones, reach))
+                {
+                    auto const exits = HazardExitSpots(bot.at, goal, goal, zones, reach, 1);
+                    leave = exits.empty() ? std::nullopt : std::optional<HazardPoint>(exits.front());
+                }
+                if (leave && bot.Move(*leave, 2, t))
+                {
+                    lastAvoid = t;
+                    avoided = true;
+                }
+            }
+            if (!avoided)
+            {
+                if (kept && (Dist(bot.at, *kept) <= step || !HazardSegmentClear(bot.at, *kept, zones, reach)))
+                    kept.reset();
+                if (!kept && inside.empty() && !HazardSegmentClear(bot.at, goal, zones, reach)
+                    && ((movingRules && HazardFirstCrossingMoves(bot.at, goal, zones, reach)) || HazardDetourAllowed(track, bot.at, goal)))
+                {
+                    auto const waypoints = HazardDetour(bot.at, goal, zones, reach, step);
+                    if (!waypoints.empty())
+                        kept = waypoints.front();
+                }
+                std::optional<HazardPoint> const leg =
+                    movingRules ? HazardMovingLeg(bot.at, goal, kept, zones, reach) : std::nullopt;
+                HazardPoint const target = leg.value_or(kept.value_or(goal));
+                if (Dist(bot.at, target) > 1.5f)
+                    bot.Move(target, 1, t);
+            }
+        }
+        bot.Step(dt);
+    }
+    return out;
+}
+}
+
+// The dojo's hall crossing as playerbots drives a bot, legs committed as it commits them, over 200 phases of the
+// waves. As #424 released it the zones still set slimes off: slimes stream through the lanes, so the detour soon
+// gave a crossing up as a pocket and walked straight. With the moving-npc rules none goes off and no crossing stalls.
+LEEROY_TEST(Hazard_TheDojoHallCrossingSetsNoSlimeOff)
+{
+    int runs = 0, hits = 0, withoutHits = 0, straightHits = 0, fewCrossings = 0;
+    float nearest = 1000.0f;
+    for (int offset = 0; offset < 200; ++offset)
+    {
+        float const start = 20.0f + static_cast<float>(offset) * 0.025f; // every phase of the 5 s waves
+        ++runs;
+        HallRun const run = DojoHall(start, true, true);
+        hits += run.hits;
+        nearest = std::min(nearest, run.nearest);
+        fewCrossings += run.crossings < 2 ? 1 : 0;
+        withoutHits += DojoHall(start, true, false).hits;
+        straightHits += DojoHall(start, false, false).hits;
+    }
+    CHECK(straightHits > runs);  // stock walks into them
+    CHECK(withoutHits > 0);      // #424's rules alone (5)
+    CHECK_EQ(hits, 0);
+    CHECK(nearest > 2.0f);       // measured 2.37
+    CHECK_EQ(fewCrossings, 0);
+}

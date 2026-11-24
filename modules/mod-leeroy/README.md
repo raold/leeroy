@@ -519,6 +519,12 @@ training state or pending bot command leaves the body to its owner (nothing adde
   that makes progress (a second hazard shutting both ways), or once six waypoints in a row gain less than a
   yard on the goal (a pocket between hazards, where greedy steps would circle), it walks straight as stock until
   his spot moves 3 yards.
+- **Moving npcs** (2026-11-24). A zone that moves is never a pocket: while the first zone across the straight
+  way moves (`HazardFirstCrossingMoves`) the detour never gives up, and with no waypoint round it the bot waits
+  where it stands for the way to clear. While a moving zone lies within 20 yards, follow walks legs of at most 4
+  yards (`HazardMovingLeg`): playerbots commits a bot to the leg it sets out on for that leg's walk time, up to
+  `Playerbots.MaxWaitForMove` (5 s, 35 yards at run speed), so a short leg makes it plan again from each fresh
+  pass. Map threads take only the bots of the master whose group the last pass made aware.
 - **Exits.** `avoid aoe` (after its three stock cases, in combat as well) walks a bot standing in a zone to the
   nearest clear spot and keeps that exit while it stays clear. Out of combat the exit ranks by the follow goal:
   one from which the goal is in plain view (his side) beats a nearer one unless the nearer saves more than 4

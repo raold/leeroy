@@ -166,6 +166,21 @@ struct HazardDetourTrack
 // Called before taking a new waypoint; false once detours toward this goal stopped making progress.
 bool HazardDetourAllowed(HazardDetourTrack& track, HazardPoint at, HazardPoint goal);
 
+// Follow commits a bot to the leg it sets out on (playerbots plans again only once that leg's walk time, up to
+// MaxWaitForMove, has passed), so near a moving hazard a long leg is walked blind into a slime's path. While a
+// moving zone lies within kHazardMovingNearYards of the bot, follow walks legs of at most kHazardMovingLegYards
+// (about half a second at run speed) and so plans again from each fresh pass, and where the first zone across the
+// straight way moves and no waypoint goes round it, the bot waits where it stands for the way to clear.
+inline constexpr float kHazardMovingNearYards = 20.0f;
+inline constexpr float kHazardMovingLegYards = 4.0f;
+// The first zone across the straight walk from `from` to `goal` moves: it passes, so no pocket is given up on
+// (HazardDetourAllowed is for zones that stay) and with no way round the bot waits.
+bool HazardFirstCrossingMoves(HazardPoint from, HazardPoint goal, std::vector<HazardZone> const& zones, float reach);
+// Where follow walks next near moving zones: `waypoint` (a detour) or else `goal`, cut to a short leg; the bot's
+// own spot to wait; nullopt when no moving zone is near (follow walks to the waypoint or goal as before).
+std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std::optional<HazardPoint> waypoint,
+    std::vector<HazardZone> const& zones, float reach);
+
 // One bot's recent exits, counted per hazard, so an exit never loops with another mover (follow, dungeon-clear's
 // route) that walks it back into the same hazards, overlapping ones included.
 struct HazardExitCount

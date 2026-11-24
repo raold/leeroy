@@ -393,6 +393,36 @@ bool HazardDetourAllowed(HazardDetourTrack& track, HazardPoint at, HazardPoint g
     return true;
 }
 
+bool HazardFirstCrossingMoves(HazardPoint from, HazardPoint goal, std::vector<HazardZone> const& zones, float reach)
+{
+    HazardZone const* first = nullptr;
+    float firstT = 2.0f;
+    for (HazardZone const& zone : zones)
+        if (Crosses(from, goal, zone, reach))
+            if (float const t = Closest(from, goal, zone).first; t < firstT)
+            {
+                firstT = t;
+                first = &zone;
+            }
+    return first && first->moving;
+}
+
+std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std::optional<HazardPoint> waypoint,
+    std::vector<HazardZone> const& zones, float reach)
+{
+    if (std::none_of(zones.begin(), zones.end(), [&](HazardZone const& zone)
+            { return zone.moving && SameFloor(at, zone) && Distance2d(at, zone.x, zone.y) <= kHazardMovingNearYards; }))
+        return std::nullopt;
+    if (!waypoint && !HazardAt(at, zones, reach) && HazardFirstCrossingMoves(at, goal, zones, reach))
+        return at; // it passes: wait for the way to clear rather than walk into it
+    HazardPoint const to = waypoint.value_or(goal);
+    float const length = Distance2d(at, to.x, to.y);
+    if (length <= kHazardMovingLegYards)
+        return to;
+    float const part = kHazardMovingLegYards / length;
+    return HazardPoint{at.x + (to.x - at.x) * part, at.y + (to.y - at.y) * part, at.z + (to.z - at.z) * part};
+}
+
 bool HazardExitYielded(HazardExitGuard const& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now)
 {
     if (zones.empty())
