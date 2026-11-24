@@ -78,6 +78,9 @@ BOSS_NAMES: dict[tuple[int, int], str] = {
 RAID_INSTANCES = {631: "Icecrown Citadel", 649: "Trial of the Crusader", 603: "Ulduar",
                   533: "Naxxramas", 615: "Obsidian Sanctum", 616: "Eye of Eternity",
                   624: "Vault of Archavon", 724: "Ruby Sanctum", 249: "Onyxia's Lair"}
+# Each raid instance's zone (AreaTable), its map: a Zone event names only the zone.
+RAID_ZONES = {4812: 631, 4722: 649, 4273: 603, 3456: 533, 4493: 615, 4500: 616, 4603: 624,
+              4987: 724, 2159: 249}
 
 # Encounters of several bosses whose tactics, if any, are on the members' own pages: the
 # library has no page for the encounter (the Twin Val'kyr have only lore and loot pages).

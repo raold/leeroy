@@ -25,10 +25,14 @@ OLDER.update({"raid": "No raid is open.",
               "dojo": "No dojo set up", "mind": "stopped"})
 
 
-async def open_console(r, *, timeout=15000):
+# The parallel mind suite can keep the browser busy loading the module graph: a page that
+# (re)starts gets this long for its first answers.
+STARTUP_MS = 15000
+
+
+async def open_console(r, *, timeout=STARTUP_MS):
     from playwright.async_api import expect
     await r.page.goto(r.url + "/#key=" + KEY)
-    # The parallel mind suite can keep the browser busy loading the module graph.
     # Wait for the real startup signal before testing a tab or action.
     await expect(r.page.locator("#s-mind")).to_contain_text("mind running", timeout=timeout)
 
@@ -139,5 +143,26 @@ def test_ops_tab_shows_health_lines_and_tolerates_an_older_database(rehearsal, s
             # Nothing needs a look in the rehearsal's health, and the badge appears only when it does.
             if state == "older":
                 await expect(r.page.locator("#t-ops .badge")).to_have_count(0)
+            assert not r.errors, r.errors
+    asyncio.run(run())
+
+
+def test_ops_verification_ledger_expands_by_keyboard_on_a_phone(rehearsal):
+    async def run():
+        from playwright.async_api import expect
+        async with rehearsal(width=390, height=900) as r:
+            await open_console(r)
+            panel = await visit(r.page, "ops")
+            ledger = panel.locator(".verify-ledger")
+            # the first poll can find the ledger still reading (8 s budget); Ops polls every 15 s
+            await expect(ledger).to_contain_text("shipped features", timeout=45000)
+            await expect(ledger).to_contain_text("mind.db: ok")
+            summary = ledger.locator("summary").filter(has_text="Group resurrection")
+            await summary.focus()
+            await r.page.keyboard.press("Enter")
+            await expect(ledger.get_by_text("group_rez · evidence since", exact=False)).to_be_visible()
+            await expect(ledger.get_by_text("Working · a bot of his group cast", exact=False)).to_be_visible()
+            assert await r.page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+            assert not await ledger.locator("button, input").count()
             assert not r.errors, r.errors
     asyncio.run(run())

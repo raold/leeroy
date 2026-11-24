@@ -725,6 +725,9 @@ td > div.who { color: var(--ink); font-weight: 600; }
 #tab-ops .ops-panel { min-width: 0; }
 #tab-ops .raid-debrief { grid-column: 1 / -1; }
 #tab-ops .raid-debrief summary { cursor: pointer; padding: .5rem 0; }
+#tab-ops .verify-ledger { grid-column: 1 / -1; }
+#tab-ops .verify-ledger summary { cursor: pointer; padding: .5rem 0; overflow-wrap: anywhere; }
+#tab-ops .verify-ledger .verify-failed > summary { color: var(--bad); }
 #tab-ops .native-switches summary { cursor: pointer; padding: .5rem 0; overflow-wrap: anywhere; }
 #tab-ops .ops-line, #tab-ops .ops-error { margin: 8px 0; overflow-wrap: anywhere; }
 #tab-ops .ops-error { color: var(--bad); }

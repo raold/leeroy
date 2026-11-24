@@ -12,6 +12,7 @@ from .upgrades import ItemInfo
 
 class Armory(Protocol):
     def items(self, ids) -> dict[int, ItemInfo]: ...
+    def spec_tabs(self, guids) -> dict[int, int]: ...
     def bank_items(self, ids) -> dict[int, ItemInfo]: ...
     def equipped(self, guids) -> dict[int, dict[int, int]]: ...
     def human_tier(self, guid) -> int: ...
@@ -82,6 +83,22 @@ def parse_equipped(rows, items) -> dict[int, dict[int, int]]:
     return found
 
 
+def parse_talents(rows) -> dict[int, tuple[int, list[int]]]:
+    """{guid: (class, her active talent spells)} from (guid, class, spell) rows."""
+    found: dict[int, tuple[int, list[int]]] = {}
+    for number, row in enumerate(rows, 1):
+        try:
+            if len(row) != 3:
+                raise ValueError("expected 3 columns")
+            guid, cls, spell = (_numeric(value) for value in row)
+            _id(guid)
+            _id(spell)
+        except (TypeError, ValueError):
+            raise RosterError(f"talent row {number}: invalid columns") from None
+        found.setdefault(guid, (cls, []))[1].append(spell)
+    return found
+
+
 def average_item_level(slots) -> float:
     levels = [level for slot, level in slots.items() if 0 <= slot < 19 and slot not in {3, 18}]
     return float(mean(levels)) if levels else 0.0
@@ -112,11 +129,13 @@ def read_premade_specs(conf: Path) -> dict[int, list[str]]:
 
 
 class MysqlArmory:
-    def __init__(self, chars: DbInfo, world: DbInfo, mysql_exe: Path):
+    def __init__(self, chars: DbInfo, world: DbInfo, mysql_exe: Path, dbc_dir: Path | None = None):
         self.chars = chars
         self.world = world
         self.mysql_exe = mysql_exe
+        self.dbc_dir = dbc_dir  # the server's dbc/ (worldserver.conf DataDir): spec_tabs
         self._items: dict[int, ItemInfo] = {}
+        self._talents = None
 
     def _read_items(self, ids, *, binding=False):
         items = {}
@@ -157,6 +176,29 @@ class MysqlArmory:
                 raise RosterError(f"equipment row {number}: invalid columns") from None
         equipped = parse_equipped(rows, self.items(entries))
         return {guid: equipped.get(guid, {}) for guid in wanted}
+
+    def spec_tabs(self, guids) -> dict[int, int]:
+        """Each member's talent tree (guild/talents.py: 0-2 by the points of her active talent
+        group), read from her talents in the characters database whether she is online or not;
+        members with no talent points are left out, and so is everyone without the server's dbc
+        files (the callers then keep the cast snapshot's tree)."""
+        from .talents import read_tables, spec_tab
+        if self.dbc_dir is None:
+            return {}
+        if self._talents is None:
+            self._talents = read_tables(self.dbc_dir)
+        found = {}
+        for chunk in _chunks(_ids(guids)):
+            sql = ("SELECT c.guid, c.class, ct.spell FROM characters c "
+                   "JOIN character_talent ct ON ct.guid = c.guid "
+                   "WHERE (ct.specMask & (1 << c.activeTalentGroup)) <> 0 AND c.guid IN ("
+                   + ",".join(map(str, chunk)) + ")")
+            for guid, (cls, spells) in parse_talents(run_mysql(self.chars, sql,
+                                                               self.mysql_exe)).items():
+                tab = spec_tab(cls, spells, self._talents)
+                if tab >= 0:
+                    found[guid] = tab
+        return found
 
     def human_tier(self, guid) -> int:
         guid = _id(guid)

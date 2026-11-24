@@ -10,6 +10,12 @@ cast has no voice sheet, nobody talks loot in game words and every draft fits he
 Re-recorded for it with a diff helper (then deleted) that showed exactly that line added to those
 32 prompts, no other prompt moving and the same lines sent.
 
+Its public band (2026-11-24, talk/romance.py PUBLIC_BAND: on a game channel others read her
+wording goes no further than flirty) moves the band's wording of the 14 guild turns to him that
+carry her romance: 6 said the suggestive band's, 8 the explicit overlay's, and all 14 now say the
+flirty band's. Re-recorded with a diff helper (then deleted) that showed exactly that sentence
+changed in those 14 prompts, nothing else in any prompt and the same lines sent.
+
 What it pins: each guild prompt (35 of the 41) gains the three grounding sections after the
 instruction's preamble blocks, in this order: "Raid and guild (facts; ...)" with her class and
 role, the last raid with her seat, its last boss with its playbook line for her role, the last
@@ -21,8 +27,10 @@ its retry) are byte for byte golden_prompts.json's. The lines sent are the same.
 with the switch off, record golden_prompts.json exactly."""
 import pytest
 
+from engine_rig import OVERLAY
 from leeroy_mind.talk import grounding as g
 from leeroy_mind.talk import wowtopic
+from leeroy_mind.talk.romance import BUILTIN_ROMANCE
 from tuning.scenario import engine_clock, golden, golden_wow, record_wow
 
 
@@ -48,6 +56,16 @@ def _channels(sent, n):
 
 
 HOLD = " " + wowtopic.hold_text("guild")  # always after a word of the instruction
+FLIRTY = BUILTIN_ROMANCE["flirty"]
+ABOVE = (BUILTIN_ROMANCE["suggestive"], OVERLAY)  # the bands the public band brings down
+
+
+def public(plain):
+    """`plain` (a prompt of golden_prompts.json) with her band's wording brought down to the
+    public band's, as wow_topic does on a guild turn to him."""
+    for band in ABOVE:
+        plain = plain.replace(band, FLIRTY)
+    return plain
 
 
 def strip(prompt):
@@ -65,9 +83,12 @@ def test_only_the_guild_prompts_gain_the_sections_and_nothing_else_moves():
         if channel == "whisper":
             assert on == off  # a whisper's prompt is byte for byte what it was
             continue
-        assert on != off and strip(on) == off
+        assert on != off and strip(on) == public(off)
         assert g.CARD_HEAD in on and g.GLOSSARY in on
         assert on.index(g.CARD_HEAD) < on.index(g.GLOSSARY)
         greeting = "just logged on. Greet" in on
         assert (HOLD in on) is not greeting  # every guild answer is held, no greeting is
         assert wowtopic.DKP_RULE not in on
+    capped = [i for i, (c, off) in enumerate(zip(channels, plain["prompts"]))
+              if c == "guild" and public(off) != off]
+    assert len(capped) == 14

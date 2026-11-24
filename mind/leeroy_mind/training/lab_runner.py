@@ -185,6 +185,7 @@ class LabRunner:
         self.reason = ""
         self._native_dummy = None  # Unknown until this process's first hello.
         self._native_dummy_noted = False
+        self._recovery_noted = None  # The last refusal code logged for a blocked lab's own recovery.
         if self.active:
             # A new process cannot prove what a previous bridge await changed.
             self._halt("process_restart")
@@ -435,9 +436,8 @@ class LabRunner:
                 log.warning("training_lab_receipt_failed error=%s", type(exc).__name__)
 
     def _native_cleanup(self, event):
-        """Keep native's first word on a trial this lab sent; `training lab-clear` reads it.
-
-        A receipt never unblocks the lab by itself: the operator clears it with the mind stopped.
+        """Keep native's first word on a trial this lab sent; the lab's next tick (`_recover`) and the
+        operator's `training lab-clear` read it. Storing it changes nothing else.
         """
         owned = self._owned
         if (type(owned) is not dict or type(event.id) is not str or type(event.ts) is not int
@@ -800,10 +800,38 @@ class LabRunner:
             _put(self.ports.conn, SUMMARY_PREFIX + self._owned["night"], summary)
             _put(self.ports.conn, CURSOR_KEY, self._owned["spec"])
 
+    def _recover(self):
+        """Free a blocked lab once native has said its trial let go (lab_recovery.recover_blocked_lab).
+
+        The operator's `training lab-clear` takes the same receipt with the mind stopped; waiting for
+        one held every member until someone looked (2026-11-23: native released its trial at 07:01,
+        the 8 members stayed held for over a day). The night ends as lab-clear ends it: no result, its
+        receipts kept. A standing setup, or a record clearing would not prove, keeps the block.
+        """
+        from .lab_recovery import LabClearRefused, recover_blocked_lab
+        guids = self.members()
+        try:
+            result = recover_blocked_lab(self.ports.conn, self.ports.clock.now())
+        except LabClearRefused as refused:
+            if self._recovery_noted != refused.code:
+                self._recovery_noted = refused.code
+                log.warning("training_lab_recovery_refused reason=%s members=%d", refused.code, refused.members)
+            return False
+        if result is None:
+            return False
+        self._owned = _get(self.ports.conn, OWNED_KEY)
+        self.ports.release(OWNER, guids)
+        self.reason = self._owned["halt"]
+        log.info("training_lab_recovered id=%s trial=%s evidence=%s members=%d", result["cleared"],
+                 result["evidence"]["trial"], result["evidence"]["kind"], len(guids))
+        return True
+
     async def tick(self):
         async with self._lock:
             if self.active:
                 self._drain()
+                if self._owned["phase"] == "blocked" and self._recover():
+                    return
                 renewed = self._renew()
                 current = self._owned["current"]
                 if current is not None:

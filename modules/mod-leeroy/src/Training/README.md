@@ -80,15 +80,26 @@ Added members, invitations, group transfers, or a
 participant becoming the configured human block further mutation. A partially created group retains its identity
 for cleanup rather than destroying an object that may already be linked to the player. As with other in-memory
 job receipts, abnormal process termination requires reconciliation of any remaining harness parties.
+Setup first gives every member playerbots' full AI reset (`PlayerbotAI::Reset(true)`: travel target, RPG task, last
+movement, engines). Playerbots does that itself only when a bot acknowledges a worldport, so a member already on the
+dummy's map, moved by a near teleport, kept its old task: on 2026-11-23 1507, from Tanaris, never hit the dummy while
+the three members from Northrend did, and left the trial spot (`location_changed`).
 A blocked member logs why (`dummy trial <id> blocked member <guid>: <reason>`); an `ownership_changed` names the
 facts that failed (`missing=` session, human, cast, selfbot, guild, invite, reserved, group, master, logout, or
-body when no online bot answers). A trial stopped because training
+body when no online bot answers), a `location_changed` where the body is (`map= zone= instance= teleporting=
+trial_yd= trial_dz= origin_map=`). A trial stopped because training
 cleanup is pending ends `cleanup_pending`, not `training_off`. Ten minutes after its `cleanup_failed` terminal the
 trial sorts its unreturned members (`DummyFateAfterBound`): it keeps and fences one it still holds (a group object
 or solo party of ours lists it, or its same body has the driver as master) and one it is still returning (not
 blocked: a teleport or reset is in progress); it abandons a blocked member it no longer holds
 (`cleanup_abandoned guid=`, never touched or fenced by the trial again), journaled or not: a journal fences its
-own body and the journal adapter restores it once the trial lets go. With nobody kept it ends:
+own body and the journal adapter restores it once the trial lets go. A blocked member its party or driver still
+holds is first let go where it stands while it is still provably the same body with every other ownership fact
+(the driver as master, or none after the stock reset its party triggered; `DecideDummyLetGo`, `DummyLetGoOwned`):
+reset, master, party, leader flag and stock reset (the master before the party, so a party released after its
+stock reset dropped the driver still proves the body for the last steps), never the teleport home its block refused
+(`let_go guid= blocked=`). Without that a moved member stayed in its party under the driver for good: on
+2026-11-23 1507 was kept and fenced for 3 hours until a battleground queue took it out. With nobody kept it ends:
 `cleanup_released after_ms= unfinished=` and a `dummy_cleanup` event `{id, state: "released", unfinished,
 after_ms}`. A recovery that proves every return sends `state: "restored"`. Otherwise it keeps its slot
 (`cleanup_held kept=` once) and only the kept members stay fenced. Journals are never discarded.
