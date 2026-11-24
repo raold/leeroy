@@ -16,6 +16,7 @@ HOUR_BORROWS = 6
 DAY_BORROWS = 30
 REPEAT_WINDOW = 30 * LIFETIME
 RETRIES = 2
+PROFILE_REFRESHES = 2
 PHASES = ('morning', 'day', 'evening', 'late', 'dead')
 _DELIVERIES = {kind: kind + '_message' for kind in
                ('initial', 'fresh', 'fallback', 'followup', 'failure')}
@@ -133,6 +134,43 @@ def plan_fresh(store, request: Request, *, scene: dict, pick: int, looks: str,
         if sid is None:
             raise RequestError('request photo already exists without its binding')
         bind_snap(store, latest.message, sid, kind='fresh')
+        return snap(store, sid)
+
+
+def refresh_fresh(store, request: Request, photo: snaps.SnapRow, *, pick: int,
+                  looks: str, now: float) -> snaps.SnapRow | None:
+    """Replace an unsent stale profile plan, preserving the scene and original deadline.
+
+    The old photo stays immutable and its files remain retained. A durable bound prevents
+    repeated appearance edits from creating an unlimited render loop, including on restart.
+    Terminal failures, delivered photos and unrelated expiry reasons are never reopened.
+    """
+    with store.transaction():
+        latest = get(store, request.message)
+        old = snap(store, photo.id)
+        if (latest is None or latest.ended or latest.failure or latest.fresh_message is not None
+                or latest.expires <= now or latest.fresh_snap != photo.id or old is None
+                or old.source != 'request' or old.request != latest.message
+                or old.guid != latest.guid or old.audience != latest.audience
+                or old.status == 'sent' or old.expires <= now
+                or (old.status == 'expired' and old.ended not in {'looks_changed', 'photo_changed'})
+                or (old.pick, old.looks) == (pick, looks)):
+            return None
+        key = f'photos:request:profile-refresh:{latest.message}'
+        count = int(store.get_meta(key) or '0')
+        if count >= PROFILE_REFRESHES:
+            return None
+        sid = snaps.plan_snap(store, kind='situation', guid=latest.guid, source='request',
+            request=latest.message, ref=f'request:{latest.message}:fresh:{count + 1}', night='request',
+            scene=old.scene, audience=latest.audience, phases=old.phases,
+            not_before=max(now, old.not_before), expires=min(latest.expires, old.expires),
+            now=now, pick=pick, looks=looks)
+        if sid is None:
+            raise RequestError('replacement request photo already exists')
+        if old.status in {'planned', 'ready'}:
+            snaps.expire(store, old.id, 'photo_changed' if old.pick != pick else 'looks_changed', now=now)
+        store.conn.execute('UPDATE selfie_request SET fresh_snap=? WHERE message=?', (sid, latest.message))
+        store.set_meta(key, str(count + 1))
         return snap(store, sid)
 
 

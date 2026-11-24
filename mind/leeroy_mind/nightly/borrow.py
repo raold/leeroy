@@ -8,9 +8,10 @@ from .gpu import LiveLeaseHeld, PausedRoom, norm
 
 
 class BorrowRoom:
-    def __init__(self, arbiter, holder, *, work_timeout):
+    def __init__(self, arbiter, holder, *, work_timeout, allowed_holders):
         self.arbiter, self.holder = arbiter, holder
         self.work_timeout = work_timeout
+        self.allowed_holders = frozenset(allowed_holders) | {holder}
         self.owner = asyncio.current_task()
         self.revision = arbiter._revision
         self.workers = []
@@ -22,7 +23,7 @@ class BorrowRoom:
         self.timings = {'drain_ms': 0, 'unload_ms': 0, 'stop_ms': 0, 'reload_ms': 0, 'ms': 0}
 
     def blockers(self):
-        held = self.arbiter.holders - {'server', 'discord', self.holder}
+        held = self.arbiter.holders - self.allowed_holders
         if self.arbiter.paused:
             held |= {'gpu_pause'}
         return frozenset(held)

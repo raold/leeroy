@@ -125,6 +125,10 @@ jobs:
             core/modules/mod-playerbots/tests/raid_vehicles_test.cpp \
             -o "$RUNNER_TEMP/raid-vehicles-tests"
           "$RUNNER_TEMP/raid-vehicles-tests"
+          c++ -std=c++20 -O2 -Wall -Wextra -Werror \
+            core/modules/mod-playerbots/tests/lich_king_mechanics_test.cpp \
+            -o "$RUNNER_TEMP/lich-king-mechanics-tests"
+          "$RUNNER_TEMP/lich-king-mechanics-tests"
 
       - name: Check bounded raid vehicle diagnostics
         run: |

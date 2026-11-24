@@ -40,17 +40,20 @@ def test_paused_scene_choice_keeps_the_plan_and_sends_a_ready_photo(tmp_path):
 
 @pytest.mark.parametrize('error', [GpuPaused('The GPU is paused.'), LiveReloadFailed('live_reload_failed')])
 @pytest.mark.parametrize('backend', ['realvisxl', 'flux1-dev'])
+@pytest.mark.parametrize('priority', [False, True])
 def test_borrow_refused_at_admission_keeps_the_plan_and_sends_a_ready_photo(
-        tmp_path, monkeypatch, error, backend):
+        tmp_path, monkeypatch, error, backend, priority):
     async def scenario():
         app = make_app(tmp_path)
         app.selfies.cfg = replace(app.selfies.cfg, backend=backend)
+        app.photos.requests.priority = priority
         try:
             await offline(app)
             made = workers(app)
             @asynccontextmanager
-            async def refused(holder, *, on_admitted=None, work_timeout=None):
+            async def refused(holder, *, on_admitted=None, work_timeout=None, priority=False):
                 assert work_timeout == (600.0 if backend == 'flux1-dev' else None)
+                assert priority is app.photos.requests.priority
                 raise error
                 yield
             monkeypatch.setattr(app.arbiter, 'borrow', refused)
