@@ -156,7 +156,19 @@ library.db (a chunk counts only when its title names the boss), then the items a
 raiders' equipment through the guild armory, and keeps for each raider the largest
 `upgrade_gain` (the loot system's own rule; ties to the lower item id) in
 `culture:loot:wish`, recomputed every 12 hours or when the raid night changes. A raider
-whose equipment cannot be read wishes for nothing. Each wish seeds "<name> needs [<item>]
+whose equipment cannot be read wishes for nothing. Her role and stat family come from her
+talents (2026-11-24: wishes had followed her persona's raid role or a stale tree, a one-hand
+dagger for an Arms warrior, agility legs for a Restoration druid, a tank's neck for a Balance
+druid): the armory reads her active talent group from the characters database and the
+server's `Talent.dbc`/`TalentTab.dbc` (worldserver.conf `DataDir`; `guild/talents.py`, the page
+with most points as playerbots counts it), online or not; without that read the cast snapshot's
+tree stands, and with neither her persona's raid role, as before. A tree that fights with a
+two-hander (Arms, Retribution, Blood, Unholy, Feral) wishes for no one-hand or off-hand weapon,
+shield or off-hand item. The cache carries the version of the code that computed it (a digest of
+`culture/loot.py`, `guild/upgrades.py`, `guild/roles.py`, `guild/talents.py`): a cache another
+version computed is never read (seeds, console) and is recomputed at the next tick he is out of
+game (`culture_loot_wish_outdated event=`), so a release that changes the rule never serves the
+old wishes (the re-measure found a pre-#394 cache read until 03:01 the next night). Each wish seeds "<name> needs [<item>]
 from <boss>" in #loot-and-dkp and the member's class channel, opened by that member; all
 wishes together weigh about three ordinary subjects. Item names pass the real-name screen.
 Legendary progress and BiS lists are not reachable: no data for either exists. Loot from

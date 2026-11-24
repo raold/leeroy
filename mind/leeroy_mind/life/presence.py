@@ -153,6 +153,27 @@ WHERE_TEXT = {
 }
 
 
+# How closely she is watching, with nothing of where she is or what she is doing: "Right now" on a
+# turn held to its channel's business ([talk] wow_topic's hold, a Discord channel's purpose: the
+# re-measure, 2026-11-24, found "You're at work" in 55 of 315 held prompts and loot answers that
+# drifted to her job). By her attention on the medium.
+AVAILABILITY_TEXT = {
+    ("game", Attention.FULL): "You're at your PC, playing.",
+    ("game", Attention.HALF): "You're logged on, keeping half an eye on chat.",
+    ("game", Attention.GLANCING): "You only glance at the game now and then.",
+    ("game", Attention.NONE): "You're barely at the keyboard.",
+    ("discord", Attention.FULL): "You're on Discord, reading along.",
+    ("discord", Attention.HALF): "You're keeping half an eye on Discord.",
+    ("discord", Attention.GLANCING): "You only glance at Discord now and then.",
+    ("discord", Attention.NONE): "You're barely checking Discord.",
+}
+
+
+def availability_text(lp: LifePresence, medium: str) -> str:
+    """AVAILABILITY_TEXT for her attention on `medium` ("game" or "discord")."""
+    return AVAILABILITY_TEXT[(_medium(medium), Attention(lp.attention))]
+
+
 def where_text(lp: LifePresence, medium: str, *, playing: bool = False) -> str:
     """WHERE_TEXT for her presence on `medium` ("game" or "discord"). `playing`: she is in his
     group in game while he plays, so she is at her PC playing whatever her day plan says (PM log

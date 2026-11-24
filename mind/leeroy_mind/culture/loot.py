@@ -5,8 +5,10 @@ event loop (library drops, then the guild armory's item and equipment reads) and
 meta for the Discord seeds to read. Nothing is guessed: no BiS lists, no legendary progress
 (neither has any data here), and a member whose equipment cannot be read wishes for nothing."""
 from dataclasses import dataclass
+import hashlib
 import json
 import math
+from pathlib import Path
 import re
 
 from leeroy_mind.guild.raids import CATALOG
@@ -21,6 +23,22 @@ RAID_RECENT_S = 14 * 86400.0
 RAIDERS_FROM = 4
 MAX_RAIDERS = 40
 MIN_QUALITY = 4
+
+
+def _code_version() -> str:
+    """A digest of the code the wishes are worked out by (this module, guild/upgrades.py,
+    guild/roles.py, guild/talents.py): a cache that other code computed is never read
+    (load_wishes) and is due at once (wish_due), so a release that changes the rule recomputes
+    it (the re-measure, 2026-11-24: a cache from before #394 was read until 03:01 the next
+    night, two openers offering a caster trinket to melee)."""
+    from leeroy_mind.guild import roles, talents, upgrades
+    digest = hashlib.sha256()
+    for module in (__file__, upgrades.__file__, roles.__file__, talents.__file__):
+        digest.update(Path(module).read_bytes())
+    return digest.hexdigest()[:16]
+
+
+WISH_VERSION = _code_version()
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +120,8 @@ def compute_wishes(conn, library, armory, *, now: float, raid_roles: dict[int, s
     event = next_raid(conn, now)
     if event is None:
         return None
-    value = {"computed": now, "event": event, "raid_key": None, "wishes": []}
+    value = {"computed": now, "event": event, "raid_key": None, "wishes": [],
+             "version": WISH_VERSION}
     target = target_raid(conn, now)
     if target is None:
         return value
@@ -114,11 +133,13 @@ def compute_wishes(conn, library, armory, *, now: float, raid_roles: dict[int, s
         return value
     items = armory.items(sorted({i for ids in drops.values() for i in ids}))
     equipped = armory.equipped(tuple(members))
+    tabs = spec_tabs(armory, members)
     for guid in members:
         worn = equipped.get(guid) or {}
         if not worn:
             continue  # no equipment read: every slot would look like an upgrade
         cls, spec = cast[guid]
+        spec = tabs.get(guid, spec)  # her talents' tree first, else the cast snapshot's
         role = role_of(cls, spec, raid_roles[guid])
         family = stat_family(cls, spec, role)
         best = None
@@ -127,7 +148,8 @@ def compute_wishes(conn, library, armory, *, now: float, raid_roles: dict[int, s
                 item = items.get(item_id)
                 if item is None or item.quality < MIN_QUALITY:
                     continue
-                gain = upgrade_gain(item, cls, family, worn, role=role)  # hers by its stats
+                gain = upgrade_gain(item, cls, family, worn, role=role,
+                                    spec_tab=spec)  # hers by its stats and her tree
                 if gain is not None and gain > 0 and (best is None or (-gain, item_id) < (-best[2], best[0])):
                     best = (item_id, boss, gain)
         if best is not None:
@@ -135,13 +157,43 @@ def compute_wishes(conn, library, armory, *, now: float, raid_roles: dict[int, s
     return value
 
 
-def load_wishes(raw) -> dict | None:
-    """WISH_KEY's value checked; None when it cannot be read."""
+def spec_tabs(armory, members) -> dict[int, int]:
+    """Each member's talent tree as the armory reads it from her talents (guild/talents.py),
+    online or not; {} when it cannot (an armory without that read, no dbc files, a failed read):
+    the cast snapshot's tree stands then, and with none her persona's raid role, as before."""
+    read = getattr(armory, "spec_tabs", None)
+    if not callable(read) or not members:
+        return {}
+    try:
+        found = read(tuple(members))
+    except Exception:  # a failed read costs the wishes nothing: the snapshot's tree stands
+        return {}
+    return {g: t for g, t in (found or {}).items()
+            if type(g) is int and type(t) is int and 0 <= t <= 2}
+
+
+def wish_version(raw) -> str | None:
+    """The code version a stored WISH_KEY value was computed by ("" for one from before
+    versions), None when it cannot be read."""
     try:
         value = json.loads(raw) if isinstance(raw, str) else None
     except ValueError:
         return None
-    if (not isinstance(value, dict) or type(value.get("event")) is not int
+    if not isinstance(value, dict):
+        return None
+    version = value.get("version", "")
+    return version if isinstance(version, str) else None
+
+
+def load_wishes(raw) -> dict | None:
+    """WISH_KEY's value checked; None when it cannot be read or other code computed it
+    (WISH_VERSION)."""
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else None
+    except ValueError:
+        return None
+    if (not isinstance(value, dict) or value.get("version") != WISH_VERSION
+            or type(value.get("event")) is not int
             or type(value.get("computed")) not in (int, float) or not math.isfinite(value["computed"])
             or not isinstance(value.get("wishes"), list)):
         return None
