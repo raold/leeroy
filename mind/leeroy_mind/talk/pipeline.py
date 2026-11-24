@@ -346,6 +346,7 @@ OWED_REFUSED = {
     "his place": "don't say where {they} lives, others can read this",
     HEAT_PUBLIC: _HEAT_OWED,
     PUBLIC_SEXUAL: publicscreen.OWED,
+    DKP_TRANSFER: "DKP is each raider's own, so nobody's DKP is offered, lent or asked for",
 }
 OWED_RETRY_HINT = "Not like that: {reasons}. " + OWED_FALLBACK_HINT
 # The second and third answers to his line see the ones before them (prompts I8), and so do
@@ -4928,7 +4929,8 @@ class Pipeline:
     def owed_clean_draft(self, turn: Turn, meta: TurnMeta, c: Composed,
                          raw: str, *, public: bool = True) -> tuple[str | None, list[str]]:
         """A draft of an owed answer against the hard screens only (OWED_HARD_TELLS, a flirt at a
-        member, silence, sexual wording on a public game channel): its words repaired, or None
+        member, silence, sexual wording on a public game channel, DKP handed over on a WoW
+        turn): its words repaired, or None
         with what refused it. `public` False: the public channel's screen left out (a draft
         that goes to him by whisper instead: _generate_serial)."""
         p = c.persona
@@ -4957,6 +4959,8 @@ class Pipeline:
             refused.append(HEAT_PUBLIC)
         if public and publicscreen.screened(turn.channel, text, self.data_dir):
             refused.append(PUBLIC_SEXUAL)
+        if self._wow_topic_on(turn) and wowtopic.dkp_transfer(text):  # [talk] wow_topic
+            refused.append(DKP_TRANSFER)
         if self._copies_own(turn, meta, text):
             refused.append("own copy")
         if self._names_his_home(turn, c, text):

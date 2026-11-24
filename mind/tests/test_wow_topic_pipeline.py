@@ -395,3 +395,18 @@ def test_the_minds_instruction_loses_an_unknown_item_by_the_item_table(store, cl
         assert "instruction_entity_dropped: guid=102 kind=aside n=1" in caplog.text
     finally:
         r.close()
+
+
+def test_his_answer_never_hands_dkp_over_even_as_its_fallback(store, clock, tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="leeroy_mind")
+    seed_test_cast(store)
+    r = make_rig(store, clock, tmp_path, wow_topic=True)
+    try:
+        r.script("just lend me your dkp then")
+        r.sync(r.event(Group(ts=0, leader_guid=HUMAN, raid=True, members=(HUMAN, 101, 102, 103))))
+        r.line_from_him("belra you want the boots?", channel="raid")  # owed: the engine answers
+        r.run(120)
+        assert not [s for s in r.sent.says() if "dkp" in s.text.lower()]
+        assert "say_owed_fallback_refused" in caplog.text and "dkp transfer" in caplog.text
+    finally:
+        r.close()
