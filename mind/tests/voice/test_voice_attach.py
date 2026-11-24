@@ -205,15 +205,18 @@ def test_the_supervisor_starts_a_service_that_went_down_again(tmp_path, fast_clo
     assert [str(a) for a in args][1:] == ["-m", "leeroy_voice", "run"]
     assert kw["cwd"] == str(fake_repo / "voice")
 
-    async def back():  # it greets: the next outage starts from the first wait again
+    async def back(up_s):  # it greets, stays up for up_s, and goes down again
         ext.client.greeted = True
         await ext.on_connection(True)
+        await clock.advance(up_s, step=up_s)
         ext.client.greeted = False
         await ext.on_connection(False)
         await clock.advance(attach.RELAUNCH_AFTER_S, step=attach.RELAUNCH_AFTER_S)
         await ext._supervise_once()
     n = len(calls)
-    run(back())
+    run(back(30))  # a crash soon after its start: the backoff goes on (30 min)
+    assert len(calls) == n
+    run(back(attach.STABLE_S))  # up long enough: the next outage starts from the first wait
     assert len(calls) == n + 1
 
 

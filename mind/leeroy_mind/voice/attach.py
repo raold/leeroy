@@ -46,6 +46,7 @@ SUPERVISE_S = 5.0  # how often the supervisor looks at a service that is down
 RELAUNCH_AFTER_S = 60.0  # unreachable this long before the mind starts it again
 START_GRACE_S = 90.0  # a launch loads its models before it listens: no second one sooner
 RELAUNCH_BACKOFF_S = (120.0, 300.0, 600.0, 1800.0)  # between its own launches; the last repeats
+STABLE_S = 600.0  # up this long, the next outage starts the backoff afresh (a crash loop doesn't)
 TICK_S = 1.0
 RESTORE_S = 1800.0  # seats saved at a clean stop are restored if he is back within this
 STOP_KEY = "voice_stop_seats"  # meta: the seats at the last clean stop
@@ -98,7 +99,8 @@ class VoiceExtension:
         # is compared with it)
         self._down_since: float | None = app.clock.now()  # the mind starts unconnected
         self._launched_at: float | None = None  # the mind's last launch
-        self._launches = 0  # the supervisor's, since the service last greeted
+        self._launches = 0  # the supervisor's, since the service last stayed up STABLE_S
+        self._up_since: float | None = None
         self._greeted_wall = 0.0
         self._login_due = False  # his login: start a service that is down at once
         self._held_logged = self._skipped_logged = False
@@ -221,12 +223,15 @@ class VoiceExtension:
             await arbiter.release_live(VOICE_GPU)
 
     async def on_connection(self, up: bool) -> None:
+        now = self.app.clock.now()
         if up:
-            self._down_since, self._launches, self._login_due = None, 0, False
+            self._down_since, self._up_since, self._login_due = None, now, False
             self._greeted_wall = time.time()
             self._held_logged = self._skipped_logged = False
         else:
-            self._down_since = self.app.clock.now()
+            if self._up_since is not None and now - self._up_since >= STABLE_S:
+                self._launches = 0
+            self._down_since, self._up_since = now, None
         if self.movement is not None:
             self._guard("room_connection", lambda: self.movement.on_connection(up))
         if not up:
@@ -552,14 +557,14 @@ class VoiceExtension:
         why = self._relaunch_due(now)
         if why is None:
             return
-        if await asyncio.to_thread(self._port_open):
-            return  # started by someone else: the client's next try finds it
         pythonw = self._pythonw()
         if pythonw is None:
             if not self._skipped_logged:
                 self._skipped_logged = True
                 event("voice_relaunch_skipped", level=logging.WARNING, reason="no_venv")
             return
+        if await asyncio.to_thread(self._port_open):
+            return  # started by someone else: the client's next try finds it
         hold = self._hold()
         self._login_due = False
         self._launches += 1
