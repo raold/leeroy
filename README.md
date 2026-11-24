@@ -555,6 +555,11 @@ There is no deploy job: the server runs on one PC and is updated with the
 scripts above. A self-hosted runner on a public repo would let any pull request
 run code on that PC.
 
+`python scripts/flaky-report.py [--runs 300]` lists the tests that failed and
+then passed on the same commit in recent CI runs (read only, through `gh`). A
+flaky test is fixed at its cause or deleted with the reason in its pull
+request, never retried, slept on or skipped.
+
 ## Research
 
 [references.bib](references.bib) lists the 282 papers, books, software and
