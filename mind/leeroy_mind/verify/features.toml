@@ -229,7 +229,7 @@ db = { from = "tg_pull", where = "map = 649 AND boss_id = 3 AND outcome = 'wiped
 id = "vortex_deaths"
 kind = "observed"
 what = "a member's last recorded hit before death was a Light or Dark Vortex (tg_death; the cause is not proven)"
-db = { from = "tg_death d JOIN tg_pull p ON p.id = d.pull", where = "p.map = 649 AND p.boss_id = 3 AND d.spell IN (66046, 66058, 67206, 67182, 67207, 67183, 67208, 67184)", time = "d.at_ms", unit = "ms" }
+db = { from = "tg_death d JOIN tg_pull p ON p.id = d.pull", where = "p.map = 649 AND p.boss_id = 3 AND d.spell IN (66046, 66058, 67206, 67182, 67207, 67183, 67208, 67184)", time = "p.start_ms + d.at_ms", unit = "ms" }
 
 [[feature]]
 id = "valithria_healers"
@@ -294,7 +294,7 @@ db = { from = "tg_pull", where = "map = 533 AND boss_id = 1", time = "end_ms", u
 id = "explode_deaths"
 kind = "observed"
 what = "a member's last recorded hit before death inside a pull was a Living Poison's Explode (tg_death spell 28433; the cause is not proven)"
-db = { from = "tg_death d JOIN tg_pull p ON p.id = d.pull", where = "p.map = 533 AND d.spell = 28433", time = "d.at_ms", unit = "ms" }
+db = { from = "tg_death d JOIN tg_pull p ON p.id = d.pull", where = "p.map = 533 AND d.spell = 28433", time = "p.start_ms + d.at_ms", unit = "ms" }
 
 [[feature]]
 id = "toc_slime_pools"
@@ -665,8 +665,8 @@ default = true
 [[feature.evidence]]
 id = "ran_its_course"
 kind = "working"
-what = "an offline run with kills that ended by its own rule, not too_few or leader_lost (guild_raid; code: its outcome)"
-db = { from = "guild_raid", where = "offline = 1 AND ended IS NOT NULL AND kills > 0 AND outcome NOT IN ('too_few', 'leader_lost')", time = "ended", unit = "s", code = "outcome" }
+what = "an offline run with kills that ended by an ordinary rule: cleared, a wipe cap, a stall, its deadline or a stop (guild_raid; code: its outcome)"
+db = { from = "guild_raid", where = "offline = 1 AND ended IS NOT NULL AND kills > 0 AND outcome IN ('cleared', 'cleared_reachable', 'wipe_cap', 'boss_wipe_cap', 'stalled', 'dc_stalled', 'dc_door_blocked', 'dc_paused', 'timeout', 'stopped', 'operator_stopped', 'human_login')", time = "ended", unit = "s", code = "outcome" }
 
 [[feature.evidence]]
 id = "full_wipe"
@@ -680,8 +680,8 @@ example = "2026-11-24 00:30:00 leeroy: raid 0123456789abcdef0123456789abcdef ful
 [[feature.evidence]]
 id = "fell_apart"
 kind = "failed"
-what = "an offline run that ended too_few or leader_lost (guild_raid; code: its outcome)"
-db = { from = "guild_raid", where = "offline = 1 AND outcome IN ('too_few', 'leader_lost')", time = "ended", unit = "s", code = "outcome" }
+what = "an offline run that fell apart, lost its terminal or failed its cleanup (guild_raid too_few, leader_lost, terminal_lost, failed, cleanup_failed:*; code: its outcome)"
+db = { from = "guild_raid", where = "offline = 1 AND (outcome IN ('too_few', 'leader_lost', 'terminal_lost', 'failed') OR outcome LIKE 'cleanup_failed:%')", time = "ended", unit = "s", code = "outcome" }
 
 [[feature]]
 id = "offline_reserves"
@@ -778,6 +778,15 @@ key = "life.day_plans"
 [[feature.switch]]
 source = "native"
 key = "Leeroy.DayPlans.Enable"
+default = false
+
+[[feature.switch]]
+source = "mind"
+key = "realm.enabled"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Realm.Enable"
 default = false
 
 [[feature.evidence]]

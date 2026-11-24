@@ -325,14 +325,31 @@ def test_a_pull_outcome_counts_when_the_fight_ended(install, store):
     assert item["working"]["last"] < item["failed"]["last"]
 
 
-def test_deaths_by_a_spell_never_decide(install, store):
+def test_deaths_by_a_spell_never_decide_and_are_timed_from_the_pull_start(install, store):
+    """tg_death.at_ms is time into the pull (TrainingTap's Elapsed), not a clock time."""
     pull(store.conn, "tw-1", 3, "killed", NOW - 900, NOW - 800, map_id=649)
-    store.conn.execute("INSERT INTO tg_death(pull,guid,at_ms,spell,source,x,y,hits) VALUES ('tw-1',101,?,66046,0,0,0,'[]')",
-                       (int((NOW - 700) * 1000),))
+    store.conn.execute("INSERT INTO tg_death(pull,guid,at_ms,spell,source,x,y,hits) VALUES ('tw-1',101,45000,66046,0,0,0,'[]')")
     store.conn.commit()
     item = feature(run(install, L.load_features()), "twin_essences")
-    assert evidence(item, "vortex_deaths")["kind"] == "observed" and evidence(item, "vortex_deaths")["count"] == 1
+    deaths = evidence(item, "vortex_deaths")
+    assert deaths["kind"] == "observed" and deaths["count"] == 1 and int(deaths["last"]) == int(NOW - 855)
     assert item["failed"]["last"] is None
+
+
+@pytest.mark.parametrize("outcome, status", [("boss_wipe_cap", "seen_working"), ("too_few", "failed"),
+                                             ("terminal_lost", "failed"), ("cleanup_failed:leader_lost", "failed"),
+                                             ("setup:starting:timeout", "unverified")])
+def test_offline_reliability_reads_ordinary_ends_and_explicit_failures(install, store, outcome, status):
+    raid_row(store.conn, 1, started=NOW - 900, ended=NOW - 100, outcome=outcome, kills=2)
+    store.conn.commit()
+    fs = tuple(dataclasses.replace(f, switches=()) for f in L.load_features() if f.id == "offline_reliability")
+    assert feature(run(install, fs), "offline_reliability")["status"] == status
+
+
+def test_day_plans_need_the_realm_on_both_sides():
+    keys = {s.key: s for s in next(f for f in L.load_features() if f.id == "day_plans").switches}
+    assert {"realm.enabled", "Leeroy.Realm.Enable", "life.day_plans", "Leeroy.DayPlans.Enable", "Leeroy.Enable"} <= set(keys)
+    assert keys["Leeroy.Realm.Enable"].default is False
 
 
 def test_the_module_switch_gates_every_feature_mod_leeroy_carries(install):
