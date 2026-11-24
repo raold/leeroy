@@ -89,7 +89,9 @@ def validate_ledger(ledger):
             raise ValueError("manual review receipts need a positive PR number")
         if not re.fullmatch(r"[0-9a-f]{40}", receipt.get("commit", "")):
             raise ValueError("manual review receipts need the reviewed commit's full SHA")
-        if not receipt.get("evidence", "").startswith(f"https://github.com/{ledger['repository']}/pull/{receipt['pr']}"):
+        base = f"https://github.com/{ledger['repository']}/pull/{receipt['pr']}"
+        evidence = receipt.get("evidence", "")
+        if evidence != base and not evidence.startswith(base + "#"):
             raise ValueError("manual review receipts need a public attestation on that PR")
         date(receipt["at"])
     seen = set()

@@ -61,6 +61,10 @@ class Outcomes(unittest.TestCase):
         rows = {r["reviewer"]: r for r in q.report(snapshot(), l)["reviewers"]}
         self.assertEqual(rows["claude-local"]["post_release_fix"], ["one"])
         self.assertNotIn("late-local", rows)
+        l["review_receipts"][0]["evidence"] = "https://github.com/raold/leeroy/pull/10"
+        with self.assertRaises(ValueError):
+            q.report(snapshot(), l)
+        l["review_receipts"][0]["evidence"] = receipt["evidence"] = "https://github.com/raold/leeroy/pull/1"
         l["review_receipts"][0]["commit"] = "abc"
         with self.assertRaises(ValueError):
             q.report(snapshot(), l)
