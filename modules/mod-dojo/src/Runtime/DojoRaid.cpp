@@ -377,7 +377,7 @@ public:
         static ChatCommandTable root{{"dojo", dojo}};
         return root;
     }
-    static bool Start(ChatHandler* handler, std::string_view args)
+    static bool Start(ChatHandler* handler, Tail args)
     {
         std::istringstream in{std::string(args)};
         std::string scenario, token, mode, extra;
