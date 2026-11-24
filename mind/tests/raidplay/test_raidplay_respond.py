@@ -51,7 +51,7 @@ def test_only_the_mechanics_stock_leaves_reach_native():
     assert "naxx.loatheb.spores" not in _ids(533, 1)
     assert "icc.putricide.choking_gas_bomb" not in _ids(631, 1)    # area none: nowhere known at cast start
     assert "icc.gunship.rocket_artillery" not in _ids(631, 1)
-    assert "toc.beasts.slime_pool" not in _ids(649, 0)
+    assert "toc.beasts.slime_pool" in _ids(649, 0)
     assert "icc.sindragosa.frost_bomb" not in _ids(631, 3)         # stock's los
     assert "naxx.patchwerk.hateful_strike" not in _ids(533, 0)     # soak is not responded yet
 
@@ -94,7 +94,7 @@ def test_every_table_is_bounded_and_fits_one_bridge_line():
                                              "duration", "landing"}
         for rule in wire["mechanics"]:                     # entries only for a nearest area, which needs them
             assert ("entries" in rule) == (rule["area"] == "nearest")
-    assert sum(len(rules) for rules in found.values()) == 114  # 47 mechanics over their difficulties
+    assert sum(len(rules) for rules in found.values()) == 118  # 48 mechanics over their difficulties
 
 
 def test_naxx_responses_use_actual_cover_clouds_and_the_injected_member():
@@ -187,6 +187,27 @@ def test_actionable_answers_nothing_for_an_uncovered_place():
     assert actionable(pb, 603, 2) == ()        # Ulduar has no heroic difficulty
     assert actionable(pb, 533, 2) == ()        # Naxxramas has no heroic
     assert actionable(pb, 631, "1") == ()
+
+
+def test_slime_pool_tracks_damage_ticks_only_on_a_capable_native():
+    pb = raidplay.load()
+    for difficulty, hit in enumerate((66881, 67638, 67639, 67640)):
+        rule = next(r for r in actionable(pb, 649, difficulty) if r.id == "toc.beasts.slime_pool")
+        assert rule.spells == (hit,) and rule.area == "cast_radius" and rule.duration == 2
+        assert rule.radius == 30  # descriptive maximum, not the live damage circle
+    async def go():
+        app = _App()
+        feed = MechanicFeed(app, pb)
+        await feed.connection(True)
+        await feed.event(_hello(("mechanics", respond.FEATURE_NAXX, respond.FEATURE_NEAREST)))
+        await _drain(feed)
+        assert all(r.area != "cast_radius" for c in app.sent for r in c.mechanics)
+        app.sent.clear()
+        await feed.event(_hello(("mechanics", respond.FEATURE_NAXX, respond.FEATURE_NEAREST,
+                                respond.FEATURE_CAST_RADIUS)))
+        await _drain(feed)
+        assert any(r.id == "toc.beasts.slime_pool" for c in app.sent for r in c.mechanics)
+    asyncio.run(go())
 
 
 @pytest.mark.parametrize("text, want", [

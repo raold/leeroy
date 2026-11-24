@@ -86,16 +86,18 @@ name = "Slime Pool"
 kind = "avoid_ground"
 phase = "worms"
 roles = ["tank", "healer", "melee", "ranged"]
-spells = { "10" = [66883], "25" = [67641], "10h" = [67642], "25h" = [67643] }
+spells = { "10" = [66883, 66881], "25" = [67641, 67638], "10h" = [67642, 67639], "25h" = [67643, 67640] }
+respond_spells = { "10" = [66881], "25" = [67638], "10h" = [67639], "25h" = [67640] }
 handled_by = "none"
 hits = { "10" = [66881], "25" = [67638], "10h" = [67639], "25h" = [67640] }
 radius = 30
 explain = "The worms leave slime pools that grow; keep fighting away from them."
 check = "toc.beasts.check_avoid"
 every = 12
-# The pool grows from the worm over its life: a cast-start circle of its full size would pull the
-# tank and melee off the worm.
-area = "none"
+# Core 66882 scales every damage tick's radius from about 2 to 20yd over 60 ticks.
+# React at the pool's actual location/size, never the worm's summon or a fixed 30yd circle.
+area = "cast_radius"
+duration = 2
 
 [[boss.mechanic]]
 id = "toc.beasts.paralytic_toxin"

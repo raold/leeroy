@@ -290,13 +290,18 @@ class Discoveries:
     def _speakers(self, cls, week, *, reserved=None):
         preferred, officers = [], []
         away = self.ports.away()
+        candidates = []
         for guid, member in sorted(self.ports.cast().items()):
             persona = self.ports.persona(guid)
             if (not _positive(guid) or guid == self.ports.human_guid or member.guid != guid or member.online is not True
                     or persona is None or getattr(persona, "guid", None) != guid or guid in away
-                    or self.ports.holder(guid) is not None
                     or guid != reserved and self.ports.conn.execute("SELECT 1 FROM meta WHERE key=?",
                         (f"{ATTEMPT_PREFIX}{guid}:{week}",)).fetchone()):
+                continue
+            candidates.append((guid, member, persona))
+        holders = self.ports.holders_of(g for g, _, _ in candidates) if candidates else {}
+        for guid, member, persona in candidates:
+            if holders.get(guid, "unavailable") is not None:
                 continue
             if member.class_ == cls and getattr(getattr(persona, "game", None), "thinks_as", None) == "theorycrafter":
                 preferred.append(guid)

@@ -44,6 +44,43 @@ decision cases and compile the adapters; they do not establish a live clear.
 
 ## Coverage
 
+### ToC slime pools: recorded-damage follow-up
+
+The November 22 audit ranked 118 recorded Slime Pool hits across four members in
+two stored offline ToC pulls. The old playbook explicitly left this mechanic
+out (`area = "none"`). The summon spell at the worm is insufficient evidence of
+the pool's position and current size. The actual core's `SpellAuraEffects.cpp`,
+case 66882, scales each damage tick with `SPELLVALUE_RADIUS_MOD`, growing its
+30-yard base radius from about 2 to 20 yards over 60 ticks.
+
+The responder now follows only damage spells 66881/67638/67639/67640 with
+`area = "cast_radius"`, using the pool caster's position and each cast's actual
+effect radius including RadiusMod. It retains the circle for two seconds so the
+next tick can refresh it; existing bot reach, exit margin, role, map, phase,
+owner-hold and native-path checks still apply. A missing or invalid radius does
+not become a guessed 30-yard circle. Neither the summon nor the worm itself is
+used as a substitute pool.
+
+This requires a native rebuild advertising `mechanics_cast_radius`. Older
+worldservers receive all their existing supported rules, with this one omitted.
+The existing default-off `[raidplay] respond` and `Leeroy.Mechanics.Enable`
+switches still control it. No settings are activated by this change.
+
+The same audit found 37 Death and Decay hits across 18 members in one heroic 25
+ICC pull, plus an observed 19-member D&D movement command. Native logs were
+bounded to 32 MiB and incomplete; that command could not be assigned confidently
+to the stored pull. Hits during escape travel are also possible, so these facts
+do not prove the existing eight-yard D&D response is absent or mis-sized. Its
+behavior is unchanged. Putricide's 56 Slime Puddle hits and Ulduar's setup timeout
+remain follow-ups; Ulduar had no stored pulls to justify mechanic changes.
+
+After release, validate a real ToC worm phase: compare per-spell 66881-family hits
+and repeated-hit members with `mechanic_response id=toc.beasts.slime_pool` logs.
+Movement counts mean commands issued, not arrivals or successful avoidance.
+One initial periodic hit is possible because the response begins with its cast;
+repeated hits after a movement command need position/path evidence. Unit tests
+do not establish a successful raid or prove every historical wipe was this pool.
+
 | Raid | Map | Key | Difficulties | Bosses |
 |---|---|---|---|---|
 | Naxxramas | 533 | `naxx` | 10, 25 | all 15 (`BOSS_NAMES` 533:0-14) |

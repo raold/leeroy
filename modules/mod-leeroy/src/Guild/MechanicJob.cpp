@@ -234,6 +234,11 @@ void CastStart(Spell* spell, Unit* caster, SpellInfo const* info)
             cast.dest = HazardPoint{dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ()};
     cast.castMs = static_cast<std::uint32_t>(std::max(0, spell->GetCastTime()));
     cast.spellDurationMs = static_cast<std::uint32_t>(std::max(0, info->GetMaxDuration()));
+    // Match Spell::SelectImplicitAreaTargets. ToC's Slime Pool changes RadiusMod
+    // on each 66882 tick; the summon's advertised 30yd radius is not its damage area.
+    for (SpellEffectInfo const& effect : info->Effects)
+        if (effect.IsTargetingArea())
+            cast.effectRadius = std::max(cast.effectRadius, effect.CalcRadius(caster) * spell->GetSpellValue()->RadiusMod);
     bool const periodic = spell->GetTriggeredByAuraSpellInfo() != nullptr;
     std::uint64_t const now = NowMs();
     for (std::size_t index : rules)
@@ -485,7 +490,7 @@ bool Resolve(Player* bot, bool full, Plan& plan)
             if (!cast.nearest)
                 continue; // no refuge within reach: nothing to do
         }
-        if ((rule.area == MechanicArea::Caster || rule.area == MechanicArea::CasterReach
+        if ((rule.area == MechanicArea::Caster || rule.area == MechanicArea::CasterReach || rule.area == MechanicArea::CastRadius
                 || rule.area == MechanicArea::IceBlock) && !caster)
             continue; // a whirl or a hellfire ends with its caster
         if (rule.area == MechanicArea::CasterReach)

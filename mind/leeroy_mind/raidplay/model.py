@@ -60,7 +60,7 @@ RESPOND_KINDS = frozenset({"avoid_ground", "move_out_cone", "spread", "stack", "
 # Where a responded kind's danger lies when its spell starts (the responder's `area`), each kind's choices with its
 # default first; "none": the cast does not say where, so the responder leaves it (README).
 AREAS = MappingProxyType({
-    "avoid_ground": ("dest", "caster", "line", "ring", "nearest", "caster_reach", "none"),
+    "avoid_ground": ("dest", "caster", "line", "ring", "nearest", "caster_reach", "cast_radius", "none"),
     "move_out_cone": ("cone", "none"),
     "spread": ("group", "none"),
     "stack": ("dest", "nearest", "none"),
