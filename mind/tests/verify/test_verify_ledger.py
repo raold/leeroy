@@ -335,6 +335,52 @@ def test_deaths_by_a_spell_never_decide(install, store):
     assert item["failed"]["last"] is None
 
 
+def test_the_module_switch_gates_every_feature_mod_leeroy_carries(install):
+    data, folder = install
+    fs = L.load_features()
+    for f in fs:
+        keys = [s.key for s in f.switches if s.source == "native"]
+        if keys or any(e.log == "server" for e in f.evidence) or f.id.startswith(("offline_", "loot")):
+            assert "Leeroy.Enable" in keys, f.id
+    append(folder / "Server.log", native(NOW - 10, "group_rez_cast guid=1 body=2 spell=7328"))
+    conf(folder, "mod_leeroy.conf", "Leeroy.Enable = 0\n")
+    item = feature(run(install, fs), "group_rez")
+    assert item["status"] == "switched_off" and evidence(item, "cast")["count"] == 1
+
+
+def test_loot_failures_are_timed_when_the_outcome_became_known(install, store):
+    """Two drops before either award: the later failure is newer than the earlier charge."""
+    data, folder = install
+    fs = tuple(f for f in L.load_features() if f.id == "loot_handout")
+    store.conn.execute("INSERT INTO dkp_ledger(ts,guid,delta,reason,raid_id,item_id) VALUES (?,101,-40,'item',1,50274)",
+                       (NOW - 100,))
+    store.conn.execute("INSERT INTO meta(key,value) VALUES ('guild:loot:1:b',?)",
+                       (json.dumps({"state": "uncertain", "received": NOW - 300}),))
+    store.conn.commit()
+    item = feature(run(install, fs), "loot_handout")
+    assert item["status"] == "seen_working" and evidence(item, "unsettled")["count"] == 1
+    append(data / "logs" / "mind.log", json.dumps({"ts": datetime.fromtimestamp(NOW - 50).astimezone().isoformat(),
+        "level": "WARNING", "event": "log", "msg": "guild_loot_give_unknown raid=1 item=50275 to=101 "
+        "command=guild-loot-1-abc attempt=1 code=receipt_unproven"}) + "\n")
+    item = feature(run(install, fs), "loot_handout")
+    assert item["status"] == "failed"
+    assert evidence(item, "give_unknown")["codes"] == [{"code": "receipt_unproven", "count": 1}]
+
+
+def test_a_lab_blocked_now_is_a_failure(install, store):
+    fs = tuple(dataclasses.replace(f, switches=()) for f in L.load_features() if f.id == "dummy_lab")
+    store.conn.execute("INSERT INTO meta(key,value) VALUES ('tg:lab:summary:2026-11-22',?)",
+                       (json.dumps({"reason": "dummy_rounds_complete", "ts": NOW - 900}),))
+    store.conn.commit()
+    assert feature(run(install, fs), "dummy_lab")["status"] == "seen_working"
+    store.conn.execute("INSERT INTO meta(key,value) VALUES ('tg:lab:owned',?)",
+                       (json.dumps({"phase": "blocked", "halt": "native_cleanup_unproved", "halted_at": NOW - 600}),))
+    store.conn.commit()
+    item = feature(run(install, fs), "dummy_lab")
+    assert item["status"] == "failed"
+    assert evidence(item, "blocked")["codes"] == [{"code": "native_cleanup_unproved", "count": 1}]
+
+
 def test_day_plans_need_a_witnessed_physical_block(install, store):
     conn = store.conn
     conn.execute("INSERT INTO game_event(id,ts,type,payload) VALUES (1,?,'job','{}')", (NOW - 300,))

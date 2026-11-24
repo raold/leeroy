@@ -17,7 +17,8 @@
 #   [[feature.switch]]  source = "mind" (a `table.key` row of console/switches.py, whose default
 #                       it takes), "native" (a Leeroy.* key) or "playerbots" (a Playerbots.* key);
 #                       native and Playerbots keys come from console/native_switch_keys.py and
-#                       name their compiled `default`.
+#                       name their compiled `default`. A feature mod-leeroy carries lists
+#                       Leeroy.Enable too: the module's own switch stops all of them.
 #   [[feature.evidence]] id, kind ("working", "failed" or "observed"), what (shown as is), and either
 #     log = "server" | "playerbots" | "mind", token (a literal every matching line carries: the
 #       scan's prefilter), pattern (a Python regex searched in the line after its timestamp; for
@@ -35,6 +36,11 @@ name = "Group resurrection: a rezzer with the mana walks in and rezzes"
 prs = [276, 405]
 since = "2026-11-21T10:10"
 note = "Waits for combat, a fence, a pending answer or a soulstone are expected and not counted as failures."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
 
 [[feature.switch]]
 source = "native"
@@ -65,6 +71,11 @@ name = "DKP loot hand-out reaches the winner and is charged"
 prs = [406, 420]
 since = "2026-11-21T12:26"
 
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
 [[feature.evidence]]
 id = "charged"
 kind = "working"
@@ -72,9 +83,27 @@ what = "an item handed out in game and charged to the winner (dkp_ledger item ro
 db = { from = "dkp_ledger", where = "reason = 'item'", time = "ts", unit = "s" }
 
 [[feature.evidence]]
-id = "unsettled"
+id = "give_unknown"
 kind = "failed"
-what = "a hand-out whose outcome stayed unknown or that the game refused (loot receipts uncertain or failed)"
+what = "the mind lost track of a give: no answer, a wrong one or no link (guild_loot_give_unknown; code: why)"
+log = "mind"
+token = "guild_loot_give_unknown "
+pattern = '^guild_loot_give_unknown raid=\d+ item=\d+ to=\d+ command=\S+ attempt=\d+ code=(?P<code>[A-Za-z][A-Za-z0-9_]*)'
+example = '{"ts": "2026-11-23T20:01:02.123-05:00", "level": "WARNING", "event": "log", "msg": "guild_loot_give_unknown raid=24 item=50274 to=1618 command=guild-loot-24-0123456789abcdef01234567 attempt=0 code=TimeoutError"}'
+
+[[feature.evidence]]
+id = "give_refused"
+kind = "failed"
+what = "the game refused a give or the item was gone (guild_loot_give_refused)"
+log = "mind"
+token = "guild_loot_give_refused "
+pattern = '^guild_loot_give_refused raid=\d+ item=\d+ command=\S+ attempt=\d+ gone=(?:True|False)'
+example = '{"ts": "2026-11-23T20:01:02.123-05:00", "level": "INFO", "event": "log", "msg": "guild_loot_give_refused raid=24 item=50274 command=guild-loot-24-0123456789abcdef01234567 attempt=1 gone=True"}'
+
+[[feature.evidence]]
+id = "unsettled"
+kind = "observed"
+what = "loot receipts still uncertain or refused (meta guild:loot; timed by the drop, so they never decide)"
 db = { from = "meta", where = "key LIKE 'guild:loot:%' AND json_valid(value) AND json_extract(value, '$.state') IN ('uncertain', 'failed')", time = "json_extract(value, '$.received')", unit = "s", code = "coalesce(json_extract(value, '$.error'), json_extract(value, '$.state'))" }
 
 [[feature]]
@@ -83,6 +112,11 @@ name = "His invitations in game carried out (come, meet, sit, follow, join, fish
 prs = [388]
 since = "2026-11-20T17:43"
 note = "A move native refuses for a reason she can say (combat, a fence, too far) is an honest answer, not a failure."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
 
 [[feature.switch]]
 source = "mind"
@@ -126,6 +160,11 @@ name = "\"You lead\": a member leads his group while he follows"
 prs = [393]
 since = "2026-11-20T21:23"
 note = "Ends he chose, arrivals, his leaving and the 60-minute cap are ordinary ends."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
 
 [[feature.switch]]
 source = "mind"
@@ -237,6 +276,11 @@ note = "No direct telemetry: hazard lines carry no npc or map, trash is not reco
 
 [[feature.switch]]
 source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
 key = "Leeroy.Hazards.Enable"
 default = false
 
@@ -257,6 +301,11 @@ id = "toc_slime_pools"
 name = "Northrend Beasts: bots leave the growing slime pools"
 prs = [448]
 since = "2026-11-22T16:26"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
 
 [[feature.switch]]
 source = "native"
@@ -303,6 +352,11 @@ since = "2026-11-14T12:03"
 
 [[feature.switch]]
 source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
 key = "Leeroy.Mechanics.Enable"
 default = false
 
@@ -346,6 +400,11 @@ id = "hazard_filter"
 name = "Hazard filter: his group's bots keep out of ground hazards while following"
 prs = [296, 424]
 since = "2026-11-14T08:52"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
 
 [[feature.switch]]
 source = "native"
@@ -396,6 +455,11 @@ since = "2026-11-11"
 
 [[feature.switch]]
 source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
 key = "Leeroy.CastDeathLoop.Enable"
 default = false
 
@@ -422,6 +486,11 @@ id = "owner_auras"
 name = "His listed auras kept on him (Leeroy.OwnerAuras)"
 prs = [423]
 since = "2026-11-21T16:08"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
 
 [[feature.evidence]]
 id = "reapplied"
@@ -456,6 +525,11 @@ name = "Offline raids in Trial of the Crusader"
 prs = [397, 410]
 since = "2026-11-20T22:20"
 
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
 [[feature.evidence]]
 id = "killed"
 kind = "working"
@@ -482,6 +556,11 @@ id = "offline_ulduar"
 name = "Offline raids in Ulduar (Flame Leviathan passed)"
 prs = [397]
 since = "2026-11-20T22:20"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
 
 [[feature.evidence]]
 id = "killed"
@@ -510,6 +589,11 @@ name = "Offline ICC passes the gunship and starts Saurfang"
 prs = [409]
 since = "2026-11-21T10:10"
 
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
 [[feature.evidence]]
 id = "passed"
 kind = "working"
@@ -536,6 +620,11 @@ id = "offline_icc_valithria"
 name = "Offline ICC drives Valithria through real healing"
 prs = [442]
 since = "2026-11-22T16:26"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
 
 [[feature.evidence]]
 id = "killed"
@@ -564,6 +653,11 @@ name = "Offline raids survive dungeon-clear teleports, full wipes and restarts"
 prs = [404]
 since = "2026-11-21T10:10"
 
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
 [[feature.evidence]]
 id = "ran_its_course"
 kind = "working"
@@ -591,6 +685,11 @@ name = "Offline raids fill admission losses from a bounded bench"
 prs = [413]
 since = "2026-11-21T11:26"
 
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
 [[feature.evidence]]
 id = "filled"
 kind = "working"
@@ -605,6 +704,11 @@ id = "dummy_lab"
 name = "Nightly dummy lab: trials form their party at the dummy and clean up"
 prs = [384]
 since = "2026-11-20T17:43"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
 
 [[feature.switch]]
 source = "mind"
@@ -624,6 +728,12 @@ id = "complete"
 kind = "working"
 what = "a lab night ran its dummy rounds to the end (tg:lab:summary reason dummy_rounds_complete)"
 db = { from = "meta", where = "key LIKE 'tg:lab:summary:%' AND json_valid(value) AND json_extract(value, '$.reason') = 'dummy_rounds_complete'", time = "json_extract(value, '$.ts')", unit = "s" }
+
+[[feature.evidence]]
+id = "blocked"
+kind = "failed"
+what = "the lab is blocked now, holding its members (tg:lab:owned phase blocked; code: its halt)"
+db = { from = "meta", where = "key = 'tg:lab:owned' AND json_valid(value) AND json_extract(value, '$.phase') = 'blocked'", time = "json_extract(value, '$.halted_at')", unit = "s", code = "json_extract(value, '$.halt')" }
 
 [[feature.evidence]]
 id = "halted"
@@ -653,6 +763,11 @@ prs = [399]
 since = "2026-11-21T10:10"
 
 [[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
 source = "mind"
 key = "life.day_plans"
 
@@ -672,6 +787,11 @@ id = "member_heroics"
 name = "Members run heroics together when they agree to"
 prs = [401, 415]
 since = "2026-11-21T10:10"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
 
 [[feature.switch]]
 source = "mind"
