@@ -16,7 +16,8 @@
 #   numbering    new mind migrations against the merge target: no number taken, no hole
 #   patches      patches/mod-playerbots or mod-dungeon-clear: the series entries the live module
 #                checkouts lack, `git am` in temporary --shared clones (scripts/ac-release-patches.py
-#                prepare, as the release does), then the pin-guard check on the result
+#                prepare, as the release does), then the pin guard on the result (CLAUDE.md's awk
+#                and the release helper's comment-aware check)
 #   contract     guild/bridge command code: the mind's `pytest -k contract`
 #   msvc         modules/mod-leeroy/src C++: `cl /Zs` of the changed translation units with the
 #                live build's include paths and defines (modules.vcxproj)
@@ -160,12 +161,35 @@ check_numbering() {
     fi
 }
 
-# The pin guard from CLAUDE.md: IsPinned before the death block, both before the group leave.
+# The release's own patch helper: beside this runner (CI takes both from the base), else the
+# checkout's.
+helper="$here/../ac-release-patches.py"
+[[ -f $helper ]] || helper="$repo/scripts/ac-release-patches.py"
+
+# pin_guard MODULE_DIR: "pin guard OK" when both checks pass: the operator's awk from CLAUDE.md
+# (IsPinned before the death block, both before the group leave), and the release helper's
+# function-bounded check, which ignores a guard that is only commented out.
 pin_guard() {
-    awk '/^bool RandomPlayerbotMgr::ProcessBot\(Player\* bot\)/{p=1}
+    local file="$1/src/Bot/RandomPlayerbotMgr.cpp" awk_result helper_result
+    awk_result="$(awk '/^bool RandomPlayerbotMgr::ProcessBot\(Player\* bot\)/{p=1}
          p && !g && /IsPinned\(botId\)/{g=NR}  p && !d && /bot->isDead\(\)/{d=NR}
          p && /leave group if leader is rndbot/{l=NR; exit}
-         END{print (g && d && l && g < d && d < l) ? "pin guard OK" : "pin guard MISPLACED"}' "$1"
+         END{print (g && d && l && g < d && d < l) ? "pin guard OK" : "pin guard MISPLACED"}' "$file")"
+    helper_result="$(pyrun -c 'import importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("release_patches", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+try:
+    module.pin_guard(Path(sys.argv[2]))
+    print("ok")
+except module.Refused as exc:
+    print(exc)' "$(native_path "$helper")" "$(native_path "$1")")"
+    if [[ $awk_result == "pin guard OK" && $helper_result == ok ]]; then
+        printf 'pin guard OK\n'
+    else
+        printf 'pin guard MISPLACED (awk: %s; release check: %s)\n' "${awk_result#pin guard }" "$helper_result"
+    fi
 }
 
 clone_at() {  # clone_at SOURCE DEST [COMMIT]: a throwaway --shared clone with a plain identity
@@ -182,7 +206,7 @@ check_patches_live() {
         return
     fi
     mkdir -p "$scratch/patches"
-    if ! out="$(pyrun "$(native_path "$repo/scripts/ac-release-patches.py")" prepare "$(native_path "$modules")" \
+    if ! out="$(pyrun "$(native_path "$helper")" prepare "$(native_path "$modules")" \
             "$(native_path "$repo/patches")" "$(native_path "$journal")")"; then
         report FAIL patches "release rehearsal refused: ${out#FAIL: release patches: }"
         return
@@ -193,7 +217,7 @@ for m in json.load(open(sys.argv[1], encoding="utf-8"))["modules"]:
     if m["name"] == "mod-playerbots":
         print(m["head"]); print("\n".join(p["name"] for p in m["patches"]))' "$(native_path "$journal")")"
     head="$(head -n 1 <<<"$names")"
-    local file="$modules/mod-playerbots/src/Bot/RandomPlayerbotMgr.cpp"
+    local dir="$modules/mod-playerbots"
     if [[ -n $head && $(wc -l <<<"$names") -gt 1 ]]; then
         local clone="$scratch/patches/mod-playerbots" name
         clone_at "$modules/mod-playerbots" "$clone" "$head" || { report FAIL patches "could not clone mod-playerbots"; return; }
@@ -202,9 +226,9 @@ for m in json.load(open(sys.argv[1], encoding="utf-8"))["modules"]:
             git -C "$clone" am --quiet --no-3way "$repo/patches/mod-playerbots/$name" >/dev/null 2>&1 ||
                 { report FAIL patches "mod-playerbots: $name does not apply"; return; }
         done < <(tail -n +2 <<<"$names")
-        file="$clone/src/Bot/RandomPlayerbotMgr.cpp"
+        dir="$clone"
     fi
-    guard="$(pin_guard "$file")"
+    guard="$(pin_guard "$dir")"
     local missing
     missing="$(grep -oE '"missing": [0-9]+' <<<"$out" | grep -oE '[0-9]+$')"
     if [[ $guard == "pin guard OK" ]]; then
@@ -238,7 +262,7 @@ check_patches_upstream() {
         fi
         if [[ $module == mod-playerbots ]]; then
             local guard
-            guard="$(pin_guard "$clone/src/Bot/RandomPlayerbotMgr.cpp")"
+            guard="$(pin_guard "$clone")"
             if [[ $guard != "pin guard OK" ]]; then report FAIL patches "$module: $guard"; failed=1; continue; fi
             report ok patches "$module: $n patch(es) apply to upstream $branch; $guard"
         else

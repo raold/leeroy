@@ -61,7 +61,11 @@ def open_db(path):
     for script in sorted(MIGRATIONS.glob("*.sql")):
         number = int(script.name[:4])
         if number > current:
-            conn.executescript(script.read_text(encoding="utf-8"))
+            text = script.read_text(encoding="utf-8")
+            conn.executescript(text)
+            if "-- data step" in text:  # as arc/ladder.py does: the message quotes a stored value
+                stored = conn.execute("SELECT body FROM memories LIMIT 1").fetchone()[0]
+                raise RuntimeError(f"cannot map {stored!r}")
             conn.execute(f"PRAGMA user_version = {number}")
             conn.commit()
     return conn
@@ -258,6 +262,14 @@ commit "$leeroy" "a broken migration"
 run --only migrate main; expect 1; has 'FAIL migrate: db migrate exited 1: sqlite3.OperationalError: no such table: nowhere'
 [ "$(cksum < "$live/mind-data/mind.db")" = "$db_sum" ] || fail "the live database changed"; ok
 leftovers
+# A data step's message can quote a stored value: only the exception class reaches the report.
+git -C "$leeroy" rm --quiet mind/leeroy_mind/storage/migrations/0004_broken.sql
+printf -- '-- data step\nSELECT 1;\n' > "$leeroy/mind/leeroy_mind/storage/migrations/0004_step.sql"
+commit "$leeroy" "a data step that fails on a stored value"
+run --only migrate main; expect 1; has 'FAIL migrate: db migrate exited 1: RuntimeError'
+lacks 'private text'
+lacks 'cannot map'
+leftovers
 VERIFY_MIND_DB="$scratch/missing.db" run --only migrate main; expect 0; has 'skip migrate: no mind.db at'
 g "$leeroy" checkout --quiet main
 
@@ -305,7 +317,17 @@ new_patch "Move the pin guard last"
 commit "$leeroy" "a series entry that moves the guard"
 run --only patches main; expect 1; has 'FAIL patches: release rehearsal refused: pin_guard_misplaced'
 VERIFY_UPSTREAM_PLAYERBOTS="$scratch/upstream-playerbots.git" run --ci --only patches main; expect 1
-has 'FAIL patches: mod-playerbots: pin guard MISPLACED'
+has 'FAIL patches: mod-playerbots: pin guard MISPLACED (awk: MISPLACED; release check: pin_guard_misplaced)'
+
+# A guard that is only commented out still reads "IsPinned(botId)" to a plain awk.
+sed -i 's|^    if (IsPinned(botId))|    // if (IsPinned(botId))|; s|^        return ProcessPinnedBot(bot);|        // return ProcessPinnedBot(bot);|' \
+    "$work/src/Bot/RandomPlayerbotMgr.cpp"
+grep -q '// if (IsPinned(botId))' "$work/src/Bot/RandomPlayerbotMgr.cpp" || fail "the guard was not commented out"; ok
+new_patch "Comment the pin guard out"
+commit "$leeroy" "a series entry that comments the guard out"
+run --only patches main; expect 1; has 'FAIL patches: release rehearsal refused: pin_guard_misplaced'
+VERIFY_UPSTREAM_PLAYERBOTS="$scratch/upstream-playerbots.git" run --ci --only patches main; expect 1
+has 'FAIL patches: mod-playerbots: pin guard MISPLACED (awk: OK; release check: pin_guard_misplaced)'
 
 g "$work" checkout --quiet -b elsewhere HEAD~1
 printf 'unrelated\n' > "$work/src/Bot/Notes.txt"

@@ -32,7 +32,7 @@ jobs:
         run: |
           if git cat-file -e "$BASE:scripts/verify/run.sh" 2>/dev/null; then
             mkdir -p "$RUNNER_TEMP/verify-base"
-            git archive "$BASE" scripts/verify | tar -x -C "$RUNNER_TEMP/verify-base"
+            git archive "$BASE" scripts/verify scripts/ac-release-patches.py | tar -x -C "$RUNNER_TEMP/verify-base"
             echo "RUNNER=$RUNNER_TEMP/verify-base/scripts/verify/run.sh" >> "$GITHUB_ENV"
             echo "runner from the base, $BASE"
           else

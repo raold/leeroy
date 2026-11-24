@@ -110,20 +110,33 @@ def migrate(mind: Path, data: Path) -> None:
         raise Failed(f"db migrate exited {out.returncode}: {last_error(out.stdout)}")
 
 
+# Failure messages that can only name schema objects, versions or migration numbers. Anything
+# else is reduced to its exception class: a message (a data step's RuntimeError, a multiline
+# one's last line) can quote a stored value, and this runs on a copy of the live database.
+DIAGNOSTICS = (
+    r"sqlite3\.\w+: no such (?:table|column|index|trigger|view): [\w.]+",
+    r"sqlite3\.\w+: (?:table|index|trigger|view) [\w.]+ already exists",
+    r"sqlite3\.\w+: duplicate column name: \w+",
+    r"sqlite3\.\w+: (?:UNIQUE|NOT NULL|FOREIGN KEY|CHECK|PRIMARY KEY) constraint failed(?:: [\w.]+(?:, [\w.]+)*)?",
+    r"sqlite3\.\w+: (?:database is locked|database disk image is malformed|disk I/O error)",
+    r"RuntimeError: mind\.db is schema v\d+, newer than this code \(v\d+\); refusing to open it",
+    r"RuntimeError: duplicate migration numbers in \S+",
+    r"RuntimeError: migration numbering in \S+ skips [\d, ]+: a database migrated past it would "
+    r"never run it; refusing to migrate or open one",
+)
+
+
 def last_error(output: str) -> str:
-    """The failure's last line when its kind cannot carry row data (SQLite's own errors and the
-    migrator's refusals name tables, columns and versions), else the exception class alone: a
-    data step's error could quote a stored value."""
+    """An allowlisted diagnostic (DIAGNOSTICS) when the last line is one, else the exception
+    class alone; never the text of an arbitrary message."""
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     if not lines:
         return "no output"
     line = lines[-1]
+    if any(re.fullmatch(pattern, line) for pattern in DIAGNOSTICS):
+        return line
     kind = re.match(r"^([A-Za-z_][\w.]*)(?::|$)", line)
-    if not kind:
-        return line[:200]
-    if kind.group(1).startswith("sqlite3.") or kind.group(1) == "RuntimeError":
-        return line[:200]
-    return kind.group(1)
+    return kind.group(1) if kind else "unrecognized output"
 
 
 def integrity(db: Path) -> None:
