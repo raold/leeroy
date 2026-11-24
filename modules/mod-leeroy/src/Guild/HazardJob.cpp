@@ -85,6 +85,7 @@ bool ContextMember(Player* bot, Player* owner)
     if (dojoOwner && owner && bot->GetSession() && owner->GetSession())
         return bot != owner && bot->GetSession()->GetAccountId() == owner->GetSession()->GetAccountId();
 #endif
+    (void)owner;
     return bot->GetGUID().GetCounter() != HumanGuid() && IsCast(bot->GetGUID().GetCounter());
 }
 std::uint32_t untilPass = 0;

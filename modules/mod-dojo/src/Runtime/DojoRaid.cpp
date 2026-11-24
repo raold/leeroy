@@ -27,6 +27,7 @@
 #include "WorldScript.h"
 #include "WorldSession.h"
 #include "Guild/HazardJob.h"
+#include <algorithm>
 #include <array>
 #include <mutex>
 #include <sstream>

@@ -49,8 +49,8 @@ class RaidVerdictTest(unittest.TestCase):
             self.assertFalse(self.check(observation("poison") | changed)["ok"])
 
     def test_broken_negative_controls_fail(self):
-        for scenario, changed in (("valithria", {"heal_events": 3, "effective_healing": 100}),
-                                  ("twins", {"light_samples": 7}), ("poison", {"poison_hits": 0})):
+        for scenario, changed in (("valithria", {"heal_events": 1, "effective_healing": 100}),
+                                  ("twins", {"light_samples": 1}), ("poison", {"poison_hits": 0})):
             self.assertFalse(self.check(observation(scenario, True) | changed)["ok"])
 
     def test_missing_or_invalid_counters_cannot_pass_negative_control(self):

@@ -11,6 +11,7 @@ import uuid
 
 from . import mysql, world
 from .layout import LayoutError, read_conf
+from .ra import RaError
 
 SCENARIOS = ("valithria", "twins", "poison")
 
@@ -38,13 +39,14 @@ def verdict(observation, *, scenario, token, negative=False):
     if scenario == "valithria":
         if not o.get("reach_competitor") or not o.get("combat_observed"):
             problems.append("stock reach-to-heal competitor or combat was not exercised")
-        healed = o.get("heal_events", 0) >= 2 and o.get("effective_healing", 0) > 0
-        if healed == negative:
-            problems.append("negative control healed Valithria" if negative else "fewer than two effective heals on Valithria")
+        if negative and (o["heal_events"] > 0 or o["effective_healing"] > 0):
+            problems.append("negative control healed Valithria")
+        elif not negative and (o["heal_events"] < 2 or o["effective_healing"] <= 0):
+            problems.append("fewer than two effective heals on Valithria")
     elif scenario == "twins":
         acquired = o.get("light_samples", 0) >= 5
         switched = o.get("dark_samples", 0) >= 10 and o.get("switch_ms", 0) > 0
-        if negative and (acquired or switched):
+        if negative and (o["light_samples"] > 0 or o["dark_samples"] > 0):
             problems.append("disabled Twin interaction still acquired an essence")
         elif not negative and not (acquired and switched):
             problems.append("real essence acquisition and colour change not both observed")
@@ -120,8 +122,8 @@ def run(layout, *, log=print):
                   cases=results, stopped=False, out=str(out))
     started = False
     try:
-        world.start(layout, log=log)
         started = True
+        world.start(layout, log=log)
         with world.ra(layout) as client:
             for scenario in SCENARIOS:
                 for negative in (True, False):
@@ -151,14 +153,15 @@ def run(layout, *, log=print):
                     if not state.get("cleanup"):
                         raise world.WorldError("fixture cleanup unproved; refusing the next scenario")
         report["ok"] = len(results) == 6 and all(r["ok"] for r in results)
-    except (world.WorldError, OSError, ValueError) as error:
+    except (world.WorldError, RaError, OSError, ValueError) as error:
         report["error"] = str(error)
     finally:
         if started:
             try:
-                world.stop(layout, log=log)
+                if world.running(layout):
+                    world.stop(layout, log=log)
                 report["stopped"] = not world.running(layout)
-            except (world.WorldError, OSError) as error:
+            except (world.WorldError, RaError, OSError) as error:
                 report["shutdown_error"] = str(error)
         report["ok"] = report["ok"] and report["stopped"]
         (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
