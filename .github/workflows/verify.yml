@@ -1,0 +1,94 @@
+name: verify
+
+# The portable parts of scripts/verify/run.sh on every pull request, in observe mode: each check
+# reports in the job summary and as annotations, and none fails the build yet. To enforce one,
+# delete its step's `continue-on-error: true` (and, for the workflow split, set
+# VERIFY_STRICT_WORKFLOWS: "1" on that step), then make `verify-observe` a required check.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify-observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BASE: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The runner that judges a pull request comes from its base whenever the base has one, so a
+      # pull request cannot weaken the check it is judged by. Only the PR that adds it runs its own.
+      - name: Pick the runner
+        run: |
+          if git cat-file -e "$BASE:scripts/verify/run.sh" 2>/dev/null; then
+            mkdir -p "$RUNNER_TEMP/verify-base"
+            git archive "$BASE" scripts/verify scripts/ac-release-patches.py | tar -x -C "$RUNNER_TEMP/verify-base"
+            echo "RUNNER=$RUNNER_TEMP/verify-base/scripts/verify/run.sh" >> "$GITHUB_ENV"
+            echo "runner from the base, $BASE"
+          else
+            echo "RUNNER=$GITHUB_WORKSPACE/scripts/verify/run.sh" >> "$GITHUB_ENV"
+            echo "the base has no runner yet: this pull request's own"
+          fi
+
+      - name: Plan
+        id: plan
+        continue-on-error: true
+        run: |
+          plan=$(bash "$RUNNER" --ci --plan "$BASE")
+          echo "$plan" | tee -a "$RUNNER_TEMP/verify.txt"
+          echo "checks=${plan##*checks: }" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v6
+        if: contains(steps.plan.outputs.checks, 'migrate')
+        with:
+          python-version: "3.14"
+
+      - name: Mind environment (for the migration fixture)
+        if: contains(steps.plan.outputs.checks, 'migrate')
+        run: |
+          python -m venv "$RUNNER_TEMP/mind-venv"
+          "$RUNNER_TEMP/mind-venv/bin/python" -m pip install -q -e ./mind
+          echo "VERIFY_PYTHON=$RUNNER_TEMP/mind-venv/bin/python" >> "$GITHUB_ENV"
+
+      - name: Workflows changed together with code (warning)
+        if: contains(steps.plan.outputs.checks, 'workflows')
+        continue-on-error: true
+        run: bash "$RUNNER" --ci --only workflows "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
+
+      - name: Windows macro identifiers
+        if: contains(steps.plan.outputs.checks, 'identifiers')
+        continue-on-error: true
+        run: bash "$RUNNER" --ci --only identifiers "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
+
+      - name: Patch series on upstream, with the pin guard
+        if: contains(steps.plan.outputs.checks, 'patches')
+        continue-on-error: true
+        run: bash "$RUNNER" --ci --only patches "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
+
+      - name: Migrations on a fixture database at the base's schema
+        if: contains(steps.plan.outputs.checks, 'numbering') || contains(steps.plan.outputs.checks, 'migrate')
+        continue-on-error: true
+        run: bash "$RUNNER" --ci --only numbering,migrate "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### verify (observe mode)"
+            echo
+            echo '```'
+            grep -v '^::' "$RUNNER_TEMP/verify.txt" 2>/dev/null || echo "no report"
+            echo '```'
+            echo
+            echo "Observe mode: nothing here fails the build. The MSVC syntax check, the live patch rehearsal and the live database copy run only on the server's machine: \`scripts/verify/run.sh\`."
+          } >> "$GITHUB_STEP_SUMMARY"

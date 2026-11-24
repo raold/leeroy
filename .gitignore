@@ -8,6 +8,7 @@
 !/.gitleaksignore
 !/.github/
 !/README.md
+!/AGENTS.md
 !/LICENSE
 !/references.bib
 !/scripts/
