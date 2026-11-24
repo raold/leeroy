@@ -95,13 +95,14 @@ def test_game_lines_split_and_tail_by_whole_clauses_without_losing_words(text, l
 
 ITEMS = ("Shadowmourne", "Deathbringer's Will", "Frozen Orb", "Bryntroll, the Bone Arbiter",
          "Tiny Abomination in a Jar", "Sharpened Twilight Scale", "Ashen Band of Endless Vengeance")
+# an item id is the item table's primary key; names may repeat (a heroic copy)
 item_rows = st.lists(st.tuples(st.sampled_from(ITEMS), st.integers(1, 99999), st.integers(2, 5),
-                               st.integers(200, 284)), min_size=1, max_size=6)
+                               st.integers(200, 284)), min_size=1, max_size=6, unique_by=lambda r: r[1])
 pieces = st.one_of(
     chat_words,
     st.sampled_from(ITEMS).flatmap(lambda n: st.sampled_from((n, n.lower(), n.upper()))).map(lambda n: f"[{n}]"),
     st.sampled_from(ITEMS).map(lambda n: n.lower()),
-    st.sampled_from(("{", "{{", "{{item:5}}", "}}", "|", "{|{", "[", "]", "[nothing]", "​", "\x07")),
+    st.sampled_from(("{", "{{", "{{item:5}}", "}}", "|", "{|{", "[", "]", "[nothing]", "\u200b", "\x07")),
     st.text(max_size=12),
 )
 TOKEN = re.compile(r"\{\{item:([0-9]{1,10})\}\}")
@@ -127,13 +128,10 @@ def test_item_placeholders_are_only_the_linkers_and_fit_the_line_once_expanded(r
     if not tokens:
         assert out == folded
         return
-    ids = {r["id"] for r in table}
-    refs = {}
-    for m in tokens:
-        assert int(m.group(1)) in ids
-        refs[m.start()] = linker.resolve(next(r["name"] for r in table if r["id"] == int(m.group(1))), level)
+    by_id = {ref.id: ref for refs in linker._index().values() for ref in refs}
+    assert all(int(m.group(1)) in by_id for m in tokens)
     size = len(out.encode("utf-8")) - sum(len(m.group(0)) for m in tokens)
-    size += sum(link_bytes(ref, level) for ref in refs.values())
+    size += sum(link_bytes(by_id[int(m.group(1))], level) for m in tokens)
     assert size <= MAX_TEXT_BYTES
     # the words around the placeholders are the folded line's own
     outside = TOKEN.split(out)[::2]
