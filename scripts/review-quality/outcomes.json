@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "repository": "raold/leeroy",
+  "outcomes": [
+    {
+      "id": "msvc-near-390",
+      "kind": "release_build_fix",
+      "original_pr": 388,
+      "fix_pr": 390,
+      "observed_at": "2026-11-20T22:30:21Z",
+      "evidence": ["https://github.com/raold/leeroy/pull/390"],
+      "rule": "Before releasing native changes, compile the affected translation units with the production Windows/MSVC headers; portable policy tests alone do not cover Windows macros.",
+      "check": "production-header MSVC syntax/build check, including new identifiers"
+    },
+    {
+      "id": "valithria-439",
+      "kind": "post_release_fix",
+      "original_pr": 416,
+      "fix_pr": 439,
+      "observed_at": "2026-11-22T18:52:50Z",
+      "evidence": ["https://github.com/raold/leeroy/pull/439", "https://github.com/raold/leeroy/pull/416"],
+      "release_evidence": "https://github.com/raold/leeroy/pull/439",
+      "rule": "For raid AI changes, require an isolated running-world scenario that observes the intended effect with competing stock strategies enabled. An action returning success or a policy test is not proof of healing, aura acquisition, or safe movement.",
+      "check": "dojo raid acceptance receipt for the candidate native build (pending runtime gate)"
+    },
+    {
+      "id": "living-poison-424",
+      "kind": "post_release_fix",
+      "original_pr": null,
+      "fix_pr": 424,
+      "observed_at": "2026-11-21T19:23:46Z",
+      "evidence": ["https://github.com/raold/leeroy/pull/424"],
+      "release_evidence": "https://github.com/raold/leeroy/pull/424",
+      "attribution_note": "The public fix documents the live failure, but does not identify one introducing PR. Do not infer a reviewer from the fix author."
+    }
+  ]
+}

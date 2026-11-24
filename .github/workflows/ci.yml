@@ -32,6 +32,8 @@ jobs:
         run: bash scripts/tests/ac-release.sh
       - name: release module patch self-test (temporary repositories only)
         run: python3 scripts/tests/test_ac_release_patches.py
+      - name: reviewer outcome accounting (synthetic records, no GitHub writes)
+        run: python3 -m unittest discover -s scripts/tests -p test_review_quality.py
       - name: SOAP client self-test (fake server on loopback)
         run: bash scripts/tests/ac-soap.sh
       - name: native log pruning self-test (temporary files only)
