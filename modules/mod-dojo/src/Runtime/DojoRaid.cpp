@@ -40,8 +40,9 @@ namespace
 {
 // Fixed synthetic account and characters; no command accepts a live character GUID.
 constexpr char const* Account = "DOJORAID";
-constexpr std::array<char const*, 2> Names{"Dojopaladin", "Dojoleader"};
-constexpr std::array<uint8, 2> Classes{CLASS_PALADIN, CLASS_MAGE};
+constexpr std::array<char const*, 2> Names{"Dojopaladin", "Dojoreserve"};
+constexpr std::array<uint8, 2> Classes{CLASS_PALADIN, CLASS_DRUID};
+constexpr std::array<uint8, 2> Races{RACE_HUMAN, RACE_NIGHTELF};
 constexpr uint32 Timeout = 120000;
 
 struct RaidRun
@@ -86,7 +87,7 @@ struct RaidRun
             }
             WorldSession* session = new WorldSession(account, std::string(), 0, nullptr, SEC_PLAYER,
                 EXPANSION_WRATH_OF_THE_LICH_KING, time_t(0), sWorld->GetDefaultDbcLocale(), 0, false, false, 0);
-            CharacterCreateInfo info(Names[i], RACE_HUMAN, Classes[i], GENDER_MALE, 0, 0, 0, 0, 0);
+            CharacterCreateInfo info(Names[i], Races[i], Classes[i], GENDER_MALE, 0, 0, 0, 0, 0);
             Player* p = new Player(session);
             p->GetMotionMaster()->Initialize();
             bool const created = p->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &info);
@@ -166,6 +167,13 @@ struct RaidRun
         if (!bot->HasTalent(20208, bot->GetActiveSpec())) { Fail("Holy fixture talent refused"); return false; }
         bot->learnSpell(48782, false); // Holy Light, rank 13
         bot->learnSpell(48785, false); // Flash of Light, rank 9
+        // Stock Valithria allocation reserves the restoration druid for the
+        // raid, leaving the measured paladin on the dragon even when the distant
+        // raid member is hurt enough to qualify for stock heal-reach selection.
+        owner->resetTalents(true);
+        owner->LearnTalent(823, 2); // Nature's Focus, 3/3 (Talent.dbc, restoration)
+        if (!owner->HasTalent(17066, owner->GetActiveSpec())) { Fail("restoration fixture talent refused"); return false; }
+        GET_PLAYERBOT_AI(owner)->ResetStrategies(false);
         PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
         ai->ResetStrategies(false);
         ai->ChangeStrategy("+heal", BOT_STATE_COMBAT);
@@ -212,7 +220,8 @@ struct RaidRun
         if (scenario == "valithria")
         {
             Creature* dragon = bot->FindNearestCreature(36789, 150.f);
-            if (!dragon || !PlayerbotAI::IsHeal(bot)) { Fail("Valithria or stock healer role missing"); return; }
+            if (!dragon || !PlayerbotAI::IsHeal(bot) || !PlayerbotAI::IsHeal(owner))
+            { Fail("Valithria or stock healer roles missing"); return; }
             target = dragon->GetGUID();
             dragon->SetHealth(dragon->GetMaxHealth() / 2); // setup only; never altered during the observation
             // The native encounter rejects a sequence break by teleporting the
@@ -221,7 +230,7 @@ struct RaidRun
             Creature* trigger = bot->GetMap()->GetCreature(script->GetGuidData(35));
             if (!trigger) { Fail("native Valithria combat trigger missing"); return; }
             owner->NearTeleportTo(bot->GetPositionX() - 55.f, bot->GetPositionY(), bot->GetPositionZ(), 0.f);
-            owner->SetHealth(owner->GetMaxHealth() * 82 / 100);
+            owner->SetHealth(owner->GetMaxHealth() * 65 / 100);
             ai->ChangeStrategy(control ? "-icc" : "+icc", BOT_STATE_COMBAT);
             ai->ChangeStrategy(control ? "-icc" : "+icc", BOT_STATE_NON_COMBAT);
             trigger->AI()->DoZoneInCombat(); // real encounter/archmage combat, not friendly fake combat
@@ -280,12 +289,14 @@ struct RaidRun
         {
             // Keep the distant stock reach-to-heal competitor eligible, and
             // mana available. Never cast for the healer or write dragon HP here.
-            // Below stock AlmostFullHealth (85), above dragon/raid triage (80).
-            owner->SetHealth(owner->GetMaxHealth() * 82 / 100);
+            // Stock target selection adds 30 points beyond HealDistance and
+            // rejects scores >=100. A reserved raid healer at 65% is eligible;
+            // the dragon-assigned paladin must still prioritize Valithria.
+            owner->SetHealth(owner->GetMaxHealth() * 65 / 100);
             bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
             Unit* healTarget = GET_PLAYERBOT_AI(bot)->GetAiObjectContext()->GetValue<Unit*>("party member to heal")->Get();
             competition = competition || (healTarget == owner && bot->GetDistance(owner) > 40.f &&
-                owner->GetHealthPct() >= 80.f && owner->GetHealthPct() < 100.f && bot->IsWithinLOSInMap(owner));
+                owner->GetHealthPct() >= 60.f && owner->GetHealthPct() < 70.f && bot->IsWithinLOSInMap(owner));
             if (phaseMs >= 20000) Phase("cleanup");
         }
         else if (scenario == "twins")
