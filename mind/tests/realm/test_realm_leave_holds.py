@@ -8,6 +8,7 @@ from leeroy_mind.protocol import Ack, parse_event, ProtocolError
 from leeroy_mind.realm import protocol as p
 from leeroy_mind.realm.action_store import held_manifest, skipped_backoff
 from leeroy_mind.realm.forget import ForgetReceipts, FORGOTTEN_RECEIPT
+from leeroy_mind.testing.wire import bridge_method
 from realm.test_realm_action_store import store, prepare, dispatch
 
 
@@ -80,6 +81,7 @@ class ForgetHarness:
         self.sent, self.waiting = [], {}
         self.forget = ForgetReceipts(store, self.send, lambda: self.context, self.clock)
 
+    @bridge_method
     async def send(self, cmd, *, preserve_id):
         assert preserve_id
         self.sent.append(cmd)

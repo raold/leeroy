@@ -10,10 +10,11 @@ import pytest
 
 from leeroy_mind import raidplay
 from leeroy_mind.guild.protocol import GuildGroup
-from leeroy_mind.protocol import MAX_LINE_BYTES, Hello, encode_command
+from leeroy_mind.protocol import MAX_LINE_BYTES, Ack, Hello, encode_command
 from leeroy_mind.raidplay import PlaybookError, load_files
 from leeroy_mind.raidplay import respond
 from leeroy_mind.raidplay.respond import MechanicFeed, RaidMechanics, actionable, settings, tables
+from leeroy_mind.testing.wire import bridge_send
 
 ON = "[raidplay]\nrespond = true\n[training]\nenabled = true\nplaybooks = true\n"
 
@@ -237,9 +238,10 @@ class _App:
         self.backlog = backlog
         self.handlers, self.hooks, self.background = {}, [], []
 
+        @bridge_send
         async def send(cmd, preserve_id=False):
             self.sent.append(cmd)
-            return SimpleNamespace(ok=self.ok, error="" if self.ok else "bad field: map")
+            return Ack(0, cmd.id, self.ok, "" if self.ok else "bad field: map")
         self.bridge = SimpleNamespace(send=send)
 
     def is_backlog(self, ev):

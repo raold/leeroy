@@ -13,6 +13,7 @@ from nightly.test_night_newcomers import context, generate
 from leeroy_mind.personas.io import load_persona, save_persona, PersonaCache
 from leeroy_mind.protocol import Ack, Hello
 from leeroy_mind.world import targets, stage, photos
+from leeroy_mind.testing.wire import bridge_send
 
 
 @pytest.mark.parametrize("seed_state",["valid","missing","invalid"])
@@ -49,6 +50,7 @@ def test_roster_refusal_is_once_and_never_logs_ack_text(h,monkeypatch,caplog):
     async def scenario():
         for _ in range(2):
             app=NS(data_dir=h.settings.data_dir,store=h.store,clock=h.clock,is_backlog=lambda _:False)
+            @bridge_send
             async def send(cmd,**kw):
                 return Ack(0,cmd.id,False,"PRIVATE_ACK_TEXT")
             app.bridge=NS(send=send)
@@ -67,6 +69,7 @@ def test_roster_polls_never_reserve_permanent_wire_ids(h):
     async def scenario():
         app=NS(data_dir=h.settings.data_dir,store=h.store,clock=h.clock,is_backlog=lambda _:False)
         preserved=set()
+        @bridge_send
         async def send(cmd,*,preserve_id=False):
             if preserve_id:
                 preserved.add(cmd.id)

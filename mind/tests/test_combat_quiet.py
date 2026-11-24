@@ -10,6 +10,7 @@ from leeroy_mind.config import load_config
 from leeroy_mind.protocol import Ack, Hello, Say, encode_command
 from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
+from leeroy_mind.testing.wire import bridge_send
 
 
 @pytest.fixture
@@ -51,6 +52,7 @@ def test_combat_rejection_drops_a_delayed_fragment_without_recording_or_retry(ri
     rig.engine._record = record
     calls = []
 
+    @bridge_send
     async def send(cmd):
         calls.append(cmd)
         return Ack(ts=0, id=cmd.id, ok=len(calls) == 1,
@@ -72,6 +74,7 @@ def test_old_native_is_safe_and_off_preserves_the_wire(rig, enabled, native, exp
     rig.engine._record = Mock()
     calls = []
 
+    @bridge_send
     async def send(cmd):
         calls.append(cmd)
         return Ack(ts=0, id=cmd.id, ok=True, error="")

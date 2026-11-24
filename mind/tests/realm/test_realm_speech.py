@@ -26,6 +26,7 @@ from leeroy_mind.realm.places import DIST, Place, Places
 from leeroy_mind.realm.ports import LivePorts
 from leeroy_mind.realm.service import attach_realm
 from leeroy_mind.realm.speech import Speech
+from leeroy_mind.testing.wire import bridge_send
 from realm.fakes import RealmApp, enabled
 
 GUILD_NAME = "Testcast"  # His guild's own name (guild 21): never said by a rival.
@@ -778,6 +779,7 @@ def test_screen_guild_name_drops_and_retry_can_pass(tmp_path, store, clock, monk
 def refusing(s, error, *, kind=protocol.RealmSay, times=1):
     left = {"n": times}
 
+    @bridge_send
     async def send(cmd, *, preserve_id=False):
         s.app.sent.append(cmd)
         if type(cmd) is kind and left["n"] > 0:
