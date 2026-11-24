@@ -293,3 +293,111 @@ def test_the_gallery_endpoint_hides_and_refuses_photos_of_her_old_looks(store, d
             assert (await http(app, "GET", old + "&thumb=1")).status == 404
             assert (await http(app, "GET", old.replace("set=1", "set=2"))).status == 200
     asyncio.run(go())
+
+
+def _earlier_looks(store, data):
+    """Set 1 and a situation from her first looks, set 2 from her new ones and her cover."""
+    renderable_cast(store, 101)
+    ready(store, data, 101, 1, now=1)
+    old_snap = ready_snap(store, data, 101, looks=looks_hash(APPEARANCE))
+    _new_looks(store, 101, build="voluptuous", weight_kg=80)
+    ready(store, data, 101, 2, now=3)
+    pick(store, 101, 2, 1, source="console", now=4)
+    return old_snap
+
+
+def test_show_all_sets_lists_and_serves_her_earlier_looks_marked_and_keeps_everything(store, data):
+    old_snap = _earlier_looks(store, data)
+    before, rows = _tree(data), _rows(store)
+    shut = galleryview.gallery(store.conn, data, 101)
+    assert shut["all"] is False and shut["earlier"] == 5  # four candidates and one situation
+    assert {p["set"] for p in shut["photos"]} == {2}
+    assert not any(p.get("earlier") for p in shut["photos"])
+    every = galleryview.gallery(store.conn, data, 101, all_sets=True)
+    assert every["all"] is True and every["earlier"] == 5
+    old = [p for p in every["photos"] if p.get("earlier")]
+    assert sorted(p["id"] for p in old) == sorted(
+        [f"candidate:1:{i}" for i in range(4)] + [f"snap:{old_snap}"])
+    assert all(p["image"].endswith("&all=1") and p["thumbnail"].endswith("&all=1&thumb=1")
+               for p in old)
+    current = [p for p in every["photos"] if not p.get("earlier")]
+    assert current == shut["photos"]  # her current looks' photos read exactly as before
+    assert [p["id"] for p in every["photos"] if p["cover"]] == ["candidate:2:1"]
+    rendered = [p["rendered"] for p in every["photos"]]
+    assert rendered == sorted(rendered, reverse=True)
+    for idx in range(4):
+        assert galleryview.photo(store.conn, data, 101, "candidate", 1, idx) is None
+        assert galleryview.photo(store.conn, data, 101, "candidate", 1, idx, all_sets=True)
+        assert galleryview.photo(store.conn, data, 101, "candidate", 1, idx, thumb=True,
+                                 all_sets=True)
+    assert galleryview.photo(store.conn, data, 101, "snap", old_snap, None) is None
+    assert galleryview.photo(store.conn, data, 101, "snap", old_snap, None, all_sets=True)
+    assert galleryview.photo(store.conn, data, 102, "candidate", 1, 0, all_sets=True) is None
+    assert _tree(data) == before and _rows(store) == rows  # nothing deleted, moved or written
+
+
+def test_show_all_sets_keeps_the_lust_and_world_rules(store, data):
+    renderable_cast(store, 101)  # not of the lust style
+    ready(store, data, 101, 1, now=1)
+    store.set_meta("selfies:set-lust:101:1", "1")  # rendered while she was
+    ready(store, data, 101, 2, now=2)
+    ready(store, data, 101, 3, now=3)
+    with store.transaction():
+        store.conn.execute("UPDATE selfie_set SET decided='passed',night='2026-11-01' "
+                           "WHERE guid=101 AND set_no=3")
+    store.set_meta("selfies:set-world:101:3", "1")
+    _new_looks(store, 101, hair_colour="copper red")
+    ready(store, data, 101, 4, now=4)
+    pick(store, 101, 4, 0, source="console", now=5)
+    every = galleryview.gallery(store.conn, data, 101, all_sets=True)
+    assert {p["set"] for p in every["photos"]} == {2, 4}
+    assert every["earlier"] == 4  # set 2 alone: the lust and world sets are not counted
+    for idx in range(4):
+        for set_no in (1, 3):
+            assert galleryview.photo(store.conn, data, 101, "candidate", set_no, idx,
+                                     all_sets=True) is None
+        assert galleryview.photo(store.conn, data, 101, "candidate", 2, idx, all_sets=True)
+
+    pick(store, 101, 1, 2, source="console", now=6)  # a lust set already her cover still shows
+    every = galleryview.gallery(store.conn, data, 101, all_sets=True)
+    assert [p["id"] for p in every["photos"] if p["cover"]] == ["candidate:1:2"]
+    assert {p["id"] for p in every["photos"] if p["set"] == 1} == {"candidate:1:2"}
+
+
+def test_an_earlier_looks_photo_can_still_be_made_her_cover(store, data):
+    _earlier_looks(store, data)
+    assert pick(store, 101, 1, 3, source="console", now=5) is not None  # the mind still takes it
+    every = galleryview.gallery(store.conn, data, 101, all_sets=True)
+    assert [p["id"] for p in every["photos"] if p["cover"]] == ["candidate:1:3"]
+    assert not any(p.get("earlier") for p in every["photos"] if p["kind"] == "candidate")
+
+
+def test_the_gallery_endpoint_shows_all_sets_only_when_asked(store, data):
+    _earlier_looks(store, data)
+
+    async def go():
+        async with served(make_app(data)) as app:
+            shut = (await http(app, "GET", "/api/selfies/gallery?guid=101")).json()["view"]
+            assert shut["all"] is False and shut["earlier"] == 5
+            assert {p["set"] for p in shut["photos"] if p["kind"] == "candidate"} == {2}
+            response = await http(app, "GET", "/api/selfies/gallery?guid=101&all=1")
+            assert response.status == 200
+            every = response.json()["view"]
+            assert every["all"] is True and every["earlier"] == 5
+            old = [p for p in every["photos"] if p.get("earlier")]
+            assert len(old) == 5
+            for p in old:
+                for url in (p["image"], p["thumbnail"]):
+                    image = await http(app, "GET", url)
+                    assert image.status == 200 and image.header("content-type") == "image/jpeg"
+                    assert image.header("cache-control") == "private, max-age=60"
+                    assert (await http(app, "GET", url.replace("&all=1", ""))).status == 404
+                    assert (await http(app, "GET", url, key=False)).status == 403
+                    assert (await http(app, "GET", url, host="wrong.invalid")).status == 403
+            assert (await http(app, "GET", "/api/selfies/gallery?guid=101&all=1",
+                               key=False)).status == 403
+            for bad in ("all=0", "all=1&all=1", "all=yes", "all="):
+                assert (await http(app, "GET", "/api/selfies/gallery?guid=101&" + bad)).status == 400
+                assert (await http(app, "GET", "/api/selfies/photo?guid=101&kind=candidate"
+                                               "&set=1&index=0&" + bad)).status == 400
+    asyncio.run(go())

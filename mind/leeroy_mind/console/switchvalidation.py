@@ -24,11 +24,11 @@ def valid_table(name, table, raw):
         return False
     simple = {'claims':{'enabled'},'signals':{'enabled'},'fingerprint':{'enabled'},
               'callbacks':{'enabled'},'looks':{'diversity'},'personas':{'auto_newcomers'},
-              'playstyle':{'enabled'},'photos':{'enabled','send','requests','scene_from_words'},
+              'playstyle':{'enabled'},'photos':{'enabled','send','requests','request_priority','scene_from_words'},
               'raidlead':{'enabled','briefs'},
               'raidplay':{'respond'},'drama':{'member_romance'},'bakeoff':{'capture'},
               'outreach':{'enabled'},'godmode':{'enabled'},'tuning':{'nudge_memories'},
-              'heat':{'enabled','public_cap'},'geography':{'enabled'}}
+              'heat':{'enabled','public_cap'},'geography':{'enabled'},'watchdog':{'enabled'}}
     if name == 'drama':
         # `threads` is a mode, not a boolean; a bad one turns only itself off (drama.config)
         table = {k:v for k,v in table.items() if k != 'threads'}

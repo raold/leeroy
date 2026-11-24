@@ -35,6 +35,7 @@ constexpr AreaName kAreas[] = {
     {"cone", MechanicArea::Cone}, {"group", MechanicArea::Group}, {"target", MechanicArea::Target},
     {"ring", MechanicArea::Ring}, {"nearest", MechanicArea::Nearest},
     {"caster_reach", MechanicArea::CasterReach}, {"ice_block", MechanicArea::IceBlock},
+    {"cast_radius", MechanicArea::CastRadius},
 };
 
 struct RoleName
@@ -53,7 +54,8 @@ bool AreaFits(MechanicKind kind, MechanicArea area)
     {
         case MechanicKind::AvoidGround:
             return area == MechanicArea::Dest || area == MechanicArea::Caster || area == MechanicArea::Line
-                || area == MechanicArea::Ring || area == MechanicArea::Nearest || area == MechanicArea::CasterReach;
+                || area == MechanicArea::Ring || area == MechanicArea::Nearest || area == MechanicArea::CasterReach
+                || area == MechanicArea::CastRadius;
         case MechanicKind::MoveOutCone:
             return area == MechanicArea::Cone;
         case MechanicKind::Spread:
@@ -504,6 +506,14 @@ std::optional<MechanicShape> MechanicLeaveArea(MechanicRule const& rule, Mechani
             shape.origin = casterNow;
             shape.radius = rule.area == MechanicArea::CasterReach
                 ? std::max(rule.radius, std::clamp(cast.casterReach, 0.0f, kMechanicMaxYards)) : rule.radius;
+            return shape;
+        case MechanicArea::CastRadius:
+            // No cast radius is not evidence of a full-sized pool. Nor may an
+            // invalid/oversized value silently shrink an actual damage circle.
+            if (!std::isfinite(cast.effectRadius) || cast.effectRadius <= 0 || cast.effectRadius > kMechanicMaxYards)
+                return std::nullopt;
+            shape.origin = casterNow;
+            shape.radius = cast.effectRadius;
             return shape;
         case MechanicArea::Nearest:
             if (!cast.nearest)

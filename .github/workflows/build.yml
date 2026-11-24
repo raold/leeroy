@@ -125,6 +125,10 @@ jobs:
             core/modules/mod-playerbots/tests/raid_vehicles_test.cpp \
             -o "$RUNNER_TEMP/raid-vehicles-tests"
           "$RUNNER_TEMP/raid-vehicles-tests"
+          c++ -std=c++20 -O2 -Wall -Wextra -Werror \
+            core/modules/mod-playerbots/tests/lich_king_mechanics_test.cpp \
+            -o "$RUNNER_TEMP/lich-king-mechanics-tests"
+          "$RUNNER_TEMP/lich-king-mechanics-tests"
 
       - name: Check equipment protection decisions
         run: |
@@ -132,6 +136,13 @@ jobs:
             core/modules/mod-playerbots/tests/equipment_protection_test.cpp \
             -o "$RUNNER_TEMP/equipment-protection-tests"
           "$RUNNER_TEMP/equipment-protection-tests"
+
+      - name: Check Yogg brain decisions
+        run: |
+          c++ -std=c++20 -O2 -Wall -Wextra -Werror \
+            core/modules/mod-playerbots/tests/yogg_brain_test.cpp \
+            -o "$RUNNER_TEMP/yogg-brain-tests"
+          "$RUNNER_TEMP/yogg-brain-tests"
 
       - name: Configure
         shell: bash

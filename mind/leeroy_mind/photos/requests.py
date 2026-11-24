@@ -48,9 +48,10 @@ SENT_LATER = ("This is the photo he asked you for earlier, when you couldn't tak
 
 
 class RequestPhotos:
-    def __init__(self, app, sender, *, words=False):
+    def __init__(self, app, sender, *, words=False, priority=False):
         self.app, self.sender = app, sender
         self.words = words is True  # [photos] scene_from_words, read at mind start
+        self.priority = priority is True  # explicit requests may interrupt background work
         self._tasks = {}
         self._reserved = set()
         self._retry_at = {}
@@ -78,14 +79,26 @@ class RequestPhotos:
             return
         if not self.known_offline():
             self._offline_at = None
-            self.app.arbiter.cancel_borrow('presence_changed')
         elif self._offline_at is None:
             self._offline_at = self.app.clock.now()
+        if not self.render_allowed():
+            self.app.arbiter.cancel_borrow('presence_changed')
 
     def known_offline(self):
         app = self.app
         return bool(self._hello_seen and getattr(app.bridge, 'connected', False)
                     and app.night_scheduler.presence.online is False and not app.world.human_online)
+
+    def render_allowed(self):
+        if not self.priority:
+            return self.known_offline()
+        app = self.app
+        return bool(self._hello_seen and getattr(app.bridge, 'connected', False)
+                    and type(app.night_scheduler.presence.online) is bool)
+
+    def render_due(self, *, immediate=False):
+        return self.render_allowed() and (self.priority or immediate or (
+            self._offline_at is not None and self.app.clock.now() - self._offline_at >= 600))
 
     def _ready_member(self, guid):
         app = self.app
@@ -248,11 +261,11 @@ class RequestPhotos:
                                       not_before=not_before)
         else:
             photo = records.snap(app.store, request.fresh_snap)
-        waited = self._offline_at is not None and app.clock.now() - self._offline_at >= 600
+        photo = self._refresh_profile(request, photo)
         # A photo her day plan puts off (not_before) is neither rendered nor replaced by a
         # retained one now: she says she can't yet.
         due = photo is None or photo.not_before <= app.clock.now()
-        if photo is not None and photo.status == 'planned' and due and self.known_offline() and (immediate or waited):
+        if photo is not None and photo.status == 'planned' and due and self.render_due(immediate=immediate):
             await self._render(request, photo)
         request = records.get(app.store, request.message)
         fresh = records.snap(app.store, request.fresh_snap)
@@ -322,31 +335,55 @@ class RequestPhotos:
             return None
         return fresh.scene.get('wait') if fresh.scene.get('wait') in CANT_NOW else None
 
+    def _refresh_profile(self, request, photo):
+        """Keep a pending request usable after an owner edits looks or picks a new cover."""
+        if photo is None or photo.id in self._reserved or not self._source_open(request):
+            return photo
+        ready = self._ready_member(request.guid)
+        if ready is None:
+            return photo
+        p, pick = ready
+        replacement = records.refresh_fresh(self.app.store, request, photo, pick=pick.pick,
+            looks=snaps.looks_hash(p.appearance), now=self.app.clock.now())
+        if replacement is not None:
+            log('selfie_request_profile_refreshed', request=request.message, guid=request.guid,
+                previous=photo.id, snap=replacement.id)
+            return replacement
+        return photo
+
     async def _render(self, request, photo):
         from leeroy_mind.llm.borrow import LiveReloadFailed
         from leeroy_mind.llm.client import GpuPaused
         from leeroy_mind.nightly.gpu import LiveLeaseHeld
         from leeroy_mind.selfies.request_render import render_request
         app = self.app
-        if not self.known_offline() or app.gpu.paused or app.nightly.running is not None:
+        photo = self._refresh_profile(request, photo)
+        if (not self.render_allowed() or app.gpu.paused
+                or not self.priority and app.nightly.running is not None):
             return False
         if not records.borrow_available(app.store, now=app.clock.now(), local_date=app.clock.local().date().isoformat()):
             return False
         def admitted():
-            return (self.known_offline() and self._source_open(request)
+            return (self.render_allowed() and self._source_open(request)
                     and app.nightly.running is None and not app.gpu.paused
                     and records.admit_borrow(app.store, request.message, now=app.clock.now(),
                                              local_date=app.clock.local().date().isoformat()))
         started, room, result, outcome = time.perf_counter(), None, None, 'refused'
         # FLUX includes a quantized cold load and a slower image pass. The whole
-        # borrow stays bounded, and login/voice/pause still cancel it immediately.
+        # borrow stays bounded. Priority requests survive login; voice/pause still cancel.
         work_timeout = 600.0 if app.selfies.cfg.backend == 'flux1-dev' else None
         try:
             async with app.arbiter.borrow(f'selfie_request:{request.message}',
-                                         on_admitted=admitted, work_timeout=work_timeout) as room:
+                                         on_admitted=admitted, work_timeout=work_timeout,
+                                         priority=self.priority) as room:
                 result = await render_request(app, photo, room, worker_factory=self.worker_factory)
                 outcome = result.outcome
                 if outcome != 'ready':
+                    if result.code in {'looks_changed', 'photo_changed'}:
+                        replacement = self._refresh_profile(request, photo)
+                        if replacement.id != photo.id:
+                            outcome = 'profile_refreshed'
+                            return False
                     if result.code == 'critic' and self._critic_fallback(request):
                         outcome = 'critic_fallback'
                         return False
@@ -380,7 +417,8 @@ class RequestPhotos:
                 start_ms=round(getattr(result, 'start_ms', timings.get('start_ms', 0))),
                 render_ms=round(getattr(result, 'render_ms', timings.get('render_ms', 0))),
                 unload_ms=round(timings.get('unload_ms', 0)), stop_ms=round(timings.get('stop_ms', 0)),
-                reload_ms=round(timings.get('reload_ms', 0)), outcome=outcome)
+                reload_ms=round(timings.get('reload_ms', 0)), outcome=outcome,
+                code=getattr(result, 'code', None))
 
     def _critic_fallback(self, request) -> bool:
         """[selfies] critic refused every seed of the fresh render: a ready-made photo of hers
@@ -526,6 +564,9 @@ class RequestPhotos:
         if part == 'failure' and (not latest.failure or latest.failure_message):
             return
         photo = records.snap(app.store, latest.fresh_snap)
+        if part != 'failure':
+            photo = self._refresh_profile(latest, photo)
+            latest = records.get(app.store, latest.message)
         fallback = records.snap(app.store, latest.fallback_snap)
         if part != 'failure' and not any(p and p.status == 'ready' for p in (photo, fallback if part == 'private' else None)):
             return
@@ -605,6 +646,7 @@ class RequestPhotos:
                 await self._send(request, 'failure')
                 continue
             photo = records.snap(app.store, request.fresh_snap)
+            photo = self._refresh_profile(request, photo)
             if photo is not None and photo.status == 'expired':
                 records.fail(app.store, request.message, 'photo_unavailable', now=app.clock.now())
                 await self._send(records.get(app.store, request.message), 'failure')
@@ -612,8 +654,8 @@ class RequestPhotos:
             if photo is not None and photo.status == 'planned':
                 if photo.not_before > app.clock.now():
                     continue  # her day plan: she can't take it yet
-                if (self._offline_at is None or app.clock.now()-self._offline_at < 600
-                        or app.nightly.running is not None):
+                if (not self.render_due()
+                        or not self.priority and app.nightly.running is not None):
                     continue
                 async with self._typing(request.guid, request.photo_channel if request.audience == 'him'
                                         else CHANNEL_PREFIX + request.photo_channel):

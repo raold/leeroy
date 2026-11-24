@@ -23,6 +23,7 @@ from .model import DEFAULT_CONE_DEGREES, DIFFICULTIES, DIFFICULTY_KEYS, Playbook
 FEATURE = "mechanics"
 FEATURE_NEAREST = "mechanics_nearest"
 FEATURE_NAXX = "mechanics_naxx"
+FEATURE_CAST_RADIUS = "mechanics_cast_radius"
 # Native's bounds (LeeroyMechanicPolicy.h): rules a table, spells a rule, yards, seconds.
 MAX_RULES = 64
 MAX_SPELLS = 16
@@ -82,16 +83,18 @@ def actionable(playbooks: Playbooks, map_id: int, difficulty: int) -> tuple[Mech
     return tuple(rules[:MAX_RULES])
 
 
-def tables(playbooks: Playbooks, nearest: bool = True, naxx: bool = True) -> dict[tuple[int, int], tuple[MechanicRule, ...]]:
+def tables(playbooks: Playbooks, nearest: bool = True, naxx: bool = True, cast_radius: bool = True) -> dict[tuple[int, int], tuple[MechanicRule, ...]]:
     """Every covered map and difficulty with at least one actionable mechanic; `nearest` False leaves out the rules
-    with a `nearest` area; `naxx` False omits growing clouds and ice cover. The hello selects both capabilities."""
+    with a `nearest` area; `naxx` False omits growing clouds and ice cover; `cast_radius` False omits live spell
+    radius circles. The native hello selects each capability independently."""
     out = {}
     for map_id, raid in playbooks.raids.items():
         for key in raid.difficulties:
             difficulty = DIFFICULTY_KEYS.index(key)
             rules = tuple(r for r in actionable(playbooks, map_id, difficulty)
                           if (nearest or r.area != "nearest")
-                          and (naxx or r.area not in ("ice_block", "caster_reach")))
+                          and (naxx or r.area not in ("ice_block", "caster_reach"))
+                          and (cast_radius or r.area != "cast_radius"))
             if rules:
                 out[(map_id, difficulty)] = rules
     return out
@@ -131,9 +134,9 @@ class MechanicFeed:
     def __init__(self, app, playbooks: Playbooks):
         self.app = app
         self.all_tables = tables(playbooks)
-        self.older_tables = tables(playbooks, nearest=False)
-        self.compat_tables = {(nearest, naxx): tables(playbooks, nearest=nearest, naxx=naxx)
-                              for nearest in (False, True) for naxx in (False, True)}
+        self.older_tables = tables(playbooks, nearest=False, cast_radius=False)
+        self.compat_tables = {(nearest, naxx, cast_radius): tables(playbooks, nearest=nearest, naxx=naxx, cast_radius=cast_radius)
+                              for nearest in (False, True) for naxx in (False, True) for cast_radius in (False, True)}
         self.tables = self.all_tables
         self.connected = False
         self.supported = False
@@ -160,11 +163,14 @@ class MechanicFeed:
             if not self.supported:
                 log("raidplay_respond_unsupported")
                 return
-            self.tables = self.compat_tables[FEATURE_NEAREST in ev.features, FEATURE_NAXX in ev.features]
+            self.tables = self.compat_tables[FEATURE_NEAREST in ev.features, FEATURE_NAXX in ev.features,
+                                             FEATURE_CAST_RADIUS in ev.features]
             if FEATURE_NEAREST not in ev.features and self.older_tables != self.all_tables:
                 log("raidplay_respond_nearest_unsupported")
             if FEATURE_NAXX not in ev.features:
                 log("raidplay_respond_naxx_unsupported")
+            if FEATURE_CAST_RADIUS not in ev.features:
+                log("raidplay_respond_cast_radius_unsupported")
             for key in sorted(self.tables):
                 self.queue(key)
             return

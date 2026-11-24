@@ -408,12 +408,39 @@ output in `patches/`:
   Malygos works without a human master; Flame Leviathan's existing offline
   bypass is unchanged. See [vehicle validation](patches/mod-playerbots/VEHICLES.md)
   before enabling it for a raid.
+- **Lich King mechanics** (playerbots, opt-in): `Playerbots.LichKingMechanics = 1`
+  adds separate normal/heroic Frostmourne handling, growing Defile avoidance,
+  Val'kyr passenger rescue and Vile Spirit avoidance using ordinary casts and
+  movement. It disables the existing LK teleport, instant-kill and free-aura
+  shortcuts. The default is `0`; see the [supervised checks and limitations](patches/mod-playerbots/LICH_KING.md)
+  before enabling it after a native release.
+- **Valithria's healers** (playerbots): the one or two raid healers heal the
+  dragon whenever nobody in range of them is below 80% and they keep 40% mana,
+  a healer on the dragon
+  no longer runs off after a hurt raid member (holy paladins' stock reach move
+  outranked the dragon heal), and Beacon of Light is not tried on her. While
+  her encounter runs, `Playerbots.log` gets a `valithria_watch` line every 5 s
+  with one `valithria_healer` line per bot healer (duty, `icc` strategy, health,
+  mana, range, heals cast on her, last spell and target).
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.
 - **Trial of the Crusader** (mod-dungeon-clear): the tank runs the raid stage by
   stage from Barrett Ramsey's gossip, pulls the faction champions and the twins,
   and takes the bots down into Anub'arak's chamber when the floor breaks.
+- **Offline Valithria** (mod-dungeon-clear patch 0005):
+  `DungeonClear.OfflineValithria = 1` adds her missing healing objective before
+  Sindragosa. The default is off. After arrival and the normal raid muster, an
+  idle autonomous raid with a healer pulls a nearby Risen Archmage. Playerbots'
+  Valithria strategy supplies the actual heals and portal work; the objective
+  waits for the core's `DONE` and remusters after a wipe. There is no fake kill,
+  healing, loot or achievement credit. A human anywhere in the instance,
+  absent/dead/remote members, missing healer or pending loot prevents the pull.
+  Requires a native rebuild with playerbots patch 0016 and dungeon-clear 0005.
+  After release, validate a supervised offline run using `dc_icc_valithria_start`
+  and the `valithria_watch`/`valithria_healer` logs, then prove her core completion
+  and progression to Sindragosa. Local policy/registry checks are not a live raid
+  rehearsal. Roll back by disabling the setting; it has no saved-state mutation.
 - **Ulduar's Flame Leviathan** (mod-dungeon-clear): the offline siege-vehicle
   bypass. He is never fought or credited there; a raid of bots only is taken past
   his gate by the Ulduar Teleporter's Colossal Forge destination, which the
@@ -451,7 +478,7 @@ Apply them to a checkout of each module with
 ./ac-update.sh [--dry-run]   # pull core + git modules, rebasing local patches
 ./ac-backup.sh [label]       # mysqldump all four databases
 ./ac-build.sh                # preflight checks, configure, build
-./ac-release.sh [--native] <commit>...  # deploy merged main commits, with snapshot and rollback
+./ac-release.sh [--native] [--allow-scripts] [--dry-run] <commit>...  # deploy merged main commits
 ./ac-server.sh start|stop|status # the game servers and the mind; stops the worldserver cleanly over local SOAP
 ./ac-voice.sh start|stop|status  # the voice service
 ./ac-health.sh [--json]      # read-only health check of the live install
@@ -492,6 +519,51 @@ accepts a positive retention period; startup uses 14 days.
 
 They assume this repo is the install root, with the core checked out in
 `azerothcore-wotlk/` and the build in `build/`.
+
+`ac-release.sh` takes commits from the local `origin/main`; fetch first. It
+rehearses the complete release in temporary Git checkouts before stopping any
+service. `.github/` and `mind/tests/` are accepted, and conflicts in those paths
+take the version from the main tip captured at the start of the release. Runtime
+conflicts still refuse the release. Changes under `scripts/` require
+`--allow-scripts`; native modules, config and patches require `--native`.
+Both flags acquire the native-build lock, so scripts cannot be replaced during
+a separate native build.
+Commits already in the live branch and confirmed empty cherry-picks are skipped,
+including merge commits whose constituent changes were already released.
+
+For a native release, numbered `.patch` files in `patches/mod-playerbots/` and
+`patches/mod-dungeon-clear/` are checked against each module's Git history.
+Missing patches are rehearsed, then applied with `git am` in filename order
+before the build. Original commit ancestry or an equivalent stable patch ID
+counts as installed, preserving later local edits and intentional reverts.
+Reapplying a reverted change requires a new patch entry. The playerbot pin guard
+is checked before services stop and again before building. Dirty module repos,
+unfinished Git operations and failed rehearsal refuse the release. Even if all
+requested commits are already live, missing module patches still trigger the
+native release and build; a complete no-op leaves services alone.
+
+After preflight, the tool stops services, snapshots the mind database, applies
+the release, and builds native code with `AC_JOBS=4` when requested. A failed
+release restores the prior checkout, both affected module heads, database and
+saved binaries. It refuses to discard commits or edits made by another process.
+Recovery helpers, journals and the original service-stop code remain beside the
+database snapshot in `mind-data/snapshots/pre-release-*-recovery/`; keep these
+with the snapshot until the release is accepted. The printed recovery command
+uses these copies, so it survives an update to the release scripts themselves.
+It acquires the same release and native-build locks before stopping services.
+Preflight refusals and dry runs print that no rollback is needed.
+A health-check failure after successful restart leaves the running release in
+place and prints the recovery command.
+
+When installing this release-tool update for the first time, install its bundled
+`ac-server.sh` along with `ac-release.sh` and both new Python helpers. Its service
+helper paths must be relative to its own script directory so the retained stop
+code keeps working after a checkout change. Subsequent script releases can use
+`--allow-scripts`. Existing owner-offline, raid, voice and release/build-lock
+checks still apply; `--dry-run` never changes services or the real checkouts.
+Run `bash scripts/tests/ac-release.sh` and
+`python scripts/tests/test_ac_release_patches.py` for isolated verification using
+temporary repositories, synthetic databases and stub services.
 
 ### CI
 

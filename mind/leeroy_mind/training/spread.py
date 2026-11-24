@@ -502,9 +502,10 @@ async def run_week(ports, applier, week, *, schedule=None, rng=None):
         if isinstance(member, MemberInfo) and guid != ports.human_guid:
             groups[member.cls, member.spec_tab, member.role].append(guid)
     evidence = score_evidence(conn, week, now=now, tz=local.tzinfo)
-    scores = {g: r["score"] for g, r in evidence.items()
-              if g in policy.members and r["identity"] == _identity(policy.members[g])
-              and ports.holder(g) is None}
+    candidates = {g: r["score"] for g, r in evidence.items()
+                  if g in policy.members and r["identity"] == _identity(policy.members[g])}
+    holders = ports.holders_of(candidates) if candidates else {}
+    scores = {g: score for g, score in candidates.items() if holders.get(g, "unavailable") is None}
     setups = {g: dict(row) for g, row in store.latest_setups(conn).items()}
     rotations = [dict(row) for row in store.rotation_rows(conn)]
     changes = plan_week(groups, scores, setups, policy, rng or random.Random(week))
@@ -520,8 +521,8 @@ async def run_week(ports, applier, week, *, schedule=None, rng=None):
         fresh = _admitted(ports, applier, week, schedule)
         if (fresh is None or _snapshot(ports, fresh) != policy
                 or dict(fresh.members) != dict(proof.members)
-                or any(ports.holder(g) is not None for change in changes
-                       for g in (change.guid, change.copied_from) if g is not None)
+                or not _bodies_free(ports, {g for change in changes
+                                         for g in (change.guid, change.copied_from) if g is not None})
                 or {g: dict(row) for g, row in store.latest_setups(conn).items()} != setups
                 or [dict(row) for row in store.rotation_rows(conn)] != rotations
                 or score_evidence(conn, week, now=now, tz=local.tzinfo) != evidence):
@@ -547,3 +548,9 @@ async def run_week(ports, applier, week, *, schedule=None, rng=None):
             cohort_kind="rank_eligible_scores_requires_original_sql")
         conn.execute("UPDATE meta SET value=? WHERE key=?", (store._json(receipt), WEEK_PREFIX + week))
     return len(rows)
+
+
+def _bodies_free(ports, guids):
+    """Refresh again at commit, without re-reading every source for every copied member."""
+    holders = ports.holders_of(guids) if guids else {}
+    return all(holders.get(g, "unavailable") is None for g in guids)

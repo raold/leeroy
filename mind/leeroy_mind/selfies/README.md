@@ -44,6 +44,12 @@ member retain their existing private-DM routing. Image classification, cutoff, d
 name and age screens, and the nudity/underwear negatives remain active. An allowed clothing
 choice can still produce a refused image; this setting never overrides that result.
 
+Level 5 swimwear is never photographed from behind (2026-11-21: from behind it scored 1.0 on
+the NSFW gate on every seed, and one slot refused three times refuses its whole set). In a varied
+set its look trades view and framing with the casual or going-out look seen from the front or
+side (`outfit_reveal.restyle_looks`), so the set keeps one of each view; with no such look to
+trade it keeps its back view at level 4 (`BACK_SAFE_MAX`).
+
 Rollback: remove `outfit_reveal` before installing a version that predates it. Old code will
 reject unfamiliar varied-plan outfits and render an ordinary set instead. Existing ready
 images keep their recorded metadata; this setting does not re-render them.

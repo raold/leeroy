@@ -62,6 +62,7 @@ class TrainingPorts(Protocol):
     def release(self, owner: str, guids: Iterable[int] | None = None) -> set[int]: ...
     def claims_for(self, owner: str) -> frozenset[int]: ...
     def holder(self, guid) -> str | None: ...
+    def holders_of(self, guids: Iterable[int]) -> dict[int, str | None]: ...
     def benchmark_allowed(self, map_id, boss_id, size, heroic) -> bool | None: ...
     def raid_at(self, ms: int) -> RaidRow | None: ...
 
@@ -313,6 +314,12 @@ class LivePorts:
     def holder(self, guid):
         bodies = getattr(self.app, "bodies", None)
         return bodies.holder(guid) if bodies else None
+
+    def holders_of(self, guids):
+        """holder() for a batch from one body snapshot (BodyLedger.holders_of)."""
+        bodies = getattr(self.app, "bodies", None)
+        guids = tuple(guids)
+        return bodies.holders_of(guids) if bodies else dict.fromkeys(guids)
 
     def benchmark_allowed(self, map_id, boss_id, size, heroic):
         race = getattr(getattr(self.app, "realm", None), "race", None)

@@ -15,10 +15,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import logging
 import math
+import time
 from typing import Protocol
 
 
 log = logging.getLogger(__name__)
+_timer = time.perf_counter
+# A refresh reads every source on the event loop's thread; one this slow is logged.
+SLOW_REFRESH_S = 0.05
+SLOW_LOG_EVERY_S = 60.0
 
 
 class _AllBodies:
@@ -150,6 +155,17 @@ class _Source:
     rows: tuple[BodyHold, ...] = ()
 
 
+@dataclass
+class _RefreshStats:
+    rows: int = 0
+    source: str = ""
+    source_s: float = 0.0
+
+    def timed(self, name: str, seconds: float) -> None:
+        if seconds > self.source_s:
+            self.source, self.source_s = name, seconds
+
+
 @dataclass(frozen=True)
 class _State:
     rows: tuple[tuple[str, BodyHold], ...]
@@ -183,6 +199,9 @@ class BodyLedger:
         self._pending_preempt: dict[str, set[int]] = {}
         self._reported = self._state()
         self._last_poll: float | None = None
+        self._refreshes = 0
+        self._slow_refreshes = 0
+        self._slow_logged: float | None = None
 
     def add_holder(
         self, name: str, rank: int | str, held: Callable[[], Iterable[int] | _AllBodies]
@@ -275,12 +294,35 @@ class BodyLedger:
         holds = self._holders(self._state(), guid)
         return min(holds, key=lambda row: row[0])[1] if holds else None
 
+    def holders_of(self, guids: Iterable[int]) -> dict[int, str | None]:
+        """holder() for each member from one refreshed, settled view: one source read for a
+        batch instead of one per member (a cast of ~150 read every source 150 times)."""
+        selected = _members(guids)
+        self._settle(refresh=True, observed=selected)
+        self._require_evidence()
+        state = self._state()
+        result = {}
+        for guid in selected:
+            holds = self._holders(state, guid)
+            result[guid] = min(holds, key=lambda row: row[0])[1] if holds else None
+        return result
+
     def others(self, guid: int, *, besides: set[str]) -> set[str]:
         guid = _uint(guid, 32)
         excluded = {_identity(owner) for owner in besides}
         self._settle(refresh=True, observed=(guid,))
         self._require_evidence()
         return {owner for _, owner in self._holders(self._state(), guid)} - excluded
+
+    def others_of(self, guids: Iterable[int], *, besides: set[str]) -> dict[int, set[str]]:
+        """All competing owners per member from one settled snapshot, including lower-ranked
+        holders that holder()/holders_of() intentionally do not return."""
+        selected = _members(guids)
+        excluded = {_identity(owner) for owner in besides}
+        self._settle(refresh=True, observed=selected)
+        self._require_evidence()
+        state = self._state()
+        return {guid: {owner for _, owner in self._holders(state, guid)} - excluded for guid in selected}
 
     def may_move(self, owner: str, guid: int) -> bool:
         owner = _identity(owner)
@@ -474,12 +516,40 @@ class BodyLedger:
                 del self._claims[owner]
 
     def _refresh(self) -> None:
+        started, stats = _timer(), _RefreshStats()
+        try:
+            self._read_evidence(stats)
+        finally:
+            self._note_refresh(_timer() - started, stats)
+
+    def _note_refresh(self, elapsed: float, stats: _RefreshStats) -> None:
+        """Counts and source names only: a refresh that held the event loop, once a minute at most."""
+        self._refreshes += 1
+        if elapsed < SLOW_REFRESH_S:
+            return
+        self._slow_refreshes += 1
+        now = _timer()
+        if self._slow_logged is not None and 0 <= now - self._slow_logged < SLOW_LOG_EVERY_S:
+            return
+        log.warning(
+            "bodies_refresh_slow ms=%d rows=%d source=%s source_ms=%d refreshes=%d slow=%d",
+            round(elapsed * 1000), stats.rows, stats.source or "none", round(stats.source_s * 1000),
+            self._refreshes, self._slow_refreshes,
+        )
+        self._slow_logged = now
+        self._refreshes = self._slow_refreshes = 0
+
+    def _read_evidence(self, stats: _RefreshStats) -> None:
         replacements: dict[str, tuple[BodyHold, ...]] = {}
         self._reading_evidence = True
         self._evidence_reentered = False
         try:
             for name, source in self._sources.items():
-                snapshot = source.snapshot()
+                begun = _timer()
+                try:
+                    snapshot = source.snapshot()
+                finally:
+                    stats.timed(name, _timer() - begun)
                 if type(snapshot) is not tuple:
                     raise ValueError("invalid body snapshot")
                 scopes = set()
@@ -496,6 +566,7 @@ class BodyLedger:
                     scopes.add(row.scope_id)
                     rows.append(row)
                 replacements[name] = tuple(rows)
+                stats.rows += len(rows)
             if self._evidence_reentered:
                 raise ValueError("reentrant body snapshot")
             proposed = _State(

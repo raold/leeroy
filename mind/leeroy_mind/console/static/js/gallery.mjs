@@ -1,9 +1,11 @@
 // A native modal keeps the background inert. Every image is fetched with the console key;
 // only the shown full image and its neighbours are retained. Closing revokes every blob URL.
-import { api, clear, el, emit, on, post, refused, str } from "./core.mjs";
+// "Show all sets" (remembered in this browser) also lists photos of her earlier looks.
+import { api, clear, el, emit, on, post, recall, refused, remember, str } from "./core.mjs";
 import { face } from "./faces.mjs";
 import { isoMinute } from "./dates.mjs";
-import { coverWhy, flagCodes, initial, lookWords, ordered, step, swipe } from "./gallerymodel.mjs";
+import { ALL_KEY, coverNote, coverWhy, earlierHint, earlierWords, flagCodes, galleryPath, initial,
+         lookWords, ordered, step, swipe, wantsAll } from "./gallerymodel.mjs";
 
 var active = null;
 
@@ -41,7 +43,8 @@ function button(text, action) {
 export function openGallery(guid, name, opener) {
   if (active) { active.dialog.close(); }
   var g = { guid: guid, name: name, opener: opener, photos: [], at: 0, state: null,
-            saving: false, loading: false, again: false, seq: 0, full: new Map(), thumbs: new Map(), closed: false };
+            saving: false, loading: false, again: false, seq: 0, full: new Map(), thumbs: new Map(), closed: false,
+            all: wantsAll(recall(ALL_KEY, "current")) };
   active = g;
   var d = g.dialog = el("dialog", "photo-gallery");
   d.setAttribute("aria-labelledby", "gallery-title");
@@ -75,6 +78,16 @@ export function openGallery(guid, name, opener) {
   g.status = el("p", "why", "Reading photos.");
   g.status.setAttribute("role", "status");
   d.appendChild(g.status);
+  var sets = el("div", "gallery-sets");
+  g.every = button("Show all sets", function () { showAll(g, !g.all); });
+  g.every.title = "Also show photos from before their current looks";
+  g.every.setAttribute("aria-pressed", String(g.all));
+  g.every.setAttribute("aria-describedby", "gallery-hint");
+  g.every.disabled = true;  // until the first answer
+  g.hint = el("span", "muted");
+  g.hint.id = "gallery-hint";
+  sets.append(g.every, g.hint);
+  d.appendChild(sets);
   g.strip = el("div", "gallery-strip");
   g.strip.setAttribute("aria-label", "Photos, newest first");
   g.strip.setAttribute("role", "group");
@@ -147,15 +160,15 @@ function refresh(g, first) {
   if (g.closed) { return; }
   if (g.loading) { g.again = true; return; }
   g.loading = true;
-  var seq = ++g.seq;
-  api("/api/selfies/gallery?guid=" + g.guid).then(function (r) {
+  var seq = ++g.seq, all = g.all;
+  api(galleryPath(g.guid, all)).then(function (r) {
     if (refused(r)) { return null; }
     return r.json().then(function (j) {
       if (r.status !== 200) { throw new Error(str(j.error) || "Photos could not be read. Close and try again."); }
       return j;
     });
   }).then(function (state) {
-    if (!state || g.closed || g.seq !== seq) { return; }
+    if (!state || g.closed || g.seq !== seq || all !== g.all) { return; }  // the toggle asks again
     var id = g.photos[g.at] && g.photos[g.at].id;
     g.state = state;
     var photos = ordered(state.view && state.view.photos);
@@ -163,6 +176,8 @@ function refresh(g, first) {
     if (changed) { g.photos = photos; }
     g.at = first ? initial(g.photos) : Math.max(0, g.photos.findIndex(function (p) { return p.id === id; }));
     g.status.textContent = g.photos.length ? "" : "No photos yet.";
+    g.hint.textContent = earlierHint(state.view, all);
+    g.every.disabled = false;
     if (changed) { drawStrip(g); }
     draw(g);
   }).catch(function (error) {
@@ -188,7 +203,10 @@ function drawStrip(g) {
     var b = button(String(i + 1), function () { g.at = i; draw(g); });
     b.dataset.photoIndex = String(i);
     b.dataset.photoId = String(p.id);
-    b.setAttribute("aria-label", "Photo " + (i + 1) + (flagCodes(p) ? ", flagged: " + flagCodes(p) : ""));
+    b.title = isoMinute(p.rendered) + (earlierWords(p) ? " · " + earlierWords(p) : "");
+    if (earlierWords(p)) { b.classList.add("earlier"); }
+    b.setAttribute("aria-label", "Photo " + (i + 1) + (earlierWords(p) ? ", " + earlierWords(p) : "")
+                   + (flagCodes(p) ? ", flagged: " + flagCodes(p) : ""));
     var dot = flagDot(p);
     if (dot) { b.appendChild(dot); }
     g.strip.appendChild(b);
@@ -206,6 +224,12 @@ function drawStrip(g) {
 }
 
 function move(g, delta) { g.at = step(g.at, delta, g.photos.length); draw(g); }
+function showAll(g, all) {
+  g.all = all;
+  remember(ALL_KEY, all ? "all" : "current");
+  g.every.setAttribute("aria-pressed", String(all));
+  refresh(g, false);
+}
 function showing(g, p) { return !g.closed && g.photos[g.at] && g.photos[g.at].id === p.id; }
 
 function draw(g) {
@@ -214,9 +238,10 @@ function draw(g) {
   g.prev.disabled = !p || g.at === 0;
   g.next.disabled = !p || g.at === g.photos.length - 1;
   g.make.disabled = !!why;
-  g.why.textContent = why;
+  g.why.textContent = why || coverNote(p);
   g.badge.hidden = !p || !p.cover;
-  g.caption.textContent = p ? (g.at + 1) + " / " + g.photos.length + " · " + isoMinute(p.rendered) + (lookWords(p) ? " · " + lookWords(p) : "") : "";
+  g.caption.textContent = p ? (g.at + 1) + " / " + g.photos.length + " · " + isoMinute(p.rendered)
+    + (earlierWords(p) ? " · " + earlierWords(p) : "") + (lookWords(p) ? " · " + lookWords(p) : "") : "";
   Array.from(g.strip.children).forEach(function (b) { b.setAttribute("aria-current", String(Number(b.dataset.photoIndex) === g.at)); });
   if (g.image.dataset.photo === (p && p.id)) { return; }
   var selected = g.strip.children[g.at - g.stripStart];

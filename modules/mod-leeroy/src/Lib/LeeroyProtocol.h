@@ -32,7 +32,7 @@ inline constexpr std::string_view kModuleVersion = "0.1.0";
 // built with can run for an offline raid (LeeroyOfflineRaidPolicy.h DcRaidFeatures); a mind plans those raids only
 // on a hello that lists them.
 inline constexpr std::string_view kFeatures[] = {"item_links", "playstyle", "raidlead", "mechanics", "regear",
-    "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx"};
+    "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "mechanics_cast_radius", "combat_quiet"};
 
 std::int64_t NowUnixMs();
 
@@ -60,6 +60,7 @@ struct Command
     std::uint8_t rank = 0;
     std::string note;
     bool on = false;
+    bool quietInCombat = false; // Say only: ambient lines stop at the world-thread send boundary.
     std::string message;
     std::string extType;      // Extension only: the type name
     nlohmann::json raw;       // Extension only: the whole message
@@ -89,6 +90,7 @@ inline constexpr std::string_view UnsupportedVersion = "unsupported version";
 inline constexpr std::string_view UnknownType = "unknown type: ";
 inline constexpr std::string_view BadField = "bad field: ";
 inline constexpr std::string_view Busy = "busy";
+inline constexpr std::string_view CombatQuiet = "combat_quiet";
 inline constexpr std::string_view LineTooLong = "line too long";
 inline constexpr std::string_view AnotherMind = "another mind is connected";
 inline constexpr std::string_view NotCast = "not a cast member";

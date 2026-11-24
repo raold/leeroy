@@ -201,6 +201,8 @@ void DecodeFields(json const& msg, Command& cmd, std::string& error)
             r.Chan("channel", cmd.channel);
             r.Str("text", true, false, cmd.text);
             r.Guid("to_guid", cmd.channel == Channel::Whisper, cmd.toGuid);
+            if (msg.contains("quiet_in_combat"))
+                r.Bool("quiet_in_combat", cmd.quietInCombat);
             break;
         case CommandType::HumanSay:
             r.Chan("channel", cmd.channel);

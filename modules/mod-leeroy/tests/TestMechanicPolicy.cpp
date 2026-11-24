@@ -3,6 +3,7 @@
 #include "TestHarness.h"
 
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -906,4 +907,36 @@ LEEROY_TEST(Mechanic_GrowingCloudTracksItsCurrentReachAndPosition)
     // Existing fixed-radius caster rules keep their own radius.
     cloud.area = MechanicArea::Caster;
     CHECK_EQ(MechanicDutyFor(cloud, cast, {0, 0, 0}, std::nullopt)->leave->radius, 2.0f);
+}
+
+LEEROY_TEST(Mechanic_PeriodicSlimeUsesItsCastRadiusNotTheSummonOrFullSize)
+{
+    auto rule = Make(MechanicKind::AvoidGround, MechanicArea::CastRadius, 30);
+    auto cast = CastAt({40, 0, 0}); // The pool, not the worm's current location.
+    CHECK(!MechanicLeaveArea(rule, cast, {40, 0, 0}));
+    for (unsigned tick = 1; tick <= 60; ++tick)
+    {
+        // SpellAuraEffects.cpp case 66882: base radius 30 * custom RadiusMod.
+        cast.effectRadius = 30.0f * ((tick / 60.0f) * 0.9f + 0.1f) * 2.0f / 3.0f;
+        auto duty = MechanicDutyFor(rule, cast, {40, 0, 0}, std::nullopt);
+        CHECK(duty && duty->leave);
+        CHECK(std::abs(duty->leave->radius - cast.effectRadius) < 0.001f);
+        CHECK(!MechanicKept({40, 0, 0}, {*duty}, {}, {}, kReach, nullptr));
+        auto spots = MechanicSpots({40, 0, 0}, {*duty}, {}, {}, kReach, 6, nullptr);
+        CHECK(!spots.empty());
+        for (auto const& spot : spots)
+            CHECK(MechanicKept(spot, {*duty}, {}, {}, kReach, nullptr));
+        // Early ticks do not evacuate the full 30-yard circle.
+        CHECK(MechanicKept({65, 0, 0}, {*duty}, {}, {}, kReach, nullptr));
+    }
+    for (float invalid : {-1.0f, 0.0f, 101.0f, std::numeric_limits<float>::infinity(),
+             std::numeric_limits<float>::quiet_NaN()})
+    {
+        cast.effectRadius = invalid;
+        CHECK(!MechanicLeaveArea(rule, cast, {40, 0, 0}));
+    }
+    auto wire = Rule("toc.beasts.slime_pool", "avoid_ground", "cast_radius");
+    CHECK_EQ(Refused(Table(json::array({wire}))), "accepted");
+    wire["kind"] = "stack";
+    CHECK(Refused(Table(json::array({wire}))) != "accepted");
 }
