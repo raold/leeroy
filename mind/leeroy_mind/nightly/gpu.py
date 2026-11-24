@@ -275,7 +275,7 @@ class GpuArbiter:
         holder, or the same one again, gets False and has nothing more to do. A bridge handler
         calls this inline and runs hand_over() as a task; release_live then ends the lease
         inline, in event order."""
-        borrow_hard = self._borrow is not None and holder not in {'server', 'discord', self._borrow.holder}
+        borrow_hard = self._borrow is not None and holder not in self._borrow.allowed_holders
         if borrow_hard:
             self.cancel_borrow('live_lease')
         if self.paused:
@@ -422,10 +422,12 @@ class GpuArbiter:
                     await to_the_end(self._recover_borrow_locked())
 
     @contextlib.asynccontextmanager
-    async def borrow(self, holder, *, on_admitted=None, work_timeout=None):
+    async def borrow(self, holder, *, on_admitted=None, work_timeout=None, priority=False):
         """Own an image pass, its worker teardown and live reload as one admission.
 
-        Only server/Discord leases may coexist. The default 180s work cap covers active-chat
+        Server/Discord leases may coexist; an explicit priority request also allows human
+        presence and preempts background image/night work before taking the GPU.
+        The default 180s work cap covers active-chat
         drain, unloading and the caller's render. A slower backend may request up to 600s;
         hard live leases still interrupt immediately. Teardown/reload must still finish
         safely afterward; all of that closed-admission time credits waiting turns.
@@ -436,6 +438,7 @@ class GpuArbiter:
                                          or not 0 < work_timeout <= 600):
             raise ValueError('borrow work timeout must be between 0 and 600 seconds')
         timeout = self.borrow_timeout if work_timeout is None else work_timeout
+        allowed = frozenset({'server', 'discord'} | ({'human'} if priority is True else set()))
         gate = self.live_admission
         if not isinstance(holder, str) or not holder or holder in {
                 'server', 'discord', 'human', 'offline_raid', 'voice_gpu'}:
@@ -447,8 +450,17 @@ class GpuArbiter:
         async with self._lock:
             if self.paused:
                 raise PausedRoom()
-            if held := self.holders - {'server', 'discord'}:
+            if held := self.holders - allowed:
                 raise LiveLeaseHeld(held)
+            if priority is True and self.borrow_busy is not None and self.borrow_busy():
+                # Fence new background passes while the existing worker joins. Do not
+                # close chat admission or reload anything if cleanup is still running
+                # when preempt times out. Cancellation must not leak this reservation.
+                self._holders.add(holder)
+                try:
+                    await self._run_preempt()
+                finally:
+                    self._holders.discard(holder)
             if self.borrow_busy is not None and self.borrow_busy():
                 raise LiveLeaseHeld(frozenset({'image_work'}))
             if gate.blocked:
@@ -456,13 +468,13 @@ class GpuArbiter:
                 await to_the_end(self._recover_borrow_locked())
             if self.paused:
                 raise PausedRoom()
-            if held := self.holders - {'server', 'discord'}:
+            if held := self.holders - allowed:
                 raise LiveLeaseHeld(held)
             if self.borrow_busy is not None and self.borrow_busy():
                 raise LiveLeaseHeld(frozenset({'image_work'}))
             if on_admitted is not None and on_admitted() is False:
                 raise LiveLeaseHeld(frozenset({'request_budget'}))
-            room = BorrowRoom(self, holder, work_timeout=timeout)
+            room = BorrowRoom(self, holder, work_timeout=timeout, allowed_holders=allowed)
             # Inline holder + gate close prevent a new night/booth or chat exchange
             # between the busy checks and the first await.
             self._borrow = room
