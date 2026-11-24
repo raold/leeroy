@@ -1,7 +1,14 @@
 """The runtime gate must reject absent/vacuous evidence, including broken negative controls."""
 import copy
+import hashlib
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 import unittest
-from leeroy_dojo.realm.raids import parse_status, verdict
+from unittest.mock import patch
+from leeroy_dojo.realm.raids import parse_status, provenance, verdict
+from leeroy_dojo.realm.layout import LayoutError
 from leeroy_dojo.realm.world import WorldError
 
 
@@ -63,6 +70,46 @@ class RaidVerdictTest(unittest.TestCase):
             with self.assertRaises(WorldError):
                 parse_status(text)
         self.assertEqual(parse_status('server prompt\ndojo-raid {"state":"idle"}\n'), {"state": "idle"})
+
+
+class RaidProvenanceTest(unittest.TestCase):
+    def test_reverted_sources_do_not_certify_old_dirty_builds(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "modules").mkdir()
+            for name in ("worldserver.conf", "modules/playerbots.conf", "modules/mod_dojo.conf", "modules/mod_leeroy.conf", "layout.json"):
+                (root / name).write_text("fixture")
+            (root / "worldserver.exe").write_bytes(b"fixture binary")
+            revs = dict.fromkeys(("source", "core", "playerbots"), "a" * 40)
+            configured = dict(raid_acceptance=True, variant="training", clean_revisions=revs,
+                              **{k: {"head": v} for k, v in revs.items()})
+            linked = dict(exit_code=0, problems=[], clean_revisions=revs, **revs,
+                          artifacts={"worldserver.exe": {"sha256": hashlib.sha256(b"fixture binary").hexdigest()}})
+            layout = SimpleNamespace(roots=dict.fromkeys((*revs, "build"), str(root)), bin=root,
+                                     build_bin=root, configs=root, path=root / "layout.json")
+            def git(argv, **kwargs):
+                # Trees are now clean even for the earlier, unattested dirty build.
+                return "" if "status" in argv else "a" * 40
+            with patch("leeroy_dojo.realm.raids.subprocess.check_output", side_effect=git):
+                for missing in ("configure", "link", "pending", None):
+                    cfg, link = copy.deepcopy(configured), copy.deepcopy(linked)
+                    if missing == "configure":
+                        cfg.pop("clean_revisions")
+                    elif missing == "link":
+                        link.pop("clean_revisions")
+                    pending = root / "dojo-build.pending.json"
+                    if missing == "pending":
+                        pending.write_text("{}")
+                    else:
+                        pending.unlink(missing_ok=True)
+                    (root / "dojo-configure.json").write_text(json.dumps(cfg))
+                    (root / "dojo-build.json").write_text(json.dumps(link))
+                    with self.subTest(missing=missing):
+                        if missing:
+                            with self.assertRaises(LayoutError):
+                                provenance(layout)
+                        else:
+                            self.assertEqual(provenance(layout)["revisions"], revs)
 
 
 if __name__ == "__main__":

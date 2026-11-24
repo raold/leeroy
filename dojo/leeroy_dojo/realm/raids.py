@@ -89,12 +89,16 @@ def provenance(layout):
     build = json.loads((Path(layout.roots["build"]) / "dojo-configure.json").read_text(encoding="utf-8"))
     if not build.get("raid_acceptance") or build.get("variant") != "training":
         raise LayoutError("configure receipt is not a raid acceptance training build")
+    if build.get("clean_revisions") != revisions:
+        raise LayoutError("configure receipt lacks matching build-time clean-source evidence")
     for name in revisions:
         if build[name]["head"] != revisions[name]:
             raise LayoutError(f"{name} revision differs from the configure receipt; rebuild and provision")
     binary = layout.bin / "worldserver.exe"
     built = layout.build_bin / "worldserver.exe"
     linked = json.loads((Path(layout.roots["build"]) / "dojo-build.json").read_text(encoding="utf-8"))
+    if linked.get("clean_revisions") != revisions or (Path(layout.roots["build"]) / "dojo-build.pending.json").exists():
+        raise LayoutError("link receipt lacks matching completed clean-source evidence")
     if linked.get("exit_code") != 0 or linked.get("problems") or any(linked.get(k) != v for k, v in revisions.items()):
         raise LayoutError("successful link receipt does not describe the candidate revisions")
     digest = fingerprint(binary)

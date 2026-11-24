@@ -54,7 +54,11 @@ python -m leeroy_dojo realm --layout <raid-layout.json> raid-acceptance
 
 Commit the candidate before configuring/building. The gate verifies clean source,
 core and playerbots revisions against both configure and successful link receipts,
-and hashes the staged worldserver against the linked artifact. Provision without
+and hashes the staged worldserver against the linked artifact. Configure and build
+check clean trees before and after their work. An old,
+unattested or interrupted build forces a clean rebuild before it can supply a
+receipt; reverting a dirty experiment cannot certify its existing binary.
+Provision without
 an arena manifest; it disables `Leeroy.Enable` so no guild bridge starts.
 `AC_DOJO_RAID_ACCEPTANCE` defaults off and requires `AC_ENABLE_DOJO=ON`.
 

@@ -316,7 +316,8 @@ struct RaidRun
         }
         else
         {
-            Leeroy::Guild::TickHazards(diff);
+            // The registered mod-leeroy world hook owns the production cadence.
+            // A second tick here would scan twice as often as the live realm.
             if (Creature* poison = bot->FindNearestCreature(16027, 70.f))
             {
                 ++hazardsSeen;

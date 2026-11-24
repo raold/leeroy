@@ -53,6 +53,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $env:GIT_OPTIONAL_LOCKS = '0'
+. (Join-Path $PSScriptRoot 'source-state.ps1')
 
 $DojoGenerator = 'Visual Studio 17 2022'
 $DojoModules = @('mod_dojo', 'mod_playerbots')
@@ -109,6 +110,8 @@ if ($null -eq $patches -or $patchCode -ne 0 -or -not $patches.ok) {
 foreach ($name in @($patches.applied)) { Write-Output "configure: applied $name to roots.playerbots" }
 
 $DojoLayout = Get-Content -LiteralPath $Layout -Raw | ConvertFrom-Json -AsHashtable
+try { $cleanRevisions = Get-DojoCleanRevisions $DojoLayout.roots }
+catch { Stop-DojoConfigure $_.Exception.Message }
 if ($RaidAcceptance -and ($Variant -ne 'training' -or 'mod-leeroy' -notin $DojoLayout.modules)) {
     Stop-DojoConfigure 'RaidAcceptance requires Variant training and an isolated mod-leeroy in layout.modules'
 }
@@ -206,6 +209,8 @@ if ($problems.Count -gt 0) {
     Stop-DojoConfigure "the configured tree is not the dojo's; see $log"
 }
 
+try { Assert-DojoSameRevisions $cleanRevisions (Get-DojoCleanRevisions $DojoLayout.roots) }
+catch { Stop-DojoConfigure $_.Exception.Message }
 $receipt = [ordered]@{
     kind        = 'leeroy-dojo-configure'
     format      = 1
@@ -215,6 +220,7 @@ $receipt = [ordered]@{
     instance    = $DojoLayout.instance
     variant     = $Variant
     raid_acceptance = [bool] $RaidAcceptance
+    clean_revisions = $cleanRevisions
     fresh       = $fresh
     core        = [ordered]@{ path = $core; head = Get-DojoHead $core }
     playerbots  = [ordered]@{ path = $DojoLayout.roots.playerbots; head = Get-DojoHead $DojoLayout.roots.playerbots;
