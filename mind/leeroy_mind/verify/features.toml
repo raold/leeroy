@@ -509,6 +509,15 @@ pattern = '^owner_aura_reapplied spell=\d+ why=(?P<code>[a-z_]+)'
 example = "2026-11-23 20:00:00 owner_aura_reapplied spell=6560 why=death"
 
 [[feature.evidence]]
+id = "refused"
+kind = "failed"
+what = "putting an aura back failed or it did not stay on him (owner_aura_refused; code: why it went)"
+log = "server"
+token = "owner_aura_refused "
+pattern = '^owner_aura_refused spell=\d+ why=(?P<code>[a-z_]+)'
+example = "2026-11-23 20:00:01 owner_aura_refused spell=6560 why=dispelled"
+
+[[feature.evidence]]
 id = "listed"
 kind = "observed"
 what = "the worldserver read his aura list (owner_auras spells=)"

@@ -379,6 +379,29 @@ def test_keep_cast_gates_the_jobs_that_need_it(install, store):
     assert feature(run(install, fs), "offline_toc")["status"] == "seen_working"
 
 
+def test_a_later_aura_refusal_outranks_an_earlier_reapply(install):
+    data, folder = install
+    fs = tuple(f for f in L.load_features() if f.id == "owner_auras")
+    append(folder / "Server.log", native(NOW - 50, "owner_aura_reapplied spell=6560 why=death"))
+    assert feature(run(install, fs), "owner_auras")["status"] == "seen_working"
+    append(folder / "Server.log", native(NOW - 10, "owner_aura_refused spell=6560 why=dispelled"))
+    item = feature(run(install, fs), "owner_auras")
+    assert item["status"] == "failed" and evidence(item, "refused")["codes"] == [{"code": "dispelled", "count": 1}]
+
+
+def test_a_spent_deadline_never_costs_a_switch_state(install, store):
+    """Switches are read first and on their own short deadline: switched off still outranks evidence."""
+    data, folder = install
+    fs = tuple(f for f in L.load_features() if f.id == "dummy_lab")
+    store.conn.execute("INSERT INTO meta(key,value) VALUES ('tg:lab:summary:2026-11-22',?)",
+                       (json.dumps({"reason": "dummy_rounds_complete", "ts": NOW - 900}),))
+    store.conn.commit()
+    (data / "mind.toml").write_text("[training]\nenabled = false\n", encoding="utf-8")
+    item = feature(run(install, fs, deadline=time.monotonic() - 1), "dummy_lab")
+    assert item["status"] == "switched_off"
+    assert {s["key"]: s["state"] for s in item["switches"]}["training.enabled"] == "off"
+
+
 def raid_row(conn, rid, *, started, ended, outcome, key="icc", offline=1, kills=1):
     conn.execute("INSERT INTO guild_raid(raid_id,started,ended,raid_key,size,heroic,offline,lead_guid,tank_guid,"
                  "loot_guid,kills,wipes,outcome) VALUES (?,?,?,?,10,0,?,101,101,102,?,0,?)",

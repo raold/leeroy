@@ -196,7 +196,8 @@ def switch_states(features, data: Path, native_dir: Path, deadline: float) -> di
     if any(source == "mind" for source, _ in wanted):
         from leeroy_mind.console import opsview
         try:
-            rows = opsview.switches_view(data, deadline, mind_started=None)["rows"]
+            # a bounded 64 KiB read of mind.toml: a spent shared deadline never costs a switch state
+            rows = opsview.switches_view(data, max(deadline, time.monotonic() + 1.0), mind_started=None)["rows"]
             states = {f"{r['table']}.{r['key']}": r["state"] for r in rows}
         except Exception:
             states = {}
@@ -316,13 +317,10 @@ def ledger(data: Path, native_dir: Path, *, features=None, now=None, deadline=No
     data, native_dir = Path(data), Path(native_dir)
     signatures = [Signature(f"{f.id}.{e.id}", e.log, e.token.encode("ascii"), e.pattern, f.since_at())
                   for f in features for e in f.evidence if e.log]
-    directories = {"server": native_dir, "playerbots": native_dir, "mind": data / "logs"}
-    tallies, coverage = scan(directories, signatures, deadline=deadline, budgets=budgets, tz=tz)
-    if "playerbots" in coverage and dungeonclear_elsewhere(native_dir):
-        coverage["playerbots"]["issues"]["dungeonclear_elsewhere"] = 1
-        coverage["playerbots"]["complete"] = False
+    # The cheap reads first, so a log scan that spends the deadline cannot cost a switch state
+    # (switched off outranks evidence) or the database's answers.
     states = switch_states(features, data, native_dir, deadline)
-    database, unavailable = "ok", {}
+    tallies, database, unavailable = {}, "ok", {}
     try:
         conn = _connect(data, deadline)
     except sqlite3.Error:
@@ -345,6 +343,12 @@ def ledger(data: Path, native_dir: Path, *, features=None, now=None, deadline=No
     finally:
         if conn is not None:
             conn.close()
+    directories = {"server": native_dir, "playerbots": native_dir, "mind": data / "logs"}
+    logged, coverage = scan(directories, signatures, deadline=deadline, budgets=budgets, tz=tz)
+    tallies.update(logged)
+    if "playerbots" in coverage and dungeonclear_elsewhere(native_dir):
+        coverage["playerbots"]["issues"]["dungeonclear_elsewhere"] = 1
+        coverage["playerbots"]["complete"] = False
     out, counts = [], Counter()
     for f in features:
         switches = [{"source": s.source, "key": s.key, "state": states[s.source, s.key][0],
