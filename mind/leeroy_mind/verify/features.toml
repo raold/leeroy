@@ -26,7 +26,7 @@
 #       tallied when it is a short identifier) and example (a synthetic line the tests match);
 #     or db = { from, where, time, unit = "s" | "ms", code }: counts, first and last `time` of
 #       `SELECT ... FROM <from> WHERE <where>`, grouped by the optional `code` expression. A pull's
-#       outcome is timed by its end (tg_pull.end_ms), when it became known.
+#       outcome is timed by its end (tg_pull.end_ms, guild_raid.ended), when it became known.
 # Only ids, counts, times, switch keys and short codes ever leave the ledger: never a log line,
 # a name or any text a member or the owner wrote.
 
@@ -524,6 +524,7 @@ id = "offline_toc"
 name = "Offline raids in Trial of the Crusader"
 prs = [397, 410]
 since = "2026-11-20T22:20"
+note = "Dungeon-clear's own lines reach Playerbots.log only while its channel falls back there; mod_dungeon_clear.conf routes it to DungeonClear.log, which has no times and is not read, so they are observed only. The pulls and raid rows in mind.db decide."
 
 [[feature.switch]]
 source = "native"
@@ -549,13 +550,14 @@ example = "2026-11-21 15:45:00 [DC:Botname] ToC raid — fighting (progress 1)"
 id = "no_kills"
 kind = "failed"
 what = "an offline ToC run that ended with no kill (guild_raid; code: its outcome)"
-db = { from = "guild_raid", where = "offline = 1 AND raid_key = 'toc' AND ended IS NOT NULL AND kills = 0", time = "started", unit = "s", code = "outcome" }
+db = { from = "guild_raid", where = "offline = 1 AND raid_key = 'toc' AND ended IS NOT NULL AND kills = 0", time = "ended", unit = "s", code = "outcome" }
 
 [[feature]]
 id = "offline_ulduar"
 name = "Offline raids in Ulduar (Flame Leviathan passed)"
 prs = [397]
 since = "2026-11-20T22:20"
+note = "Dungeon-clear's own lines reach Playerbots.log only while its channel falls back there; mod_dungeon_clear.conf routes it to DungeonClear.log, which has no times and is not read, so they are observed only. The pulls and raid rows in mind.db decide."
 
 [[feature.switch]]
 source = "native"
@@ -581,13 +583,14 @@ example = "2026-11-22 00:50:00 [DC:Botname] Ulduar — Flame Leviathan (state 0)
 id = "no_kills"
 kind = "failed"
 what = "an offline Ulduar run that ended with no kill (guild_raid; code: its outcome)"
-db = { from = "guild_raid", where = "offline = 1 AND raid_key = 'ulduar' AND ended IS NOT NULL AND kills = 0", time = "started", unit = "s", code = "outcome" }
+db = { from = "guild_raid", where = "offline = 1 AND raid_key = 'ulduar' AND ended IS NOT NULL AND kills = 0", time = "ended", unit = "s", code = "outcome" }
 
 [[feature]]
 id = "offline_icc_gunship"
 name = "Offline ICC passes the gunship and starts Saurfang"
 prs = [409]
 since = "2026-11-21T10:10"
+note = "Dungeon-clear's own lines reach Playerbots.log only while its channel falls back there; mod_dungeon_clear.conf routes it to DungeonClear.log, which has no times and is not read, so they are observed only. The pulls and raid rows in mind.db decide."
 
 [[feature.switch]]
 source = "native"
@@ -596,7 +599,7 @@ default = true
 
 [[feature.evidence]]
 id = "passed"
-kind = "working"
+kind = "observed"
 what = "dungeon-clear passed the gunship for an offline run (dc_icc_gunship_pass)"
 log = "playerbots"
 token = "dc_icc_gunship_pass "
@@ -613,13 +616,14 @@ db = { from = "tg_pull", where = "kind = 'offline' AND map = 631 AND boss_id = 3
 id = "stuck"
 kind = "failed"
 what = "an offline ICC run killed Deathwhisper and ended without reaching Saurfang (guild_raid; code: its outcome)"
-db = { from = "guild_raid r", where = "r.offline = 1 AND r.raid_key = 'icc' AND r.ended IS NOT NULL AND EXISTS (SELECT 1 FROM tg_pull p WHERE p.raid_id = r.raid_id AND p.map = 631 AND p.boss_id = 1 AND p.outcome = 'killed') AND NOT EXISTS (SELECT 1 FROM tg_pull p WHERE p.raid_id = r.raid_id AND p.map = 631 AND p.boss_id >= 3)", time = "r.started", unit = "s", code = "r.outcome" }
+db = { from = "guild_raid r", where = "r.offline = 1 AND r.raid_key = 'icc' AND r.ended IS NOT NULL AND EXISTS (SELECT 1 FROM tg_pull p WHERE p.raid_id = r.raid_id AND p.map = 631 AND p.boss_id = 1 AND p.outcome = 'killed') AND NOT EXISTS (SELECT 1 FROM tg_pull p WHERE p.raid_id = r.raid_id AND p.map = 631 AND p.boss_id >= 3)", time = "r.ended", unit = "s", code = "r.outcome" }
 
 [[feature]]
 id = "offline_icc_valithria"
 name = "Offline ICC drives Valithria through real healing"
 prs = [442]
 since = "2026-11-22T16:26"
+note = "Dungeon-clear's own lines reach Playerbots.log only while its channel falls back there; mod_dungeon_clear.conf routes it to DungeonClear.log, which has no times and is not read, so they are observed only. The pulls and raid rows in mind.db decide."
 
 [[feature.switch]]
 source = "native"
@@ -662,7 +666,7 @@ default = true
 id = "ran_its_course"
 kind = "working"
 what = "an offline run with kills that ended by its own rule, not too_few or leader_lost (guild_raid; code: its outcome)"
-db = { from = "guild_raid", where = "offline = 1 AND ended IS NOT NULL AND kills > 0 AND outcome NOT IN ('too_few', 'leader_lost')", time = "started", unit = "s", code = "outcome" }
+db = { from = "guild_raid", where = "offline = 1 AND ended IS NOT NULL AND kills > 0 AND outcome NOT IN ('too_few', 'leader_lost')", time = "ended", unit = "s", code = "outcome" }
 
 [[feature.evidence]]
 id = "full_wipe"
@@ -677,7 +681,7 @@ example = "2026-11-24 00:30:00 leeroy: raid 0123456789abcdef0123456789abcdef ful
 id = "fell_apart"
 kind = "failed"
 what = "an offline run that ended too_few or leader_lost (guild_raid; code: its outcome)"
-db = { from = "guild_raid", where = "offline = 1 AND outcome IN ('too_few', 'leader_lost')", time = "started", unit = "s", code = "outcome" }
+db = { from = "guild_raid", where = "offline = 1 AND outcome IN ('too_few', 'leader_lost')", time = "ended", unit = "s", code = "outcome" }
 
 [[feature]]
 id = "offline_reserves"

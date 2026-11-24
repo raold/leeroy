@@ -348,6 +348,44 @@ def test_the_module_switch_gates_every_feature_mod_leeroy_carries(install):
     assert item["status"] == "switched_off" and evidence(item, "cast")["count"] == 1
 
 
+def raid_row(conn, rid, *, started, ended, outcome, key="icc", offline=1, kills=1):
+    conn.execute("INSERT INTO guild_raid(raid_id,started,ended,raid_key,size,heroic,offline,lead_guid,tank_guid,"
+                 "loot_guid,kills,wipes,outcome) VALUES (?,?,?,?,10,0,?,101,101,102,?,0,?)",
+                 (rid, started, ended, key, offline, kills, outcome))
+
+
+def test_a_run_that_stalled_after_the_gunship_counts_when_it_ended(install, store):
+    """It started before an earlier run reached Saurfang, but its failure is known only at its end."""
+    data, folder = install
+    conn = store.conn
+    raid_row(conn, 1, started=NOW - 5000, ended=NOW - 3000, outcome="cleared_reachable")
+    pull(conn, "saurfang", 3, "killed", NOW - 4000, NOW - 3900, kind="offline")
+    conn.execute("UPDATE tg_pull SET raid_id=1 WHERE id='saurfang'")
+    raid_row(conn, 2, started=NOW - 4500, ended=NOW - 100, outcome="stalled")
+    pull(conn, "deathwhisper", 1, "killed", NOW - 4400, NOW - 4300, kind="offline")
+    conn.execute("UPDATE tg_pull SET raid_id=2 WHERE id='deathwhisper'")
+    conn.commit()
+    append(folder / "Playerbots.log", native(NOW - 4200, "dc_icc_gunship_pass instance=9 earned=0"))
+    fs = tuple(dataclasses.replace(f, switches=()) for f in L.load_features() if f.id == "offline_icc_gunship")
+    item = feature(run(install, fs), "offline_icc_gunship")
+    assert item["status"] == "failed"
+    assert evidence(item, "stuck")["codes"] == [{"code": "stalled", "count": 1}]
+    assert evidence(item, "passed")["kind"] == "observed" and evidence(item, "passed")["count"] == 1
+
+
+@pytest.mark.parametrize("routing, elsewhere", [("4,DungeonClear", True), ('"4,Console Playerbots"', False), (None, False)])
+def test_dungeon_clear_routed_to_its_own_file_is_partial_coverage(install, routing, elsewhere):
+    data, folder = install
+    append(folder / "Playerbots.log", native(NOW - 10, "dc_icc_gunship_pass instance=9 earned=0"))
+    if routing is not None:
+        conf(folder, "mod_dungeon_clear.conf", f"Appender.DungeonClear=2,4,0,DungeonClear.log\n"
+                                               f"Logger.playerbots.dungeonclear={routing}\n")
+    coverage = run(install, L.load_features())["coverage"]["playerbots"]
+    assert ("dungeonclear_elsewhere" in coverage["issues"]) is elsewhere
+    assert coverage["complete"] is (not elsewhere)
+    assert L.dungeonclear_elsewhere(folder / "absent") is None
+
+
 def test_loot_failures_are_timed_when_the_outcome_became_known(install, store):
     """Two drops before either award: the later failure is newer than the earlier charge."""
     data, folder = install

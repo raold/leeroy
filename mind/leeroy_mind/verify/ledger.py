@@ -224,6 +224,22 @@ def switch_states(features, data: Path, native_dir: Path, deadline: float) -> di
     return out
 
 
+def dungeonclear_elsewhere(native_dir: Path) -> bool | None:
+    """True when mod_dungeon_clear.conf routes playerbots.dungeonclear away from Playerbots.log,
+    to its own file, which carries no times and is not read: after a `.reload config` its lines
+    go there; before one they fall back to the playerbots channel. None when it cannot be read."""
+    try:
+        text = _read_conf(native_dir / "configs" / "modules" / "mod_dungeon_clear.conf")
+    except (OSError, UnicodeError):
+        return None
+    for line in text.splitlines():
+        key, _, value = line.strip().partition("=")
+        if key.strip() == "Logger.playerbots.dungeonclear":
+            appenders = value.replace('"', "").partition(",")[2]
+            return "Playerbots" not in appenders.split()
+    return False
+
+
 # -- mind.db --------------------------------------------------------------------------------------
 
 def _connect(data: Path, deadline: float):
@@ -302,6 +318,9 @@ def ledger(data: Path, native_dir: Path, *, features=None, now=None, deadline=No
                   for f in features for e in f.evidence if e.log]
     directories = {"server": native_dir, "playerbots": native_dir, "mind": data / "logs"}
     tallies, coverage = scan(directories, signatures, deadline=deadline, budgets=budgets, tz=tz)
+    if "playerbots" in coverage and dungeonclear_elsewhere(native_dir):
+        coverage["playerbots"]["issues"]["dungeonclear_elsewhere"] = 1
+        coverage["playerbots"]["complete"] = False
     states = switch_states(features, data, native_dir, deadline)
     database, unavailable = "ok", {}
     try:
