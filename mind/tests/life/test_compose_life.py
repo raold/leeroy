@@ -837,3 +837,17 @@ def test_a_voiced_line_records_her_want(store, clock, tmp_path, monkeypatch):
         assert meta.intent and r.engine._wants[r.engine._want_key(turn)] == Intent(meta.intent)
     finally:
         r.close()
+
+
+def test_availability_text_says_how_closely_she_watches_never_where_she_is():
+    from leeroy_mind.life.presence import availability_text
+    for block in Block:
+        for att in Attention:
+            lp = LifePresence(block, Where.BUSY, att, DayEvent.NONE, True)
+            for medium in ("game", "discord"):
+                text = availability_text(lp, medium)
+                assert text and not any(w in text for w in ("work", "home", "kids", "gym",
+                                                            "asleep", "out tonight"))
+    assert availability_text(LifePresence(Block.WORK, Where.AT_WORK, Attention.GLANCING,
+                                          DayEvent.NONE, False), "game") == (
+        "You only glance at the game now and then.")

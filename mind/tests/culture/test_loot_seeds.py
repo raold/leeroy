@@ -180,7 +180,8 @@ def test_wish_tick_waits_while_he_plays_and_logs_only_codes(tmp_path, caplog):
             calls.append(at)
             if len(calls) == 2:
                 raise RuntimeError("invented failure text")
-            return {"computed": at, "event": 1, "raid_key": None, "wishes": []}
+            return {"computed": at, "event": 1, "raid_key": None, "wishes": [],
+                    "version": loot.WISH_VERSION}
         live._compute = compute
         app.world.human_online = True
         run(live.wish_tick(now))
@@ -266,3 +267,117 @@ def test_a_trinket_whose_stats_say_nothing_is_nobodys_wish(store, cast):
                                 raid_roles=roles, human=1)
     # +64 on a trinket slot would have won; it is no item of hers by its stats, so the chest is
     assert value["wishes"] == [{"guid": 101, "item_id": 1001, "boss": "Lord Marrowgar", "gain": 51}]
+
+
+# -- her talents decide, and a cache other code computed is never read (2026-11-24) ---------------
+
+KRYSS = ItemInfo(2001, "Invented Kryss", 4, 277, 13, 2, 15, -1, frozenset({7, 38}))
+GREATAXE = ItemInfo(2002, "Invented Greataxe", 4, 264, 17, 2, 1, -1, frozenset({4, 7, 32}))
+AGI_LEGS = ItemInfo(2003, "Invented Leggings", 4, 277, 7, 4, 2, -1, frozenset({3, 7, 38}))
+INT_LEGS = ItemInfo(2004, "Invented Kilt", 4, 277, 7, 4, 2, -1, frozenset({5, 6, 7, 45}))
+TANK_NECK = ItemInfo(2005, "Invented Gorget", 4, 277, 2, 4, 0, -1, frozenset({7, 12, 13}))
+CASTER_NECK = ItemInfo(2006, "Invented Pendant", 4, 277, 2, 4, 0, -1, frozenset({5, 7, 45}))
+SPOT_CHECK = (KRYSS, GREATAXE, AGI_LEGS, INT_LEGS, TANK_NECK, CASTER_NECK)
+
+
+class SpotLibrary:
+    def drops_from(self, boss):
+        if boss != "Lord Marrowgar":
+            return []
+        return [SimpleNamespace(map_id=631, section="10-player", title=boss,
+                                ref_ids=tuple(f"item:{i.item_id}" for i in SPOT_CHECK))]
+
+
+class SpotArmory:
+    """Arkon (a warrior) wields a two-hander; Belra and Coros are druids. Their talents: Arms,
+    Restoration and Balance (`tabs`); None: an armory without the read."""
+
+    def __init__(self, tabs=None, fail=False):
+        self.tabs, self.fail = tabs, fail
+        if tabs is None:
+            self.spec_tabs = None
+
+    def items(self, ids):
+        return {i.item_id: i for i in SPOT_CHECK if i.item_id in ids}
+
+    def equipped(self, guids):
+        return {101: {15: 245, 1: 277, 6: 277}, 102: {6: 251, 1: 277}, 103: {1: 251, 6: 277}}
+
+    def spec_tabs(self, guids):
+        if self.fail:
+            raise OSError("no dbc files")
+        return self.tabs
+
+
+def spot_check(store):
+    raid_ahead(store)
+    store.conn.execute("UPDATE guild_attendance SET status='raided' WHERE raid_id=9 AND guid=103")
+    store.conn.execute("UPDATE cast_member SET class=11 WHERE guid=103")  # Coros, a druid here
+    store.conn.execute("UPDATE cast_member SET spec_tab=1 WHERE guid=102")  # a stale Feral tree
+    return {101: "melee", 102: "melee", 103: "tank"}  # their personas' raid roles
+
+
+def wished(store, armory, roles):
+    value = loot.compute_wishes(store.conn, SpotLibrary(), armory, now=store.clock.now(),
+                                raid_roles=roles, human=1)
+    return {w["guid"]: w["item_id"] for w in value["wishes"]}
+
+
+def test_wishes_follow_her_talents_not_her_persona_or_a_stale_tree(store, cast):
+    roles = spot_check(store)
+    # before: Arkon a one-hand dagger, Belra agility legs, Coros a tank's neck
+    assert wished(store, SpotArmory(), roles) == {101: KRYSS.item_id, 102: AGI_LEGS.item_id,
+                                                  103: TANK_NECK.item_id}
+    talents = SpotArmory({101: 0, 102: 2, 103: 0})
+    assert wished(store, talents, roles) == {101: GREATAXE.item_id, 102: INT_LEGS.item_id,
+                                             103: CASTER_NECK.item_id}
+
+
+def test_a_failed_talent_read_keeps_the_snapshots_tree(store, cast):
+    roles = spot_check(store)
+    assert wished(store, SpotArmory({}, fail=True), roles) == wished(store, SpotArmory(), roles)
+    assert loot.spec_tabs(SpotArmory({101: 0, 102: 7, "x": 1}), [101, 102]) == {101: 0}
+
+
+def test_a_cache_other_code_computed_is_never_read_and_is_due(store, cast):
+    event = raid_ahead(store)
+    value = loot.compute_wishes(store.conn, FakeLibrary(), FakeArmory(), now=store.clock.now(),
+                                raid_roles={g: p.play.raid_role for g, p in cast.items()}, human=1)
+    assert value["version"] == loot.WISH_VERSION and loot.load_wishes(json.dumps(value))
+    old = {k: v for k, v in value.items() if k != "version"}
+    assert loot.load_wishes(json.dumps(old)) is None and loot.wish_version(json.dumps(old)) == ""
+    older = {**value, "version": "0123456789abcdef"}
+    assert loot.load_wishes(json.dumps(older)) is None
+    assert loot.wish_due(loot.load_wishes(json.dumps(older)), event, store.clock.now())
+    store.set_meta(loot.WISH_KEY, json.dumps(older))  # the seeds never offer its wishes
+    assert not any(s.kind == "loot_wish" for s in gather(store, cast, culture_enabled=True,
+                                                         culture_store=store, culture_loot=True))
+
+
+def test_the_wish_tick_recomputes_an_outdated_cache_at_once(tmp_path, caplog):
+    from selfies.fakes import mind_app
+    app = mind_app(tmp_path, toml="[server]\nenabled=true\n[culture]\nenabled=true\nloot=true\n")
+    try:
+        live = app.server.culture
+        now = app.clock.now()
+        event = app.store.conn.execute(
+            "INSERT INTO realm_calendar(kind,creator,at,title,updated,state) "
+            "VALUES ('raid',102,?,'Raid night',?,'posted')", (now + 86400, now)).lastrowid
+        app.store.set_meta(loot.WISH_KEY, json.dumps(
+            {"computed": now, "event": event, "raid_key": None, "wishes": [],
+             "version": "an-older-release"}))
+        calls = []
+
+        def compute(at, roles, human):
+            calls.append(at)
+            return {"computed": at, "event": event, "raid_key": None, "wishes": [],
+                    "version": loot.WISH_VERSION}
+        live._compute = compute
+        app.world.human_online = False
+        with caplog.at_level(logging.INFO):
+            run(live.wish_tick(now + 60))  # fresh by its clock, but another release's
+        assert calls == [now + 60] and f"culture_loot_wish_outdated event={event}" in caplog.text
+        run(live.wish_tick(now + 120))
+        assert calls == [now + 60]  # this code's now: kept for the night
+    finally:
+        run(app.stop())

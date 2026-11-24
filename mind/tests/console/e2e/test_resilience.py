@@ -263,6 +263,7 @@ def test_mind_bridge_and_voice_down_up_are_words_on_every_tab(rehearsal):
     async def run():
         from playwright.async_api import expect
         from console.test_console_voice import FakeVoice
+        from leeroy_mind.console.voicelink import RETRY_MAX_S
         from leeroy_mind.console.ws import WsClient
         from selfies.fakes import until
         async with rehearsal() as r:
@@ -297,6 +298,9 @@ def test_mind_bridge_and_voice_down_up_are_words_on_every_tab(rehearsal):
                 await fake.start()
                 r.ports.add(fake.port)
                 r.console.s.voice_ui_port = fake.port
+                # While the service was away the relay's waits grew to RETRY_MAX_S, so its next
+                # try can come that long after the start: wait for its link, then for the strip.
+                await until(lambda: r.console.relay.connected, RETRY_MAX_S + 2)
                 await expect(r.page.locator("#s-vlink")).to_contain_text("voice linked")
                 await r.stop_mind()
                 await expect(r.page.locator("#s-mind")).to_contain_text("mind stopped")

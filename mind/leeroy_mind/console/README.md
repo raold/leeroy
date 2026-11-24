@@ -109,6 +109,17 @@ a separate four-second budget. Older raids are available with
 `python -m leeroy_mind training debrief --raid ID --data-dir <mind-data>`.
 See [debrief evidence and limits](../training/README.md#raid-debrief).
 
+**Verification** lists every shipped feature of `verify/features.toml` as failed,
+seen working, unverified or switched off, failed first. Expand one for its
+switches and each evidence signature: what it means, its count and its first and
+last time since the change reached the live install, with short codes. Evidence
+comes from bounded newest-first tails of Server.log, Playerbots.log and mind.log
+and from mind.db opened read-only; the panel shows how far back each log was read.
+A feature with nothing seen is unverified, never working; observed evidence (an
+engage, a stage, a death's last recorded hit) is shown but never decides. It refreshes at most
+every five minutes with an eight-second budget. The same ledger prints with
+`python -m leeroy_mind verify status [--json] --data-dir <mind-data>`.
+
 Open the named **FAIL** and read its check, source, age and reason. Compare Mind's links, the relevant journal or the schedule's last result. Verify the same check on a fresh poll after correcting its cause. Panels for health, night, Realm holds, raids, selfies, backups, release drift and schedules can fail independently. Switches report configuration, dependencies and a restart cue. Confirm effective behavior with a fresh greeting or operation receipt. Cached Git drift, a completed snapshot and a verified off-machine backup answer different questions.
 
 To act, enable `[control] ops_actions = true` and restart mind and console. Controls must be on, the mind verified, owner freshly known offline, and no competing operation or open human raid. An open offline raid blocks actions other than stopping that run. Preview names the target and consequences. Confirm the fresh one-use request. If confirmation times out, inspect the recorded operation before retrying.

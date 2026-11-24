@@ -547,10 +547,27 @@ def test_timeout_bounds_only_the_wait_for_the_query_vector(library_path, clock, 
                                                            phase):
     """As on the inline search, whose only await was its embed call: a slow embed, or one that
     would start past the deadline, ends in TimeoutError without a rank; a slow preparation
-    with nothing to embed, and a slow rank after the vector, keep their results."""
+    with nothing to embed, and a slow rank after the vector, keep their results. A slow phase
+    moves the loop's clock past the deadline, so a loaded machine's real seconds never decide
+    which side of it a phase ends on (CI, 2026-11-19 and 20: an unslowed preparation took longer
+    than a 50 ms timeout)."""
+    timeout = 30.0
+
     async def main():
+        loop = asyncio.get_running_loop()
+        late = [0.0]  # what the loop's clock has been moved on by
+        monkeypatch.setattr(loop, "time", lambda now=loop.time: now() + late[0])
+
+        def overrun():
+            late[0] += 2 * timeout
+
+        class EmbedOverruns(asyncio.Event):
+            async def wait(self):  # the embed has started: its wait outlasts the deadline
+                overrun()
+                return await super().wait()
+
         query = "Sindragosa frost wyrm"
-        gate = asyncio.Event()
+        gate = EmbedOverruns()
         llm = None if phase == "prepare_text" else FakeLLM(
             gate=gate if phase == "embed" else None)
         direct = Library(library_path, clock=clock, readonly=True)
@@ -568,7 +585,7 @@ def test_timeout_bounds_only_the_wait_for_the_query_vector(library_path, clock, 
                 if name == "_finish_search":
                     ranked.append(True)
                 if name == slow:
-                    time.sleep(0.2)  # past the deadline, on the owned reader
+                    overrun()  # past the deadline, on the owned reader
                 return original(self, *args, **kwargs)
             return run_slowly
 
@@ -578,11 +595,11 @@ def test_timeout_bounds_only_the_wait_for_the_query_vector(library_path, clock, 
         try:
             if phase in ("embed", "prepare_embed"):
                 with pytest.raises(TimeoutError):
-                    await worker.search(query, llm=llm, timeout=0.05)
+                    await worker.search(query, llm=llm, timeout=timeout)
                 assert not ranked and not worker._requests and llm.inflight == 0
                 assert len(llm.calls) == (1 if phase == "embed" else 0)
             else:
-                assert await worker.search(query, llm=llm, timeout=0.05) == expected
+                assert await worker.search(query, llm=llm, timeout=timeout) == expected
                 assert ranked == [True]
             assert await worker.search_text("Sindragosa")  # the reader carries on
         finally:

@@ -33,6 +33,7 @@ import asyncio.selector_events
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -241,12 +242,52 @@ def _patch_create_connection() -> None:
     socket.create_connection = create_connection
 
 
+# struct linger: two u_short on Windows, two int elsewhere
+LINGER = "HH" if os.name == "nt" else "ii"
+
+
+def loopback_pair(family=socket.AF_INET, type=socket.SOCK_STREAM, proto=0):
+    """socket.socketpair for Windows, where CPython's is a TCP fallback: a listener on 127.0.0.1
+    port 0, a non-blocking connect to it, then accept() with no timeout. Every asyncio loop takes
+    one for its self-pipe, a suite takes thousands a minute, and each closed pair held a port in
+    TIME_WAIT for 30 s. A busy machine then ran out of ports (System log Tcpip 4231) or Windows
+    refused the connect from a port pair still in TIME_WAIT (4227, WSAEADDRINUSE) after it had
+    returned "would block", and accept() waited forever: local runs hung in it. Here the connect
+    blocks, so a refusal is raised, and both ends close abortively (SO_LINGER 0), so a pair
+    leaves no TIME_WAIT behind. The pair is only asyncio's self-pipe here: no byte matters at
+    close."""
+    lsock = socket.socket(family, type, proto)
+    try:
+        lsock.bind(("::1" if family == socket.AF_INET6 else "127.0.0.1", 0))
+        lsock.listen()
+        csock = socket.socket(family, type, proto)
+        try:
+            csock.connect(lsock.getsockname()[:2])
+            ssock, _ = lsock.accept()
+        except BaseException:
+            csock.close()
+            raise
+    finally:
+        lsock.close()
+    try:
+        if ssock.getsockname() != csock.getpeername() or csock.getsockname() != ssock.getpeername():
+            raise ConnectionError("Unexpected peer connection")  # something else got in first
+        for end in (ssock, csock):
+            end.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack(LINGER, 1, 0))
+    except BaseException:
+        ssock.close()
+        csock.close()
+        raise
+    return ssock, csock
+
+
 def _patch_socketpair() -> None:
     """On Windows socket.socketpair binds a listener on 127.0.0.1 port 0 and connects to it, and
     the OS can hand out a live service's port. While the original runs, this thread's connects
     are not port-checked; every other thread and every other connect stays guarded. asyncio's
-    loops call socket.socketpair() through the module, so they pick this up."""
-    GUARD.originals["socket.socketpair"] = socket.socketpair
+    loops call socket.socketpair() through the module, so they pick this up. On Windows the
+    original is loopback_pair."""
+    GUARD.originals["socket.socketpair"] = loopback_pair if os.name == "nt" else socket.socketpair
 
     def socketpair(*args, **kw):
         local = GUARD.local
