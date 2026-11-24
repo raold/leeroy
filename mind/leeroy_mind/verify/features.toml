@@ -815,6 +815,10 @@ source = "native"
 key = "Leeroy.MemberDungeon.Enable"
 default = false
 
+[[feature.switch]]
+source = "mind"
+key = "server.enabled"
+
 [[feature.evidence]]
 id = "boss_killed"
 kind = "working"
