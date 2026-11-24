@@ -18,7 +18,9 @@
 #                       it takes), "native" (a Leeroy.* key) or "playerbots" (a Playerbots.* key);
 #                       native and Playerbots keys come from console/native_switch_keys.py and
 #                       name their compiled `default`. A feature mod-leeroy carries lists
-#                       Leeroy.Enable too: the module's own switch stops all of them.
+#                       Leeroy.Enable too: the module's own switch stops all of them; offline
+#                       raids, heroics, dummy trials and death-loop rescue also need
+#                       Leeroy.KeepCast.
 #   [[feature.evidence]] id, kind ("working", "failed" or "observed"), what (shown as is), and either
 #     log = "server" | "playerbots" | "mind", token (a literal every matching line carries: the
 #       scan's prefilter), pattern (a Python regex searched in the line after its timestamp; for
@@ -463,6 +465,11 @@ source = "native"
 key = "Leeroy.CastDeathLoop.Enable"
 default = false
 
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
 [[feature.evidence]]
 id = "rescued"
 kind = "working"
@@ -531,6 +538,11 @@ source = "native"
 key = "Leeroy.Enable"
 default = true
 
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
 [[feature.evidence]]
 id = "killed"
 kind = "working"
@@ -562,6 +574,11 @@ note = "Dungeon-clear's own lines reach Playerbots.log only while its channel fa
 [[feature.switch]]
 source = "native"
 key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
 default = true
 
 [[feature.evidence]]
@@ -597,6 +614,11 @@ source = "native"
 key = "Leeroy.Enable"
 default = true
 
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
 [[feature.evidence]]
 id = "passed"
 kind = "observed"
@@ -628,6 +650,11 @@ note = "Dungeon-clear's own lines reach Playerbots.log only while its channel fa
 [[feature.switch]]
 source = "native"
 key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
 default = true
 
 [[feature.evidence]]
@@ -662,6 +689,11 @@ source = "native"
 key = "Leeroy.Enable"
 default = true
 
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
+
 [[feature.evidence]]
 id = "ran_its_course"
 kind = "working"
@@ -692,6 +724,11 @@ since = "2026-11-21T11:26"
 [[feature.switch]]
 source = "native"
 key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
 default = true
 
 [[feature.evidence]]
@@ -726,6 +763,11 @@ key = "training.lab"
 source = "native"
 key = "Leeroy.Training.Enable"
 default = false
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
 
 [[feature.evidence]]
 id = "complete"
@@ -818,6 +860,11 @@ default = false
 [[feature.switch]]
 source = "mind"
 key = "server.enabled"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.KeepCast"
+default = true
 
 [[feature.evidence]]
 id = "boss_killed"

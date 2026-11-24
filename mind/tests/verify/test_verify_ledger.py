@@ -365,6 +365,20 @@ def test_the_module_switch_gates_every_feature_mod_leeroy_carries(install):
     assert item["status"] == "switched_off" and evidence(item, "cast")["count"] == 1
 
 
+def test_keep_cast_gates_the_jobs_that_need_it(install, store):
+    """StartRaidJob (offline raids, heroics), dummy trials and death-loop rescue refuse without it."""
+    data, folder = install
+    fs = L.load_features()
+    gated = {f.id for f in fs if any(s.key == "Leeroy.KeepCast" for s in f.switches)}
+    assert {f.id for f in fs if f.id.startswith("offline_")} | {"member_heroics", "dummy_lab", "cast_death_loop"} == gated
+    pull(store.conn, "toc", 1, "killed", NOW - 900, NOW - 800, map_id=649, kind="offline")
+    store.conn.commit()
+    conf(folder, "mod_leeroy.conf", "Leeroy.KeepCast = 0\n")
+    assert feature(run(install, fs), "offline_toc")["status"] == "switched_off"
+    conf(folder, "mod_leeroy.conf", "Leeroy.Enable = 1\n")
+    assert feature(run(install, fs), "offline_toc")["status"] == "seen_working"
+
+
 def raid_row(conn, rid, *, started, ended, outcome, key="icc", offline=1, kills=1):
     conn.execute("INSERT INTO guild_raid(raid_id,started,ended,raid_key,size,heroic,offline,lead_guid,tank_guid,"
                  "loot_guid,kills,wipes,outcome) VALUES (?,?,?,?,10,0,?,101,101,102,?,0,?)",
