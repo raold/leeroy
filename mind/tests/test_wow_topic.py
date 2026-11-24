@@ -1,7 +1,7 @@
 """[talk] wow_topic's pure rules (talk/wowtopic.py, talk/entities.py, guards/register.py): which
 turns are held, the hold and DKP lines, the length trim and num_predict, the chat register, the
-mind's own instruction text without unknown game entities, and the raid night's time in words.
-Invented text only."""
+mind's own instruction text without unknown game entities, the raid night's time in words, DKP
+treated as transferable and her flirts on the public channels. Invented text only."""
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -84,6 +84,48 @@ def test_loot_turns():
     assert not w.loot_turn("guild", ("os tonight anyone?", "barrel roll off the ledge"))
     assert w.loot_turn("raid", ("ms/os on the ring", "roll for the token"))
     assert "never gold" in w.DKP_RULE and "DKP" in w.DKP_RULE
+
+
+def test_the_dkp_line_says_dkp_is_her_own():
+    assert "can't be given, lent or pooled" in w.DKP_RULE
+
+
+@pytest.mark.parametrize("text", [
+    "got 30 dkp for ya, grab the ring", "just pass me your DKP lol",
+    "ill give you my dkp for it", "lend me some dkp?", "we could pool our dkp for the bow",
+    "gonna send 50 dkp to him", "you can borrow my dkp", "have 40 dkp for u",
+    "Give Me Your DKP"])
+def test_dkp_treated_as_transferable(text):
+    assert w.dkp_transfer(text)
+
+
+@pytest.mark.parametrize("text", [
+    "bidding my dkp on the boots", "spend 50 dkp and its yours", "I have 146 dkp",
+    "they give dkp for attendance", "saving my dkp for the helm", "dkp standings are up",
+    "we got dkp for the kill", "lost the bid to you, gz", "", "hand me the flask"])
+def test_dkp_spent_as_her_own(text):
+    assert not w.dkp_transfer(text)
+
+
+# -- public flirts ---------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("channel", sorted(w.PUBLIC_CHANNELS))
+def test_a_flirt_on_a_public_game_channel(channel):
+    assert w.public_flirt(TurnKind.FLIRT, channel)
+    assert not w.public_flirt(TurnKind.OPEN, channel)
+
+
+@pytest.mark.parametrize("channel", ["whisper", "dm:102", "gdm:4", "discord:general", "voice:raid"])
+def test_a_flirt_anywhere_else_is_no_public_one(channel):
+    assert not w.public_flirt(TurnKind.FLIRT, channel)
+
+
+def test_the_public_flirt_line_names_who_reads_it():
+    assert w.public_flirt_line("guild") == (
+        "Everyone in the guild reads this: one light line, 10 words at most, and save anything "
+        "more for a whisper.")
+    assert "Everyone in the party" in w.public_flirt_line("party", 8)
+    assert "8 words at most" in w.public_flirt_line("party", 8)
 
 
 def test_game_topics_are_what_she_wants_in_game():

@@ -68,8 +68,8 @@ from leeroy_mind.human import THEY_FORMS, HumanIdentity, human_identity
 from leeroy_mind.life import state as life_state
 from leeroy_mind.life.day import Block, has_kids
 from leeroy_mind.life.interrupt import EXCUSE as AWAY_EXCUSE
-from leeroy_mind.life.presence import (AWAY_NOTE_S, away_note, away_words, playing_text,
-                                       settled_where, stated_where, where_text)
+from leeroy_mind.life.presence import (AWAY_NOTE_S, availability_text, away_note, away_words,
+                                       playing_text, settled_where, stated_where, where_text)
 from leeroy_mind.life.seed import seeded
 from leeroy_mind.llm.client import LLMError, GpuPaused
 from leeroy_mind.llm.presets import BEAT, LIVE, LIVE_BIT
@@ -112,7 +112,7 @@ from leeroy_mind.guards.pronouns import fix as fix_pronouns
 from leeroy_mind.talk.facts import LibraryFacts
 from leeroy_mind.talk import grounding
 from leeroy_mind.talk.grounding import wow_turn
-from leeroy_mind.talk import wowtopic
+from leeroy_mind.talk import publicscreen, wowtopic
 from leeroy_mind.discord import topics as channel_topics
 from leeroy_mind.talk.gearfit import for_speaker as facts_for_speaker
 from leeroy_mind.talk.gamenames import misplaced_battleground, squashed, unknown_bosses
@@ -281,10 +281,18 @@ HIS_HOME_HINT = ("Never say where {they} lives where others can read it: that is
 from leeroy_mind.heat.guard import HINT as HEAT_PUBLIC_HINT  # noqa: E402
 from leeroy_mind.heat.guard import OWED as _HEAT_OWED  # noqa: E402
 from leeroy_mind.heat.guard import TELL as HEAT_PUBLIC  # noqa: E402
+# The hard screen on sexual wording in the game's public channels (talk/publicscreen.py), every
+# model line there, answers he is owed included: fatal, asked again once clean (its HINT); an
+# owed answer's fallback is screened for it too, and an owed answer whose only problem it is goes
+# to him by whisper (Pipeline._speak_now); the last check before the bridge drops it.
+PUBLIC_SEXUAL = publicscreen.TELL
+# [talk] wow_topic: a WoW line that treats DKP as something to hand over (wowtopic.dkp_transfer):
+# soft, asked again with its hint, dropped when the retry still has it
+DKP_TRANSFER = wowtopic.DKP_TELL
 _HINTED = frozenset({"echo", "repeat", "near repeat", "long", "member flirt", "sample",
                      "history", "copy", "slang", "summons", "game name", "self name",
                      "phrase: resting", "in person", "era", "own copy", "attachment",
-                     "place", "his place", HEAT_PUBLIC})
+                     "place", "his place", HEAT_PUBLIC, PUBLIC_SEXUAL, DKP_TRANSFER})
 # Guard codes a second draft may still have and lose by a cut (_without_phrases): the phrase
 # cooldown's and an opener that says his line back.
 CUT_CODES = frozenset({*PHRASE_CODES, "echo_opener"})
@@ -297,7 +305,7 @@ FIX_CODES = frozenset({"member_misgender"})
 DM_KEEP_TURNS = 6  # of his last messages, a DM's chat keeps whole when the prompt is over budget
 SO_FAR_WINDOW_S = 12 * 3600.0  # the stored lines talk/sofar.py reads a conversation from
 DROP_ON_RETRY = frozenset({"history", "summons", "in person", "game name", "self name",
-                           "own copy", "his place"})
+                           "own copy", "his place", DKP_TRANSFER})
 # A reply this far over the words its lines hold is asked again shorter (prompts C1).
 MEETING_TELLS = frozenset({"summons", "in person"})
 LONG_SLACK = 1.25
@@ -337,6 +345,7 @@ OWED_REFUSED = {
     "silent": "say something back, not (nothing)",
     "his place": "don't say where {they} lives, others can read this",
     HEAT_PUBLIC: _HEAT_OWED,
+    PUBLIC_SEXUAL: publicscreen.OWED,
 }
 OWED_RETRY_HINT = "Not like that: {reasons}. " + OWED_FALLBACK_HINT
 # The second and third answers to his line see the ones before them (prompts I8), and so do
@@ -600,6 +609,12 @@ class TurnMeta:
     # num_predict (0: the preset's), which _generate_serial sets and _ask reads
     game_topic: bool = False
     wow_predict: int = 0
+    # the last model call for a game line stopped at its num_predict (_ask): a public flirt then
+    # counts as long (_generate_serial)
+    cut_off: bool = False
+    # an owed answer whose drafts were all sexual on a public game channel: it goes to him by
+    # whisper instead (talk/publicscreen.py; _generate_serial, _speak_now)
+    whisper_instead: bool = False
     # what recall looks for when the turn has no trigger line: for an answer to his Discord post,
     # its words and its thread's last lines (discord.talk, ruling R13); for a turn carrying an
     # outreach item, its words (outreach.service); "" for every other turn
@@ -1770,6 +1785,12 @@ class Pipeline:
         if (is_group(turn.channel) or not hg or turn.addressee != hg or p.identity.player_gender != "female"
                 or p.romance.stance not in ROMANCE_SHARE or meta.casual):
             return None
+        # [talk] wow_topic (talk/wowtopic.py): on a game channel others read, none while he raids
+        # (her flirts go by whisper then: TalkEngine._flirt_turn) and no further than
+        # romance.PUBLIC_BAND otherwise
+        public = self._wow_topic_on(turn) and turn.channel in wowtopic.PUBLIC_CHANNELS
+        if public and self.world.human_raiding():
+            return None
         hr = None if self.heat is None else self._hr(
             turn, meta, p, dial=dial, words=self._his_words(meta, trigger))
         if hr is not None and hr.tier == "none":
@@ -1806,7 +1827,8 @@ class Pipeline:
                                    data_dir=self.data_dir, rng=vary or rng,
                                    tail_follows=tail_follows, scene=scene,
                                    arc_lines=arc.arc_lines, rival=arc.rival, cooling=arc.cooling,
-                                   realism=realism, heat=heat, **({} if hr is None else {"hr": hr}))
+                                   realism=realism, heat=heat, **({} if hr is None else {"hr": hr}),
+                                   **({"public_cap": True} if public else {}))
         if hr is not None and text:
             meta.heat_band = turn_band(p, rel_h, dial, hr)
         return text
@@ -2309,6 +2331,14 @@ class Pipeline:
             draw = ShapeDraw(Shape.ONE_WORD, rng.randint(1, 3), 1, ONE_WORD_NUM_PREDICT)
         if owed and draw.shape in (Shape.LEAVE, Shape.REACTION, Shape.ONE_WORD):
             return  # never drawn for him (talk/shape.py ROWS); today's length if it ever were
+        if self._public_flirt(turn) and draw.shape not in (Shape.LEAVE, Shape.REACTION,
+                                                           Shape.ONE_WORD):
+            # [talk] wow_topic: a flirt others read is one line of PUBLIC_FLIRT_WORDS or fewer,
+            # its num_predict sized for it (never a burst; never cut down after)
+            words = min(max(1, draw.words // max(1, draw.lines)), wowtopic.PUBLIC_FLIRT_WORDS)
+            draw = ShapeDraw(Shape.SHORT if draw.shape is Shape.BURST else draw.shape, words, 1,
+                             wowtopic.predict(words), draw.content)
+            turn.max_lines = 1
         turn.shape, meta.shape_ctx = draw, ctx
         meta.shape_saved = (turn.max_lines, meta.burst)
         if draw.shape is Shape.BURST and family in DISCORD_FAMILIES:
@@ -2441,18 +2471,24 @@ class Pipeline:
             return SHORT_WORDS if discord else ONE_WORD_WORDS
         return draw.words
 
-    def _where_line(self, turn: Turn, meta: TurnMeta) -> str:
+    def _where_line(self, turn: Turn, meta: TurnMeta, *, held: bool = False) -> str:
         """Where she is, as "Right now" says it ([life] availability above 0, her presence on
         the meta): "" in a raid call (CALLOUT, URGENT) and in a voice room he is in (the room
         says where she is, review-340); at her PC playing while she is in his group as he plays
         (PM log D15); else by her block (life.presence.where_text). The awareness card leaves
-        her Discord status out while this line shows (review-340 P2-1)."""
+        her Discord status out while this line shows (review-340 P2-1). `held` (a turn held to
+        its channel's business: [talk] wow_topic's hold, a Discord channel's purpose): her
+        availability only (life.presence.availability_text), in his group the line of playing
+        with him, never where she is, what she said of it or why she stepped away."""
         lp = meta.life_presence if self._life_on() else None
         if (lp is None or turn.kind in RAID_CALLS
                 or (turn.channel.startswith("voice:") and not meta.elsewhere)):
             return ""
         playing = bool(self.world.human_online and self.world.in_group(turn.speaker))
-        text = where_text(lp, "discord" if is_discord(turn.channel) else "game", playing=playing)
+        medium = "discord" if is_discord(turn.channel) else "game"
+        if held and not (playing and medium == "game"):
+            return availability_text(lp, medium)
+        text = where_text(lp, medium, playing=playing)
         if not self._coherent():
             return text
         # one "right now" per conversation: in his group she is told so, with the place, and
@@ -2461,6 +2497,8 @@ class Pipeline:
         if playing and not is_discord(turn.channel):
             text = playing_text(self.human.called, them, raid=self._in_his_raid(),
                                 place=self._instance_of(turn.speaker))
+        if held:
+            return text
         try:
             stated = stated_where(self._said_here(turn, meta, self.clock.now()))
         except Exception as e:  # her situation is colour: nothing in it may cost him an answer
@@ -3129,7 +3167,7 @@ class Pipeline:
         # her day ([life] availability above 0: her own clock and where she is; never in a raid
         # call) and her feeling ([life] state; how she feels about him only on a turn of his).
         # [geography] on, her day is on her own clock wherever the sheet knows where she lives
-        today, where = day_line(local, p.identity.region), self._where_line(turn, meta)
+        today, where = day_line(local, p.identity.region), self._where_line(turn, meta, held=hold)
         if (geo_config.on() and place_of(p) is not None) or (
                 self._life_on() and meta.life_presence is not None):
             today = day_line(her_local(local, p), p.identity.region)
@@ -3161,7 +3199,8 @@ class Pipeline:
                            kind=turn.kind, life_thread="" if hold else p.real_life.life_thread,
                            lately="" if hold else self._lately_line(turn.speaker, now),
                            variant=random.Random(f"{p.guid}:{night_of(local)}:mood")
-                           .randrange(1000), today=today, where=where, state_words=feels),
+                           .randrange(1000), today=today, where=where, state_words=feels,
+                           held=hold),
             chat=[said_hi_text(r, names, human.called, now=now) if r.id in hi
                   else chat_line_text(r, names, now=now, photo=chat_notes.get(r.id,''),
                                       pronoun=pronouns.get(("line", r.id), ""))
@@ -3312,6 +3351,18 @@ class Pipeline:
                 or self.live_review.owed(turn, meta)):
             return ""
         return cid
+
+    def _public_flirt(self, turn: Turn) -> bool:
+        """[talk] wow_topic on and a FLIRT on a game channel others read (wowtopic.public_flirt):
+        one short line, generated short (_shape, _word_budget, _generate_serial)."""
+        return wowtopic.public_flirt(turn.kind, turn.channel) and self._wow_topic_on(turn)
+
+    def _may_whisper_instead(self, turn: Turn) -> bool:
+        """An answer to him on a public game channel can go to him by whisper instead: he is
+        online and the turn is his (talk/publicscreen.py)."""
+        hg = self.human.guid
+        return (bool(hg) and self.world.human_online and self._aimed_at_him(turn)
+                and publicscreen.public_channel(turn.channel))
 
     def _wow_topic_on(self, turn: Turn) -> bool:
         """[talk] wow_topic (read at each compose) on a WoW turn (wowtopic.wow_topic_channel:
@@ -3718,6 +3769,14 @@ class Pipeline:
                 return self._drop(turn, meta, "scope_changed", memory_ids, text=text)
             if why:
                 return self._drop(turn, meta, why, memory_ids, text=text)
+            if meta.whisper_instead:  # talk/publicscreen.py: his answer, never posted publicly
+                if not self._may_whisper_instead(turn):
+                    return self._drop(turn, meta, "public_sexual", memory_ids, text=text)
+                log.info("public_sexual_whispered: guid=%d kind=%s channel=%s", turn.speaker,
+                         turn.kind, turn.channel)
+                hg = self.human.guid
+                turn.channel, turn.to_guid, turn.addressee = "whisper", hg, hg
+                voiced = False
             if voiced:  # the model takes time: the service may be gone, the speaker moved on
                 voiced = self._route(turn, meta)
         else:
@@ -4546,6 +4605,8 @@ class Pipeline:
             self.timing.model(trace, attempt, outcome)
         text = result.text
         cutoff = getattr(getattr(result, "diagnostics", None), "done_reason", None) == "length"
+        if meta is not None:
+            meta.cut_off = bool(cutoff and not words)
         if words and cutoff:
             # cut off by num_predict: back to its last full sentence (none: as it is)
             cut = trim_to_sentence(text)
@@ -4640,8 +4701,14 @@ class Pipeline:
         # her usual words cut back to its first line or sentence (talk/wowtopic.py); never an
         # answer to a line that asks something, never with the length rule on (it owns game lines)
         wow_len = self._wow_length_on(turn, meta, c, game=game)
-        wow_budget = self._word_budget(turn, p, meta.two_lines) if wow_len else 0
-        meta.wow_predict = wowtopic.predict(wow_budget) if wow_len else 0
+        # [talk] wow_topic, a flirt on a public game channel (_public_flirt): generated short (its
+        # num_predict here, its shape and line), never cut down: a draft past its words, or one
+        # the num_predict cut off, is asked again shorter and dropped when the retry is too
+        flirt = game and self._public_flirt(turn)
+        wow_budget = self._word_budget(turn, p, meta.two_lines) if wow_len or flirt else 0
+        meta.wow_predict = wowtopic.predict(wow_budget) if wow_len or flirt else 0
+        drop_on_retry = DROP_ON_RETRY | {"long"} if flirt else DROP_ON_RETRY
+        topic_on = self._wow_topic_on(turn)
         kept, why = "", "tells"
         # the kept draft's lines are the length rule's (a kept or cut answer that fits her
         # lines): when it is what goes, the styling leaves it whole as the return below would
@@ -4704,7 +4771,7 @@ class Pipeline:
                 silent = quiet(text)  # a line that was only a command at him included
             if not silent and fit and len(text.split()) > fit:
                 text = fit_words(text, fit)
-            if not silent and wow_len:
+            if not silent and wow_len and not flirt:
                 voiced = _voice_words(p)
                 cut = wowtopic.trim(text, wow_budget, floor=min(voiced) if voiced else 0)
                 if cut is not None:
@@ -4762,7 +4829,8 @@ class Pipeline:
                                    recent_moves=moves, summons_ok=summons_ok,
                                    keep_emoji=emoji, far=far)
                 if (length == "retry" or usual if keeps else
-                        len(text.split()) > LONG_SLACK * self._word_budget(turn, p, meta.two_lines)):
+                        len(text.split()) > LONG_SLACK * self._word_budget(turn, p, meta.two_lines)
+                        or (flirt and meta.cut_off)):
                     tells.append(Tell("long", False, True))
                 if self._flirts_at_a_member(turn, text):
                     tells.append(Tell("member flirt", True))
@@ -4774,6 +4842,10 @@ class Pipeline:
                     tells.append(Tell("his place", False, True))
                 if self._heat_public(turn, meta, text):  # [heat] public_cap: never sent
                     tells.append(Tell(HEAT_PUBLIC, True))
+                if publicscreen.screened(turn.channel, text, self.data_dir):  # never posted there
+                    tells.append(Tell(PUBLIC_SEXUAL, True))
+                if topic_on and wowtopic.dkp_transfer(text):  # [talk] wow_topic: DKP is hers
+                    tells.append(Tell(DKP_TRANSFER, False, True))
                 if self._copies_own(turn, meta, text):
                     tells.append(Tell("own copy", False, True))
                 # never on an answer to him, which a second miss must not drop
@@ -4782,7 +4854,7 @@ class Pipeline:
                     tells.append(Tell("self name", False, True))
                 if meta.phrase_rests is not None and (rest_hint := meta.phrase_rests(text)):
                     tells.append(Tell("phrase: resting", True))
-                if not any(t.fatal or (t.soft and (attempt == 0 or t.reason in DROP_ON_RETRY))
+                if not any(t.fatal or (t.soft and (attempt == 0 or t.reason in drop_on_retry))
                            for t in tells):
                     text = repair(text, speaker=name, aliases=own, him=his, keep_emoji=emoji)
                     if not quiet(text):
@@ -4791,12 +4863,12 @@ class Pipeline:
                             meta.keep_words = len(text.split())
                         return text, None
                     silent = True
-                elif not kept and not any(t.fatal or t.reason in DROP_ON_RETRY for t in tells):
+                elif not kept and not any(t.fatal or t.reason in drop_on_retry for t in tells):
                     kept = text  # soft tells only: what a retry may still not beat
                     if length in ("cut", "kept") or (
                             length == "fits" and len(text.split()) >= budget):
                         kept_lines = meta.keep_lines
-                blocking = {t.reason for t in tells if t.fatal or t.reason in DROP_ON_RETRY}
+                blocking = {t.reason for t in tells if t.fatal or t.reason in drop_on_retry}
             if silent:
                 dm = self._answers_his_dm(turn, meta)
                 named = is_discord(turn.channel) and meta.discord_named and meta.answers_human
@@ -4839,12 +4911,22 @@ class Pipeline:
             if line:
                 log.info("say_owed_fallback: guid=%d kind=%s", turn.speaker, turn.kind)
                 return line, None
+            if (blocking == {PUBLIC_SEXUAL} and why == "tells" and text
+                    and self._may_whisper_instead(turn)):
+                # his answer, sexual every time on a channel others read: it goes to him by
+                # whisper instead (_speak_now), never posted there
+                cut, refused = self.owed_clean_draft(turn, meta, c, text, public=False)
+                if cut:
+                    meta.whisper_instead = True
+                    return cut, None
         return text, why
 
     def owed_clean_draft(self, turn: Turn, meta: TurnMeta, c: Composed,
-                         raw: str) -> tuple[str | None, list[str]]:
+                         raw: str, *, public: bool = True) -> tuple[str | None, list[str]]:
         """A draft of an owed answer against the hard screens only (OWED_HARD_TELLS, a flirt at a
-        member, silence): its words repaired, or None with what refused it."""
+        member, silence, sexual wording on a public game channel): its words repaired, or None
+        with what refused it. `public` False: the public channel's screen left out (a draft
+        that goes to him by whisper instead: _generate_serial)."""
         p = c.persona
         name, own, his = p.character_name, aliases(p), self._his_names()
         emoji = is_discord(turn.channel)
@@ -4869,6 +4951,8 @@ class Pipeline:
             refused.append("member flirt")
         if self._heat_public(turn, meta, text):
             refused.append(HEAT_PUBLIC)
+        if public and publicscreen.screened(turn.channel, text, self.data_dir):
+            refused.append(PUBLIC_SEXUAL)
         if self._copies_own(turn, meta, text):
             refused.append("own copy")
         if self._names_his_home(turn, c, text):
@@ -5162,6 +5246,10 @@ class Pipeline:
                                                          self.human.forms))))
         if HEAT_PUBLIC in reasons:
             hints.append(HEAT_PUBLIC_HINT)
+        if PUBLIC_SEXUAL in reasons:
+            hints.append(publicscreen.HINT)
+        if DKP_TRANSFER in reasons:
+            hints.append(wowtopic.DKP_HINT)
         if "self name" in reasons:
             hints.append(SELF_NAME_HINT.format(name=p.character_name))
         if "long" in reasons and usual and turn is not None:
@@ -5183,6 +5271,8 @@ class Pipeline:
             hints.append(DISCORD_LONG_HINT.format(words=words))
         elif "long" in reasons:
             lo, hi = p.typing.words_per_line
+            if turn is not None and self._public_flirt(turn):  # [talk] wow_topic: one short line
+                lo, hi = min(lo, wowtopic.PUBLIC_FLIRT_WORDS), min(hi, wowtopic.PUBLIC_FLIRT_WORDS)
             hints.append(LONG_HINT.format(lo=lo, hi=hi))
         return " ".join(hints)
 
@@ -5230,11 +5320,17 @@ class Pipeline:
             draw = turn.shape
             if draw.shape is Shape.ONE_WORD:
                 return ONE_WORD_WORDS
-            return max(cap * max(1, draw.lines), draw.words if draw.content else 0,
-                       self._voice_room(p) * max(1, draw.lines))
+            budget = max(cap * max(1, draw.lines), draw.words if draw.content else 0,
+                         self._voice_room(p) * max(1, draw.lines))
+            if self._public_flirt(turn):  # [talk] wow_topic: one short line (wowtopic)
+                return min(budget, wowtopic.PUBLIC_FLIRT_WORDS)
+            return budget
         lines = (turn.max_lines if turn.kind is TurnKind.BIT or two_lines
                  else turn_lines(p.typing, turn.max_lines))
-        return max(cap * max(1, lines), self._voice_room(p) * max(1, lines))
+        budget = max(cap * max(1, lines), self._voice_room(p) * max(1, lines))
+        if self._public_flirt(turn):  # [talk] wow_topic: one short line (wowtopic)
+            return min(budget, wowtopic.PUBLIC_FLIRT_WORDS)
+        return budget
 
     def _voice_room(self, p: Persona) -> int:
         """[talk] coherence_length: the longest line her voice sheet names (0 without one), at
@@ -5381,6 +5477,13 @@ class Pipeline:
                 return 'photo_words'
             if not meta.photo.valid():
                 return 'photo_stale'
+        if turn.template is None and any(publicscreen.screened(turn.channel, x, self.data_dir)
+                                         for x in (text, meta.words) if x):
+            # the last check (talk/publicscreen.py): a guard's rewrite or a path past the tells
+            # never puts sexual wording on a public game channel
+            log.info("public_sexual_refused: guid=%d kind=%s channel=%s", turn.speaker,
+                     turn.kind, turn.channel)
+            return "public_sexual"
         if self.live_review.enabled(turn, meta) and not meta.realism_correction:
             # Recheck the reviewed text after typing, before its first fragment. A
             # fragment can look like filler by itself; later fragments inherit this

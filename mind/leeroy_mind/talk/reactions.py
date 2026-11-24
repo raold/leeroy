@@ -23,7 +23,7 @@ from leeroy_mind.discord.channels import is_discord, is_private
 from leeroy_mind.personas.schema import Persona
 from leeroy_mind.protocol import (Achievement, BgEnd, Boss, Death, Emote, Group, Login,
                                   LootDrop, LootWon, Logout, Resurrect, Zone)
-from leeroy_mind.talk import greetings
+from leeroy_mind.talk import greetings, wowtopic
 from leeroy_mind.talk.prompt import open_topics
 from leeroy_mind.talk.bits import BitScheduler
 from leeroy_mind.talk.budget import AFTER_BURST_S
@@ -78,9 +78,12 @@ HOLIDAY_FIRST_P = 0.4  # on a holiday, this share of the members open the night 
 FIGHT_PHASES = frozenset({RaidPhase.COMBAT, RaidPhase.WIPE_SILENCE, RaidPhase.WIPE_DEBRIEF})
 # A woman's attitude makes her likelier to cheer his loot: lust above drawn.
 LOOT_CHEER = {"lust": 3.0, "drawn": 2.0}
+# Her flirt while he raids, sent by whisper instead of on a public channel ([talk] wow_topic:
+# TalkEngine._flirt_turn, _raid_flirt)
+RAID_FLIRT = "raid_flirt"
 WHISPER_WHY = {"after_kill": "The raid just killed {about}.",
                "idle": "Chat has been quiet for a while.", "late": "It's getting late.",
-               "evening": "{about}", START: ""}
+               "evening": "{about}", START: "", RAID_FLIRT: "{about}"}
 # Every unprompted whisper says it starts the conversation, and what to bring up by what the
 # member feels for him (romance.whisper_kind), so the model has something to say (2026-11-07:
 # 5 of 8 came back "(nothing)" with only the reason above to go on).
@@ -103,7 +106,7 @@ EMOTE_S = (2.0, 15.0)
 ASIDE_S = (3.0, 10.0)
 RIVAL_S = (4.0, 12.0)
 WHISPER_S = {"after_kill": (20.0, 45.0), "idle": (2.0, 10.0), "late": (2.0, 10.0),
-             "evening": (20.0, 60.0), START: (5.0, 20.0)}
+             "evening": (20.0, 60.0), START: (5.0, 20.0), RAID_FLIRT: (5.0, 20.0)}
 
 
 class Reactions(Pipeline):
@@ -691,6 +694,27 @@ class Reactions(Pipeline):
             return
         self._queue_whisper(g, START, now)
 
+    def _raid_flirt(self, g: int, now: float) -> bool:
+        """[talk] wow_topic: her flirt while he raids goes to him by whisper (RAID_FLIRT, its
+        reason wowtopic.RAID_FLIRT_WHY) when he may be whispered first now (_may_whisper), she is
+        in no whisper with him and the planner has room for one of hers (WhisperPlanner.take);
+        else nowhere. Logs `raid_flirt: guid= sent=whisper|none reason=` (codes only)."""
+        why = ""
+        if not self._may_whisper(now):
+            why = "held"
+        elif g in self._whisper_threads(now):
+            why = "in_whisper"
+        elif not self.whispers.take(now, g):
+            why = self.whispers.refusal(now) or "her_gap"
+        if why:
+            log.info("raid_flirt: guid=%d sent=none reason=%s", g, why)
+            return False
+        they = self.human.forms[0]
+        self._queue_whisper(g, RAID_FLIRT, now,
+                            about=wowtopic.RAID_FLIRT_WHY.format(name=self.human.called, they=they))
+        log.info("raid_flirt: guid=%d sent=whisper", g)
+        return True
+
     def _queue_whisper(self, g: int, trigger: str, now: float, *, about: str = "") -> None:
         """Her whisper to him: what set it off, that she starts the conversation and what she
         brings up (START_WHAT by romance.whisper_kind, a topic of her own: _open_topic). A
@@ -784,8 +808,14 @@ class Reactions(Pipeline):
             meta.aside = None
 
     def _rival(self, turn: Turn, woman: Persona, now: float) -> None:
-        """Another woman who wants him may cut in with a flirt of her own."""
+        """Another woman who wants him may cut in with a flirt of her own. [talk] wow_topic on
+        (talk/wowtopic.py): never while he raids, and on a public game channel as one line told
+        to stay light, like any public flirt (Pipeline._public_flirt)."""
         if self._login_quiet(now):
+            return
+        topic_on = getattr(self.cfg.talk, "wow_topic", False) is True
+        public = topic_on and wowtopic.public_flirt(TurnKind.FLIRT, turn.channel)
+        if public and self.world.human_raiding():
             return
         women = {g: q for g in self._candidates(self._audience(turn.channel, woman.guid),
                                                 exclude=(woman.guid,))
@@ -793,9 +823,12 @@ class Reactions(Pipeline):
         g = rivalry_reply(woman.guid, women, self.cfg.romance.jealousy, self.rng)
         if g is None:
             return
+        told = rivalry_text(woman, self.human)
         flirt = Turn(kind=TurnKind.FLIRT, speaker=g, channel=turn.channel,
-                     addressee=self.human.guid, instruction=rivalry_text(woman, self.human),
-                     delay=self.rng.uniform(*RIVAL_S))
+                     addressee=self.human.guid,
+                     instruction=(f"{told} {wowtopic.public_flirt_line(turn.channel)}" if public
+                                  else told),
+                     max_lines=1 if public else 2, delay=self.rng.uniform(*RIVAL_S))
         self._queue([(flirt, TurnMeta(self._new_id(), rivalry=True, why="rival:flirt"))])
 
 

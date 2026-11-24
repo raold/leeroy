@@ -776,15 +776,16 @@ def _mood_words(mood: float) -> str:
 def mood_line(state: PersonaStateRow, altered: Altered, substance: str | None,
               phase: DayPhase, *, kind: TurnKind | None = None, life_thread: str = "",
               lately: str = "", variant: int = 0, today: str = "", where: str = "",
-              state_words: str = "") -> str:
+              state_words: str = "", held: bool = False) -> str:
     """The "Right now:" line: time of day (`today`, the weekday and tonight's holidays from
     seasons.day_line, in its place when given), mood and any altered state. Openers
     (IDLE_KINDS) also get what has been on their mind (state.life_thread, else the persona's
     own `life_thread`: P1b writes no state, spec I3), what they did tonight (`lately`) and a
     smoker's habit; raid calls (CALLOUT, URGENT) get no altered state. `where` (where she is in
     her day) follows the time of day; `state_words` (how she feels right now) takes the place
-    of the mood words when given."""
-    idle = kind in IDLE_KINDS
+    of the mood words when given. `held` (a turn held to its channel's business): nothing of
+    what has been on her mind or what she did tonight, the state's own thread included."""
+    idle = kind in IDLE_KINDS and not held
     life = " ".join((state.life_thread or life_thread).split()).rstrip(".") if idle else ""
     tonight = " ".join(lately.split()).rstrip(".") if idle else ""
     shown = "" if kind in RAID_CALLS else state_line(

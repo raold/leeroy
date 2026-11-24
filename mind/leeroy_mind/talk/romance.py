@@ -417,6 +417,16 @@ def effective_band(stance: str, stage: str, dial: int) -> Band | None:
 # explicit. Her own place on the ladder is still her attitude's reach plus her stage's depth (a
 # reach of 3 is the top, explicit); the heat's tier is the ceiling over it.
 HEAT_BANDS = ("warm", "flirty", "suggestive", "frank", "explicit")
+# [talk] wow_topic (talk/wowtopic.py): on a game channel others read her wording goes no further
+# than this, whatever her band (the re-measure, 2026-11-24: the explicit band's words in /raid)
+PUBLIC_BAND = "flirty"
+
+
+def public_band(b: str | None) -> str | None:
+    """`b` (a band or a heat tier) no further than PUBLIC_BAND."""
+    if b is None or b not in HEAT_BANDS:
+        return b
+    return b if HEAT_BANDS.index(b) <= HEAT_BANDS.index(PUBLIC_BAND) else PUBLIC_BAND
 
 
 def heat_band(stance: str, stage: str, hr) -> str | None:
@@ -696,7 +706,7 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
                         tail_follows: bool = False, scene: Sequence[str] = (),
                         arc_lines: Sequence[str] = (), rival: str = "",
                         cooling: bool = False, realism: bool = False,
-                        heat: bool = False, hr=None) -> str | None:
+                        heat: bool = False, hr=None, public_cap: bool = False) -> str | None:
     """The romance text for a turn by `p` (rel is p's relationship to the human), or None
     when p is a man, has no attitude toward him or is not talking to him. The human is named
     by human.called with his pronouns from human.forms; his real name never appears here. A
@@ -720,16 +730,22 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
 
     `hr` ([heat] on): her heat.Resolved for this turn. It stands in for every dial: the wording
     is its tier's (heat_band; the owner's words through heat.overlays, by the channel), and at
-    the tier "none" there is no romance text at all (None)."""
+    the tier "none" there is no romance text at all (None).
+
+    `public_cap` ([talk] wow_topic, a game channel others read: the pipeline's _romance): the
+    band's wording no further than PUBLIC_BAND, never on a private channel."""
     stance = p.romance.stance
     if not addressee_is_human or stance not in ATTITUDE_REACH or not _is_woman(p):
         return None
     stage = rel.romance_stage if rel is not None else "none"
     tier = None
+    capped = public_cap and not is_private(channel)
     if hr is not None:
         tier = heat_band(stance, stage, hr)
         if tier is None:
             return None
+        if capped:
+            tier = public_band(tier)
     dial = dial_for(p, dial) if hr is None else hr.dial
     they, them, their = human.forms
     fill = dict(name=human.called, they=they, them=them, their=their)
@@ -762,7 +778,8 @@ def romance_instruction(p: Persona, rel: Relationship | None, *, dial: int, chan
         wording = overlays.band_text(tier, data_dir, rng, private=private,
                                      public_cap=hl is not None and hl.config.public_cap)
         return f"{head} {wording} {tail}"
-    return f"{head} {_band_text(effective_band(stance, stage, dial), data_dir, rng)} {tail}"
+    b = effective_band(stance, stage, dial)
+    return f"{head} {_band_text(public_band(b) if capped else b, data_dir, rng)} {tail}"
 
 
 # -- the men's jealousy asides ---------------------------------------------------------------
@@ -1090,6 +1107,17 @@ class WhisperPlanner:
         if not pool or not self._room(now):
             return None
         return self._drawn(now, pool)
+
+    def take(self, now: float, guid: int) -> bool:
+        """A whisper one member starts of her own accord (a flirt she would have typed in his
+        raid: TalkEngine._raid_flirt): True, and counted as one of the planner's (her
+        WHISPER_GAP_S, the hour's WHISPERS_HOUR_MAX, WHISPERS_APART_S), when those leave room;
+        it takes no slot of the clock's. False, and nothing counted, otherwise."""
+        if now - self._last.get(guid, -math.inf) < WHISPER_GAP_S or not self._room(now):
+            return False
+        self._last[guid] = now
+        self._said.append(now)
+        return True
 
     def maybe(self, now: float, trigger: WhisperTrigger,
               candidates: dict[int, tuple[Persona, Relationship]]) -> int | None:

@@ -1345,3 +1345,68 @@ tonight at 9pm server time", "late tonight, at 1am server time"), never a bare "
 Rollback without code: `wow_topic = false` under `[talk]`, then restart the mind (or wait for his
 next login). The upstream fixes and the instruction check have no switch. Older code ignores the
 key with an unknown-key warning.
+
+## Second round: flirts, sexual wording, DKP, "Right now" (2026-11-24)
+
+A re-measure of the sent lines (W1 Orion 11-16..19, W2 the new model, W3 after #385/#394, 11-20
+22:05 to 11-24) found her flirt turns typed in /raid and /guild rising from 1 to 9 to 25 of 38
+attempted with similar play. **Why:** nothing in the flirt code or config changed. A social turn
+(an opener or follow-on of a burst) becomes a FLIRT at him at `flirt_chance` (0.45 for a lust
+woman, 0.3 drawn; by 11-21 102 of the 103 women were lust), on the burst's channel. While the
+voice service was up those bursts were placed in his voice room (`voice/comms.py place`: 19 of 21
+flirts in W1 were spoken in `voice:raid`/`voice:guild_hall`); from 11-20 the voice service kept
+going down (`voice_connect_failed`, `voice_still_down` for hours at a time), and with nobody on
+comms every burst was typed on its game channel: 24 of W3's 25 typed flirts fell inside an
+outage. The same turns then hit the game length cap (23 of 69 `wow_length_trim`, 20 of 35
+`wow_line_cutoff`), and the explicit band's wording (the owner's overlay, no public variant
+without `[heat]`) reached the raid. With `[talk] wow_topic` on:
+
+- **While he raids** (`WorldView.human_raiding`: in a raid group, or his map or zone is a raid
+  instance's) a flirt is never typed on a public channel: her flirt chance, when it lands, asks
+  the whisper planner for a whisper of hers (`WhisperPlanner.take`: her 10 minutes, the hour's 8,
+  2 minutes apart; `_may_whisper`'s holds; not while she is in a whisper with him) and queues
+  `whisper:raid_flirt` ("You're in his raid and you'd rather say this where only he can read
+  it."), else nothing; the social turn stays what it was. No romance text on a public game
+  channel while he raids (an answer to him, a loot cheer: plain), and no rival cuts in. Logs
+  `raid_flirt: guid= sent=whisper|none reason=held|in_whisper|ceiling|spacing|her_gap`.
+- **Elsewhere** a social turn becomes a public flirt at `PUBLIC_FLIRT_SHARE` (0.25) of her chance,
+  at most one every `PUBLIC_FLIRT_GAP_S` (15 minutes) guild-wide, as one line told
+  `Everyone in the guild reads this: one light line, 10 words at most, and save anything more
+  for a whisper.` It is generated short, never cut: one line, its shape one line of
+  `PUBLIC_FLIRT_WORDS` (10) or fewer, num_predict for that, its "long" bound at 10 words; a
+  draft past it or cut off by the num_predict is asked again shorter and dropped when the retry
+  is too (`_public_flirt`). A rival's flirt there is one such line too.
+- On every public game channel her romance wording goes no further than the flirty band
+  (`romance.PUBLIC_BAND`; the whisper, the DM and every private turn keep theirs).
+
+**No sexual wording in public game channels** (no switch; `talk/publicscreen.py`). Every model
+line on guild, officer, party, raid, raid warning, say or yell is screened (the `[heat]` voice
+rule's words, the public guard's, the owner's `prompts/heat/public_block.txt` and a few phrases
+more): a hit is the fatal tell `public sexual`, asked again once with `Other people read this
+channel: nothing sexual...`; an owed answer's fallback is screened too, and an owed answer to him
+whose every draft hits it (and nothing else) goes to him by whisper instead
+(`public_sexual_whispered`); the last check before the bridge drops anything that still hits it
+(`public_sexual_refused`). On W1-W3's 373 public game lines it caught the 5 sexual ones and
+nothing else.
+
+**DKP is hers.** The DKP line adds `DKP is each raider's own: it can't be given, lent or pooled.`,
+and a WoW line that treats DKP as something to give, lend, hand over or pool (two W3 loot lines
+did: `wowtopic.dkp_transfer`) is the soft tell `dkp transfer`, asked again with its hint and
+dropped when the retry still has it.
+
+**"Right now" on a held turn** (the topic hold, a Discord channel's purpose): her availability
+only (`life.presence.availability_text`: "You only glance at the game now and then."), in his
+group the line of playing with him; never where she is in her day, what she said of it or why she
+stepped away, and no "On your mind lately" or "Tonight so far" (the state's own thread included:
+55 of 315 held prompts had said "You're at work", 17 "On your mind lately").
+
+**`instruction_entity_dropped`** never fired live, and nothing in it is broken: through the real
+checks (the library's vocabulary for a boss in a boss context, the item table for a bracketed
+item) it drops what it should (`tests/test_wow_topic_pipeline.py`). The texts it reads are the
+mind's own (seeds, topics, asides, outreach), built from stored names; an invented name comes
+from the model's draft, which the "game name" tell reads (0 of the 66 boss-context sent lines in
+W1-W3 named a word the library lacks).
+
+Rollback: `wow_topic = false` turns off the flirt rules, the public band, the DKP tell and the
+WoW hold's "Right now" (a Discord channel's purpose keeps its own); the sexual screen has no
+switch.
