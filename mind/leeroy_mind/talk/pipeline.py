@@ -4459,6 +4459,9 @@ class Pipeline:
             p = self.personas.get(g)
             if p is None or flirt_chance(p, 1.0) <= 0:
                 return "flirt_stance"  # and only from a woman who wants him
+            if self._public_flirt(turn) and w.human_raiding():
+                # [talk] wow_topic: he began raiding after it was planned (TalkEngine._flirt_turn)
+                return "raid_flirt"
         if first and deadline:
             expired = self.scheduler.expired(self._deadline(turn, meta))
             self.timing.deadline_check(meta.timing_trace, "mind_before_generation", expired=expired)

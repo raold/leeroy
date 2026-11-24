@@ -372,3 +372,18 @@ def test_the_planner_off_takes_no_whisper_of_hers():
     assert on.take(1000.0, 102) and not on.take(1001.0, 102)  # then her own gap
     assert not on.take(1010.0, 104)  # two whispers never 2 minutes apart
     assert on.take(1200.0, 104)
+
+
+def test_a_public_flirt_planned_before_he_raids_never_goes_once_he_does(store, clock, tmp_path):
+    r = rig(store, clock, tmp_path)
+    try:
+        r.script("you look good tonight")
+        flirt = Turn(kind=TurnKind.FLIRT, speaker=102, channel="guild", addressee=HUMAN,
+                     max_lines=1, instruction=w.public_flirt_line("guild"), delay=10.0)
+        r.sync(r.event(Group(ts=0, leader_guid=HUMAN, raid=True,
+                             members=(HUMAN, 101, 102, 103, 104))))  # he forms a raid meanwhile
+        assert r.speak_turn(flirt) == [] and r.sent.says() == []
+        assert [u["dropped"] for u in r.utterances()] == ["raid_flirt"]
+        assert r.chat_calls() == []  # dropped before it is composed
+    finally:
+        r.close()

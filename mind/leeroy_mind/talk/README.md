@@ -1393,7 +1393,8 @@ without `[heat]`) reached the raid. With `[talk] wow_topic` on:
   2 minutes apart, never at `whispers_per_hour` 0; `_may_whisper`'s holds; not while she is in a
   whisper with him) and queues
   `whisper:raid_flirt` ("You're in his raid and you'd rather say this where only he can read
-  it."), else nothing; the social turn stays what it was. No romance text on a public game
+  it."), else nothing; the social turn stays what it was. A public flirt planned before he began
+  raiding is dropped before it is composed or sent (`raid_flirt`). No romance text on a public game
   channel while he raids (an answer to him, a loot cheer: plain), and no rival cuts in. Logs
   `raid_flirt: guid= sent=whisper|none reason=held|in_whisper|ceiling|spacing|her_gap`.
 - **Elsewhere** a social turn becomes a public flirt at `PUBLIC_FLIRT_SHARE` (0.25) of her chance,
