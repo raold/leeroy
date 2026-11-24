@@ -96,7 +96,8 @@ blocked: a teleport or reset is in progress); it abandons a blocked member it no
 own body and the journal adapter restores it once the trial lets go. A blocked member its party or driver still
 holds is first let go where it stands while it is still provably the same body with every other ownership fact
 (the driver as master, or none after the stock reset its party triggered; `DecideDummyLetGo`, `DummyLetGoOwned`):
-reset, party, leader flag, master and stock reset as on a return, never the teleport home its block refused
+reset, master, party, leader flag and stock reset (the master before the party, so a party released after its
+stock reset dropped the driver still proves the body for the last steps), never the teleport home its block refused
 (`let_go guid= blocked=`). Without that a moved member stayed in its party under the driver for good: on
 2026-11-23 1507 was kept and fenced for 3 hours until a battleground queue took it out. With nobody kept it ends:
 `cleanup_released after_ms= unfinished=` and a `dummy_cleanup` event `{id, state: "released", unfinished,

@@ -155,10 +155,12 @@ inline bool DummyTrialFences(DummyMemberFate fate) { return fate == DummyMemberF
 // so nothing ever let go of it: on 2026-11-23 1507 left the trial spot with every ownership fact intact
 // (location_changed) and stayed fenced in our party under the driver for 3 h, until a battleground queue took it out.
 // Past the bound, while the body is still provably ours (DummyLetGoOwned), the job lets go of its own control where
-// the body stands, in the return's order: reset, party, leader flag, master, stock reset. Never the teleport home its
-// block refused, so the member stays unreturned (native's receipt says released, not restored). Then nothing of ours
-// holds it and it is abandoned. Anything not provably ours (another session, master or group, or a teleport or logout
-// in progress) is left alone (Wait).
+// the body stands: reset, master, party, leader flag, stock reset. The master goes before the party, unlike on a
+// return: when the party's stock reset already dropped the driver, only our party proves the body (the empty master
+// is reassertable), and a released party with an unreleased master proves nothing, so the leader flag and the final
+// reset would be skipped. Never the teleport home its block refused, so the member stays unreturned (native's receipt
+// says released, not restored). Then nothing of ours holds it and it is abandoned. Anything not provably ours
+// (another session, master or group, or a teleport or logout in progress) is left alone (Wait).
 inline DummyReturnStep DecideDummyLetGo(DummyReturnState const& state)
 {
     if (!state.prepared) return DummyReturnStep::Complete;
@@ -166,9 +168,9 @@ inline DummyReturnStep DecideDummyLetGo(DummyReturnState const& state)
         || !state.owned)
         return DummyReturnStep::Wait;
     if (!state.resetDone) return DummyReturnStep::ResetStrategies;
+    if (!state.released) return DummyReturnStep::ReleaseMaster;
     if (!state.groupReleased) return DummyReturnStep::ReleaseGroup;
     if (!state.leaderRestored) return DummyReturnStep::RestoreLeaderFlag;
-    if (!state.released) return DummyReturnStep::ReleaseMaster;
     if (!state.finalResetDone) return DummyReturnStep::FinalStockReset;
     return DummyReturnStep::Complete; // Nothing of ours is left on it.
 }

@@ -364,12 +364,12 @@ LEEROY_TEST(Training_DummyLetGoReleasesOurControlWhereItStandsAndNeverTeleports)
     CHECK(DecideDummyReturn(moved) == DummyReturnStep::Block); // The return still refuses the teleport home.
     CHECK(DecideDummyLetGo(moved) == DummyReturnStep::ResetStrategies);
     moved.resetDone = true;
+    CHECK(DecideDummyLetGo(moved) == DummyReturnStep::ReleaseMaster); // Before the party: see the next test.
+    moved.released = true;
     CHECK(DecideDummyLetGo(moved) == DummyReturnStep::ReleaseGroup);
     moved.groupReleased = true;
     CHECK(DecideDummyLetGo(moved) == DummyReturnStep::RestoreLeaderFlag);
     moved.leaderRestored = true;
-    CHECK(DecideDummyLetGo(moved) == DummyReturnStep::ReleaseMaster);
-    moved.released = true;
     CHECK(DecideDummyLetGo(moved) == DummyReturnStep::FinalStockReset);
     moved.finalResetDone = true;
     CHECK(DecideDummyLetGo(moved) == DummyReturnStep::Complete); // Nothing of ours is left on it.
@@ -432,6 +432,42 @@ LEEROY_TEST(Training_DummyLetGoOwnershipAcceptsOnlyOurPartyWithTheDriverOrNoMast
         auto altered = proven;
         altered.*field = true;
         CHECK(!DummyLetGoOwned(altered, false, false, false));
+    }
+}
+
+LEEROY_TEST(Training_DummyLetGoKeepsItsProofThroughEveryStepWithOrWithoutTheDriver)
+{
+    // Letting go of a member whose party's stock reset dropped the driver: releasing the party first would leave
+    // a released party with no master released, which no ownership proof accepts, so the leader flag and the final
+    // stock reset were skipped (Codex review of #449). The master goes first, then the party.
+    for (bool stockResetDroppedDriver : {false, true})
+    {
+        bool released = false, groupReleased = false, grouped = true;
+        DummyReturnState state;
+        state.prepared = state.connected = state.sameSession = state.online = true;
+        state.groupReleased = state.leaderRestored = state.finalResetDone = false;
+        int steps = 0;
+        for (; steps < 8; ++steps)
+        {
+            bool const masterEmpty = stockResetDroppedDriver || released;
+            DummyOwnerState owner{true, false, true, false, true, false, false,
+                DummyGroupProven(groupReleased, grouped, true, grouped ? 1 : 0, grouped, 0, true),
+                released ? masterEmpty : !masterEmpty, false};
+            state.owned = DummyLetGoOwned(owner, released, groupReleased, masterEmpty);
+            state.released = released;
+            state.groupReleased = groupReleased;
+            auto const step = DecideDummyLetGo(state);
+            if (step == DummyReturnStep::Complete) break;
+            CHECK(step != DummyReturnStep::Wait); // Never loses the proof half way.
+            if (step == DummyReturnStep::Wait) break;
+            if (step == DummyReturnStep::ResetStrategies) state.resetDone = true;
+            else if (step == DummyReturnStep::ReleaseMaster) released = true;
+            else if (step == DummyReturnStep::ReleaseGroup) { grouped = false; groupReleased = true; }
+            else if (step == DummyReturnStep::RestoreLeaderFlag) state.leaderRestored = true;
+            else if (step == DummyReturnStep::FinalStockReset) state.finalResetDone = true;
+        }
+        CHECK_EQ(steps, 5);
+        CHECK(state.resetDone && released && groupReleased && state.leaderRestored && state.finalResetDone);
     }
 }
 
