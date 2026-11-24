@@ -182,11 +182,20 @@ class ControlTest(unittest.TestCase):
     def setUp(self):
         self.executor = (MODULE / "src" / "Runtime" / "DojoExecutor.cpp").read_text(encoding="utf-8")
 
-    def test_only_the_controller_acquires_or_releases(self):
+    def test_only_the_controller_or_scripted_raid_leader_is_owned(self):
         for path in sources("src"):
             text = path.read_text(encoding="utf-8")
             if path.suffix == ".cpp" and path.name != "DojoExecutor.cpp":
-                for call in ("AcquireExternalControl", "ReleaseExternalControl", "ClearStrategies", "SetNextCheckDelay"):
+                forbidden = ("AcquireExternalControl", "ReleaseExternalControl", "ClearStrategies", "SetNextCheckDelay")
+                if path.name == "DojoRaid.cpp":
+                    # Only the scripted stimulus is owned; the measured actor must retain stock AI.
+                    self.assertEqual(text.count("AcquireExternalControl"), 1)
+                    self.assertEqual(text.count("ReleaseExternalControl"), 1)
+                    self.assertIn('GET_PLAYERBOT_AI(owner)->AcquireExternalControl("dojo-raid-leader")', text)
+                    self.assertIn('if (i == 1 && ownerEpoch) GET_PLAYERBOT_AI(p)->ReleaseExternalControl(ownerEpoch)', text)
+                    self.assertIn('#if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE', text)
+                    forbidden = ("ClearStrategies", "SetNextCheckDelay")
+                for call in forbidden:
                     self.assertNotIn(call, text, path.name)
         self.assertIn('constexpr char const* kOwner = "mod-dojo";', self.executor)
         self.assertIn("ai->AcquireExternalControl(kOwner)", self.executor)
