@@ -174,7 +174,20 @@ def test_stop_while_in_game_asks_first(data, store):
             assert r.status == 200 and mind.acts == ["stop"]
             r = await http(app, "POST", "/api/control", origin=True,
                            body={"service": "voice", "action": "stop"})
-            assert r.status == 409 and "comms go silent" in r.json()["confirm"]
+            assert r.status == 409 and r.json()["confirm"] == (
+                "You're in game. If you stop the voice, comms go silent until you start it "
+                "again. Stop it anyway?")
+            (data / "mind.toml").write_text("[voice]\nenabled = true\nautostart = true\n",
+                                            encoding="utf-8")
+            r = await http(app, "POST", "/api/control", origin=True,
+                           body={"service": "voice", "action": "stop"})
+            assert r.json()["confirm"] == (
+                "You're in game. If you stop the voice, comms go silent until your next login, "
+                "when the mind starts it again, or until you start it here. Stop it anyway?")
+            r = await http(app, "POST", "/api/control", origin=True,
+                           body={"service": "voice", "action": "restart"})
+            assert r.json()["confirm"] == ("You're in game. If you restart the voice, comms go "
+                                           "silent until it is back. Restart it anyway?")
     run(go())
     assert sid
 

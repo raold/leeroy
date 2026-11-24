@@ -12,7 +12,9 @@ The voice service is located as scripts/ac-voice.sh locates it: its own `python 
 leeroy_voice where` names the data dir and ports, and `held` the pid holding voice.lock. That
 pid must also be this checkout's voice service (the base interpreter its venv launcher started,
 running `-m leeroy_voice run` under that launcher) before it is asked to close (WM_CLOSE, so
-WoW's volume is restored) and, after five seconds, terminated.
+WoW's volume is restored) and, after five seconds, terminated. A stop asked for here leaves
+voice.stopped in its data dir (as ac-voice.sh stop does), so the mind, which starts a service
+that went down again, leaves it down until his next login; every start removes it.
 
 Both are started outside the starting process's job (CREATE_BREAKAWAY_FROM_JOB, where the job
 allows it) at normal priority, so a service the logon task's console starts outlives that task
@@ -347,7 +349,41 @@ def run_action(action, root, data, python, base_python, *, processes, locked,
 
 VOICE_START_S = 30  # ac-voice.sh's wait for both ports
 VOICE_CLOSE_S = 5  # after WM_CLOSE, before it is terminated
+VOICE_HOLD_FILE = "voice.stopped"  # in its data dir: an operator stopped it (ac-voice.sh too)
 _LISTENING = re.compile(r"^\s*TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\b", re.MULTILINE)
+
+
+def hold_voice(data_dir, by: str) -> None:
+    """Record an operator's stop in the voice data dir. The mind starts a service that went
+    down again, but not one held this way: it waits for his next login."""
+    path = Path(data_dir) / VOICE_HOLD_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"by": by, "at": int(time.time())}) + "\n", encoding="utf-8")
+
+
+def voice_hold(data_dir) -> dict | None:
+    """The hold an operator's stop left, {"by", "at"} (`at` is the file's mtime); None when there
+    is none. Unreadable content is still a hold, by "unknown"."""
+    path = Path(data_dir) / VOICE_HOLD_FILE
+    try:
+        at = path.stat().st_mtime
+    except OSError:
+        return None
+    try:
+        by = json.loads(path.read_text(encoding="utf-8")).get("by")
+    except (OSError, ValueError, AttributeError):  # UnicodeDecodeError is a ValueError
+        by = None
+    return {"by": by if isinstance(by, str) and by.isalnum() and len(by) <= 20 else "unknown",
+            "at": at}
+
+
+def release_voice_hold(data_dir) -> bool:
+    """Remove an operator's hold; False when there was none."""
+    try:
+        (Path(data_dir) / VOICE_HOLD_FILE).unlink()
+    except FileNotFoundError:
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -484,6 +520,7 @@ class VoiceControl:
         if pid is not None:
             return Outcome(0, f"voice already running, pid {pid}", "running", pid or None)
         where = self.where()
+        release_voice_hold(where.data_dir)
         logs = where.data_dir / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         with open(logs / "voice-stdout.log", "wb") as out:
@@ -505,15 +542,19 @@ class VoiceControl:
         raise OwnershipError(f"voice not listening after {self.start_s} s: see "
                              f"{logs / 'voice-stdout.log'} and voice.log")
 
-    def stop(self) -> Outcome:
+    def stop(self, *, by: str = "console") -> Outcome:
+        """Also holds it down (voice.stopped, before it is asked to close): the mind starts it
+        again at his next login, not as soon as it finds it gone."""
         pid = self.held()
         if pid is None:
+            self._hold(by)
             return Outcome(0, "voice already stopped", "stopped")
         if pid == 0:
             raise OwnershipError("voice.lock is held, but voice.pid names nobody; no action taken")
         if self.processes is None:
             raise OwnershipError("voice process identity cannot be verified here")
         row = self._identify(pid)
+        self._hold(by)
         handle = self.processes.open(row)
         if handle is None:  # it exited meanwhile
             return self._released("voice stopped")
@@ -526,6 +567,13 @@ class VoiceControl:
         finally:
             self.processes.close(handle)
         return self._released("voice terminated after 5 s" if forced else "voice stopped")
+
+    def _hold(self, by: str) -> None:
+        try:
+            hold_voice(self.where().data_dir, by)
+        except OSError as e:
+            raise OwnershipError(f"cannot record the stop in the voice data dir "
+                                 f"({type(e).__name__}); no action taken") from None
 
     def _released(self, message: str) -> Outcome:
         deadline = self._monotonic() + 5

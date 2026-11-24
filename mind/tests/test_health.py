@@ -549,6 +549,22 @@ def test_a_stopped_voice_service_is_a_note(rig):
                                          "a crash)")
 
 
+def test_a_voice_service_stopped_on_purpose_says_who_and_until_when(rig):
+    rig.voice_pid(None)
+    voice_ports(rig)
+    lifecycle.hold_voice(rig.voice_data, "console")
+    checks = rig.run()
+    assert checks["voice"].status == NOTE
+    assert checks["voice"].text == ("voice service: stopped (ports 7879 and 7880 closed); "
+                                    "stopped from the console")
+    rig.toml = "[voice]\nenabled = true\nautostart = true\n"
+    rig.write_toml()
+    assert rig.run()["voice"].text.endswith("; stopped from the console, so the mind starts it "
+                                            "again at his next login")
+    lifecycle.hold_voice(rig.voice_data, "script")
+    assert "; stopped by ac-voice.sh, so" in rig.run()["voice"].text
+
+
 def test_a_voice_service_whose_pid_does_not_hold_both_ports_fails(rig):
     voice_ports(rig, (7879, VOICE_PID))
     checks = rig.run()

@@ -246,6 +246,13 @@ It also renders members' voice notes for Discord DMs and transcribes the ones
 he records back. Playback keeps each engine's native sound. Every voice is a blend of synthetic
 stock voices, none cloned from a real person.
 
+With `[voice] autostart = true` in `mind.toml` the mind starts it, and starts it
+again whenever it has been unreachable for a minute (then 2, 5, 10 and every 30
+minutes while it stays down; `voice_relaunched` in the mind's log). A stop asked
+for in the console or with `ac-voice.sh stop` leaves `voice.stopped` in its data
+dir and holds it down until his next login (`voice_relaunch_held`,
+`voice_hold_lifted`); any start removes it.
+
 Its default loopback ports are 7879 for the mind and 7880 for its browser
 panel. Runtime settings and models stay in the ignored `voice-data/`; voice
 specs and synthetic references stay in `mind-data/voices/`. The
@@ -480,7 +487,7 @@ Apply them to a checkout of each module with
 ./ac-build.sh                # preflight checks, configure, build
 ./ac-release.sh [--native] [--allow-scripts] [--dry-run] <commit>...  # deploy merged main commits
 ./ac-server.sh start|stop|status # the game servers and the mind; stops the worldserver cleanly over local SOAP
-./ac-voice.sh start|stop|status  # the voice service
+./ac-voice.sh start|stop|status  # the voice service; a stop holds it down until his next login
 ./ac-health.sh [--json]      # read-only health check of the live install
 ./ac-guild-backup.sh         # verified, pruned backups of the guild's data to another machine
 ./ac-snapshot.sh             # copy live configs and module patches into this repo
