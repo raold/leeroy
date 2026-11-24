@@ -221,7 +221,7 @@ struct RaidRun
             Creature* trigger = bot->GetMap()->GetCreature(script->GetGuidData(35));
             if (!trigger) { Fail("native Valithria combat trigger missing"); return; }
             owner->NearTeleportTo(bot->GetPositionX() - 55.f, bot->GetPositionY(), bot->GetPositionZ(), 0.f);
-            owner->SetHealth(owner->GetMaxHealth() * 9 / 10);
+            owner->SetHealth(owner->GetMaxHealth() * 82 / 100);
             ai->ChangeStrategy(control ? "-icc" : "+icc", BOT_STATE_COMBAT);
             ai->ChangeStrategy(control ? "-icc" : "+icc", BOT_STATE_NON_COMBAT);
             trigger->AI()->DoZoneInCombat(); // real encounter/archmage combat, not friendly fake combat
@@ -236,6 +236,9 @@ struct RaidRun
             bot->SummonCreature(34568, 552.f, 139.5f, 393.84f, 0.f, TEMPSUMMON_TIMED_DESPAWN, 90000);
             bot->SummonCreature(34567, 575.f, 139.5f, 393.84f, 0.f, TEMPSUMMON_TIMED_DESPAWN, 90000);
             target = dark->GetGUID();
+            // A fresh ToC instance starts with TO_BE_DECIDED until its announcer
+            // progression prepares this fight. Establish that ready state.
+            script->SetBossState(3, NOT_STARTED);
             ai->ChangeStrategy("+toc", BOT_STATE_NON_COMBAT);
             ai->ChangeStrategy("+toc", BOT_STATE_COMBAT);
         }
@@ -255,7 +258,10 @@ struct RaidRun
         Player* bot = Actor(0);
         Player* owner = Actor(1);
         if (!bot || !owner || !bot->IsAlive() || !owner->IsAlive()) { Fail("fixture died or disconnected"); return; }
-        if (bot->IsBeingTeleported() || bot->GetMapId() != map || bot->GetInstanceId() != instance ||
+        // Stock ICC movement can acknowledge a same-instance floor correction.
+        // Wait for the acknowledgement, then verify the actual destination.
+        if (bot->IsBeingTeleported() || owner->IsBeingTeleported()) return;
+        if (bot->GetMapId() != map || bot->GetInstanceId() != instance ||
             owner->GetMap() != bot->GetMap()) { Fail("fixture left the measured instance"); return; }
         ++samples;
         maxGap = std::max(maxGap, diff);
@@ -274,7 +280,8 @@ struct RaidRun
         {
             // Keep the distant stock reach-to-heal competitor eligible, and
             // mana available. Never cast for the healer or write dragon HP here.
-            owner->SetHealth(owner->GetMaxHealth() * 9 / 10);
+            // Below stock AlmostFullHealth (85), above dragon/raid triage (80).
+            owner->SetHealth(owner->GetMaxHealth() * 82 / 100);
             bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
             Unit* healTarget = GET_PLAYERBOT_AI(bot)->GetAiObjectContext()->GetValue<Unit*>("party member to heal")->Get();
             competition = competition || (healTarget == owner && bot->GetDistance(owner) > 40.f &&
