@@ -83,6 +83,14 @@ _DKP_TRANSFER = re.compile(
     rf"|\b(?:got|have|has)\s+(?:(?:some|extra|spare|\d+)\s+)?dkp\s+for\s+{_WHO}\b"
     rf"|\b(?:pool|combine|merge)\s+(?:our|their|your|ur)\s+dkp\b",
     re.IGNORECASE)
+# A clause that refuses the transfer ("can't give you my DKP", "don't pool our DKP") says the
+# rule, not the slip: a negation in the clause before the match (back to its last punctuation
+# or "but")
+_NEGATION = re.compile(r"\b(?:not|never|no|nobody|nor|can'?t|cannot|won'?t|don'?t|doesn'?t|"
+                       r"didn'?t|isn'?t|ain'?t|couldn'?t|shouldn'?t|wouldn'?t|mustn'?t)\b",
+                       re.IGNORECASE)
+_CLAUSE = re.compile(r"[.!?;,:]|\bbut\b", re.IGNORECASE)
+_ASKING = re.compile(r"\bwhy (?:not|don'?t|won'?t)\b", re.IGNORECASE)  # a request, no refusal
 LOOT_CHANNELS = frozenset({"discord:loot-and-dkp", "voice:loot_dkp"})
 # (never "os" alone: the Obsidian Sanctum; never "roll" alone: a roll in a fight)
 _LOOT = re.compile(r"\b(?:loot(?:ed|ing|s)?|dkp|bids?|bidd(?:ing|ed)|ms ?/ ?os|ms or os|mainspec|"
@@ -175,8 +183,16 @@ def loot_turn(channel: str, texts=()) -> bool:
 
 
 def dkp_transfer(text: str) -> bool:
-    """The line treats DKP as something one raider can give, lend, hand over or pool."""
-    return bool(_DKP_TRANSFER.search(text or ""))
+    """The line treats DKP as something one raider can give, lend, hand over or pool, in a
+    clause that does not refuse it (_NEGATION before the match, in its clause)."""
+    text = (text or "").replace("’", "'")
+    for m in _DKP_TRANSFER.finditer(text):
+        head = text[:m.start()]
+        cuts = list(_CLAUSE.finditer(head))
+        clause = _ASKING.sub(" ", head[cuts[-1].end():] if cuts else head)
+        if not _NEGATION.search(clause):
+            return True
+    return False
 
 
 def public_flirt(kind: TurnKind, channel: str) -> bool:

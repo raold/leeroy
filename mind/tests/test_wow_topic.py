@@ -94,7 +94,8 @@ def test_the_dkp_line_says_dkp_is_her_own():
     "got 30 dkp for ya, grab the ring", "just pass me your DKP lol",
     "ill give you my dkp for it", "lend me some dkp?", "we could pool our dkp for the bow",
     "gonna send 50 dkp to him", "you can borrow my dkp", "have 40 dkp for u",
-    "Give Me Your DKP"])
+    "Give Me Your DKP", "why don't you give me your dkp", "no worries, lend me your dkp",
+    "i can't play tomorrow but you can borrow my dkp"])
 def test_dkp_treated_as_transferable(text):
     assert w.dkp_transfer(text)
 
@@ -102,7 +103,9 @@ def test_dkp_treated_as_transferable(text):
 @pytest.mark.parametrize("text", [
     "bidding my dkp on the boots", "spend 50 dkp and its yours", "I have 146 dkp",
     "they give dkp for attendance", "saving my dkp for the helm", "dkp standings are up",
-    "we got dkp for the kill", "lost the bid to you, gz", "", "hand me the flask"])
+    "we got dkp for the kill", "lost the bid to you, gz", "", "hand me the flask",
+    "I can't give you my DKP", "don't pool our DKP", "nobody can lend you dkp, its yours",
+    "you can’t pass me your dkp anyway", "never give him your dkp"])
 def test_dkp_spent_as_her_own(text):
     assert not w.dkp_transfer(text)
 

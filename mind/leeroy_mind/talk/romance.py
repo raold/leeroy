@@ -1112,8 +1112,10 @@ class WhisperPlanner:
         """A whisper one member starts of her own accord (a flirt she would have typed in his
         raid: TalkEngine._raid_flirt): True, and counted as one of the planner's (her
         WHISPER_GAP_S, the hour's WHISPERS_HOUR_MAX, WHISPERS_APART_S), when those leave room;
-        it takes no slot of the clock's. False, and nothing counted, otherwise."""
-        if now - self._last.get(guid, -math.inf) < WHISPER_GAP_S or not self._room(now):
+        it takes no slot of the clock's. False, and nothing counted, otherwise, and always with
+        the planner off (a rate of 0: the owner's setting stops every unprompted whisper)."""
+        if (self._per_hour <= 0 or now - self._last.get(guid, -math.inf) < WHISPER_GAP_S
+                or not self._room(now)):
             return False
         self._last[guid] = now
         self._said.append(now)

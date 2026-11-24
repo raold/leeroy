@@ -1390,7 +1390,8 @@ without `[heat]`) reached the raid. With `[talk] wow_topic` on:
 - **While he raids** (`WorldView.human_raiding`: in a raid group, or his map or zone is a raid
   instance's) a flirt is never typed on a public channel: her flirt chance, when it lands, asks
   the whisper planner for a whisper of hers (`WhisperPlanner.take`: her 10 minutes, the hour's 8,
-  2 minutes apart; `_may_whisper`'s holds; not while she is in a whisper with him) and queues
+  2 minutes apart, never at `whispers_per_hour` 0; `_may_whisper`'s holds; not while she is in a
+  whisper with him) and queues
   `whisper:raid_flirt` ("You're in his raid and you'd rather say this where only he can read
   it."), else nothing; the social turn stays what it was. No romance text on a public game
   channel while he raids (an answer to him, a loot cheer: plain), and no rival cuts in. Logs
@@ -1417,8 +1418,9 @@ nothing else.
 
 **DKP is hers.** The DKP line adds `DKP is each raider's own: it can't be given, lent or pooled.`,
 and a WoW line that treats DKP as something to give, lend, hand over or pool (two W3 loot lines
-did: `wowtopic.dkp_transfer`) is the soft tell `dkp transfer`, asked again with its hint and
-dropped when the retry still has it.
+did: `wowtopic.dkp_transfer`; a clause that refuses it, "can't give you my DKP", is the rule, not
+the slip) is the soft tell `dkp transfer`, asked again with its hint and dropped when the retry
+still has it.
 
 **"Right now" on a held turn** (the topic hold, a Discord channel's purpose): her availability
 only (`life.presence.availability_text`: "You only glance at the game now and then."), in his

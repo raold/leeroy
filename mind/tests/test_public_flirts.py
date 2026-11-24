@@ -361,3 +361,14 @@ def test_the_last_check_before_the_bridge(store, clock, tmp_path):
         assert r.sync(send(whisper, SEXUAL)) is None
     finally:
         r.close()
+
+
+def test_the_planner_off_takes_no_whisper_of_hers():
+    import random
+    from leeroy_mind.talk.romance import WhisperPlanner
+    off = WhisperPlanner(random.Random(1), per_hour=0, events=False)
+    assert not off.take(1000.0, 102)  # [talk] whispers_per_hour 0: no unprompted whisper at all
+    on = WhisperPlanner(random.Random(1), per_hour=4)
+    assert on.take(1000.0, 102) and not on.take(1001.0, 102)  # then her own gap
+    assert not on.take(1010.0, 104)  # two whispers never 2 minutes apart
+    assert on.take(1200.0, 104)
