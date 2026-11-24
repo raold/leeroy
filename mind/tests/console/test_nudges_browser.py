@@ -6,6 +6,7 @@ import pytest
 
 from console.rig import KEY, make_app, running
 from leeroy_mind.endpoint import tune_args
+from leeroy_mind.testing import control
 from tuning.test_tuning_preview import _app
 
 
@@ -22,10 +23,12 @@ def test_nudge_controls_at_phone_width(tmp_path, theme):
                 def locate(self, pids):
                     return {"pid": 101, "port": 1, "key": "synthetic"}
                 def call(self, pids, op, args=None, *, timeout=3):
-                    if op == "tune":
-                        return asyncio.run_coroutine_threadsafe(
-                            mind.tuning.handle(tune_args(args)), loop).result(timeout)
-                    return {"ok": True}
+                    def handle(op, args):
+                        if op == "tune":
+                            return asyncio.run_coroutine_threadsafe(
+                                mind.tuning.handle(tune_args(args)), loop).result(timeout)
+                        return {"ok": True}
+                    return control.answer(op, args, handle)
             console = make_app(tmp_path, mind=running(tmp_path), link=Link(), clock=mind.clock.now)
             await console.start()
             browser = await driver.chromium.launch()

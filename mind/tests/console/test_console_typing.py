@@ -15,6 +15,7 @@ import pytest
 
 from leeroy_mind.console import app as console_app
 from leeroy_mind.console.mindlink import LinkError
+from leeroy_mind.testing import control
 from console.rig import events, http, make_app, running
 
 LINKED = [SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)]
@@ -47,7 +48,7 @@ class FakeLink:
         self.timeouts.append(timeout)
         if self.error:
             raise LinkError(self.error)
-        return self.reply
+        return control.answer(op, args, self.reply)
 
 
 def status(typing=None, **kw):
@@ -111,13 +112,11 @@ def test_only_well_formed_entries_pass_and_nothing_else_of_theirs(data, in_game)
     ok = {"since": 1.0, "age": 1.0}
     bad = [None, "x", 7, {"guid": "101", "channel": "guild", **ok},
            {"guid": 101, "channel": 5, **ok}, {"guid": 101, "channel": "guild", "age": 1.0},
-           {"guid": 101, "channel": "guild", "since": float("inf"), "age": 1.0},
            {"guid": 0, "channel": "guild", **ok}, {"guid": True, "channel": "guild", **ok},
            {"guid": 101, "channel": "whisper", "to": "1", **ok},
            {"guid": 104, "channel": "guild", "since": 1.0},  # no age: an older mind's entry
            {"guid": 104, "channel": "guild", "since": 1.0, "age": -0.5},
            {"guid": 104, "channel": "guild", "since": 1.0, "age": "2"},
-           {"guid": 104, "channel": "guild", "since": 1.0, "age": float("nan")},
            {"guid": 104, "channel": "guild", "since": 1.0, "age": True},
            {"guid": 105, "channel": "guild", "since": 1.0, "age": 30.5}]  # stale
     extra = {**ENTRY, "text": "words the member is typing", "prompt": "the prompt"}
@@ -130,6 +129,10 @@ def test_only_well_formed_entries_pass_and_nothing_else_of_theirs(data, in_game)
             return await typing_seen(app)
     assert asyncio.run(go()) == [ENTRY, {"guid": 103, "name": "", "channel": "officer",
                                          "to": None, "since": 5, "age": 30}]
+    # not a number: no answer line carries one (the endpoint's JSON has none), and none passes
+    assert console_app.typing_entries([
+        {"guid": 101, "channel": "guild", "since": float("inf"), "age": 1.0},
+        {"guid": 104, "channel": "guild", "since": 1.0, "age": float("nan")}]) == []
 
 
 def test_an_age_that_moved_alone_sends_no_new_status(data, in_game):

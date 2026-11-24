@@ -26,6 +26,7 @@ from leeroy_mind.selfies.scene import ref_crop
 from leeroy_mind.selfies.store import (PICK_LOOK_KEY, VARIED_SET_KEY, cover_look, face_pick,
                                        lust_set, pick, queued_sets, ready_set, undo)
 from leeroy_mind.selfies.style import AGE_RE, LUST
+from leeroy_mind.testing import control
 from nightly.test_night_enrich import APPEARANCE
 from selfies import clip_bpe
 from selfies.fakes import fake_worker, ready
@@ -484,7 +485,8 @@ def test_cli_go_asks_the_running_mind_and_needs_the_switch(h, capsys):
 
     def call(r, args):
         asked.append(args)
-        return {"ok": True, "queued": [101], "message": "1 varied sets will be rendered at night."}
+        return control.answer("selfie", args, {"ok": True, "queued": [101],
+                                               "message": "1 varied sets will be rendered at night."})
     with acquire_instance_lock(root):
         assert cli.selfies_main(["vary", "--stance", "lust", "--data-dir", str(root)]) == 0
         capsys.readouterr()

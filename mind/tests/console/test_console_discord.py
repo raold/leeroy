@@ -21,6 +21,7 @@ from leeroy_mind.console import app as console_app, mindlink
 from leeroy_mind.console.control import Controls
 from leeroy_mind.console.mindlink import LinkError
 from leeroy_mind.discord import store as dstore
+from leeroy_mind.testing import control
 from console.rig import FakeMind, http, make_app, running
 
 LINKED = [SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)]
@@ -64,7 +65,7 @@ class FakeLink:
         self.timeouts.append(timeout)
         if self.error:
             raise LinkError(self.error)
-        return self.reply
+        return control.answer(op, args, self.reply)
 
 
 @asynccontextmanager

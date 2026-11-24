@@ -24,6 +24,7 @@ from leeroy_mind.guild.dkp import LedgerEntry
 from leeroy_mind.guild.loot import _put
 from leeroy_mind.guild.store import add_ledger, end_raid, new_raid, record_attendance
 from leeroy_mind.protocol import Member
+from leeroy_mind.testing import control
 from console.rig import events, http, make_app, running
 from console.test_lifecycle_shared import Clock, Processes, mind as mind_rows  # noqa: F401
 
@@ -212,11 +213,8 @@ def _key_file(data, pid=4242, port=40000):
 
 
 def test_the_key_goes_only_to_the_running_minds_own_listener(tmp_path):
-    sent = []
-
-    def request(port, key, op, args=None, *, timeout):
-        sent.append((port, key, op, args))
-        return {"ok": True}
+    request = control.request({"ok": True})
+    sent = request.calls
     table = [None]
     link = MindLink(tmp_path, tcp=lambda: table[0], request=request)
     cases = [((), "the mind is not running"),
@@ -287,7 +285,7 @@ class FakeLink:
         self.calls.append((tuple(pids), op, args))
         if self.error:
             raise LinkError(self.error)
-        return self.reply(op, args) if callable(self.reply) else self.reply
+        return control.answer(op, args, self.reply)
 
 
 STATUS = {"ok": True, "v": 1, "pid": 101, "stopping": False,
@@ -440,7 +438,7 @@ class StopLink:
             raise LinkError(self.error)
         if self.ends:
             self.processes.rows = []  # its own shutdown ran, and the process ended
-        return self.reply or {"ok": True, "stopping": True}
+        return control.answer(op, args, self.reply or {"ok": True, "stopping": True})
 
 
 def _handle(m, processes, link, **kw):
