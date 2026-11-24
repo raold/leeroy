@@ -21,7 +21,7 @@ from pathlib import Path
 from unittest.mock import DEFAULT, AsyncMock
 
 from .. import protocol
-from ..bridge import NotConnected, claim_preserved_id
+from ..bridge import NotConnected, claim_preserved_id, valid_preserved_id
 from ..protocol import Ack, encode_command
 
 NATIVE_SRC = Path(__file__).resolve().parents[3] / "modules" / "mod-leeroy" / "src"
@@ -246,7 +246,10 @@ class WireContract:
         before anything is written: a bad or reissued kept identity, a command encode_command
         refuses."""
         if preserve_id:
-            cmd_id = claim_preserved_id(cmd.id, self.issued)
+            # BridgeClient.send's old_auto: an m<n> it already allocated is never kept afterwards.
+            old_auto = (valid_preserved_id(cmd.id) and cmd.id.startswith("m") and cmd.id[1:].isdigit()
+                        and int(cmd.id[1:]) < self._next_id)
+            cmd_id = claim_preserved_id(cmd.id, self.issued, in_use={cmd.id} if old_auto else ())
         else:
             cmd_id = f"m{self._next_id}"
             while cmd_id in self.issued:

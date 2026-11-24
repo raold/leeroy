@@ -72,10 +72,13 @@ def test_the_contract_refuses_what_the_client_and_the_server_refuse():
     ack = contract.ack(dataclasses.replace(say, guid=0), preserve_id=False)
     assert (ack.ok, ack.error) == (False, "bad field: guid")
     assert contract.refused[-1][1] == "bad field: guid"
-    # A kept identity is never reissued as an automatic one.
+    # A kept identity is never reissued as an automatic one, nor an automatic one kept afterwards.
     contract = wire.WireContract()
     contract.send(dataclasses.replace(say, id="m1"), preserve_id=True)
     assert contract.send(say, preserve_id=False)[0] == "m2"
+    with pytest.raises(ValueError, match="already issued"):
+        contract.send(dataclasses.replace(say, id="m2"), preserve_id=True)
+    assert contract.send(dataclasses.replace(say, id="m3"), preserve_id=True)[0] == "m3"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
