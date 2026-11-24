@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 KEY_LINE = re.compile(r"^(\s*)([A-Za-z0-9_.]+)(\s*=\s*)(.*?)\s*$")
@@ -58,6 +58,7 @@ class FileRules:
     isolation: frozenset[str]
     training: dict[str, str]
     ordinary: dict[str, str]
+    ordinary_if_present: dict[str, str] = field(default_factory=dict)
 
 
 def load_rules(path: Path) -> dict[str, FileRules]:
@@ -68,18 +69,21 @@ def load_rules(path: Path) -> dict[str, FileRules]:
     for name, spec in data["files"].items():
         training = {k: str(v["value"]) for k, v in spec.get("training", {}).items()}
         ordinary = {k: str(v) for k, v in spec.get("ordinary", {}).items()}
+        optional = {k: str(v) for k, v in spec.get("ordinary_if_present", {}).items()}
         isolation = frozenset(spec.get("isolation", []))
         overlap = (set(training) & set(ordinary)) | (set(training) & isolation) | (set(ordinary) & isolation)
+        overlap |= set(optional) & (set(training) | set(ordinary) | isolation)
         if overlap:
             raise ConfError(f"{name}: {', '.join(sorted(overlap))} listed twice in the rules")
-        rules[name] = FileRules(name, spec["dist"], isolation, training, ordinary)
+        rules[name] = FileRules(name, spec["dist"], isolation, training, ordinary, optional)
     return rules
 
 
 def check(rules: FileRules, conf: dict[str, str], dist: dict[str, str]) -> list[str]:
     """Every way conf breaks the rules (empty when it follows them). Values are never echoed for isolation keys."""
     problems = []
-    for key, want in rules.ordinary.items():
+    ordinary = {**rules.ordinary, **{k: v for k, v in rules.ordinary_if_present.items() if k in dist or k in conf}}
+    for key, want in ordinary.items():
         if dist.get(key) != want:
             problems.append(f"{key}: the .dist says {dist.get(key)!r}, the rules expect the stock {want!r}")
         if conf.get(key) != want:

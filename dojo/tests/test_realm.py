@@ -250,6 +250,16 @@ class RulesTest(unittest.TestCase):
         with self.assertRaises(conf.ConfError):
             conf.render(dist, {"Threads": 'a"b'})
 
+    def test_optional_stock_rule_does_not_allow_drift_or_missing_config(self):
+        rules = conf.FileRules("w", "w.dist", frozenset(), {}, {}, {"Periodic": "0"})
+        self.assertEqual(conf.check(rules, {}, {}), [])
+        self.assertEqual(conf.check(rules, {"Periodic": "0"}, {"Periodic": "0"}), [])
+        for actual, stock in (({}, {"Periodic": "0"}), ({"Periodic": "0"}, {}),
+                              ({"Periodic": "1"}, {"Periodic": "1"}),
+                              ({"Periodic": "1"}, {"Periodic": "0"})):
+            with self.subTest(actual=actual, stock=stock):
+                self.assertTrue(conf.check(rules, actual, stock))
+
     def test_check_finds_every_kind_of_deviation(self):
         rules = conf.FileRules("w.conf", "w.conf.dist", frozenset({"Port"}), {"Threads": "0"}, {"Rate": "1"})
         dist = conf.parse("Threads = 1\nRate = 1\nPort = 8085\nOther = x\n")

@@ -35,6 +35,9 @@ The layout's isolated core must have `mod-playerbots`, `mod-dojo`, and
 `mod-leeroy` linked to the isolated source checkouts. Record a current production
 baseline with preflight, then apply the dojo controller patch on top of the
 candidate playerbots series. No other modules are admitted to this variant.
+Older production revisions lack `Playerbots.EnablePeriodicOnlineOffline`.
+The config checks allow that option to be absent from both files; when present,
+both the build's `.dist` and the runtime config must keep its reviewed value `0`.
 
 ```powershell
 pwsh -NoProfile -File scripts/dojo/preflight.ps1 -Layout <raid-layout.json> -WriteProvenance
