@@ -103,8 +103,7 @@ def upgrade_gain(item: ItemInfo, cls: int, family: str, equipped: dict[int, int]
                  role: str | None = None, spec_tab: int | None = None) -> int | None:
     """The item levels `item` would gain her (a member of class `cls`, stat `family`, raid `role`
     and, when the caller knows it, talent tree `spec_tab`) over what she wears; None when it is no
-    upgrade or none of hers (suits). A one-hand weapon beside an empty off hand is measured
-    against her main hand (a two-hander there leaves the off hand empty, which is no gap)."""
+    upgrade or none of hers (suits)."""
     if type(cls) is not int or cls not in _ARMOUR or family not in _FAMILY_STATS:
         return None
     if item.allowable_class != -1 and not item.allowable_class & (1 << (cls - 1)):
@@ -138,7 +137,5 @@ def upgrade_gain(item: ItemInfo, cls: int, family: str, equipped: dict[int, int]
     slots = _SLOTS.get(item.inventory_type)
     if slots is None:
         return None
-    if item.inventory_type == 13 and 16 not in equipped and 15 in equipped:
-        slots = (15,)
     gain = item.item_level - min(equipped.get(slot, 200) for slot in slots)
     return gain if gain > 0 else None

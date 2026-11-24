@@ -103,8 +103,9 @@ class LazyArmory:
                 from .talents import read_data_dir
                 data = read_data_dir(self.cfg.worldserver_conf)
                 self._backend = MysqlArmory(read_db_info(self.cfg.worldserver_conf),
-                    read_db_info(self.cfg.worldserver_conf, "WorldDatabaseInfo"), self.cfg.mysql_exe,
-                    dbc_dir=data / "dbc" if data is not None else None)
+                    read_db_info(self.cfg.worldserver_conf, "WorldDatabaseInfo"), self.cfg.mysql_exe)
+                if data is not None and hasattr(self._backend, "dbc_dir"):
+                    self._backend.dbc_dir = data / "dbc"  # her talents' trees (spec_tabs)
             except (OSError, ValueError, RosterError):
                 self.unavailable()
                 raise RosterError("guild armory unavailable") from None

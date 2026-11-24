@@ -278,9 +278,3 @@ def test_a_two_handed_tree_wears_no_one_hand_or_off_hand(cls, tab):
     assert suits(dataclasses.replace(GREATAXE, stats=frozenset()), "str", "damage", cls=cls,
                  spec_tab=tab)
     assert suits(dataclasses.replace(KRYSS, stats=frozenset()), "str", "damage")  # tree unknown
-
-
-def test_an_empty_off_hand_beside_a_two_hander_is_no_gap():
-    assert upgrade_gain(KRYSS, 3, "agi", {15: 264}, role="damage") == 13  # not 277 - 200
-    assert upgrade_gain(KRYSS, 4, "agi", {15: 264, 16: 251}, role="damage") == 26
-    assert upgrade_gain(KRYSS, 4, "agi", {}, role="damage") == 77  # nothing worn: a real gap

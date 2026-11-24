@@ -159,12 +159,17 @@ def test_a_capped_public_line_is_asked_again_and_the_clean_one_goes(store, clock
     assert [s.text for s in r.sent.says()] == ["nice work out there today"]
 
 
-def test_with_the_cap_off_the_public_prompt_and_line_are_as_before(store, clock, tmp_path):
-    replies = iter(["so horny right now"])
+def test_with_the_cap_off_the_public_prompt_is_as_before(store, clock, tmp_path):
+    """The prompt as before the dial; since 2026-11-24 the line goes through the game's public
+    channels' hard screen whatever heat says (talk/publicscreen.py): a sexual draft is asked
+    again clean, never sent there."""
+    from leeroy_mind.talk import publicscreen
+    replies = iter(["so horny right now", "nice work out there today"])
     r = _rig(store, clock, tmp_path, ON, lambda model, messages: next(replies))
     _flirt(r)
-    assert OVERLAY in r.prompts()[0] and len(r.prompts()) == 1
-    assert [s.text for s in r.sent.says()] == ["so horny right now"]
+    assert OVERLAY in r.prompts()[0] and len(r.prompts()) == 2
+    assert publicscreen.HINT in r.prompts()[1]
+    assert [s.text for s in r.sent.says()] == ["nice work out there today"]
 
 
 def test_the_guard_never_reads_a_private_line_or_a_turn_heat_does_not_reach(store, clock,

@@ -164,8 +164,7 @@ server's `Talent.dbc`/`TalentTab.dbc` (worldserver.conf `DataDir`; `guild/talent
 with most points as playerbots counts it), online or not; without that read the cast snapshot's
 tree stands, and with neither her persona's raid role, as before. A tree that fights with a
 two-hander (Arms, Retribution, Blood, Unholy, Feral) wishes for no one-hand or off-hand weapon,
-shield or off-hand item, and a one-hand weapon beside an empty off hand is measured against the
-main hand. The cache carries the version of the code that computed it (a digest of
+shield or off-hand item. The cache carries the version of the code that computed it (a digest of
 `culture/loot.py`, `guild/upgrades.py`, `guild/roles.py`, `guild/talents.py`): a cache another
 version computed is never read (seeds, console) and is recomputed at the next tick he is out of
 game (`culture_loot_wish_outdated event=`), so a release that changes the rule never serves the
