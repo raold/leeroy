@@ -119,6 +119,16 @@ its bot lands on another map, so every trial it accepted failed `ownership_chang
 (2026-11-10..14). Against such a native the lab claims nothing, sends nothing and logs
 `training_lab_native_unsupported` once; its reason reads `native_dummy_unsupported`.
 
+A lab blocked on its current trial clears itself once native has said that trial let go of its bodies:
+the trial's `dummy_cleanup` receipt (`released` or `restored`), or a hello from a worldserver that started
+after the trial (`lab_recovery.recover_blocked_lab`, on the lab's next tick; `training_lab_recovered id=
+trial= evidence= members=`). It ends the night exactly as the operator's `training lab-clear` does (no
+result, every receipt kept, a summary with the halt as its reason, `recovered.by = "native"`) and releases
+the lab's body claims. A member with a standing setup or a record that would not validate keeps the block
+(`training_lab_recovery_refused reason=`, once per reason); any other block (no trial in flight, a mind-side
+restoration) stays the operator's. On 2026-11-23 native released its trial at 07:01 (`unfinished=1507`) and
+the lab's 8 members stayed held for more than a day until an operator could stop the mind for `lab-clear`.
+
 The lab reads its members' bodies in one snapshot (`TrainingPorts.holders_of`, `BodyLedger.holders_of`):
 its eligibility pass over the cast, its "still ours" check and its preemption check. One `holder()`
 per member read every body source again, the whole Realm journal included, and on 2026-11-22 held

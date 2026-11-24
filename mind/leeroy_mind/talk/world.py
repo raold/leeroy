@@ -11,7 +11,7 @@ from leeroy_mind.discord.transport import channel_id, is_discord
 from leeroy_mind.protocol import (AfkEvent, Cast, Chat, Death, Event, Group, Hello, Login, Logout,
                                   Member, Zone)
 from leeroy_mind.storage.rows import ChatLineRow
-from leeroy_mind.wow import CAST_MIN_LEVEL
+from leeroy_mind.wow import CAST_MIN_LEVEL, RAID_INSTANCES, RAID_ZONES
 
 BOT_COMMANDS = frozenset({
     "follow", "stay", "wait", "flee", "attack", "grind", "summon", "release", "revive", "loot",
@@ -70,6 +70,7 @@ class WorldView:
         self.human_last_active = 0.0
         self.human_afk = False
         self.human_zone = 0
+        self.human_map = 0  # his map by his last line, death or raid zone (human_raiding)
         self.group: Group | None = None
         self.afk: set[int] = set()
         self.history: deque[SeenLine] = deque(maxlen=300)
@@ -149,6 +150,7 @@ class WorldView:
             h = self.members.get(self.human_guid)
             if h is not None:
                 self.human_online = h.online
+                self.human_map = h.map
             return
         if isinstance(ev, Group):
             self.set_group(ev)
@@ -169,7 +171,7 @@ class WorldView:
                 self.human_online = on
                 if not on:
                     self.human_afk = False
-                    self.human_zone = 0
+                    self.human_zone = self.human_map = 0
             elif on:
                 self.online.add(guid)
             else:
@@ -187,18 +189,31 @@ class WorldView:
             self._touch_member(guid, zone=ev.zone_id)
             if is_human:
                 self.human_zone = ev.zone_id
+                self.human_map = RAID_ZONES.get(ev.zone_id, 0)
         elif isinstance(ev, Chat) and not is_discord(ev.channel):
             self._touch_member(guid, map=ev.map, zone=ev.zone)
             if is_human:
-                self.human_zone = ev.zone
+                self.human_zone, self.human_map = ev.zone, ev.map
         elif isinstance(ev, Death):
             self._touch_member(guid, map=ev.map)
+            if is_human:
+                self.human_map = ev.map
         if is_human:
             self.human_last_active = now
 
     def in_group(self, guid: int) -> bool:
         g = self.group
         return g is not None and (guid in g.members or guid == g.leader_guid)
+
+    def human_raiding(self) -> bool:
+        """He is raiding: online and in a raid group, or standing in a raid instance
+        (wow.RAID_INSTANCES: the map his last line or death carried, or his raid zone)."""
+        if not self.human_online or not self.human_guid:
+            return False
+        g = self.group
+        if g is not None and g.raid and self.in_group(self.human_guid):
+            return True
+        return self.human_map in RAID_INSTANCES
 
     def audience(self, channel: str, *, from_guid: int, to_guid: int = 0,
                  zone: int = 0) -> frozenset[int]:

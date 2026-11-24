@@ -7,10 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from console.rig import KEY
-
 from .test_accessibility import AXE
-from .test_tabs import open_console, visit
+from .test_tabs import STARTUP_MS, open_console, visit
 
 SIZES = [(1440, 900), (1024, 768), (390, 844)]
 SHOTS = os.environ.get("LEEROY_E2E_SHOTS")
@@ -52,6 +50,10 @@ def test_member_page_replaces_the_list_and_back_returns(rehearsal, width, height
             await open_console(r)
             await visit(page, "personas")
             profile = page.get_by_role("button", name="Profile of Arkon", exact=True)
+            # The Choose selfies card above the cast draws when its own answer comes. On a slow
+            # runner that came after the wall, and its first draw pushed the wall down between
+            # the scroll read here and the click (CI, 2026-11-21: (0, 624)).
+            await expect(page.locator("#sf-lead")).not_to_have_text("-")
             await profile.scroll_into_view_if_needed()
             before = await page.evaluate("document.querySelector('main').scrollTop")
             await profile.click()
@@ -441,11 +443,17 @@ def test_the_page_loads_compressed_and_reloads_from_cache(rehearsal):
             wire = sum(size for _, _, _, size, *_ in first)
             print("load", {"requests": len(first), "wire_bytes": wire})
             assert wire < 450_000, wire
-            # a reload revalidates: nothing is sent again
+            # a reload revalidates: nothing is sent again. The page took its key out of the
+            # address bar when it loaded; a "#key=" put back just before the reload raced the
+            # page's hashchange handler, and a reload sent first carried the key (CI, 2026-11-22)
+            # A font still downloading when the reload starts is fetched whole again (200), so
+            # the first load must have its fonts in the cache first.
+            fonts = await page.evaluate("document.fonts.ready.then(() => document.fonts.status)")
+            assert fonts == "loaded"
             seen.clear()
-            await page.goto(r.url + "/#key=" + KEY)
-            await page.reload()
-            await expect(page.locator("#s-lost")).to_be_visible()   # a reload loses the key, as before
+            assert "key=" not in page.url
+            await page.reload()  # the page starts again: its first answer says the key is gone
+            await expect(page.locator("#s-lost")).to_be_visible(timeout=STARTUP_MS)
             await page.wait_for_timeout(500)
             again = [f for f in seen]
             # (Chromium reports the revalidated document itself as a 200 with nothing sent)

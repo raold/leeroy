@@ -4,7 +4,9 @@ block), a loot turn is told bids are DKP, a game line past her usual words is cu
 first sentence with a tighter num_predict, the guards read the chat register and her own words
 tighter, the mind's own instruction text loses an invented boss, and an opener on the raid's
 channel while he raids brings up the game. A whisper's prompt and lines are byte for byte what
-they were. Invented cast and lines only."""
+they were. Second round (2026-11-24): a line that hands DKP over is asked again, a held turn's
+"Right now" says her availability only, and the instruction check fires through its real checks.
+Invented cast and lines only."""
 import logging
 from dataclasses import replace
 
@@ -241,5 +243,170 @@ def test_a_game_line_cut_off_by_its_num_predict_goes_back_to_its_last_sentence(
         lines = r.speak_turn(reply(102, trigger=row.id))
         assert " ".join(lines).startswith("on my way") and "flasks" not in " ".join(lines)
         assert any("wow_line_cutoff: guid=102" in rec.getMessage() for rec in caplog.records)
+    finally:
+        r.close()
+
+
+# -- DKP is hers (the re-measure, 2026-11-24) -------------------------------------------------------
+
+def _loot_reply(store, clock, tmp_path, *replies, wow_topic=True):
+    seed_test_cast(store)
+    save_member(store, 102, player_gender="female", typo_rate=0.0, split_rate=0.0,
+                emoticon_rate=0.0, abbreviations={})
+    r = make_rig(store, clock, tmp_path, wow_topic=wow_topic)
+    r.script(*replies)
+    row = his_line(r, "bids on the helm, who wants it", channel="raid")
+    return r, r.speak_turn(reply(102, channel="raid", trigger=row.id))
+
+
+def test_a_line_that_hands_dkp_over_is_asked_again(store, clock, tmp_path):
+    r, lines = _loot_reply(store, clock, tmp_path, "have 20 dkp for u if you want it", "40 on it")
+    try:
+        assert lines == ["40 on it"]
+        assert w.DKP_HINT in r.chat_calls()[-1]["messages"][-1]["content"]
+    finally:
+        r.close()
+
+
+def test_a_retry_that_still_hands_dkp_over_is_dropped(store, clock, tmp_path):
+    r, lines = _loot_reply(store, clock, tmp_path, "just lend me your dkp then")
+    try:
+        assert lines == [] and len(r.chat_calls()) == 2
+    finally:
+        r.close()
+
+
+def test_dkp_words_are_read_only_with_the_switch(store, clock, tmp_path):
+    r, lines = _loot_reply(store, clock, tmp_path, "have 20 dkp for u if you want it",
+                           wow_topic=False)
+    try:
+        assert lines == ["have 20 dkp for u if you want it"] and len(r.chat_calls()) == 1
+    finally:
+        r.close()
+
+
+# -- "Right now" on a held turn: her availability only (the re-measure, 2026-11-24) ------------------
+
+def _work():
+    from leeroy_mind.life.day import Block, DayEvent
+    from leeroy_mind.life.presence import Attention, LifePresence, Where
+    return LifePresence(Block.WORK, Where.AT_WORK, Attention.GLANCING, DayEvent.NONE, False)
+
+
+def _user(r, turn, meta):
+    r.engine._draw_situation(turn, meta, r.engine.personas.get(turn.speaker), r.clock.now())
+    c = r.sync(r.engine._compose(turn, meta, live=True))
+    return c.messages[-1]["content"]
+
+
+def test_a_held_turn_says_her_availability_not_where_she_is(store, clock, tmp_path):
+    seed_test_cast(store)
+    r = make_rig(store, clock, tmp_path, wow_topic=True, availability=6)
+    try:
+        row = his_line(r, "go when ready")
+        user = _user(r, reply(102, trigger=row.id), TurnMeta("h", life_presence=_work()))
+        assert w.hold_text("guild") in user
+        assert "You only glance at the game now and then." in user and "at work" not in user
+        asks = his_line(r, "how was work today")
+        user = _user(r, reply(102, trigger=asks.id), TurnMeta("a", life_presence=_work()))
+        assert "You're at work, the game open on your PC." in user  # he asked: not held
+        switch(r, wow_topic=False)
+        user = _user(r, reply(102, trigger=row.id), TurnMeta("o", life_presence=_work()))
+        assert "You're at work, the game open on your PC." in user  # the switch off
+    finally:
+        r.close()
+
+
+def test_a_held_turn_in_his_group_says_she_is_playing_with_him(store, clock, tmp_path):
+    seed_test_cast(store)
+    r = make_rig(store, clock, tmp_path, wow_topic=True, availability=6, coherence=True)
+    try:
+        r.sync(r.event(Group(ts=0, leader_guid=HUMAN, raid=True, members=(HUMAN, 101, 102))))
+        r.engine._own[102].append(("raid", 0, "still at the office, tanking from my desk"))
+        row = his_line(r, "go when ready", channel="raid")
+        user = _user(r, reply(102, channel="raid", trigger=row.id),
+                     TurnMeta("g", life_presence=_work()))
+        now = user.split("Right now:")[1].split("\n\n")[0]
+        assert "You're at your PC, playing: you're in" in now
+        assert "office" not in now and "at work" not in now  # never what she said of it
+    finally:
+        r.close()
+
+
+def test_a_held_game_opener_leaves_what_is_on_her_mind_out(store, clock, tmp_path):
+    seed_test_cast(store)
+    save_member(store, 102, player_gender="female", wants=["the Invented Drake mount"])
+    r = make_rig(store, clock, tmp_path, wow_topic=True)
+    try:
+        r.store.put_state(replace(r.store.get_state(102), life_thread="her sister's wedding"))
+        r.sync(r.event(Group(ts=0, leader_guid=HUMAN, raid=True, members=(HUMAN, 101, 102, 103))))
+        r.engine.bits.pick = lambda *a, **k: None
+        turn, meta = r.engine._social_turn(TurnKind.OPEN, 102, "raid", addressee=None,
+                                           trigger=None, room=2, now=clock.now(), delay=0.0)
+        assert meta.game_topic
+        text, _ = prompt(r, turn, meta)
+        assert "On your mind lately" not in text and "wedding" not in text
+        guild, guild_meta = r.engine._social_turn(TurnKind.OPEN, 102, "guild", addressee=None,
+                                                  trigger=None, room=2, now=clock.now(),
+                                                  delay=0.0)
+        text, _ = prompt(r, guild, guild_meta)
+        assert "On your mind lately: her sister's wedding." in text  # not held: as it was
+    finally:
+        r.close()
+
+
+# -- instruction_entity_dropped through the real checks (the re-measure, 2026-11-24: it had never
+# fired live; nothing in it was broken, the mind's own instructions carried no unknown name) ------
+
+def test_the_minds_instruction_loses_an_unknown_boss_by_the_real_check(store, clock, tmp_path,
+                                                                        caplog):
+    from types import SimpleNamespace
+    caplog.set_level(logging.INFO, logger="leeroy_mind")
+    r = make_rig(store, clock, tmp_path)
+    try:
+        library = {"marrowgar", "raid", "night", "guild", "wiped", "again"}
+        r.engine.facts = SimpleNamespace(
+            library=SimpleNamespace(known_words=lambda words: {x for x in words if x in library}))
+        t = replace(reply(102, kind=TurnKind.ASIDE), addressee=None,
+                    instruction="The guild wiped on Gloomfang twice. Say how the night went.")
+        text, _ = prompt(r, t)
+        assert "Gloomfang" not in text and "Say how the night went." in text
+        assert "instruction_entity_dropped: guid=102 kind=aside n=1" in caplog.text
+        known = replace(t, instruction="The guild wiped on Marrowgar twice. Say how it went.")
+        caplog.clear()
+        text, _ = prompt(r, known)
+        assert "Marrowgar twice" in text and "instruction_entity_dropped" not in caplog.text
+    finally:
+        r.close()
+
+
+def test_the_minds_instruction_loses_an_unknown_item_by_the_item_table(store, clock, tmp_path,
+                                                                       caplog):
+    from leeroy_mind.talk.items import ItemLinker
+    caplog.set_level(logging.INFO, logger="leeroy_mind")
+    rows = [{"id": 50736, "name": "Invented Kryss", "quality": 4, "ilvl": 284, "req_level": 80}]
+    items = ItemLinker(lambda: rows, clock.now)
+    r = make_rig(store, clock, tmp_path, items=items)
+    try:
+        t = replace(reply(102, kind=TurnKind.ASIDE), addressee=None,
+                    instruction="She wants [Made Up Blade]. Cheer the [Invented Kryss] drop.")
+        text, _ = prompt(r, t)
+        assert "Made Up Blade" not in text and "[Invented Kryss]" in text
+        assert "instruction_entity_dropped: guid=102 kind=aside n=1" in caplog.text
+    finally:
+        r.close()
+
+
+def test_his_answer_never_hands_dkp_over_even_as_its_fallback(store, clock, tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="leeroy_mind")
+    seed_test_cast(store)
+    r = make_rig(store, clock, tmp_path, wow_topic=True)
+    try:
+        r.script("just lend me your dkp then")
+        r.sync(r.event(Group(ts=0, leader_guid=HUMAN, raid=True, members=(HUMAN, 101, 102, 103))))
+        r.line_from_him("belra you want the boots?", channel="raid")  # owed: the engine answers
+        r.run(120)
+        assert not [s for s in r.sent.says() if "dkp" in s.text.lower()]
+        assert "say_owed_fallback_refused" in caplog.text and "dkp transfer" in caplog.text
     finally:
         r.close()

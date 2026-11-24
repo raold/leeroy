@@ -3,11 +3,13 @@ listener or a directory of its own, so a broken guard would only reach that targ
 test would then fail (no LiveServiceTouched, or the listener sees a connection)."""
 import asyncio
 import contextlib
+import errno
 import http.client
 import logging
 import os
 import socket
 import sqlite3
+import struct
 import subprocess
 import sys
 import threading
@@ -17,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from conftest import run, seed_test_cast
-from live_guard import REAL_MIND_DATA, LiveServiceTouched, live_ports, norm
+from live_guard import LINGER, REAL_MIND_DATA, LiveServiceTouched, live_ports, loopback_pair, norm
 from leeroy_mind import config
 from leeroy_mind.app import MindApp, acquire_instance_lock
 from leeroy_mind.bridge import BridgeClient
@@ -174,6 +176,45 @@ def test_a_socketpair_does_not_loosen_the_guard_for_another_thread(live_guard, m
                 end.close()
     live_guard.hits.clear()
     assert pairs and not getattr(live_guard.local, "in_socketpair", False)
+
+
+def test_the_loopback_pair_works_and_leaves_no_time_wait():
+    a, b = loopback_pair()
+    with a, b:
+        a.sendall(b"x")
+        assert b.recv(1) == b"x"
+        for end in (a, b):  # an abortive close: no port held in TIME_WAIT after it
+            assert struct.unpack(LINGER, end.getsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                                        struct.calcsize(LINGER))) == (1, 0)
+
+
+def test_a_refused_pair_connect_is_an_error_not_a_wait(monkeypatch):
+    """Windows refuses a connect from a port pair still in TIME_WAIT (Tcpip 4227). A non-blocking
+    connect says "would block" first and fails later, which left the fallback's accept() waiting
+    forever; this pair's blocking connect raises the refusal itself."""
+    def refuse(self, address):
+        if self.gettimeout() == 0.0:
+            raise BlockingIOError(errno.EWOULDBLOCK, "would block")  # then it fails, unseen
+        raise OSError(errno.EADDRINUSE, "only one usage of each socket address")
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    before = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(5)  # a regression waits 5 s in accept(), then fails here
+    try:
+        with pytest.raises(OSError) as refused:
+            loopback_pair()
+    finally:
+        socket.setdefaulttimeout(before)
+    assert refused.value.errno == errno.EADDRINUSE
+
+
+@pytest.mark.skipif(os.name != "nt", reason="asyncio uses the OS's own socketpair elsewhere")
+def test_asyncio_loops_get_the_loopback_pair_on_windows():
+    loop = asyncio.new_event_loop()
+    try:
+        assert struct.unpack(LINGER, loop._ssock.getsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                                            struct.calcsize(LINGER))) == (1, 0)
+    finally:
+        loop.close()
 
 
 def test_the_live_mind_data_is_refused_before_anything_opens(live_guard, tmp_path,

@@ -1413,6 +1413,18 @@ def test_a_lab_blocked_for_longer_than_a_night_fails_with_the_recovery_command(r
     assert rig.run()["training-lab"].status == FAIL
 
 
+def test_a_blocked_lab_says_when_natives_release_is_already_recorded(rig):
+    # 2026-11-24: health said "once native's dummy_cleanup receipt ... is recorded" a day after it was.
+    lab_record(rig)
+    rig.db("INSERT INTO meta(key,value) VALUES (?,?)", ("tg:lab:native:" + "b" * 32, json.dumps(
+        {"id": "b" * 32, "state": "released", "unfinished": [1924], "after_ms": 600000, "ts": 1, "seen": 1})))
+    result = readonly_check(rig, health._training_lab, NOW)
+    assert result.status == FAIL
+    assert "native's dummy_cleanup receipt (released) is recorded" in result.text
+    assert "standing setup" in result.text and "with the mind stopped: training lab-clear" in result.text
+    assert "once native's dummy_cleanup receipt" not in result.text and "1924" not in result.text
+
+
 def test_a_fresh_block_is_a_note_and_a_finished_lab_is_ok(rig):
     lab_record(rig, halted_at=NOW - 86400)
     assert readonly_check(rig, health._training_lab, NOW).status == NOTE

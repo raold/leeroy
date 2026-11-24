@@ -70,7 +70,11 @@ def decay_entries(balances, times, rate, ts) -> list[LedgerEntry]:
         for _ in range(times):
             if not balance:
                 break
+            # Rounded to 0.1, the cut could pass 0 (0.3 at 75% twice, or 0.07 at 90%): decay moves
+            # a balance toward 0, never across it
             delta = -round(balance * rate, 1)
+            if abs(delta) > abs(balance):
+                delta = -balance
             if delta:
                 entries.append(LedgerEntry(ts, guid, delta, "decay"))
             balance += delta

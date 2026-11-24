@@ -485,6 +485,7 @@ Apply them to a checkout of each module with
 ./ac-guild-backup.sh         # verified, pruned backups of the guild's data to another machine
 ./ac-snapshot.sh             # copy live configs and module patches into this repo
 ./ac-module-to-git.sh [--go] [--subdir P] <module> <url> <commit>  # swap a zip-extracted module for its git clone
+./verify/run.sh [--plan] [BASE]  # before a release: only the checks this branch's diff needs
 ```
 
 Modules converted with `--subdir` now record their prefix, upstream branch and
@@ -509,6 +510,17 @@ servers, run the converter with `--subdir server-side/mod-bg-slaveryvalley` at t
 verified zip source commit, then run `ac-build.sh`. This change performs no live
 swap or release. An older conversion without metadata remains skipped; do not
 guess its split base or set its Git upstream to the unsplit repository.
+
+`verify/run.sh` reads `git diff BASE...HEAD` (default `origin/main`) and runs the
+matching checks, fastest first: `<windows.h>` macro names in added module code,
+mind migration numbering against the merge target, the patch series entries the
+live module checkouts lack (rehearsed in temporary clones, then the pin guard),
+the mind's bridge, protocol, wire and contract test files, an MSVC `cl /Zs`
+of the changed mod-leeroy files with the live build's include paths and
+defines, and the branch's
+`db migrate` on an online-backup copy of the live `mind.db` with an integrity
+check. It only reads the live install and deletes what it writes. Its self-test,
+`bash scripts/tests/verify-run.sh`, uses temporary repositories and a stub mind.
 
 On server startup, native `*.log.YYYY-MM-DD HH-MM-SS` rotations older than
 14 days are pruned by their local rotation timestamp. Every rotation within
@@ -569,18 +581,24 @@ temporary repositories, synthetic databases and stub services.
 
 | Workflow | When | What |
 |---|---|---|
-| `ci` | main pushes and pull requests | shellcheck on `scripts/`, gitleaks over each push's and pull request's commits, the mod-leeroy and mod-dojo unit tests, the mind's Python 3.14 suite, the console's browser tests, the voice and selfie Python 3.12 suites, the dojo's suite and fake-worker protocol smoke, and a headless cross-service rehearsal in separate environments |
+| `ci` | main pushes and pull requests | shellcheck on `scripts/`, gitleaks over each push's and pull request's commits, the mod-leeroy and mod-dojo unit tests, the mind's Python 3.14 suite (its Hypothesis property tests derandomized under the `ci` profile), the console's browser tests, the voice and selfie Python 3.12 suites, the dojo's suite and fake-worker protocol smoke, and a headless cross-service rehearsal in separate environments |
 | `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots, then the dojo's series on top (plus playerbots' codestyle check), to mod-ollama-chat, and to mod-dungeon-clear (plus its lints); a nightly failure opens a `patch-drift` issue |
 | `build` | patch or module changes, weekly | compiles the fork core with the patched playerbots, patched mod-dungeon-clear, mod-leeroy and mod-dojo's disabled variant (clang, `-Werror`, ccache), then runs dungeon-clear's suites for the raids its patches add |
+| `verify` | pull requests | observe mode: the portable parts of `scripts/verify/run.sh` (macro names, the patch series on upstream with the pin guard, migrations on a fixture database at the base's schema) and a warning when a pull request changes workflows together with code; it reports in the job summary and fails nothing yet |
 | `release` | `v*` tag | GitHub release with the patches, modules, configs and scripts |
 
 There is no deploy job: the server runs on one PC and is updated with the
 scripts above. A self-hosted runner on a public repo would let any pull request
 run code on that PC.
 
+`python scripts/flaky-report.py [--runs 300]` lists the tests that failed and
+then passed on the same commit in recent CI runs (read only, through `gh`). A
+flaky test is fixed at its cause or deleted with the reason in its pull
+request, never retried, slept on or skipped.
+
 ## Research
 
-[references.bib](references.bib) lists the 282 papers, books, software and
+[references.bib](references.bib) lists the 283 papers, books, software and
 models behind the project. Each entry notes what it shaped, or, in the dojo's
 section, what it is planned for. The main threads:
 
