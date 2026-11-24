@@ -4,6 +4,7 @@ import { PANELS, at, badge, lines, panelWords } from "./opsmodel.mjs";
 import { actionButton, refreshActions } from "./opsactions.mjs";
 import { setBadge as setTabBadge } from "./tabs.mjs";
 import { renderDebrief } from "./debrief.mjs";
+import { renderVerify } from "./verify.mjs";
 import { renderNativeSwitches } from "./nativeswitches.mjs";
 
 // The tab badge shows only when something needs a look (a health FAIL or a held member).
@@ -36,6 +37,7 @@ function renderOps(value) {
     card.appendChild(el("p", "note", "Checked " + at(p.checked_at) + " · budget " + (p.budget_s || "unknown") + " s"));
     lines(name, p).forEach(line => card.appendChild(el("p", p.status === "error" || line.startsWith("FAIL · ") ? "ops-error" : "ops-line", line)));
     if (name === "debrief" && !panelWords(p)) { renderDebrief(card, p); }
+    if (name === "verify" && !panelWords(p)) { renderVerify(card, p); }
     if (name === "switches" && !panelWords(p)) { renderNativeSwitches(card, p.native); }
     if (name === "realm" && !panelWords(p)) {
       (p.roots || []).forEach(r => {
