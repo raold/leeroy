@@ -103,6 +103,7 @@ class VoiceExtension:
         self._up_since: float | None = None
         self._greeted_wall = 0.0
         self._login_due = False  # his login: start a service that is down at once
+        self._login_wall = 0.0  # time.time() of that login: a hold written after it still holds
         self._held_logged = self._skipped_logged = False
         self.client = VoiceClient(cfg.host, cfg.port, self.on_message, clock=app.clock,
                                   on_connection=self.on_connection)
@@ -263,7 +264,7 @@ class VoiceExtension:
     async def _on_login(self, ev) -> None:
         if ev.human:
             # The supervisor starts a service his login finds down, held or not
-            self._login_due = not self.client.greeted
+            self._login_due, self._login_wall = not self.client.greeted, time.time()
             self._guard("login", self.begin_session)
         elif self.movement is not None:
             self._guard("member_login", lambda: self.movement.on_login(ev.guid))
@@ -534,9 +535,10 @@ class VoiceExtension:
             return None
         if self._down_since is None:
             self._down_since = now
-        login = self._login_due
+        login, hold = self._login_due, self._hold()
+        if login and hold is not None and hold["at"] > self._login_wall:
+            login = self._login_due = False  # stopped since his login: held until the next one
         if not login:
-            hold = self._hold()
             if hold is not None:
                 if not self._held_logged:
                     self._held_logged = True

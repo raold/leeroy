@@ -300,6 +300,33 @@ def test_a_stop_after_a_login_that_found_it_up_still_holds(tmp_path, fast_clock,
     assert calls == [] and voice_hold(voice_data) is not None
 
 
+def test_a_stop_after_his_login_cancels_the_logins_pending_start(tmp_path, fast_clock,
+                                                                 voice_data, fake_repo,
+                                                                 monkeypatch):
+    """Launched at 0, his login at 5 (the launch still has its grace), a Stop at 10: the
+    stop is the newer wish, so the login does not start it at 90; his next login does."""
+    clock = fast_clock
+    ext, calls = supervised(tmp_path, clock, fake_repo, monkeypatch)
+    ext.ensure_service()
+    assert len(calls) == 1
+
+    async def go():
+        await clock.advance(5, step=5)
+        await ext._on_login(SimpleNamespace(human=True, guid=1))
+        await ext._supervise_once()
+        assert len(calls) == 1  # the launch is still loading
+        ext._login_wall -= 5  # the wall clock as the fake one: his login came 5 s before
+        await clock.advance(5, step=5)
+        hold_voice(voice_data, "console")
+        await clock.advance(3600, step=3600)
+        await ext._supervise_once()
+        assert len(calls) == 1 and voice_hold(voice_data) is not None
+        await ext._on_login(SimpleNamespace(human=True, guid=1))
+        await ext._supervise_once()
+    run(go())
+    assert len(calls) == 2 and voice_hold(voice_data) is None
+
+
 def test_a_hold_older_than_the_last_greeting_is_stale(tmp_path, fast_clock, voice_data,
                                                       fake_repo, monkeypatch):
     """Something started the service after the stop (by hand, say): the hold no longer
