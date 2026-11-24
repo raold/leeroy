@@ -10,6 +10,7 @@
 #include "CommandScript.h"
 #include "Creature.h"
 #include "CreatureAI.h"
+#include "Engine.h"
 #include "Group.h"
 #include "GroupMgr.h"
 #include "InstanceScript.h"
@@ -52,6 +53,7 @@ struct RaidRun
     uint32 crossings = 0, hazardsSeen = 0, lightSamples = 0, darkSamples = 0, switchMs = 0;
     uint32 heals = 0, damageHits = 0;
     uint64 effectiveHealing = 0;
+    uint64 ownerEpoch = 0;
     float minimumClearance = 1000.f;
     bool setup = false, active = false, cleanup = false, combatObserved = false, competition = false;
     ObjectGuid target;
@@ -118,7 +120,7 @@ struct RaidRun
         std::lock_guard<std::recursive_mutex> lock(events);
         scenario = name; token = id; control = negative; failure.clear();
         elapsed = phaseMs = instance = samples = maxGap = crossings = hazardsSeen = lightSamples = darkSamples = switchMs = 0;
-        heals = damageHits = 0; effectiveHealing = 0; minimumClearance = 1000.f;
+        heals = damageHits = 0; effectiveHealing = ownerEpoch = 0; minimumClearance = 1000.f;
         setup = cleanup = combatObserved = competition = false; target.Clear();
         map = name == "valithria" ? 631 : name == "twins" ? 649 : 533;
         oldTwins = sPlayerbotAIConfig.TwinValkyrInteractions;
@@ -196,6 +198,11 @@ struct RaidRun
         InstanceScript* script = bot->GetInstanceScript();
         if (!script) { Fail("no native instance script"); return; }
         instance = bot->GetInstanceId();
+        // The leader is a scripted stimulus, not a second tested policy. Its
+        // ordinary AI must not move it or cast while the measured bot stays stock.
+        ownerEpoch = GET_PLAYERBOT_AI(owner)->AcquireExternalControl("dojo-raid-leader");
+        if (!ownerEpoch) { Fail("could not hold the scripted leader"); return; }
+        owner->StopMoving();
         // Far-teleport acknowledgement may have rebuilt the strategies.
         ai->SetMaster(owner);
         ai->ChangeStrategy("-stay,-passive,+heal", BOT_STATE_COMBAT);
@@ -208,12 +215,16 @@ struct RaidRun
             if (!dragon || !PlayerbotAI::IsHeal(bot)) { Fail("Valithria or stock healer role missing"); return; }
             target = dragon->GetGUID();
             dragon->SetHealth(dragon->GetMaxHealth() / 2); // setup only; never altered during the observation
-            script->SetBossState(10, IN_PROGRESS);
-            dragon->AI()->DoAction(1); // native encounter's enter-combat action
+            // The native encounter rejects a sequence break by teleporting the
+            // raid out. Establish the completed lower-spire prerequisite only.
+            for (uint32 boss = 0; boss < 4; ++boss) script->SetBossState(boss, DONE);
+            Creature* trigger = bot->GetMap()->GetCreature(script->GetGuidData(35));
+            if (!trigger) { Fail("native Valithria combat trigger missing"); return; }
             owner->NearTeleportTo(bot->GetPositionX() - 55.f, bot->GetPositionY(), bot->GetPositionZ(), 0.f);
             owner->SetHealth(owner->GetMaxHealth() * 9 / 10);
-            bot->SetInCombatWith(dragon);
             ai->ChangeStrategy(control ? "-icc" : "+icc", BOT_STATE_COMBAT);
+            ai->ChangeStrategy(control ? "-icc" : "+icc", BOT_STATE_NON_COMBAT);
+            trigger->AI()->DoZoneInCombat(); // real encounter/archmage combat, not friendly fake combat
         }
         else if (scenario == "twins")
         {
@@ -249,6 +260,16 @@ struct RaidRun
         ++samples;
         maxGap = std::max(maxGap, diff);
         combatObserved = combatObserved || bot->IsInCombat();
+        // These actors are mechanic probes, not a geared raid. Keep their
+        // reserves stable across instance buffs and spell stat recalculations.
+        // Damage events still count, and Valithria's health is never written here.
+        for (Player* p : {bot, owner})
+        {
+            p->SetMaxHealth(100000);
+            p->SetFullHealth();
+            p->SetMaxPower(POWER_MANA, 30000);
+            p->SetPower(POWER_MANA, 30000);
+        }
         if (scenario == "valithria")
         {
             // Keep the distant stock reach-to-heal competitor eligible, and
@@ -319,6 +340,7 @@ struct RaidRun
                 if (Player* p = Actor(i))
                 {
                     p->CombatStop(true);
+                    if (i == 1 && ownerEpoch) GET_PLAYERBOT_AI(p)->ReleaseExternalControl(ownerEpoch);
                     GET_PLAYERBOT_AI(p)->SetMaster(nullptr);
                     GET_PLAYERBOT_AI(p)->ChangeStrategy("+passive,+stay", BOT_STATE_NON_COMBAT);
                     if (Group* g = p->GetGroup()) g->Disband();
@@ -349,18 +371,47 @@ struct RaidRun
         json fixtures = json::array();
         for (std::size_t i = 0; i < actors.size(); ++i)
             if (Player* p = Actor(i))
+            {
+                PlayerbotAI* ai = GET_PLAYERBOT_AI(p);
                 fixtures.push_back({{"slot", i}, {"map", p->GetMapId()}, {"instance", p->GetInstanceId()},
                     {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
                     {"health", p->GetHealth()}, {"max_health", p->GetMaxHealth()}, {"mana", p->GetPower(POWER_MANA)},
                     {"teleporting", p->IsBeingTeleported()}, {"healer", PlayerbotAI::IsHeal(p)},
-                    {"icc", GET_PLAYERBOT_AI(p)->HasStrategy("icc", BOT_STATE_COMBAT)}});
+                    {"icc", ai->HasStrategy("icc", BOT_STATE_COMBAT)},
+                    {"combat", p->IsInCombat()}, {"self_bot", IsSelfBot(p)},
+                    {"controlled", ai->IsExternallyControlled()},
+                    {"combat_strategies", ai->GetStrategies(BOT_STATE_COMBAT)},
+                    {"idle_strategies", ai->GetStrategies(BOT_STATE_NON_COMBAT)},
+                    {"last_action", ai->GetCurrentEngine() ? ai->GetCurrentEngine()->GetLastAction() : ""}});
+            }
+        json encounter = json::object();
+        if (Player* p = Actor(0); p && p->GetInstanceScript())
+        {
+            InstanceScript* script = p->GetInstanceScript();
+            encounter["boss_state"] = uint32(script->GetBossState(scenario == "valithria" ? 10 : scenario == "twins" ? 3 : 0));
+            if (Player* owner = Actor(1))
+            {
+                encounter["leader_distance"] = p->GetDistance(owner);
+                encounter["leader_los"] = p->IsWithinLOSInMap(owner);
+            }
+            if (scenario == "twins")
+            {
+                encounter["interactions"] = sPlayerbotAIConfig.TwinValkyrInteractions;
+                for (uint32 data : {11u, 12u})
+                {
+                    Creature* c = p->GetMap()->GetCreature(script->GetGuidData(data));
+                    encounter[std::to_string(data)] = {{"exists", c != nullptr},
+                        {"alive", c && c->IsAlive()}, {"distance", c ? p->GetDistance(c) : -1.f}};
+                }
+            }
+        }
         return {{"format", 1}, {"kind", "dojo-raid-observation"}, {"scenario", scenario}, {"token", token},
             {"state", state}, {"control", control}, {"setup", setup}, {"cleanup", cleanup}, {"failure", failure},
             {"map", map}, {"instance", instance}, {"elapsed_ms", elapsed}, {"samples", samples}, {"max_gap_ms", maxGap},
             {"combat_observed", combatObserved}, {"reach_competitor", competition}, {"effective_healing", effectiveHealing},
             {"heal_events", heals}, {"light_samples", lightSamples}, {"dark_samples", darkSamples},
             {"switch_ms", switchMs}, {"crossings", crossings}, {"hazard_samples", hazardsSeen},
-            {"minimum_clearance", minimumClearance}, {"poison_hits", damageHits}, {"fixtures", fixtures}};
+            {"minimum_clearance", minimumClearance}, {"poison_hits", damageHits}, {"fixtures", fixtures}, {"encounter", encounter}};
     }
 };
 RaidRun run;

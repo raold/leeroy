@@ -68,7 +68,9 @@ Every normal case and negative control must pass. A missing boss, stalled bot,
 absent slimes, insufficient samples, login failure or unproved cleanup fails the
 gate. Poison samples more than 200 ms apart cannot certify a crossing. Controls
 prove sensitivity to these disabled behaviours, not detection of every possible
-raid regression. Fixtures have fixed enlarged health/mana reserves; these are
+raid regression. The scripted leader's ordinary AI is fenced; the measured bot
+keeps its stock AI. Fixture health/mana reserves are refilled during observation
+(never Valithria's HP, and never the recorded damage counters); these are
 mechanic integration checks, not DPS, healing throughput, full raid-clear or
 difficulty-parity claims. The initial suite uses 10-player normal difficulty.
 
