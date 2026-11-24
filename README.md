@@ -546,7 +546,7 @@ temporary repositories, synthetic databases and stub services.
 
 | Workflow | When | What |
 |---|---|---|
-| `ci` | main pushes and pull requests | shellcheck on `scripts/`, gitleaks over each push's and pull request's commits, the mod-leeroy and mod-dojo unit tests, the mind's Python 3.14 suite, the console's browser tests, the voice and selfie Python 3.12 suites, the dojo's suite and fake-worker protocol smoke, and a headless cross-service rehearsal in separate environments |
+| `ci` | main pushes and pull requests | shellcheck on `scripts/`, gitleaks over each push's and pull request's commits, the mod-leeroy and mod-dojo unit tests, the mind's Python 3.14 suite (its Hypothesis property tests derandomized under the `ci` profile), the console's browser tests, the voice and selfie Python 3.12 suites, the dojo's suite and fake-worker protocol smoke, and a headless cross-service rehearsal in separate environments |
 | `patches` | patch changes, nightly | applies the patches to the newest upstream mod-playerbots, then the dojo's series on top (plus playerbots' codestyle check), to mod-ollama-chat, and to mod-dungeon-clear (plus its lints); a nightly failure opens a `patch-drift` issue |
 | `build` | patch or module changes, weekly | compiles the fork core with the patched playerbots, patched mod-dungeon-clear, mod-leeroy and mod-dojo's disabled variant (clang, `-Werror`, ccache), then runs dungeon-clear's suites for the raids its patches add |
 | `release` | `v*` tag | GitHub release with the patches, modules, configs and scripts |
@@ -557,7 +557,7 @@ run code on that PC.
 
 ## Research
 
-[references.bib](references.bib) lists the 282 papers, books, software and
+[references.bib](references.bib) lists the 283 papers, books, software and
 models behind the project. Each entry notes what it shaped, or, in the dojo's
 section, what it is planned for. The main threads:
 
