@@ -101,7 +101,7 @@ from leeroy_mind.control_json import decode_body
 
 VERSION = 1
 KEY_FILE = "control.json"
-MAX_LINE = 8192  # a 400-character letter reply escaped (12 bytes an astral character) fits
+MAX_LINE = 32768  # a 2000-character Discord message escaped (12 bytes an astral character) fits
 MAX_REPLY = 65536
 READ_S = 2.0  # the console sends its line at once: a slot is not held longer
 RAID_S = 30.0  # how long one raid action may take before the console is answered anyway

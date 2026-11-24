@@ -57,7 +57,7 @@ def test_a_request_that_cannot_be_sent_is_a_contract_error(breaches):
 
 def test_a_line_over_max_line_is_refused_as_the_endpoint_refuses_it(breaches):
     got = control.answer("board", {"action": "reply", "kind": "letter", "to": 7,
-                                   "text": "\U0001f600" * 700}, {"ok": True})
+                                   "text": "\U0001f600" * (endpoint.MAX_LINE // 12)}, {"ok": True})
     assert got == {"ok": False, "error": "bad request"} and len(breaches) == 1
 
 
