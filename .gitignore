@@ -17,6 +17,7 @@
 !/mind/
 /mind/.venv/
 /mind/.pytest_cache/
+/mind/.hypothesis/
 /mind/*.egg-info/
 /mind/tests/console/e2e/node_modules/
 !/voice/
