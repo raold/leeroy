@@ -492,8 +492,9 @@ Apply them to a checkout of each module with
 matching checks, fastest first: `<windows.h>` macro names in added module code,
 mind migration numbering against the merge target, the patch series entries the
 live module checkouts lack (rehearsed in temporary clones, then the pin guard),
-the mind's `-k contract` tests, an MSVC `cl /Zs` of the changed mod-leeroy
-files with the live build's include paths and defines, and the branch's
+the mind's bridge, protocol, wire and contract test files, an MSVC `cl /Zs`
+of the changed mod-leeroy files with the live build's include paths and
+defines, and the branch's
 `db migrate` on an online-backup copy of the live `mind.db` with an integrity
 check. It only reads the live install and deletes what it writes. Its self-test,
 `bash scripts/tests/verify-run.sh`, uses temporary repositories and a stub mind.

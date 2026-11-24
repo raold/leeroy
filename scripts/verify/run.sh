@@ -18,7 +18,7 @@
 #                checkouts lack, `git am` in temporary --shared clones (scripts/ac-release-patches.py
 #                prepare, as the release does), then the pin guard on the result (CLAUDE.md's awk
 #                and the release helper's comment-aware check)
-#   contract     guild/bridge command code: the mind's `pytest -k contract`
+#   contract     guild/bridge command code: the mind's bridge, protocol, wire and contract test files
 #   msvc         modules/mod-leeroy/src C++: `cl /Zs` of the changed translation units with the
 #                live build's include paths and defines (modules.vcxproj)
 #   migrate      mind migrations: the branch's `db migrate` on an online-backup copy of the live
@@ -108,7 +108,7 @@ src_files="$(matching "^modules/[^/]+/src/.*$cxx")"
 leeroy_src="$(matching "^modules/mod-leeroy/src/.*$cxx" | present)"
 migration_files="$(matching '^mind/leeroy_mind/storage/(migrations/|db\.py$)')"
 patch_files="$(matching '^patches/(mod-playerbots|mod-dungeon-clear)/')"
-contract_files="$(matching '^mind/leeroy_mind/(bridge|protocol)\.py$|^mind/leeroy_mind/guild/|^modules/mod-leeroy/src/(LeeroyCommands\.|Guild/BotCommands\.|Lib/(LeeroyProtocol|LeeroyBridge|LeeroyGuildCommands|LeeroyBotCommandPolicy)\.)|contract')"
+contract_files="$(matching '^mind/leeroy_mind/(bridge|protocol)\.py$|^mind/leeroy_mind/guild/|^modules/mod-leeroy/src/(LeeroyCommands\.|Guild/BotCommands\.|Lib/(LeeroyProtocol|LeeroyBridge|LeeroyGuildCommands|LeeroyBotCommandPolicy)\.)|contracts?([^a-z]|$)')"
 
 selected=()
 [[ -n $workflow_files ]] && selected+=(workflows)
@@ -277,15 +277,25 @@ check_contract() {
         report skip contract "no pytest in $py"
         return
     fi
+    # The wire tests by file, not `-k contract` (a substring match that also takes "contraction"
+    # tests and misses the bridge's): bridge, protocol and wire test files, and any contract test
+    # file or directory. Live tests stay out (pyproject's addopts also deselects their marker).
+    local -a targets
+    mapfile -t targets < <(cd "$repo/mind" && find tests -name 'test_*.py' \( -name '*bridge*' -o -name '*protocol*' \
+        -o -name '*wire*' -o -path '*contract*' \) -not -name '*live*' -not -path '*contraction*' 2>/dev/null | LC_ALL=C sort)
+    if ((${#targets[@]} == 0)); then
+        report skip contract "no bridge, protocol, wire or contract test files in mind/tests"
+        return
+    fi
     local out rc
-    out="$(cd "$repo/mind" && PYTHONDONTWRITEBYTECODE=1 pyrun -m pytest -q -k contract -p no:cacheprovider tests)"
+    out="$(cd "$repo/mind" && PYTHONDONTWRITEBYTECODE=1 pyrun -m pytest -q -p no:cacheprovider "${targets[@]}")"
     rc=$?
-    case "$rc" in
-        0) report ok contract "$(tail -n 1 <<<"$out")" ;;
-        5) report skip contract "no test matches -k contract" ;;
-        *) report FAIL contract "$(tail -n 1 <<<"$out")"
-           grep -E '^(FAILED|ERROR) ' <<<"$out" | head -n 20 | indent ;;
-    esac
+    if ((rc == 0)); then
+        report ok contract "$(tail -n 1 <<<"$out") (${#targets[@]} wire/contract test file(s))"
+    else
+        report FAIL contract "$(tail -n 1 <<<"$out") (${#targets[@]} wire/contract test file(s))"
+        grep -E '^(FAILED|ERROR) ' <<<"$out" | head -n 20 | indent
+    fi
 }
 
 check_msvc() {

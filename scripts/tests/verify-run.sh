@@ -273,7 +273,7 @@ leftovers
 VERIFY_MIND_DB="$scratch/missing.db" run --only migrate main; expect 0; has 'skip migrate: no mind.db at'
 g "$leeroy" checkout --quiet main
 
-# --- contract: whatever -k contract selects, through a stub interpreter --------------------------
+# --- contract: the wire test files, through a stub interpreter that records what it was given -----
 g "$leeroy" checkout --quiet -b contract
 printf 'x = 3\n' > "$leeroy/mind/leeroy_mind/guild/loot.py"
 commit "$leeroy" "guild command code"
@@ -281,19 +281,36 @@ cat > "$scratch/stub-python" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
     "-c import pytest") exit "${STUB_IMPORT:-0}" ;;
-    "-m pytest -q -k contract -p no:cacheprovider tests") printf '%s\n' "$STUB_OUT"; exit "${STUB_RC:-0}" ;;
+    "-m pytest -q -p no:cacheprovider "*) printf '%s\n' "$*" > "$STUB_ARGS"; printf '%s\n' "$STUB_OUT"; exit "${STUB_RC:-0}" ;;
 esac
 exit 3
 EOF
 chmod +x "$scratch/stub-python"
+export STUB_ARGS="$scratch/stub-args"
 STUB_OUT="3 passed in 0.1s" VERIFY_PYTHON="$scratch/stub-python" run --only contract main
-expect 0; has 'ok   contract: 3 passed in 0.1s'
-STUB_OUT="no tests ran" STUB_RC=5 VERIFY_PYTHON="$scratch/stub-python" run --only contract main
-expect 0; has 'skip contract: no test matches -k contract'
-STUB_OUT=$'FAILED tests/test_wire.py::test_contract_give_loot\n1 failed in 0.2s' STUB_RC=1 VERIFY_PYTHON="$scratch/stub-python" run --only contract main
-expect 1; has 'FAIL contract: 1 failed in 0.2s'; has 'FAILED tests/test_wire.py::test_contract_give_loot'
+expect 0; has 'skip contract: no bridge, protocol, wire or contract test files in mind/tests'
+mkdir -p "$leeroy/mind/tests/guild" "$leeroy/mind/tests/contract" "$leeroy/mind/tests/text"
+for test in test_bridge.py test_live_bridge.py guild/test_protocol.py guild/test_loot_wire.py contract/test_give_loot.py \
+        text/test_contractions.py guild/test_loot_receipts.py; do
+    printf 'def test_x():\n    pass\n' > "$leeroy/mind/tests/$test"
+done
+commit "$leeroy" "wire tests and others"
+STUB_OUT="3 passed in 0.1s" VERIFY_PYTHON="$scratch/stub-python" run --only contract main
+expect 0; has 'ok   contract: 3 passed in 0.1s (4 wire/contract test file(s))'
+output=$(cat "$STUB_ARGS")
+has 'tests/contract/test_give_loot.py tests/guild/test_loot_wire.py tests/guild/test_protocol.py tests/test_bridge.py'
+lacks 'test_live_bridge'; lacks 'contractions'; lacks 'receipts'; lacks '-k'
+STUB_OUT=$'FAILED tests/test_bridge.py::test_invalid_preserved_identity\n1 failed in 0.2s' STUB_RC=1 VERIFY_PYTHON="$scratch/stub-python" run --only contract main
+expect 1; has 'FAIL contract: 1 failed in 0.2s'; has 'FAILED tests/test_bridge.py::test_invalid_preserved_identity'
 STUB_IMPORT=1 VERIFY_PYTHON="$scratch/stub-python" run --only contract main
 expect 0; has 'skip contract: no pytest in'
+# A path that only contains "contraction" selects nothing; a contract test file does.
+run --plan main; expect 0; has 'checks: contract'
+g "$leeroy" checkout --quiet -b contraction main
+mkdir -p "$leeroy/mind/tests"
+printf 'def test_y():\n    pass\n' > "$leeroy/mind/tests/test_contractions.py"
+commit "$leeroy" "a contraction test"
+run --plan main; expect 0; has 'checks: none'
 g "$leeroy" checkout --quiet main
 
 # --- patches: the entries the live checkout lacks, rehearsed in clones; the pin guard after -------
