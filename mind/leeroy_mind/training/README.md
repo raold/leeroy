@@ -123,6 +123,9 @@ The lab reads its members' bodies in one snapshot (`TrainingPorts.holders_of`, `
 its eligibility pass over the cast, its "still ours" check and its preemption check. One `holder()`
 per member read every body source again, the whole Realm journal included, and on 2026-11-22 held
 the mind's event loop at 100% CPU for 40 minutes until `[training] lab = false`.
+Discovery speakers and the weekly spread score pass also use one snapshot per eligible
+cohort. Spread refreshes the selected recipients and sources together again immediately
+before committing plans. Missing entries remain held; a batch never extends an old proof.
 
 ## Raid debrief
 

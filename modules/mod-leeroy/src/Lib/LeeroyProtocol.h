@@ -32,7 +32,7 @@ inline constexpr std::string_view kModuleVersion = "0.1.0";
 // built with can run for an offline raid (LeeroyOfflineRaidPolicy.h DcRaidFeatures); a mind plans those raids only
 // on a hello that lists them.
 inline constexpr std::string_view kFeatures[] = {"item_links", "playstyle", "raidlead", "mechanics", "regear",
-    "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "combat_quiet"};
+    "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "mechanics_cast_radius", "combat_quiet"};
 
 std::int64_t NowUnixMs();
 

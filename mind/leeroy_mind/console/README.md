@@ -118,6 +118,23 @@ To act, enable `[control] ops_actions = true` and restart mind and console. Cont
 
 Member heroics start disabled. To admit new runs, enable `[life] dungeons = true`, the guarded Discord server (`[server] enabled`, `[guards] enabled`), `Leeroy.MemberDungeon.Enable = 1` and `Leeroy.KeepCast = 1`. Native needs DungeonClear, its eligible dedicated test driver and enabled instance strategies. Verify `member_dungeon_v1` after native reload or reconnect. The mind reads the life switches at startup, session start and nightly reload. Day plans, Godmode and Strings have independent switches. The first rotation uses map 602 with encounter slots 0, 3, 1, 2. Normal heroic entry, loot and lockouts apply.
 
+Ops → Feature switchboard also has collapsible native sections for the installed
+`build/bin/RelWithDebInfo/configs/modules/mod_leeroy.conf` and `playerbots.conf`.
+They show only catalogued boolean keys, including Leeroy's feature enables and
+Playerbots' raid switches. Counts, modes, database strings and unknown keys are
+excluded. The source is explicit; tracked `config/` files are never a fallback.
+`unset` means the key is absent in that file, not off. `invalid` does not imply
+off either: native may use its own default. The first assignment wins as in the
+native parser. Missing/unreadable files show unknown values.
+
+These are configured file values, not observed server state. A different build,
+alternate config path, environment override or unapplied edit can change what
+runs. The panel neither reads those overrides nor controls native. Follow each
+feature's reload instructions, then verify its fresh greeting or receipt; apply
+restart-only changes at an approved native restart. Reading this panel never
+enables day plans, heroics or any other switch. Update `native_switch_keys.py`
+from actual `GetOption<bool>` declarations when updating the native/playerbots pin.
+
 Disablement closes proposals and requests cleanup for entered runs. Preserve the original start ID and first terminal. A cleanup-failed result can appear after 60 seconds. At least 600 seconds after the verified failure report, the shared slot can release if native no longer holds a member. A disjoint roster may then run. The original five stay fenced until exact handback is verified, including in a build without DungeonClear. After a crash at the first group-creation intent, the connected leader's independent ownership, group absence, original live position, difficulties, leader flag and matching stored character state can prove handback without any physical restoration. An old character row alone cannot.
 
 For an unresolved heroic, preserve a read-only copy of the characters database's `leeroy_member_dungeon_receipt` row for its realm and case-sensitive original start. Record revision, slot, settled flag, original terminal/time, verified failure time, group/copy, return scope, saved body states and per-GUID handbacks. Compare character/group rows with available live session, master and ownership observations. A verified member can later move. Keep ambiguous members fenced and send the evidence privately to the release owner. The Realm release action has no authority over this receipt. Any manual restoration needs separate authority. [Inspection procedure](../godmode/README.md#inspecting-an-unresolved-return)

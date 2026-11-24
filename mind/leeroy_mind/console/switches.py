@@ -9,6 +9,7 @@ A boolean row's default is false unless a fifth value says otherwise."""
 NUMBER = "number"
 
 SWITCHES = (
+    ('watchdog','enabled','Capture event-loop stalls','mind restart'),
     ('talk','aware','Awareness cards',''), ('guards','enabled','Guards',''),
     ('guards','semantic_enabled','Semantic guard checks','guards.enabled'),
     ('guards','phrase_cooldown','Phrase cooldown','guards.enabled',True),

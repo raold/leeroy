@@ -314,6 +314,16 @@ class BodyLedger:
         self._require_evidence()
         return {owner for _, owner in self._holders(self._state(), guid)} - excluded
 
+    def others_of(self, guids: Iterable[int], *, besides: set[str]) -> dict[int, set[str]]:
+        """All competing owners per member from one settled snapshot, including lower-ranked
+        holders that holder()/holders_of() intentionally do not return."""
+        selected = _members(guids)
+        excluded = {_identity(owner) for owner in besides}
+        self._settle(refresh=True, observed=selected)
+        self._require_evidence()
+        state = self._state()
+        return {guid: {owner for _, owner in self._holders(state, guid)} - excluded for guid in selected}
+
     def may_move(self, owner: str, guid: int) -> bool:
         owner = _identity(owner)
         guid = _uint(guid, 32)

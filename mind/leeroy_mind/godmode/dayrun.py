@@ -368,7 +368,8 @@ class DayRun:
                 why = "away_cap"
             else:
                 try:
-                    free = all(self.realm.bodies.holder(g) is None for g in guids)
+                    holders = self.realm.bodies.holders_of(guids)
+                    free = all(holders.get(g, owner) is None for g in guids)
                     claimed = self.realm.bodies.claim(owner, guids, rank="realm_day", until=row["ends"]) if free else set()
                 except BodyEvidenceUnavailable:
                     claimed = set()
@@ -392,7 +393,8 @@ class DayRun:
             return
         def preempted(_members):
             reason = self.reason(rows)
-            if not reason and any(self.realm.bodies.holder(g) in {'raid', 'offline_raid'} for g in _members):
+            holders = self.realm.bodies.holders_of(_members) if not reason and _members else {}
+            if not reason and any(holder in {'raid', 'offline_raid'} for holder in holders.values()):
                 return  # A tentative roster hold fences dispatch. Its validated request owns revocation.
             reason = reason or 'held'
             if self.permit(plan)["state"] in {"opening", "open"}:
