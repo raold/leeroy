@@ -60,6 +60,7 @@ constexpr float kAnchorYards = 15.0f;            // a member this far from every
 std::atomic<bool> enabled{false};
 #if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
 std::uint32_t dojoOwner = 0;
+bool dojoWasEnabled = false;
 #endif
 
 bool ContextEnabled()
@@ -755,6 +756,15 @@ void ReloadHazards()
 #if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
 void DojoHazardOwner(std::uint32_t guid)
 {
+    // The map-thread movement callbacks also consult the master enable flag.
+    // Preserve it across the synthetic group; no other group enters its snapshot.
+    if (guid && !dojoOwner)
+    {
+        dojoWasEnabled = enabled.load(std::memory_order_relaxed);
+        enabled.store(true, std::memory_order_relaxed);
+    }
+    else if (!guid && dojoOwner)
+        enabled.store(dojoWasEnabled, std::memory_order_relaxed);
     dojoOwner = guid;
     untilPass = 0;
 }

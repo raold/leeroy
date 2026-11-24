@@ -159,7 +159,8 @@ struct RaidRun
         // A legal first-tier Holy talent fixes the specialization. Ordinary stock
         // healing/reach strategies remain active, including the regression competitor.
         bot->resetTalents(true);
-        bot->LearnTalent(1450, 4); // Spiritual Focus, 5/5
+        bot->LearnTalent(1432, 4); // Spiritual Focus, 5/5 (Talent.dbc)
+        if (!bot->HasTalent(20208, bot->GetActiveSpec())) { Fail("Holy fixture talent refused"); return false; }
         bot->learnSpell(48782, false); // Holy Light, rank 13
         bot->learnSpell(48785, false); // Flash of Light, rank 9
         PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
@@ -206,7 +207,6 @@ struct RaidRun
             owner->SetHealth(owner->GetMaxHealth() * 9 / 10);
             bot->SetInCombatWith(dragon);
             ai->ChangeStrategy(control ? "-icc" : "+icc", BOT_STATE_COMBAT);
-            competition = bot->GetDistance(owner) > 40.f && owner->GetHealthPct() >= 80.f && owner->GetHealthPct() < 100.f;
         }
         else if (scenario == "twins")
         {
@@ -248,6 +248,9 @@ struct RaidRun
             // mana available. Never cast for the healer or write dragon HP here.
             owner->SetHealth(owner->GetMaxHealth() * 9 / 10);
             bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
+            Unit* healTarget = GET_PLAYERBOT_AI(bot)->GetAiObjectContext()->GetValue<Unit*>("party member to heal")->Get();
+            competition = competition || (healTarget == owner && bot->GetDistance(owner) > 40.f &&
+                owner->GetHealthPct() >= 80.f && owner->GetHealthPct() < 100.f && bot->IsWithinLOSInMap(owner));
             if (phaseMs >= 20000) Phase("cleanup");
         }
         else if (scenario == "twins")
