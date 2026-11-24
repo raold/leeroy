@@ -354,6 +354,101 @@ LEEROY_TEST(Training_DummyAbandonedJournaledMemberStaysFencedByItsJournal)
     CHECK(DecideDummyRelease(true, kDummyReleaseMs, DummyTrialFences(fate) ? 1 : 0) == DummyRelease::Release);
 }
 
+LEEROY_TEST(Training_DummyLetGoReleasesOurControlWhereItStandsAndNeverTeleports)
+{
+    // 2026-11-23: 1507 left the trial spot while every ownership fact held, so its return blocked
+    // (location_changed) with our solo party and the driver still on it, and the trial kept it 3 h.
+    DummyReturnState moved;
+    moved.prepared = moved.connected = moved.sameSession = moved.online = moved.owned = true;
+    moved.groupReleased = moved.leaderRestored = moved.finalResetDone = false;
+    CHECK(DecideDummyReturn(moved) == DummyReturnStep::Block); // The return still refuses the teleport home.
+    CHECK(DecideDummyLetGo(moved) == DummyReturnStep::ResetStrategies);
+    moved.resetDone = true;
+    CHECK(DecideDummyLetGo(moved) == DummyReturnStep::ReleaseGroup);
+    moved.groupReleased = true;
+    CHECK(DecideDummyLetGo(moved) == DummyReturnStep::RestoreLeaderFlag);
+    moved.leaderRestored = true;
+    CHECK(DecideDummyLetGo(moved) == DummyReturnStep::ReleaseMaster);
+    moved.released = true;
+    CHECK(DecideDummyLetGo(moved) == DummyReturnStep::FinalStockReset);
+    moved.finalResetDone = true;
+    CHECK(DecideDummyLetGo(moved) == DummyReturnStep::Complete); // Nothing of ours is left on it.
+    for (int bits = 0; bits < 64; ++bits)
+    {
+        DummyReturnState any;
+        any.prepared = any.connected = any.sameSession = any.online = any.owned = true;
+        any.resetDone = (bits & 1) != 0;
+        any.groupReleased = (bits & 2) != 0;
+        any.leaderRestored = (bits & 4) != 0;
+        any.released = (bits & 8) != 0;
+        any.finalResetDone = (bits & 16) != 0;
+        any.atOrigin = (bits & 32) != 0;
+        CHECK(DecideDummyLetGo(any) != DummyReturnStep::Teleport);
+        CHECK(DecideDummyLetGo(any) != DummyReturnStep::Block);
+    }
+}
+
+LEEROY_TEST(Training_DummyLetGoTouchesNothingThatIsNotProvablyOurs)
+{
+    DummyReturnState ours;
+    ours.prepared = ours.connected = ours.sameSession = ours.online = ours.owned = true;
+    CHECK(DecideDummyLetGo(ours) == DummyReturnStep::ResetStrategies);
+    for (auto field : {&DummyReturnState::connected, &DummyReturnState::sameSession, &DummyReturnState::online,
+        &DummyReturnState::owned})
+    {
+        auto changed = ours;
+        changed.*field = false;
+        CHECK(DecideDummyLetGo(changed) == DummyReturnStep::Wait);
+    }
+    for (auto field : {&DummyReturnState::teleporting, &DummyReturnState::loggingOut})
+    {
+        auto changed = ours;
+        changed.*field = true;
+        CHECK(DecideDummyLetGo(changed) == DummyReturnStep::Wait);
+    }
+    auto untouched = ours;
+    untouched.prepared = false;
+    CHECK(DecideDummyLetGo(untouched) == DummyReturnStep::Complete);
+}
+
+LEEROY_TEST(Training_DummyLetGoOwnershipAcceptsOnlyOurPartyWithTheDriverOrNoMaster)
+{
+    DummyOwnerState proven{true, false, true, false, true, false, false, true, true, false};
+    CHECK(DummyLetGoOwned(proven, false, false, false));
+    auto masterless = proven;
+    masterless.masterOwned = false; // The stock reset our party triggers dropped the driver.
+    CHECK(DummyLetGoOwned(masterless, false, false, true));
+    CHECK(!DummyLetGoOwned(masterless, false, false, false)); // A foreign master took it.
+    for (auto field : {&DummyOwnerState::sameSession, &DummyOwnerState::isCast, &DummyOwnerState::sameGuild,
+        &DummyOwnerState::groupOwned})
+    {
+        auto altered = proven;
+        altered.*field = false;
+        CHECK(!DummyLetGoOwned(altered, false, false, false));
+    }
+    for (auto field : {&DummyOwnerState::isHuman, &DummyOwnerState::isSelfBot, &DummyOwnerState::invited,
+        &DummyOwnerState::reserved, &DummyOwnerState::loggingOut})
+    {
+        auto altered = proven;
+        altered.*field = true;
+        CHECK(!DummyLetGoOwned(altered, false, false, false));
+    }
+}
+
+LEEROY_TEST(Training_DummyMovedMemberLetGoAtTheBoundEndsTheTrial)
+{
+    // Before: blocked, still in our solo party under the driver, so the trial kept it for good.
+    DummyHoldState held{true, false, false, true, true, true};
+    CHECK(DummyMemberHeld(held));
+    CHECK(DummyFateAfterBound(held, true) == DummyMemberFate::Keep);
+    // After letting go: no party of ours lists it and the driver is not its master.
+    DummyHoldState letGo{true, false, false, false, true, false};
+    CHECK(!DummyMemberHeld(letGo));
+    auto const fate = DummyFateAfterBound(letGo, true);
+    CHECK(fate == DummyMemberFate::Abandon); // Unreturned: native's receipt says released, never restored.
+    CHECK(DecideDummyRelease(true, kDummyReleaseMs, DummyTrialFences(fate) ? 1 : 0) == DummyRelease::Release);
+}
+
 LEEROY_TEST(Training_DummyCoreDisbandsAOneMemberPartyOnEnteringAMap)
 {
     // LFGPlayerScript::OnPlayerMapChanged outside an LFG dungeon: a group of one member or fewer is disbanded.

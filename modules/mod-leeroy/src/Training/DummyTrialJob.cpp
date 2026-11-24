@@ -64,7 +64,7 @@ struct Member
     bool prepared = false, moved = false, arrived = false, attacking = false, frozen = false,
         released = true, resetDone = true, returned = false, returnIssued = false, blocked = false,
         groupReleased = true, groupReleaseStarted = false, leaderFlag = false, leaderRestored = true,
-        finalResetDone = true, abandoned = false, setUp = false;
+        finalResetDone = true, abandoned = false, setUp = false, letGo = false;
     uint32 reasserted = 0;
     uint64 started = 0, ms = 0, damage = 0, hits = 0, retryAt = 0, setupAt = 0;
     std::optional<uint64> outsideSince;
@@ -95,11 +95,14 @@ public:
     bool Begin(Unit* target) { return Attack(target); }
 };
 
-bool SameSession(Member const& member, Player* bot)
+bool SameBody(Member const& member, Player* bot)
 {
-    return !member.blocked && bot && Identity(bot) == member.player && Identity(bot->GetSession()) == member.session
+    return bot && Identity(bot) == member.player && Identity(bot->GetSession()) == member.session
         && Identity(GET_PLAYERBOT_AI(bot)) == member.ai;
 }
+
+// A blocked member is never the same session to the trial's own steps; only letting it go asks past that.
+bool SameSession(Member const& member, Player* bot) { return !member.blocked && SameBody(member, bot); }
 
 bool AtOrigin(Member const& member, Player* bot)
 {
@@ -144,10 +147,11 @@ bool GroupScope(Member const& member, Player* bot)
         !member.groupReleased && HasNonPermanentBind(member.guid));
 }
 
-DummyOwnerState OwnerState(Job const& job, Member const& member, Player* bot)
+DummyOwnerState OwnerState(Job const& job, Member const& member, Player* bot, bool blockedToo = false)
 {
     auto master = Identity(GET_PLAYERBOT_AI(bot)->GetMaster());
-    return {SameSession(member, bot), member.guid == job.human || member.guid == Guild::HumanGuid(),
+    return {blockedToo ? SameBody(member, bot) : SameSession(member, bot),
+        member.guid == job.human || member.guid == Guild::HumanGuid(),
         Guild::IsCast(member.guid), IsSelfBot(bot), bot->GetGuildId() == job.guild,
         bot->GetGroupInvite() != nullptr || bot->GetOriginalGroup() != nullptr,
         DcTestRunManager::Instance().IsReserved(bot->GetGUID()) || Guild::OfflineRaidOwns(member.guid),
@@ -251,36 +255,120 @@ void Drop(Job const& job, Member& member, std::string reason, uint64 now)
     if (member.dropped.empty()) member.dropped = std::move(reason);
 }
 
-void Block(Job const& job, Member& member, std::string reason, std::string const& missing = {})
+// The blocked-member line's detail: `missing=` for an ownership change, where the body is for a move.
+void Block(Job const& job, Member& member, std::string reason, std::string const& detail = {})
 {
     if (!member.blocked)
         LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} blocked member {}: {}{}{}; its return stops and "
-            "training cleanup is required", job.event.id, member.guid, reason, missing.empty() ? "" : " missing=",
-            missing);
+            "training cleanup is required", job.event.id, member.guid, reason, detail.empty() ? "" : " ", detail);
     member.blocked = true;
     member.cleanupError = std::move(reason);
     RequireTrainingCleanup();
+}
+
+std::string Missing(Job const& job, Member const& member, Player* bot)
+{
+    return "missing=" + MissingOwnership(job, member, bot);
+}
+
+// Where a member that left the trial spot is, in ids and yards. On 2026-11-23 the block of 1507 (location_changed)
+// could not say whether it was teleporting, on another map or instance, or only out of range.
+std::string Where(Job const& job, Member const& member, Player* bot)
+{
+    if (!bot) return "where=unknown";
+    auto const& place = kDummyPlaces[job.command.place];
+    return Acore::StringFormat("map={} zone={} instance={} teleporting={} trial_yd={:.0f} trial_dz={:.0f} "
+        "origin_map={}", bot->GetMapId(), bot->GetZoneId(), bot->GetInstanceId(), bot->IsBeingTeleported() ? 1 : 0,
+        bot->GetDistance2d(place.x, place.y), bot->GetPositionZ() - place.z, member.origin.GetMapId());
+}
+
+void NoteGroupGone(Member& member, Player* bot)
+{
+    if (member.groupReleaseStarted && !member.creatingGroup && !OwnedGroup(member)
+        && bot && !bot->GetGroup() && !sGroupMgr->GetGroupByGUID(member.group.GetCounter()))
+        member.groupReleased = true; // Only our recorded release intent can consume a disappeared group.
+}
+
+// The ownership a release step needs: the trial's own proof, or for letting go of a blocked member
+// DummyLetGoOwned (the same body; the driver, or no master after our party's stock reset).
+bool Ours(Job const& job, Member const& member, Player* bot, bool letGo)
+{
+    if (!letGo) return Owned(job, member, bot);
+    auto* ai = bot ? GET_PLAYERBOT_AI(bot) : nullptr;
+    return ai && DummyLetGoOwned(OwnerState(job, member, bot, true), member.released, member.groupReleased,
+        !ai->GetMaster());
+}
+
+// One release step of a return or of letting go. Empty when it was taken, else why the body is no longer ours.
+// Never dereference a Group after RemoveMember/Disband: both can delete it.
+std::string ReleaseStep(Job const& job, Member& member, Player* bot, DummyReturnStep step, bool letGo)
+{
+    switch (step)
+    {
+        case DummyReturnStep::ReleaseMaster:
+            bot->AttackStop();
+            bot->CombatStopWithPets(true);
+            GET_PLAYERBOT_AI(bot)->SetMaster(nullptr); // Admission required a masterless bot.
+            member.released = true;
+            return {};
+        case DummyReturnStep::ResetStrategies:
+            bot->AttackStop();
+            bot->CombatStopWithPets(true);
+            GET_PLAYERBOT_AI(bot)->Reset(false); // Clears trial targets/engine; ownership excludes logging out.
+            GET_PLAYERBOT_AI(bot)->ResetStrategies();
+            JournalReset(member.guid);
+            member.resetDone = true; // A throwing reset remains false and is retried while ownership still holds.
+            return {};
+        case DummyReturnStep::ReleaseGroup:
+        {
+            PublishCreatedGroup(member);
+            auto* group = OwnedGroup(member);
+            if (!group || !Ours(job, member, bot, letGo)) return "group_changed";
+            member.groupReleaseStarted = true; // Record before a possibly throwing/deleting core operation.
+            if (member.creatingGroup)
+            {
+                // No ID means Create stopped before core membership/registration. Only discard an empty object.
+                if (group->GetGUID() || group->GetMembersCount() || group->GetInviteeCount() || bot->GetGroup())
+                    return "group_create_incomplete";
+                member.creatingGroup.reset();
+                member.groupReleased = true;
+            }
+            else if (group->GetMembersCount()) group->RemoveMember(bot->GetGUID());
+            else group->Disband();
+            return {}; // Re-resolve the player and GroupMgr identity on the next bounded iteration.
+        }
+        case DummyReturnStep::RestoreLeaderFlag:
+            if (!member.leaderFlag) bot->RemovePlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
+            member.leaderRestored = true; // Group::Disband does not undo Create's leader flag in this core.
+            return {};
+        case DummyReturnStep::FinalStockReset:
+            GET_PLAYERBOT_AI(bot)->Reset(false);
+            GET_PLAYERBOT_AI(bot)->ResetStrategies(); // Factory defaults depend on the restored groupless state.
+            JournalReset(member.guid);
+            member.finalResetDone = true; // A failure retries only this step while released ownership still holds.
+            return {};
+        default:
+            return {};
+    }
 }
 
 void ReturnMember(Job& job, Member& member, uint64 now)
 {
     if (member.returned || member.blocked) return;
     // Reset while the driver and solo group still prove control, then release both and issue one return.
-    // Never dereference a Group after RemoveMember/Disband: both can delete it.
     for (unsigned action = 0; action < 6; ++action)
     {
         auto* connected = ObjectAccessor::FindConnectedPlayer(Guid(member.guid));
         auto* bot = Guild::FindOnline(member.guid);
-        if (member.groupReleaseStarted && !member.creatingGroup && !OwnedGroup(member)
-            && bot && !bot->GetGroup() && !sGroupMgr->GetGroupByGUID(member.group.GetCounter()))
-            member.groupReleased = true; // Only our recorded release intent can consume a disappeared group.
+        NoteGroupGone(member, bot);
         Reassert(job, member, bot);
         DummyReturnState state{member.prepared, connected != nullptr, SameSession(member, connected), bot != nullptr,
             connected && connected->IsBeingTeleported(), AtOrigin(member, bot),
             member.released, member.resetDone, Owned(job, member, bot), AtTrial(job, bot, 150.0f),
             member.groupReleased, member.leaderRestored, member.finalResetDone,
             connected && connected->GetSession() && connected->GetSession()->IsLoggingOut()};
-        switch (DecideDummyReturn(state))
+        auto const step = DecideDummyReturn(state);
+        switch (step)
         {
             case DummyReturnStep::Complete:
                 member.returned = true;
@@ -295,51 +383,21 @@ void ReturnMember(Job& job, Member& member, uint64 now)
                 std::string reason = !state.sameSession ? "session_changed"
                     : !member.groupReleased && HasNonPermanentBind(member.guid) ? "instance_binding_changed"
                     : !state.owned ? "ownership_changed" : "location_changed";
-                std::string const missing = reason == "ownership_changed" ? MissingOwnership(job, member, bot) : "";
-                Block(job, member, std::move(reason), missing);
+                std::string const detail = reason == "ownership_changed" ? Missing(job, member, bot)
+                    : reason == "location_changed" ? Where(job, member, bot) : "";
+                Block(job, member, std::move(reason), detail);
                 return;
             }
             case DummyReturnStep::ReleaseMaster:
-                bot->AttackStop();
-                bot->CombatStopWithPets(true);
-                GET_PLAYERBOT_AI(bot)->SetMaster(nullptr); // Admission required a masterless bot.
-                member.released = true;
-                break;
             case DummyReturnStep::ResetStrategies:
-                bot->AttackStop();
-                bot->CombatStopWithPets(true);
-                GET_PLAYERBOT_AI(bot)->Reset(false); // Clears trial targets/engine; ownership excludes logging out.
-                GET_PLAYERBOT_AI(bot)->ResetStrategies();
-                JournalReset(member.guid);
-                member.resetDone = true; // A throwing reset remains false and is retried while ownership still holds.
-                break;
             case DummyReturnStep::ReleaseGroup:
-            {
-                PublishCreatedGroup(member);
-                auto* group = OwnedGroup(member);
-                if (!group || !Owned(job, member, bot)) { Block(job, member, "group_changed"); return; }
-                member.groupReleaseStarted = true; // Record before a possibly throwing/deleting core operation.
-                if (member.creatingGroup)
-                {
-                    // No ID means Create stopped before core membership/registration. Only discard an empty object.
-                    if (group->GetGUID() || group->GetMembersCount() || group->GetInviteeCount() || bot->GetGroup())
-                    { Block(job, member, "group_create_incomplete"); return; }
-                    member.creatingGroup.reset();
-                    member.groupReleased = true;
-                }
-                else if (group->GetMembersCount()) group->RemoveMember(bot->GetGUID());
-                else group->Disband();
-                break; // Re-resolve the player and GroupMgr identity on the next bounded iteration.
-            }
             case DummyReturnStep::RestoreLeaderFlag:
-                if (!member.leaderFlag) bot->RemovePlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
-                member.leaderRestored = true; // Group::Disband does not undo Create's leader flag in this core.
-                break;
             case DummyReturnStep::FinalStockReset:
-                GET_PLAYERBOT_AI(bot)->Reset(false);
-                GET_PLAYERBOT_AI(bot)->ResetStrategies(); // Factory defaults depend on the restored groupless state.
-                JournalReset(member.guid);
-                member.finalResetDone = true; // A failure retries only this step while released ownership still holds.
+                if (auto reason = ReleaseStep(job, member, bot, step, false); !reason.empty())
+                {
+                    Block(job, member, std::move(reason));
+                    return;
+                }
                 break;
             case DummyReturnStep::Teleport:
                 if (now < member.retryAt) return;
@@ -349,6 +407,29 @@ void ReturnMember(Job& job, Member& member, uint64 now)
                 return;
         }
     }
+}
+
+// Past the release bound: let go of a blocked member that our solo party or the driver still holds, where it
+// stands (DecideDummyLetGo). True once nothing of ours is left on it; it then stays unreturned and blocked.
+bool LetGo(Job const& job, Member& member)
+{
+    for (unsigned action = 0; action < 6; ++action)
+    {
+        auto* connected = ObjectAccessor::FindConnectedPlayer(Guid(member.guid));
+        auto* bot = Guild::FindOnline(member.guid);
+        NoteGroupGone(member, bot);
+        DummyReturnState state{member.prepared, connected != nullptr, SameBody(member, connected), bot != nullptr,
+            connected && connected->IsBeingTeleported(), AtOrigin(member, bot),
+            member.released, member.resetDone, Ours(job, member, bot, true), AtTrial(job, bot, 150.0f),
+            member.groupReleased, member.leaderRestored, member.finalResetDone,
+            connected && connected->GetSession() && connected->GetSession()->IsLoggingOut()};
+        auto const step = DecideDummyLetGo(state);
+        if (step == DummyReturnStep::Complete) return true;
+        if (step == DummyReturnStep::Wait || step == DummyReturnStep::Block || step == DummyReturnStep::Teleport)
+            return false;
+        if (!ReleaseStep(job, member, bot, step, true).empty()) return false; // No longer provably ours: left alone.
+    }
+    return false;
 }
 
 void Prepare(Job& job, uint64 now)
@@ -399,6 +480,11 @@ void Setup(Job& job, Member& member, Player* bot, uint64 now)
     auto* driver = Driver(job);
     if (!driver) { job.life.Stop("driver_offline", now); return; }
     auto* ai = GET_PLAYERBOT_AI(bot);
+    // Playerbots fully resets a bot's AI (travel target, RPG task, last movement, engines) only when it acks a
+    // worldport. A member already on the dummy's map came by a near teleport and kept all of it: on 2026-11-23
+    // 1507, from Tanaris, never hit the dummy while the three from Northrend did, and left the trial spot
+    // (location_changed). Every member starts the fight from the same clean AI, however it arrived.
+    ai->Reset(true);
     member.creatingGroup = std::make_unique<Group>();
     member.groupIdentity = Identity(member.creatingGroup.get());
     member.leaderFlag = bot->HasPlayerFlag(PLAYER_FLAGS_GROUP_LEADER);
@@ -458,7 +544,7 @@ void Move(Job& job, uint64 now)
                 break;
             case DummyMoveStep::Block:
                 Drop(job, member, "ownership_changed", now);
-                Block(job, member, "ownership_changed", MissingOwnership(job, member, bot));
+                Block(job, member, "ownership_changed", Missing(job, member, bot));
                 break;
             case DummyMoveStep::Died: Drop(job, member, "died", now); break;
             case DummyMoveStep::Attacked: Drop(job, member, "attacked", now); break;
@@ -534,7 +620,7 @@ void Fight(Job& job, uint64 now)
         else if (!Owned(job, member, bot))
         {
             Drop(job, member, "ownership_changed", now);
-            Block(job, member, "ownership_changed", MissingOwnership(job, member, bot));
+            Block(job, member, "ownership_changed", Missing(job, member, bot));
         }
         else if (!bot->IsAlive()) Drop(job, member, "died", now);
         else if (tap.DummyAttacked(job.slot, member.guid)) Drop(job, member, "attacked", now);
@@ -542,7 +628,7 @@ void Fight(Job& job, uint64 now)
             || bot->GetInstanceId())
         {
             Drop(job, member, "moved", now);
-            Block(job, member, "location_changed");
+            Block(job, member, "location_changed", Where(job, member, bot));
         }
         else
         {
@@ -636,7 +722,8 @@ std::string GuidList(std::vector<uint32> const& guids)
 // holds (cleanup_abandoned, never touched again, no longer fenced by the trial), journaled or not: its
 // journal keeps fencing that body and RestoreTrainingBots restores it. With nobody kept the job ends: its
 // slot frees and its global fence can clear. The dummy_cleanup "released" receipt names the members
-// whose return was never proved.
+// whose return was never proved. A blocked member our party or driver still holds is first let go where it
+// stands while it is still provably ours (DecideDummyLetGo), so it cannot keep the job for good.
 bool ReleaseStuck(Job& job, uint64 now)
 {
     if (job.life.Phase() != DummyPhase::Recovery || now < job.releaseCheckAt) return false;
@@ -647,6 +734,12 @@ bool ReleaseStuck(Job& job, uint64 now)
     for (auto& member : job.members)
     {
         if (member.abandoned) continue;
+        if (member.blocked && !member.letGo && DummyMemberHeld(HoldState(job, member)) && LetGo(job, member))
+        {
+            member.letGo = true;
+            LOG_WARN("module.leeroy", "mod-leeroy: dummy trial {} let_go guid={} blocked={}; our party and master "
+                "released where it stands, without the teleport home", job.event.id, member.guid, member.cleanupError);
+        }
         auto const fate = DummyFateAfterBound(HoldState(job, member), member.blocked);
         if (DummyTrialFences(fate)) kept.push_back(member.guid);
         else if (fate == DummyMemberFate::Abandon)
