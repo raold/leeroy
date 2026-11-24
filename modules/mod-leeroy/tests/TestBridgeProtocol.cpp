@@ -4,9 +4,10 @@
 // through its Python copy of DecodeCommand (the fake bridge's decoder) and checks that the mind encodes each valid
 // row exactly. Here the same rows go through the real decoder and, for an extension command, its handler's parser.
 //
-// LEEROY_WIRE_CAPTURE names a file of command lines the mind's test doubles wrote (mind/leeroy_mind/testing/wire.py
-// appends every line to it when the variable is set for a mind test run); Bridge_CapturedLinesParse then holds each
-// to the same decoder and parsers. Unset, as in CI, it has nothing to read.
+// LEEROY_WIRE_CAPTURE names a file of command lines the mind's test doubles saw, each with the verdict of their
+// decoder (mind/leeroy_mind/testing/wire.py writes it when the variable is set for a mind test run).
+// Bridge_CapturedLinesParse replays it: the real decoder must agree with the fake's on every line, and every
+// extension line the fake passed on must pass its handler's parser. Unset, as in CI, it has nothing to read.
 
 #include "LeeroyGuildAddPolicy.h"
 #include "LeeroyGuildCommands.h"
@@ -217,31 +218,45 @@ LEEROY_TEST(Bridge_CapturedLinesParse)
     std::ifstream file(path);
     CHECK(static_cast<bool>(file));
     Register({});
-    std::size_t lines = 0, refused = 0, unchecked = 0;
-    for (std::string line; std::getline(file, line);)
+    std::size_t lines = 0, differ = 0, refused = 0, unchecked = 0;
+    for (std::string text; std::getline(file, text);)
     {
-        if (line.empty())
+        if (text.empty())
             continue;
         ++lines;
+        // {"line", "error": what the fake's decoder said ("" accepted), "test"}
+        auto const row = json::parse(text);
+        std::string const line = row.at("line").get<std::string>(), fake = row.at("error").get<std::string>();
+        std::string const test = row.value("test", std::string("?"));
+        // Which extension types a fake bridge knows is its own setting (an older server): not the decoder's rule.
+        if (fake.rfind(std::string(Leeroy::Err::UnknownType), 0) == 0)
+            continue;
         auto const msg = json::parse(line, nullptr, false);
         if (msg.is_object() && msg.contains("type") && msg["type"].is_string())
             Leeroy::RegisterExtensionCommand(msg["type"].get<std::string>());
         auto const decoded = Leeroy::DecodeCommand(line);
-        std::string error = decoded.error;
-        bool ok = decoded.command.has_value();
-        if (ok && decoded.command->type == Leeroy::CommandType::Extension)
+        if (decoded.error != fake)
         {
-            auto const parsed = Parse(decoded.command->extType, decoded.command->raw, error);
-            if (!parsed)
-                ++unchecked;
-            ok = parsed.value_or(true);
+            ++differ;
+            std::cout << "  decoded '" << decoded.error << "', the fake '" << fake << "' (" << test << "): "
+                      << line.substr(0, 300) << "\n";
+            continue;
         }
-        if (!ok)
+        if (!decoded.command || decoded.command->type != Leeroy::CommandType::Extension)
+            continue;   // a refusal both decoders gave was the test's to expect
+        std::string error;
+        auto const parsed = Parse(decoded.command->extType, decoded.command->raw, error);
+        if (!parsed)
+            ++unchecked;
+        else if (!*parsed)
         {
             ++refused;
-            std::cout << "  refused (" << error << "): " << line.substr(0, 400) << "\n";
+            std::cout << "  refused (" << error << ") after the fake passed it on (" << test << "): "
+                      << line.substr(0, 300) << "\n";
         }
     }
-    std::cout << "  captured lines: " << lines << ", refused: " << refused << ", without a parser: " << unchecked << "\n";
+    std::cout << "  captured lines: " << lines << ", decoded otherwise: " << differ << ", refused by a parser: "
+              << refused << ", without a parser: " << unchecked << "\n";
+    CHECK_EQ(differ, std::size_t(0));
     CHECK_EQ(refused, std::size_t(0));
 }

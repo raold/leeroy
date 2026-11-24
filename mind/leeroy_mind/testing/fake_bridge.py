@@ -229,12 +229,12 @@ class FakeBridge:
                         return
                     continue
                 if wire.decode_command(raw, known=()).error == wire.BAD_JSON:
+                    wire.capture(raw, wire.BAD_JSON)
                     await self._write(writer, {"type": "error", "message": wire.BAD_JSON})
                     if first:
                         return  # as-built: error "bad json", then close
                     continue
                 first = False
-                wire.capture(raw)
                 await self._command(writer, json.loads(raw))
         except (OSError, asyncio.IncompleteReadError, asyncio.CancelledError):
             pass
@@ -245,7 +245,9 @@ class FakeBridge:
             self._handlers.discard(task)
 
     async def _command(self, writer: asyncio.StreamWriter, cmd: dict) -> None:
-        decoded = wire.decode_command(json.dumps(cmd), known=_Known(self))
+        line = json.dumps(cmd)
+        decoded = wire.decode_command(line, known=_Known(self))
+        wire.capture(line.encode(), decoded.error)
         self.commands.append(cmd)
         cmd_id = decoded.id
         type_name = cmd.get("type")

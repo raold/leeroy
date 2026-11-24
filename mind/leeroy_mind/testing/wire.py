@@ -41,17 +41,18 @@ def _source() -> str:
                      for path in sorted(NATIVE_SRC.rglob("*")) if path.suffix in (".cpp", ".h"))
 
 
-def capture(line: bytes) -> None:
-    """With LEEROY_WIRE_CAPTURE set, append the line to that file (and the test that sent it to
-    <file>.tests, line for line), for mod-leeroy's Bridge_CapturedLinesParse to hold to the real
-    parsers: every command any test made the mind send."""
+def capture(line: bytes, error: str) -> None:
+    """With LEEROY_WIRE_CAPTURE set, append {"line", "error", "test"} to that file: a command line
+    a double saw, the error decode_command gave it ("" when accepted) and the test that sent it.
+    mod-leeroy's Bridge_CapturedLinesParse replays the file: native must decode each line as the
+    fake did, and accept every extension line the fake passed on."""
     path = os.environ.get("LEEROY_WIRE_CAPTURE")
     if not path:
         return
-    with open(path, "ab") as out:
-        out.write(line.rstrip(b"\n") + b"\n")
-    with open(path + ".tests", "a", encoding="utf-8") as out:
-        out.write(os.environ.get("PYTEST_CURRENT_TEST", "?") + "\n")
+    row = {"line": line.rstrip(b"\n").decode("utf-8", "replace"), "error": error,
+           "test": os.environ.get("PYTEST_CURRENT_TEST", "?")}
+    with open(path, "a", encoding="utf-8") as out:
+        out.write(json.dumps(row) + "\n")
 
 
 @functools.cache
@@ -257,8 +258,8 @@ class WireContract:
                 cmd_id = f"m{self._next_id}"
             self._next_id += 1
         line = encode_command(dataclasses.replace(cmd, id=cmd_id), ts_ms)
-        capture(line)
         decoded = decode_command(line, known=self._known)
+        capture(line, decoded.error)
         msg = json.loads(line)
         self.lines.append(msg)
         if decoded.error:
