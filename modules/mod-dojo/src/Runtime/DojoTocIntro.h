@@ -124,7 +124,11 @@ struct DojoTocIntro
             // old speeches, loot or kill credit alongside the real Twins outro.
             for (uint32 slot = 0; slot < BOSS_TWIN_VALKYR; ++slot)
                 instance->InstanceScript::SetBossState(slot, DONE);
-            instance->SetBossState(BOSS_TWIN_VALKYR, DONE);
+            // A fresh boss starts TO_BE_DECIDED. Its first state assignment is
+            // treated as save loading and deliberately suppresses core scenes.
+            instance->InstanceScript::SetBossState(BOSS_TWIN_VALKYR, NOT_STARTED);
+            if (!instance->SetBossState(BOSS_TWIN_VALKYR, DONE))
+            { error = "toc_intro_scene_not_scheduled"; Release(actors); return; }
             instance->SetBossState(BOSS_ANUBARAK, NOT_STARTED);
             instance->SetCompletedEncountersMask(0x0f, false);
             if (!Leeroy::Guild::DojoPrimeTocStates(token))
