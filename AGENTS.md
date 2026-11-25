@@ -114,6 +114,20 @@ install.
   them or un-ignores them.
 - Commits carry no `Co-Authored-By` or other attribution trailers.
 
+### How to report findings
+
+- Report a bug class once: one finding listing every affected `file:line`, not one finding per
+  site or per round.
+- Tag a finding about code the PR did not change as **Pre-existing**; never block on it.
+- On a re-review, look only at commits after the last commit you already reviewed.
+- Start the summary with a count line: `N findings (P1 a, P2 b)`.
+- No style or naming nits. Report only correctness, security, data loss, release safety and
+  privacy.
+
+### Maintainer rule
+
+- After 3 review rounds on one PR, split or rethink the PR instead of starting a 4th round.
+
 <!-- review-outcomes:start -->
 ## Checks learned from released misses
 
