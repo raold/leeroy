@@ -103,7 +103,7 @@ struct OfflineFixture
         if (!Armed() || LeeroyModule::Instance().Enabled()) return "prepare requires an armed realm with Leeroy disabled";
         if (state != "idle" && state != "prepared") return "fixture is busy";
         for (std::size_t i = 0; i < Fixtures.size(); ++i)
-            if (DcBotProvisioning::ResolveSpecNo(Fixtures[i].cls, Fixtures[i].spec, Fixtures[i].spec) < 0)
+            if (DcBotProvisioning::ResolveSpecNo(Fixtures[i].cls, Fixtures[i].spec, Fixtures[i].spec, nullptr) < 0)
                 return "missing premade spec for fixture slot " + std::to_string(i);
         auto why = Identify(true);
         if (!why.empty()) return why;
