@@ -67,6 +67,27 @@ private. The report records the checkpoint hash for comparison. These runs are
 features. Automatic random population remains disabled; only `RNDBOTDOJO` gets
 the type-1 account assignment that ordinary guild pinning requires.
 
+### Open-world leading
+
+`realm --layout <layout> lead-acceptance` uses the same synthetic guild checkpoint
+and OfflineAcceptance build. A fixed `DOJORAID` character is loaded through the
+core login path with no playerbot AI attached. Two fixed guild bots start with
+that player as their master. The real command decoder and `lead_do` handler
+request travel from Dalaran's fountain to its bank.
+
+The enabled case requires actual leader and follower displacement, a three-second
+wait when the stationary player is over 40 yards behind, renewed walking after
+that scripted player catches up, and both bot masters restored at the end.
+The harness never moves a measured bot during observation; implausible steps or
+observation gaps above 200 ms fail. The disabled control must refuse with `off`
+after fixture readiness, leaving the master relationships intact. Both cases
+require group/session cleanup and world shutdown. The switch is changed only in
+this isolated configuration and restored afterwards.
+
+This checks native command handling and game behaviour; it does not exercise
+Discord or the mind's natural-language recognition. Reports and timestamped
+observations are saved under `<data>/runs/*-lead-*/`.
+
 The separate raid acceptance build exercises the real playerbots strategies,
 core encounter scripts and mod-leeroy hazard filter. It uses a dedicated dojo
 layout, MySQL instance, synthetic `DOJORAID` account and two fixture characters.
