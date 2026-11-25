@@ -23,7 +23,8 @@ TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
            "ulduar-route": ("ulduar-full", 603, None),
            "toc-slime-pools": ("toc", 649, None), "toc-slime-pools-control": ("toc", 649, None),
            "icc-deathwhisper": ("icc", 631, 1), "icc-gunship": ("icc", 631, 2),
-           "icc-valithria": ("icc", 631, 10), "offline-reserves": ("toc-reserves", 649, None),
+           "icc-valithria": ("icc", 631, 10), "icc-valithria-frontier": ("icc-valithria-frontier", 631, 10),
+           "offline-reserves": ("toc-reserves", 649, None),
            "ulduar-restart": ("ulduar", 603, None), "ulduar-tank-restart": ("ulduar", 603, None),
            "ulduar-forced-tank-restart": ("ulduar", 603, None)}
 
@@ -77,6 +78,24 @@ def reached(observation, *, target, token):
     if native.get("stage") != "running":
         return False
     bodies = observation.get("bodies", [])
+    if target == "icc-valithria-frontier":
+        frontier = observation.get("valithria_frontier", {})
+        if (type(event.get("wipes")) is not int or event["wipes"] != 0
+                or frontier.get("state") != "ready" or frontier.get("setup_strategies_restored") is not True
+                or any(type(frontier.get(k)) is not int or frontier[k] < 0
+                       for k in ("measured_ms", "heals", "healing", "start_health", "peak_health", "setup_completed_mask"))
+                or frontier["setup_completed_mask"] != 0 or frontier["heals"] < 2 or frontier["healing"] == 0
+                or frontier["start_health"] == 0 or frontier["peak_health"] <= frontier["start_health"]
+                or frontier["measured_ms"] < 1000):
+            return False
+        actors = [b for b in bodies if b.get("slot") in range(1, 11)]
+        if (len(actors) != 10 or len({b.get("guid") for b in actors}) != 10
+                or native.get("driver") is not True or native.get("elected") != native.get("leader")
+                or type(native.get("leader")) is not int or native["leader"] <= 0
+                or any(type(b.get("guid")) is not int or b["guid"] <= 0
+                       or b.get("owned") is not True or b.get("pinned") is not True
+                       or b.get("map") != map_id or b.get("instance") != instance for b in actors)):
+            return False
     if target in {"toc-slime-pools", "toc-slime-pools-control"}:
         slime = observation.get("slime", {})
         negative = target == "toc-slime-pools-control"
@@ -228,7 +247,7 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                                                 "Leeroy.HumanGuid": str(prepared["owner"]),
                                                 "Leeroy.Mechanics.Enable": "0" if target == "toc-slime-pools-control" else "1",
                                                 "Leeroy.Hazards.Enable": "1"})
-        if target == "icc-valithria":
+        if target in {"icc-valithria", "icc-valithria-frontier"}:
             _set(layout, "modules/mod_dungeon_clear.conf", {"DungeonClear.OfflineValithria": "1"})
         report["run_source"] = raids.provenance(layout)
         feed = MechanicConnection(layout, guild=prepared["guild"], map_id=TARGETS[target][1])
@@ -285,6 +304,13 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                             report["gate_failure"] = "naxx_pass_deadline_or_wipe"
                             report["failure_observation"] = observed
                             client.command("dojo offline stop")
+                    if (target == "icc-valithria-frontier" and not report.get("gate_failure")
+                            and native.get("event", {}).get("wipes", 0) > 0):
+                        # A restart returns to a fresh ICC instance at Marrowgar.
+                        # That unrelated full route cannot certify this prepared frontier.
+                        report["gate_failure"] = "valithria_frontier_wipe"
+                        report["failure_observation"] = observed
+                        client.command("dojo offline stop")
                     if target == "toc-slime-pools" and not report.get("gate_failure"):
                         slime = observed.get("slime", {})
                         if slime.get("late_hits", 0) > 0 or slime.get("unknown_hits", 0) > 0:
@@ -327,6 +353,8 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                             report["cleanup"] = report["cleanup"] and observed.get("toc_intro", {}).get("strategies_restored") is True
                         if target == "offline-native-stall":
                             report["cleanup"] = report["cleanup"] and observed.get("native_stall", {}).get("released") is True
+                        if target == "icc-valithria-frontier":
+                            report["cleanup"] = report["cleanup"] and observed.get("valithria_frontier", {}).get("setup_strategies_restored") is True
                         if toc_worm_support:
                             report["cleanup"] = report["cleanup"] and observed.get("toc_worm_support", {}).get("restored") is True
                         if target == "offline-reserves":
