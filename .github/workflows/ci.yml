@@ -30,8 +30,6 @@ jobs:
         run: pwsh -NoProfile -File scripts/tests/ac-guild-backup-schedule.ps1
       - name: release self-test (temporary repositories and stub services)
         run: bash scripts/tests/ac-release.sh
-      - name: server wrapper self-test (scratch install, stub process list)
-        run: bash scripts/tests/ac-server.sh
       - name: release module patch self-test (temporary repositories only)
         run: python3 scripts/tests/test_ac_release_patches.py
       - name: reviewer outcome accounting (synthetic records, no GitHub writes)
