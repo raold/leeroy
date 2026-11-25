@@ -119,6 +119,11 @@ HazardZone HazardLeadZone(HazardZone zone, std::optional<HazardPoint> next, floa
 // walk crosses its zone when the two come within the npc's own radius plus the bot's reach at any moment; passing
 // behind it is clear, stepping into its way is not.
 inline constexpr float kHazardWalkSpeed = 7.0f;
+// A bot waiting for the way to clear must be able to stand where it waits this long: no moving npc comes within
+// its own radius plus the bot's reach plus kHazardMarginYards (HazardStandClear). Else it steps aside, at most
+// kHazardAsideYards, to the nearest spot where it may.
+inline constexpr float kHazardStandSeconds = 2.0f;
+inline constexpr float kHazardAsideYards = 10.0f;
 inline constexpr float kHazardStandAfter = 1.0f;
 inline constexpr float kHazardScanAge = 0.5f;
 
@@ -136,6 +141,8 @@ bool InHazard(HazardPoint p, HazardZone const& zone, float reach);
 std::optional<std::size_t> HazardAt(HazardPoint p, std::vector<HazardZone> const& zones, float reach);
 // kHazardMarginYards clear of every zone's edge (beyond the reach).
 bool HazardClear(HazardPoint p, std::vector<HazardZone> const& zones, float reach);
+// HazardClear, and no moving npc comes that near within kHazardStandSeconds: a spot to wait on.
+bool HazardStandClear(HazardPoint p, std::vector<HazardZone> const& zones, float reach);
 // The straight walk from a to b enters no zone (no point within radius plus reach).
 bool HazardSegmentClear(HazardPoint a, HazardPoint b, std::vector<HazardZone> const& zones, float reach);
 
@@ -178,16 +185,18 @@ bool HazardDetourAllowed(HazardDetourTrack& track, HazardPoint at, HazardPoint g
 // Follow commits a bot to the leg it sets out on (playerbots plans again only once that leg's walk time, up to
 // MaxWaitForMove, has passed), so near a moving hazard a long leg is walked blind into a slime's path. While a
 // moving zone lies within kHazardMovingNearYards of the bot, follow walks legs of at most kHazardMovingLegYards
-// (about half a second at run speed) and so plans again from each fresh pass, and where the first zone across the
-// straight way moves and no waypoint goes round it, the bot waits where it stands for the way to clear.
+// (about half a second at run speed) and so plans again from each fresh pass, and where a moving npc shuts the
+// way it waits for it to pass, where it may stand (HazardStandClear) or a step aside.
 inline constexpr float kHazardMovingNearYards = 20.0f;
 inline constexpr float kHazardMovingLegYards = 4.0f;
 // The first zone across the straight walk from `from` to `goal` moves: it passes, so no pocket is given up on
 // (HazardDetourAllowed is for zones that stay) and with no way round the bot waits.
 bool HazardFirstCrossingMoves(HazardPoint from, HazardPoint goal, std::vector<HazardZone> const& zones, float reach);
-// Where follow walks next near moving zones: `waypoint` (a detour) or else `goal`, cut to a short leg, never
-// shorter than `minLeg` (HazardDetourStep: a nearer spot would stop follow); the bot's own spot to wait; nullopt
-// when no moving zone is near (follow walks to the waypoint or goal as before).
+// Where follow walks next near moving zones: a leg toward `waypoint` (a detour) or else `goal`, cut to
+// kHazardMovingLegYards but never shorter than `minLeg` (HazardDetourStep: a nearer spot would stop follow), when
+// the walk is clear; else the bot's own spot to wait, if HazardStandClear, or the nearest such spot to step aside
+// to. nullopt when no moving zone is near, when the bot stands in a zone (the exit's job), when a zone that stays
+// shuts the way (follow as before), or when no spot to wait on is in reach.
 std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std::optional<HazardPoint> waypoint,
     std::vector<HazardZone> const& zones, float reach, float minLeg);
 

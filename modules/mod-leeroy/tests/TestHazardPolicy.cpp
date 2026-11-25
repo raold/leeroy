@@ -737,6 +737,30 @@ LEEROY_TEST(Hazard_AWalkIsJudgedAgainstWhereAMovingNpcGoes)
     CHECK(HazardSegmentClear({-10, -8, 0}, {0, -8, 0}, {parked}, reach));
 }
 
+// The dojo's runs 5 and 6 of #469: the bot waited for a gap 1.5 yards from lane 1, and every slime set off on it.
+// A bot waits only where no slime comes within 2 s; beside a lane with one coming it steps aside instead.
+LEEROY_TEST(Hazard_ABotWaitsOnlyWhereNoSlimeComes)
+{
+    float const reach = 1.5f;
+    // A lane running south along x = 0 and a slime 3 yards north of the bot's latitude, coming.
+    HazardZone const slime = HazardLeadZone({0, 3, 0, 1.5f, 1}, HazardPoint{0, -40, 0}, 2.5f);
+    std::vector<HazardZone> const zones{slime};
+    HazardPoint const beside{4, 0, 0};
+    CHECK(!HazardAt(beside, zones, reach).has_value()); // not in its zone yet
+    CHECK(!HazardStandClear(beside, zones, reach));      // but in its way within 2 s
+    HazardPoint const goal{-30, 0, 0};                   // across the lane: no walk gets ahead of it
+    auto const leg = HazardMovingLeg(beside, goal, std::nullopt, zones, reach, 3.5f);
+    CHECK(leg.has_value());
+    CHECK(Dist(*leg, beside) > 1.0f);                    // a step, not a wait on the spot
+    CHECK(leg->x >= 4.5f);                               // its radius, the reach and the margin from the lane
+    CHECK(HazardStandClear(*leg, zones, reach));
+    // Well clear of the lane it waits where it stands.
+    HazardPoint const back{9, 0, 0};
+    CHECK(HazardStandClear(back, zones, reach));
+    auto const wait = HazardMovingLeg(back, goal, std::nullopt, zones, reach, 3.5f);
+    CHECK(wait.has_value() && Dist(*wait, back) < 0.01f);
+}
+
 // A slime that walks onto a bot again and again is no mover walking the bot back in: never counted, never yielded.
 LEEROY_TEST(Hazard_AMovingHazardNeverYieldsTheExit)
 {

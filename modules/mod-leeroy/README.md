@@ -520,14 +520,18 @@ training state or pending bot command leaves the body to its owner (nothing adde
   yard on the goal (a pocket between hazards, where greedy steps would circle), it walks straight as stock until
   his spot moves 3 yards.
 - **Moving npcs** (2026-11-24). A zone that moves is never a pocket: while the first zone across the straight
-  way moves (`HazardFirstCrossingMoves`) the detour never gives up, and with no waypoint round it the bot waits
-  where it stands for the way to clear. While a moving zone lies within 20 yards, follow walks short legs
+  way moves (`HazardFirstCrossingMoves`) the detour never gives up, and with no way round it the bot waits for the
+  way to clear, but only where it may stand: no moving npc comes within its own radius, the bot's reach and 1.5
+  yards in the next 2 s (`HazardStandClear`); else it steps aside, up to 10 yards, to the nearest such spot. (In
+  the dojo a bot waited 1.5 yards from lane 1 and every slime went off on it.) While a moving zone lies within 20
+  yards, follow walks short legs
   (`HazardMovingLeg`): playerbots commits a bot to the leg it sets out on for that leg's walk time, up to
   `Playerbots.MaxWaitForMove` (5 s, 35 yards at run speed), so a short leg makes it plan again from each fresh
   pass. A leg is 4 yards, or longer to lie beyond where follow stops: the bot's own formation distance from its
   edge (`FollowStop`; playerbots' default chaos formation widens `Playerbots.FollowDistance` by up to 3.5 yards
   every 3 s), and so is a detour step; a nearer spot made follow judge itself done, and the bot stood still
-  beside the lanes. A walk (a leg, a detour step, a crossing) is judged as both move (`HazardSegmentClear`): the
+  beside the lanes. Across a lane a leg runs on to the first spot where the bot may stand, so it crosses in one
+  walk instead of stopping in a slime's path. A walk (a leg, a detour step, a crossing) is judged as both move (`HazardSegmentClear`): the
   bot at run speed to its end and standing there a second, the npc on its way from a pass up to 500 ms old; it is
   not clear when they come within the npc's own radius plus the bot's reach, so stepping into a slime's way is
   refused and passing behind it is not. Map threads take only the bots of the master whose group the last pass
