@@ -58,6 +58,21 @@ remain `running` for five seconds with the actual driver and elected tank intact
 It exercises the recovery path behind `setup:restarting:timeout` without waiting
 for an accidental wipe. The existing setup timeout and cleanup requirements apply.
 
+`--target ulduar-tank-restart` separately waits for Razorscale's real main-tank
+reassignment before applying that wipe. Recovery must restore the job's designated
+tank as well as the complete roster and driver; it does not replace the XT check.
+
+Run both `--target toc-slime-pools-control` and `--target toc-slime-pools` to check
+Slime Pool avoidance during the actual Northrend Beasts pull. The control disables
+only the isolated mechanic responder and must take real pool damage. The enabled
+case requires a successfully cast pool to grow by at least four yards over twenty
+seconds, an observed entry and escape, three seconds with all ten owned actors
+outside the current pool radii, and no damage after each pool's initial two-second
+reaction window. Unknown damage sources, missing cast evidence, sampling gaps over
+200 ms, lost actors, cleanup failure or shutdown failure cannot pass. The native
+observer reads the spell's actual radius multiplier; it never moves a bot or
+changes a pool. These checks do not claim the whole Beasts encounter was cleared.
+
 `--target offline-reserves` starts with nine primary members and offers the
 fixed benched healer through the production reserve field. Its gate requires
 ten distinct owned members, including that reserve, alive in the same running
