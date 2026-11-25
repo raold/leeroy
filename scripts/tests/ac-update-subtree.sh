@@ -9,10 +9,13 @@ trap 'rm -rf -- "$scratch"' EXIT
 export GIT_AUTHOR_NAME=tester GIT_AUTHOR_EMAIL=tester@example.invalid
 export GIT_COMMITTER_NAME=tester GIT_COMMITTER_EMAIL=tester@example.invalid
 export AC_ROOT="$scratch/install with spaces" TMPDIR="$scratch/tmp" AC_TASKLIST="$scratch/tasklist"
+export AC_PROCESSES="$scratch/servers"
 mkdir -p "$AC_ROOT/scripts" "$TMPDIR"
 cp "$scripts/"{ac-update,common,config-keys,subtree-module}.sh "$AC_ROOT/scripts/"
 printf '#!/usr/bin/env bash\nprintf '\''"explorer.exe","100","Console","1","900 K"\\n'\''\n' > "$AC_TASKLIST"
-chmod +x "$AC_TASKLIST"
+printf '#!/usr/bin/env bash\ncat "%s/server-rows"\n' "$scratch" > "$AC_PROCESSES"
+printf 'end\n' > "$scratch/server-rows"
+chmod +x "$AC_TASKLIST" "$AC_PROCESSES"
 checks=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 ok() { checks=$((checks + 1)); }
@@ -44,6 +47,14 @@ module="$AC_ROOT/azerothcore-wotlk/modules/mod-nested"
 mkdir -p "$module"
 cp -R "$up/$prefix/". "$module/"
 printf 'local\n' > "$module/local.txt"
+# A process snapshot without its end sentinel must still refuse the swap.
+printf 'incomplete\n' > "$scratch/server-rows"
+if output=$(bash "$scripts/ac-module-to-git.sh" --go --subdir "$prefix" mod-nested "$up" "$initial" 2>&1); then
+    fail 'unreadable process snapshot permitted conversion'
+fi
+has 'cannot read the server processes'
+[ ! -e "$module/.git" ] || fail 'refused conversion changed the module'; ok
+printf 'end\n' > "$scratch/server-rows"
 output=$(bash "$scripts/ac-module-to-git.sh" --go --subdir "$prefix" mod-nested "$up" "$initial" 2>&1)
 has 'ac-update.sh follows origin/main'
 g "$module" branch -m local-work
