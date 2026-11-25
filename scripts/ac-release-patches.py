@@ -27,17 +27,18 @@ class Refused(Exception):
     pass
 
 
-def git(repo: Path, *args: str, data: bytes | None = None, check: bool = True) -> subprocess.CompletedProcess:
+def git(repo: Path, *args: str, data: bytes | None = None, check: bool = True,
+        env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     result = subprocess.run(["git", "-C", str(repo), *args], input=data,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            env=dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0"))
+                            env=dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0", **(env or {})))
     if check and result.returncode:
         raise Refused(f"git_{args[0].replace('-', '_')}_failed")
     return result
 
 
-def value(repo: Path, *args: str) -> str:
-    return git(repo, *args).stdout.decode("utf-8", "surrogateescape").strip()
+def value(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
+    return git(repo, *args, env=env).stdout.decode("utf-8", "surrogateescape").strip()
 
 
 def same_path(a: Path | str, b: Path | str) -> bool:
@@ -88,6 +89,49 @@ def history_ids(repo: Path) -> set[str]:
         if ids.returncode or log.wait():
             raise Refused("patch_history_unreadable")
     return {line.split()[0] for line in output.decode().splitlines() if line.split()}
+
+
+def mail(clone: Path, raw: bytes, work: Path) -> tuple[str, bytes]:
+    """The commit subject and diff that git am takes from a format-patch file."""
+    info = git(clone, "mailinfo", str(work / "message"), str(work / "diff"), data=raw).stdout
+    rows = info.decode("utf-8", "surrogateescape").splitlines()
+    subject = next((row[len("Subject: "):] for row in rows if row.startswith("Subject: ")), "")
+    return subject, (work / "diff").read_bytes()
+
+
+def subjects(clone: Path) -> dict[str, list[str]]:
+    rows = git(clone, "log", "--no-merges", "--format=%H %s", "HEAD").stdout
+    found: dict[str, list[str]] = {}
+    for row in rows.decode("utf-8", "surrogateescape").splitlines():
+        sha, _, subject = row.partition(" ")
+        found.setdefault(subject, []).append(sha)
+    return found
+
+
+def same_change(clone: Path, sha: str, diff: bytes, index: dict[str, str]) -> bool:
+    # The patch is this commit when it turns the commit's parent into exactly the
+    # commit's tree, whatever context width or format it was exported with.
+    parents = value(clone, "rev-list", "--parents", "-n", "1", sha).split()
+    if len(parents) != 2:
+        return False
+    git(clone, "read-tree", parents[1], env=index)
+    if git(clone, "apply", "--cached", data=diff, check=False, env=index).returncode:
+        return False
+    return value(clone, "write-tree", env=index) == value(clone, "rev-parse", f"{sha}^{{tree}}")
+
+
+def applies(clone: Path, diff: bytes, index: dict[str, str], *flags: str) -> bool:
+    # Check against the committed HEAD tree in a private index: never a working
+    # tree or its line-ending conversion, and nothing is applied.
+    git(clone, "read-tree", "HEAD", env=index)
+    return git(clone, "apply", "--cached", "--check", *flags, data=diff, check=False, env=index).returncode == 0
+
+
+def label(patch: dict) -> str:
+    # Report the offending series entry, never Git's unbounded error payload.
+    # Unusual filenames get a content identifier instead of terminal controls.
+    name = patch["name"]
+    return name if re.fullmatch(r"[0-9]{4}-[A-Za-z0-9_.-]{1,180}\.patch", name) else patch["sha256"][:12]
 
 
 def pin_guard(repo: Path) -> None:
@@ -160,11 +204,7 @@ def apply_entry(repo: Path, module: str, patch: dict) -> None:
     try:
         am(repo, raw)
     except Refused as exc:
-        # Report the offending series entry, never Git's unbounded error payload.
-        # Unusual filenames get a content identifier instead of terminal controls.
-        name = patch["name"]
-        label = name if re.fullmatch(r"[0-9]{4}-[A-Za-z0-9_.-]{1,180}\.patch", name) else patch["sha256"][:12]
-        raise Refused(f"{module}: {label}: patch_apply_failed") from exc
+        raise Refused(f"{module}: {label(patch)}: patch_apply_failed") from exc
 
 
 def prepare(modules_root: Path, series_root: Path, path: Path) -> dict:
@@ -228,7 +268,22 @@ def prepare(modules_root: Path, series_root: Path, path: Path) -> dict:
             git(clone, "config", "commit.gpgSign", "false")
             git(clone, "config", "core.autocrlf", "false")
             git(clone, "checkout", "--quiet", "--detach", module["head"])
-            for patch in module["patches"]:
+            work = Path(temporary) / (module["name"] + "-check")
+            work.mkdir()
+            index = {"GIT_INDEX_FILE": str(work / "index")}
+            history = subjects(clone)  # the real checkout's history, before any rehearsal commit
+            candidates, module["patches"] = module["patches"], []
+            for patch in candidates:
+                subject, diff = mail(clone, patch_bytes(patch), work)
+                if any(same_change(clone, sha, diff, index) for sha in history.get(subject, ())):
+                    continue  # the same change in history under another patch-id
+                # Checked in series order on the rehearsal tip, so a later entry that
+                # undoes a missing earlier one is not mistaken for already installed.
+                if applies(clone, diff, index, "--reverse"):
+                    if applies(clone, diff, index):
+                        raise Refused(f"{module['name']}: {label(patch)}: ambiguous_installed_state")
+                    continue  # its whole change is already in the checkout
+                module["patches"].append(patch)
                 apply_entry(clone, module["name"], patch)
                 patch["tree"] = value(clone, "rev-parse", "HEAD^{tree}")
                 patch["result_patch_id"] = patch_id(clone, git(clone, "show", "--format=", "--binary", "HEAD").stdout)

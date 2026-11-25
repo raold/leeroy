@@ -252,6 +252,105 @@ class PatchTests(unittest.TestCase):
         self.assert_original()
         self.assertFalse(self.journal.exists())
 
+    LINES = "".join(f"line {i}\n" for i in range(1, 16))
+
+    def lined(self, text=LINES):
+        """A multi-line file in the real playerbots checkout, and an author clone of it."""
+        repo = self.repos["mod-playerbots"]
+        self.write(repo / "lines.cpp", text)
+        self.git(repo, "add", ".")
+        self.git(repo, "commit", "-qm", "Lines")
+        self.original["mod-playerbots"] = self.git(repo, "rev-parse", "HEAD")
+        author = self.root / "lines-author"
+        self.git(repo, "clone", "-q", "--config", "core.autocrlf=false", str(repo), str(author))
+        for key, value in (("user.name", "Patch author"), ("user.email", "author@example.invalid"),
+                           ("commit.gpgsign", "false")):
+            self.git(author, "config", key, value)
+        return repo, author
+
+    def entry(self, author, number, old, new, subject, *export):
+        """Commit one change in the author clone; write its export, return the standard one."""
+        path = author / "lines.cpp"
+        self.write(path, path.read_text(encoding="utf-8").replace(old, new, 1))
+        self.git(author, "commit", "-qam", subject)
+        show = ["git", "-C", str(author), "format-patch", "-1", "--stdout"]
+        target = self.series / "mod-playerbots" / f"{number:04d}-{subject.replace(' ', '-')}.patch"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(subprocess.check_output([*show, *export]))
+        return subprocess.check_output(show)
+
+    def commit_lines(self, repo, text, subject):
+        self.write(repo / "lines.cpp", text)
+        self.git(repo, "commit", "-qam", subject)
+        self.original["mod-playerbots"] = self.git(repo, "rev-parse", "HEAD")
+
+    def file_id(self, repo, number):
+        return release.patch_id(repo, next((self.series / "mod-playerbots").glob(f"{number:04d}-*")).read_bytes())
+
+    def test_installed_patch_with_another_patch_id_is_recognised_by_its_content(self):
+        repo, author = self.lined()
+        self.entry(author, 1, "line 8\n", "line 8 changed\n", "Change eight", "-U1")
+        self.commit_lines(repo, (author / "lines.cpp").read_text(encoding="utf-8"), "Installed by hand")
+        self.assertNotIn(self.file_id(repo, 1), release.history_ids(repo))
+        journal = self.prepare()
+        self.assertEqual(release.summary(journal)["missing"], 0)
+        self.assert_original()
+        release.apply(self.journal)
+        self.assert_original()
+
+    def test_installed_patch_with_another_patch_id_and_later_edit_is_matched_by_subject(self):
+        repo, author = self.lined()
+        standard = self.entry(author, 1, "line 8\n", "line 8 changed\n", "Change eight", "-U1")
+        self.git(repo, "am", data=standard)
+        self.commit_lines(repo, self.LINES.replace("line 8\n", "line 8 owner\n"), "Owner edit")
+        self.assertNotIn(self.file_id(repo, 1), release.history_ids(repo))
+        self.assertEqual(release.summary(self.prepare())["missing"], 0)
+        self.assert_original()
+
+    def test_missing_patch_after_one_installed_with_another_patch_id_is_applied(self):
+        repo, author = self.lined()
+        self.entry(author, 1, "line 4\n", "line 4 changed\n", "Change four", "-U1")
+        self.commit_lines(repo, (author / "lines.cpp").read_text(encoding="utf-8"), "Installed by hand")
+        self.entry(author, 2, "line 12\n", "line 12 changed\n", "Change twelve", "-U1")
+        journal = self.prepare()
+        self.assertEqual(release.summary(journal)["missing"], 1)
+        self.assertEqual([p["name"] for p in journal["modules"][0]["patches"]], ["0002-Change-twelve.patch"])
+        self.assert_original()
+        self.assertEqual(release.summary(release.apply(self.journal))["applied"], 1)
+        self.assertEqual((repo / "lines.cpp").read_text(encoding="utf-8"), (author / "lines.cpp").read_text(encoding="utf-8"))
+        self.assertEqual(self.git(repo, "log", "-1", "--format=%s"), "Change twelve")
+        release.rollback(self.journal)
+        self.assert_original()
+
+    def test_entry_undoing_a_missing_earlier_entry_is_not_taken_as_installed(self):
+        repo, author = self.lined()
+        self.entry(author, 1, "line 8\n", "line 8 changed\n", "Change eight")
+        self.entry(author, 2, "line 8 changed\n", "line 8\n", "Restore eight")
+        self.assertEqual(release.summary(self.prepare())["missing"], 2)
+        self.assert_original()
+        release.apply(self.journal)
+        self.assertEqual(self.git(repo, "log", "-2", "--format=%s").splitlines(), ["Restore eight", "Change eight"])
+        release.rollback(self.journal)
+        self.assert_original()
+
+    def test_patch_that_neither_reverses_nor_applies_still_fails_closed(self):
+        repo, author = self.lined()
+        self.entry(author, 1, "line 8\n", "line 8 changed\n", "Change eight", "-U1")
+        self.commit_lines(repo, self.LINES.replace("line 8\n", "line 8 local\n"), "Local change")
+        with self.assertRaisesRegex(release.Refused, r"mod-playerbots: 0001-Change-eight\.patch: patch_apply_failed"):
+            self.prepare()
+        self.assert_original()
+        self.assertFalse(self.journal.exists())
+
+    def test_patch_that_both_reverses_and_applies_is_refused_as_ambiguous(self):
+        block = "one\ntwo\nthree\nfour\n"
+        repo, author = self.lined("head 1\nhead 2\nhead 3\none\ntwo\nX\nthree\nfour\nmid\n" + block + "tail 1\ntail 2\n")
+        self.entry(author, 1, "X\n", "", "Drop X", "-U2")
+        with self.assertRaisesRegex(release.Refused, r"mod-playerbots: 0001-Drop-X\.patch: ambiguous_installed_state"):
+            self.prepare()
+        self.assert_original()
+        self.assertFalse(self.journal.exists())
+
     def test_incompatible_patch_reports_its_series_entry_without_real_changes(self):
         self.series_for("mod-playerbots", ("one\n",))
         repo = self.repos["mod-playerbots"]
