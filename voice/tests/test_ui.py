@@ -9,6 +9,7 @@ import logging
 import re
 import socket
 import threading
+from pathlib import Path
 
 import pytest
 from websockets.exceptions import InvalidStatus
@@ -312,6 +313,24 @@ def test_a_bad_argument_is_ignored(message):
             await page.send(message)
             assert await rig.settled(page) == []
             assert not page.closed.is_set()
+    run(go())
+
+
+PAGE_GOLDEN = Path(__file__).parent / "fixtures" / "page_golden.json"
+
+
+@pytest.mark.parametrize("case", json.loads(PAGE_GOLDEN.read_text(encoding="utf-8")),
+                         ids=lambda c: json.dumps(c["message"])[:60])
+def test_the_page_golden_cases(case):
+    """What the socket acts on, and with which arguments; the mind's console relays a page's
+    message only as voicelink.page_message makes it, which is held to the same file."""
+    async def go():
+        async with Rig() as rig:
+            page = await rig.page()
+            await page.send(case["message"])
+            relayed = case["relayed"]
+            assert await rig.settled(page) == (
+                [] if relayed is None else [tuple(relayed.values())])
     run(go())
 
 

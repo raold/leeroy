@@ -578,6 +578,15 @@ if ($rules -isnot [System.Collections.IDictionary] -or (Get-DojoValue $rules 'ki
         $dist = Read-DojoConf $distPath
         $training = if ($spec.Contains('training')) { $spec.training } else { @{} }
         $ordinary = if ($spec.Contains('ordinary')) { $spec.ordinary } else { @{} }
+        # Older production playerbots revisions predate these options. If either
+        # file has one, both must have the reviewed stock value.
+        if ($spec.Contains('ordinary_if_present')) {
+            foreach ($key in $spec.ordinary_if_present.Keys) {
+                if ($dist.ContainsKey($key) -or $conf.ContainsKey($key)) {
+                    $ordinary[$key] = $spec.ordinary_if_present[$key]
+                }
+            }
+        }
         $isolation = @(if ($spec.Contains('isolation')) { $spec.isolation } else { @() })
         $problems = [System.Collections.Generic.List[string]]::new()
         foreach ($key in $ordinary.Keys) {

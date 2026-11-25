@@ -27,6 +27,7 @@ from leeroy_mind.realm.service import attach_realm
 from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
+from leeroy_mind.testing.wire import port_method
 from realm.fakes import RealmApp, enabled
 
 NY = ZoneInfo("America/New_York")
@@ -73,6 +74,7 @@ class Ports:
         return [row[0] for row in self.rig.store.conn.execute(
             "SELECT started FROM session WHERE started>=? ORDER BY started,id", (since,))]
 
+    @port_method
     async def send(self, cmd):
         return await self.rig.native(cmd)
 

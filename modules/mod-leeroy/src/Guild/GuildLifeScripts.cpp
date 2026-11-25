@@ -62,6 +62,7 @@ public:
         Leeroy::Guild::RegisterMechanicsHandler();
         Leeroy::Guild::RegisterStringsHandler();
         Leeroy::Guild::RegisterLeadHandler();
+        Leeroy::PlayStyle::RegisterTableHandler();
     }
 
     void OnUpdate(uint32 diff) override

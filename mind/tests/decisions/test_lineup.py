@@ -12,6 +12,7 @@ from leeroy_mind.decisions.lineup import (BENCH_MAX, LINEUP_AHEAD_S, NIGHT_S, SE
                                           build_lineup, roster_text, subject_of, tonight)
 from leeroy_mind.guild.comp import Candidate, coverage, select_comp
 from leeroy_mind.protocol import Ack, Member
+from leeroy_mind.testing.wire import port_method
 
 HOUR = 3600.0
 
@@ -105,8 +106,11 @@ def test_coverage_breaks_ties_toward_bloodlust_and_replenishment():
 
 class Ports:
     def __init__(self, ok=True):
+        from leeroy_mind.guild.protocol import register
+        register()  # guild life's ports exist only once its types are registered
         self.enabled, self.sent, self.ok = True, [], ok
 
+    @port_method
     async def send(self, command):
         self.sent.append(command)
         return Ack(0, command.id, self.ok, '' if self.ok else 'bad field: until_ms')

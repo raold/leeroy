@@ -11,9 +11,10 @@ from leeroy_mind.bridge import Backoff, BridgeClient
 from leeroy_mind.guild import protocol as guild_protocol
 from leeroy_mind.guild.protocol import Job
 from leeroy_mind.memory.writer import WriteResult
-from leeroy_mind.protocol import Ack, encode_command, parse_event
+from leeroy_mind.protocol import Ack, parse_event
 from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_clock import FakeClock
+from leeroy_mind.testing.wire import WireContract
 from leeroy_mind.training import protocol as training_protocol
 from leeroy_mind.training.benchmark import (BenchmarkSchedule, Benchmarks, DPS_UNAVAILABLE,
     allowed_bosses, percentiles, pick_guild, rival_candidates)
@@ -48,6 +49,7 @@ class Ports:
         self.cast_members = {201: SimpleNamespace(name="SyntheticOfficer")}
         self.rivals = roster()
         self.holders, self.claims, self.released, self.sent, self.memories = {}, [], [], [], []
+        self.wire = WireContract()
         self.away_guids = set()
         self.realm = lambda map_, boss, size, heroic: boss == 0
         self.schedule_changes = {}
@@ -114,8 +116,10 @@ class Ports:
         return self.memory_result
 
     def serialized(self, cmd):
-        raw = json.loads(encode_command(cmd, int(self.clock.now() * 1000)))
-        assert re.fullmatch(r"[A-Za-z0-9_-]{1,128}", raw["id"])
+        # The live ports send through guild life's: BridgeClient's identity rule, then native's decoder.
+        _, refusal = self.wire.send(cmd, preserve_id=True, ts_ms=int(self.clock.now() * 1000))
+        assert not refusal, refusal
+        raw = self.wire.lines[-1]
         self.sent.append(raw)
         return raw
 

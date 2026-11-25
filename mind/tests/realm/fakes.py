@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 from leeroy_mind.bridge import TransportState
 from leeroy_mind.config import load_config
 from leeroy_mind.protocol import Ack, event_type
+from leeroy_mind.testing.wire import WireContract
 
 
 class RealmApp:
@@ -24,6 +25,7 @@ class RealmApp:
         self.personas = {}
         self.training = None
         self.sent = []
+        self.wire = WireContract()
         self.bridge = self
         self.engine = SimpleNamespace(speak=AsyncMock(return_value=[]),
                                       say_as=AsyncMock(return_value=True))
@@ -48,8 +50,9 @@ class RealmApp:
     async def send(self, cmd, *, preserve_id=False, expected_epoch=None):
         assert expected_epoch in (None, self._transport.epoch)
         assert preserve_id is True
+        _, refusal = self.wire.send(cmd, preserve_id=True)
         self.sent.append(cmd)
-        return Ack(0, cmd.id, True, "")
+        return Ack(0, cmd.id, not refusal, refusal)
 
     def register_event_handler(self, name, handler, *, before=False):
         (self.before if before else self.handlers)[name].append(handler)

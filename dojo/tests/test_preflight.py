@@ -576,6 +576,22 @@ class PreflightTest(unittest.TestCase):
             code, report, _ = self.run_preflight(self.layout)
         self.assertIn("the .dist says", self.failures(report)["rules worldserver.conf"])
 
+    def test_optional_stock_setting_is_checked_when_present(self):
+        bot_conf = self.train_configs / "modules" / "playerbots.conf"
+        bot_dist = self.dist_configs / "modules" / "playerbots.conf.dist"
+        original_conf = bot_conf.read_text(encoding="utf-8")
+        original_dist = bot_dist.read_text(encoding="utf-8")
+        key = "Playerbots.EnablePeriodicOnlineOffline"
+        for actual, stock, expected in ((None, None, 0), ("0", "0", 0),
+                                        (None, "0", 1), ("1", "1", 1), ("0", None, 1)):
+            with self.subTest(actual=actual, stock=stock), \
+                 self.with_file(bot_conf, original_conf + (f"{key} = {actual}\n" if actual is not None else "")), \
+                 self.with_file(bot_dist, original_dist + (f"{key} = {stock}\n" if stock is not None else "")):
+                code, report, output = self.run_preflight(self.layout)
+                self.assertEqual(code, expected, output)
+                if expected:
+                    self.assertIn(key, self.failures(report)["rules modules/playerbots.conf"])
+
     def test_mod_dojo_names_this_instance_and_a_pinned_scenario(self):
         path = self.train_configs / "modules" / "mod_dojo.conf"
         text = path.read_text(encoding="utf-8")

@@ -15,6 +15,7 @@ from leeroy_mind.lead.service import native_code
 from leeroy_mind.protocol import Ack, Chat, Group, Hello, Member
 from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
+from leeroy_mind.testing.wire import WireContract
 
 ORG = (1, 1637)        # Orgrimmar: map, zone
 NAXX = (533, 3456)     # Naxxramas: map, zone
@@ -34,12 +35,14 @@ class Wire:
 
     def __init__(self, app):
         self.app, self.sent, self.connected = app, [], True
+        self.wire = WireContract()
         self.answer = lambda cmd: (True, "")
 
     async def send(self, cmd, *, preserve_id=False):
         assert preserve_id
+        _, refusal = self.wire.send(cmd, preserve_id=preserve_id)
         self.sent.append(cmd)
-        ok, error = self.answer(cmd)
+        ok, error = (False, refusal) if refusal else self.answer(cmd)
         if ok and isinstance(cmd, LeadDo) and cmd.action == "start":
             self.app.leading.on_job(job(cmd))
         return Ack(0, cmd.id, ok, error)

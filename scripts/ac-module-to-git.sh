@@ -8,24 +8,25 @@
 #   COMMIT   the upstream commit whose tree matches the folder (the dry run shows the match)
 #   --subdir PATH  the module lives in PATH inside the upstream repository (the core reads a
 #            module's conf/ and data/sql/ from the folder itself, so the clone cannot hold it
-#            nested): the branch is `git subtree split` of PATH and has no upstream, so
-#            ac-update.sh skips it; the recipe printed at the end updates it
+#            nested): the branch is `git subtree split` of PATH. Local metadata lets
+#            ac-update.sh update the split without importing the rest of upstream
 #   --go     act; without it the upstream is cloned into a temporary directory and compared
 #
 # Afterwards the folder holds exactly what the zip folder held, line endings aside: what the
 # zip changed, added or lacks is one local commit on top of COMMIT, which ac-update.sh
 # rebases like any local patch. The old folder is kept under $AC_ROOT/module-to-git/.
-# Refuses while the native build lock is held, a server or a build is running (or the
-# process list cannot be read), or the folder is a link, a git checkout already, or named
-# like an unstripped GitHub zip (-master, -main).
+# Refuses while the native build lock is held, this install's servers or a build are running
+# (or the process list cannot be read), or the folder is a link, a git checkout already, or
+# named like an unstripped GitHub zip (-master, -main). A dojo's servers do not block.
 #
-# AC_TASKLIST names a command that prints the process list as tasklist's CSV (tests).
+# AC_TASKLIST names a command that prints the process list as tasklist's CSV, and
+# AC_PROCESSES one that prints common.sh's server listing (tests).
 # Exit: 0 done or compared; 2 the swap itself failed (the message says where each folder
 # is); any other failure changed nothing.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-usage() { sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 GO=0 SUBDIR='' args=()
 while [ $# -gt 0 ]; do
@@ -63,11 +64,21 @@ process_list() {
     if [ -n "${AC_TASKLIST:-}" ]; then "$AC_TASKLIST"; else tasklist //FO CSV //NH; fi
 }
 if ! listing="$(process_list 2>/dev/null)" || ! grep -q '^"' <<< "$listing"; then
-    refusals+=("cannot read the process list, so the servers and builds are not proved stopped")
+    refusals+=("cannot read the process list, so the builds are not proved stopped")
 else
-    busy="$(tr -d '\r' <<< "$listing" | awk -F'"' 'tolower($2) ~ /^(worldserver|authserver|cmake|msbuild|cl)\.exe$/ {print $2}' \
+    busy="$(tr -d '\r' <<< "$listing" | awk -F'"' 'tolower($2) ~ /^(cmake|msbuild|cl)\.exe$/ {print $2}' \
         | sort -u | tr '\n' ' ')"
     [ -z "$busy" ] || refusals+=("still running: ${busy% }")
+fi
+# This install's servers, by path: a dojo's run from its own folder and do not block.
+if ! ac_list_servers; then
+    refusals+=("cannot read the server processes, so the servers are not proved stopped")
+else
+    for p in authserver.exe worldserver.exe; do
+        ac_scan_servers "$p"
+        [ -z "$AC_LIVE" ] || refusals+=("$p still running (pid $AC_LIVE)")
+        [ "$AC_UNREAD" -eq 0 ] || refusals+=("$AC_UNREAD $p whose path cannot be read still running")
+    done
 fi
 for r in "${refusals[@]}"; do warn "$MODULE: $r"; done
 [ "$GO" -eq 0 ] || [ "${#refusals[@]}" -eq 0 ] || die "refused; nothing changed"
@@ -101,6 +112,9 @@ if [ -n "$SUBDIR" ]; then
     tip="$(cd "$STAGE" && git subtree split -q --prefix="$SUBDIR" "$sha")" || die "subtree split failed"
     GIT_LFS_SKIP_SMUDGE=1 git -C "$STAGE" checkout --quiet -B "$branch" "$tip"
     git -C "$STAGE" branch --quiet --unset-upstream "$branch" 2>/dev/null || true
+    git -C "$STAGE" config --local leeroy.subtreePrefix "$SUBDIR"
+    git -C "$STAGE" config --local leeroy.subtreeUpstream "$remote_head"
+    git -C "$STAGE" config --local leeroy.subtreeRevision "$sha $tip"
 else
     tip="$sha"
     GIT_LFS_SKIP_SMUDGE=1 git -C "$STAGE" checkout --quiet -B "$branch" "$sha"
@@ -190,13 +204,8 @@ fi
 swapped=1
 log "$MODULE is now a git checkout: $branch at $(git -C "$DIR" rev-parse --short HEAD)"
 if [ -n "$SUBDIR" ]; then
-    # The split is deterministic, so a later split of upstream extends this one and the
-    # rebase only replays the local edits, if any. It splits in a temporary worktree of
-    # upstream, where the prefix is on disk as older Git's subtree split wants.
-    printf '    %s, no upstream (ac-update.sh skips it). Update with:\n' "split of $SUBDIR from ${sha:0:12}"
-    # shellcheck disable=SC2016  # the $w, $s and $(...) are for the operator's shell, printed as is
-    printf '      cd %q && git fetch origin && w=$(mktemp -d) && GIT_LFS_SKIP_SMUDGE=1 git worktree add --quiet --detach "$w" origin/%s && s=$(cd "$w" && git subtree split -q --prefix=%q HEAD) && git worktree remove --force "$w" && git rebase "$s"\n' \
-        "$DIR" "$branch" "$SUBDIR"
+    printf '    %s; ac-update.sh follows %s with this prefix only.\n' "split of $SUBDIR from ${sha:0:12}" "$remote_head"
+    printf '    update: bash %q\n' "$AC_ROOT/scripts/ac-update.sh"
 else
     printf '    tracking %s; ac-update.sh fast-forwards it\n' "$remote_head"
 fi

@@ -39,19 +39,38 @@ for any other JPEG; a path that is not a file answers missing_image; FAKE_SELFIE
 "<id> critic <seed>".
 
 A grid writes JPEG to `out` and `thumb` and answers the canvas size from the real worker's layout
-(selfie/leeroy_selfie/grid.py); a tile that is not a file answers missing_tile.
+(selfie/leeroy_selfie/grid.py); a tile that is not a file answers missing_tile. Its similarity is
+the real worker's for its kind: too_few_tiles under two tiles, scores from an identity worker and
+encoder_unavailable from a plain one (no image encoder).
 
 A caption (the culture memes) writes JPEG to `out_path` when `base_path` is a file (else
 missing_base) and answers a 1024 x 1024 image; FAKE_SELFIE_LOG gets "<id> caption".
 
+Every line is parsed by the real worker's own protocol.parse (selfie/leeroy_selfie/protocol.py,
+standard library only, loaded by path): a line it refuses is answered bad_request with the id
+the real worker would give, and the worker goes on, as does a retry once it is ready.
+
 A render it answers writes JPEG to `out` and `thumb`. Like the real worker, the end of stdin
 ends it at once, mid-render too, and quit ends it with 0."""
+import importlib.util
 import json
 import os
 import queue
 import subprocess
 import sys
 import threading
+from pathlib import Path
+
+PROTOCOL = Path(__file__).resolve().parents[3] / "selfie" / "leeroy_selfie" / "protocol.py"
+
+
+def load_protocol():
+    """The real worker's protocol module."""
+    spec = importlib.util.spec_from_file_location("leeroy_selfie_protocol", PROTOCOL)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 JPEG = bytes.fromhex(  # an 8 x 8 JPEG, the smallest file every decoder reads
     "ffd8ffe000104a46494600010100000100010000ffdb00430006040506050406060506070706080a100a0a09"
@@ -89,10 +108,21 @@ def _detail(req: dict, env) -> dict:
         return {}
     return {"detail_faces": 1 if req.get("detail_faces") else 0,
             "detail_hands": 2 if req.get("detail_hands") else 0, "detail_skipped": 0,
-            "detail_ms": 7, "detail_code": ""}
+            "detail_reverted": 0, "detail_ms": 7, "detail_code": ""}
 
 
-def _grid(req: dict) -> None:
+def _similarity(tiles: int, identity: bool) -> dict:
+    if os.environ.get("FAKE_SELFIE_BAD_SIMILARITY"):
+        return {"code": "ok", "pairs": 99}
+    if tiles < 2:
+        return {"code": "too_few_tiles"}
+    if not identity:
+        return {"code": "encoder_unavailable"}
+    return {"code": "ok", "pairs": tiles * (tiles - 1) // 2, "max": 0.5, "mean": 0.4,
+            "pair": [0, 1]}
+
+
+def _grid(req: dict, identity: bool) -> None:
     if os.environ.get("FAKE_SELFIE_LOG"):
         with open(os.environ["FAKE_SELFIE_LOG"], "a", encoding="utf-8") as f:
             f.write(f"{req['id']} grid {len(req['tiles'])}\n")
@@ -102,9 +132,8 @@ def _grid(req: dict) -> None:
     width, height = _canvas(len(req["tiles"]), req["tile"], req["gutter"])
     _write(req["out"], JPEG)
     _write(req["thumb"], JPEG)
-    extra = {"similarity": {"code": "ok", "pairs": 99}}         if os.environ.get("FAKE_SELFIE_BAD_SIMILARITY") else {}
     _send({"id": req["id"], "ok": True, "error": "", "width": width, "height": height,
-           "seconds": 0.01, **extra})
+           "seconds": 0.01, "similarity": _similarity(len(req["tiles"]), identity)})
 
 
 def _caption(req: dict) -> None:
@@ -176,8 +205,39 @@ def _note(text: str) -> None:
             f.write(text + "\n")
 
 
+def _id_of(line: bytes) -> str:
+    """The id the real worker answers a bad line with (worker._id_of)."""
+    try:
+        rid = json.loads(line).get("id")
+    except (ValueError, AttributeError, RecursionError):
+        return ""
+    if not isinstance(rid, str) or not 1 <= len(rid) <= 32:
+        return ""
+    try:
+        rid.encode("utf-8")
+    except UnicodeEncodeError:
+        return ""
+    return rid
+
+
+def _request(proto, raw: bytes) -> dict | None:
+    """The request as a dict once protocol.parse takes it; None once a line it refuses (or one
+    over its MAX_LINE) is answered bad_request, as the real worker answers it."""
+    line = raw.rstrip(b"\r\n")
+    if len(line) > proto.MAX_LINE:
+        _send({"id": "", "ok": False, "error": "bad_request"})
+        return None
+    try:
+        proto.parse(line)
+    except ValueError:
+        _send({"id": _id_of(line), "ok": False, "error": "bad_request"})
+        return None
+    return json.loads(line)
+
+
 def main() -> None:
     env = os.environ
+    proto = load_protocol()
     _note(f"spawn {os.getpid()}")
     child = _child() if env.get("FAKE_SELFIE_CHILD") else None
     if env.get("FAKE_SELFIE_PIDS"):
@@ -189,24 +249,31 @@ def main() -> None:
     threading.Thread(target=_reader, args=(lines,), daemon=True).start()
     for _ in range(int(env.get("FAKE_SELFIE_VRAM") or 0)):
         _send(VRAM)
-        req = json.loads(lines.get())
-        if req.get("op") != "retry":
-            os._exit(1)
+        while (req := _request(proto, lines.get())) is None or req["op"] != "retry":
+            if req is not None and req["op"] == "quit":
+                os._exit(1)
+            if req is not None:
+                _send({"id": req["id"], "ok": False, "error": "bad_request"})
         _note("retry")
     identity = bool(env.get("FAKE_SELFIE_IDENTITY"))
     _send({**(READY if env.get("FAKE_SELFIE_VRAM") is None else
-              {**READY, "check_ms": 0, "load_ms": 0}), **({"identity": True} if identity else {})})
+              {**READY, "check_ms": 0, "load_ms": 0}), "identity": identity})
     flagged = {int(s) for s in env.get("FAKE_SELFIE_FLAG_SEEDS", "").split(",") if s.strip()}
     oom = int(env.get("FAKE_SELFIE_OOM") or 0)
     hang_after = int(env["FAKE_SELFIE_HANG_AFTER"]) if env.get("FAKE_SELFIE_HANG_AFTER") else None
     renders = 0
     seeds: dict = {}  # out path -> the seed it was rendered from
     while True:
-        req = json.loads(lines.get())
+        req = _request(proto, lines.get())
+        if req is None:
+            continue
         if req.get("op") == "quit":
             os._exit(0)
+        if req.get("op") == "retry":  # it is ready: nothing to try again
+            _send({"id": req["id"], "ok": False, "error": "bad_request"})
+            continue
         if req.get("op") == "grid":
-            _grid(req)
+            _grid(req, identity)
             continue
         if req.get("op") == "caption":
             _caption(req)

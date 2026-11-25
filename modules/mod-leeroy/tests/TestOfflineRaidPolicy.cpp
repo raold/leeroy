@@ -603,6 +603,38 @@ LEEROY_TEST(OfflineRaid_DcPhaseNamesWhatDungeonClearIsDoing)
     CHECK_EQ(std::string(DcPhaseCode(DcPhase::On)), "on");
     CHECK_EQ(std::string(DcPhaseCode(DcPhase::Paused)), "paused");
     CHECK_EQ(std::string(DcPhaseCode(DcPhase::Door)), "door");
+    CHECK_EQ(std::string(DcPhaseCode(DcPhase::Stalled)), "stalled");
+}
+
+LEEROY_TEST(OfflineRaid_ARouteStallIsItsOwnPhaseBelowEveryPause)
+{
+    // 2026-11-23, Naxx 10: "Can't path to Gothik the Harvester" read as on for 24 minutes.
+    CHECK(ReadDcPhase(true, true, false, false, true) == DcPhase::Stalled);
+    CHECK(ReadDcPhase(true, true, false, false, false) == DcPhase::On);
+    CHECK(ReadDcPhase(true, true, true, false, true) == DcPhase::Paused);  // A pause names the hold.
+    CHECK(ReadDcPhase(true, true, true, true, true) == DcPhase::Door);
+    CHECK(ReadDcPhase(true, false, false, false, true) == DcPhase::Off);   // A stopped run restarts instead.
+    CHECK(ReadDcPhase(false, true, false, false, true) == DcPhase::Unknown);
+}
+
+LEEROY_TEST(OfflineRaid_RouteStallOutOfEveryFightStopsTheRunAsUnreachable)
+{
+    DcHold stall;
+    CHECK(stall.Observe(DcPhase::Stalled, false, OfflineDcHoldStopMs - 1).empty());
+    CHECK_EQ(stall.Observe(DcPhase::Stalled, false, 1), "dc_unreachable");
+    CHECK_EQ(std::string(OfflineDcUnreachable), "dc_unreachable");
+    // Dungeon-clear moving again clears its stall reason: on resets the clock, as a fight does.
+    for (std::optional<bool> reset : {std::optional<bool>(true), std::optional<bool>()})
+    {
+        DcHold hold;
+        CHECK(hold.Observe(DcPhase::Stalled, false, OfflineDcHoldStopMs - 1).empty());
+        CHECK(hold.Observe(DcPhase::Stalled, reset, 1000).empty());
+        CHECK_EQ(hold.heldMs, 0u);
+    }
+    DcHold moved;
+    CHECK(moved.Observe(DcPhase::Stalled, false, OfflineDcHoldStopMs - 1).empty());
+    CHECK(moved.Observe(DcPhase::On, false, 1000).empty());
+    CHECK_EQ(moved.heldMs, 0u);
 }
 
 LEEROY_TEST(OfflineRaid_DoorHoldOutOfEveryFightStopsTheRunByName)
@@ -637,11 +669,52 @@ LEEROY_TEST(OfflineRaid_HoldClockRestartsInAFightUnreadableEncounterOrAnyOtherPh
     }
 }
 
-LEEROY_TEST(OfflineRaid_NaxxSapphironAndKelThuzadAreOutOfDungeonClearsReach)
+LEEROY_TEST(OfflineRaid_NaxxGothikHorsemenSapphironAndKelThuzadAreOutOfDungeonClearsReach)
 {
-    CHECK(DcUnreachableBosses(533) == std::vector<std::uint32_t>({13, 14}));
+    CHECK(DcUnreachableBosses(533) == std::vector<std::uint32_t>({11, 12, 13, 14}));
     CHECK(DcUnreachableBosses(631).empty());
     CHECK(DcUnreachableBosses(649).empty());     // Trial of the Crusader: every stage, then Anub'arak.
+}
+
+LEEROY_TEST(OfflineRaid_NaxxEndsAfterTheConstructQuarterWithGothikPassed)
+{
+    // Instance indices: Patchwerk 0, Grobbulus 1, Gluth 2, Noth 3, Heigan 4, Loatheb 5, Anub'Rekhan 6, Faerlina 7,
+    // Maexxna 8, Thaddius 9, Razuvious 10, Gothik 11, the Four Horsemen 12, Sapphiron 13, Kel'Thuzad 14.
+    std::vector<std::uint8_t> naxx(15, 0);
+    for (std::uint32_t boss : {3u, 4u, 5u, 6u, 7u, 8u, 10u})  // 2026-11-23: the seven kills before Gothik.
+        naxx[boss] = 3;
+    CHECK(!ClearedReachable(naxx, DcUnreachableBosses(533)));   // The Construct Quarter is left.
+    for (std::uint32_t boss : {0u, 1u, 2u, 9u})
+        naxx[boss] = 3;
+    CHECK(ClearedReachable(naxx, DcUnreachableBosses(533)));
+    naxx[11] = 1;                                               // Gothik engaged after all: fight it out.
+    CHECK(!ClearedReachable(naxx, DcUnreachableBosses(533)));
+    naxx[11] = 3;
+    CHECK(ClearedReachable(naxx, DcUnreachableBosses(533)));    // The Horsemen behind his gates stay out of reach.
+}
+
+LEEROY_TEST(OfflineRaid_GothikIsPassedOnlyWhileDungeonClearDrivesOutOfEveryFight)
+{
+    CHECK(OfflineDcPassEntries(533) == std::vector<std::uint32_t>({16060}));
+    CHECK(OfflineDcPassEntries(631).empty());    // Every other map reads no dungeon-clear target at all.
+    CHECK(OfflineDcPassEntries(603).empty());
+    OfflineDcPassFacts gothik;
+    gothik.mapId = 533;
+    gothik.targetEntry = 16060;
+    gothik.enabled = true;
+    gothik.bossEngaged = false;
+    CHECK(OfflineDcPassDue(gothik));
+    auto with = [&](auto change) { auto facts = gothik; change(facts); return OfflineDcPassDue(facts); };
+    CHECK(!with([](auto& f) { f.targetEntry = 16061; }));    // Razuvious, and every other boss.
+    CHECK(!with([](auto& f) { f.targetEntry = 0; }));        // No target read.
+    CHECK(!with([](auto& f) { f.mapId = 631; }));
+    CHECK(!with([](auto& f) { f.enabled = false; }));
+    CHECK(!with([](auto& f) { f.paused = true; }));
+    CHECK(!with([](auto& f) { f.leaderCombat = true; }));
+    CHECK(!with([](auto& f) { f.bossEngaged = true; }));
+    CHECK(!with([](auto& f) { f.bossEngaged.reset(); }));    // Unreadable encounter state.
+    CHECK(with([](auto& f) { f.passes = OfflineDcPassLimit - 1; }));
+    CHECK(!with([](auto& f) { f.passes = OfflineDcPassLimit; }));
 }
 
 LEEROY_TEST(OfflineRaid_UlduarEndsWhenTheBossesPastTheLeviathanAreDone)

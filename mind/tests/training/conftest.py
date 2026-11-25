@@ -3,6 +3,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from leeroy_mind.testing.wire import bridge_mock
+
 from .fakes import FakeTrainingPorts
 
 
@@ -50,7 +52,7 @@ def app(tmp_path, clock):
     from leeroy_mind.testing.fake_llm import FakeLLM
     instance = MindApp(load_config(tmp_path / "mind.toml"), tmp_path,
                        llm=FakeLLM(), clock=clock, rng_seed=1)
-    instance.bridge.send = AsyncMock()
+    instance.bridge.send = bridge_mock()
     try:
         yield instance
     finally:

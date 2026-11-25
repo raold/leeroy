@@ -3,7 +3,15 @@
 With `[photos] scene_from_words` (`words`) her scene is read from his words
 (selfies.request_scene.choose_words_scene), and when her day plan has her asleep or driving
 (life.presence.NO_PHOTO, [life] availability on) the photo waits for her next block where she can
-take it: she says so now, and it is rendered and sent then with a line (its snap's not_before)."""
+take it: she says so now, and it is rendered and sent then with a line (its snap's not_before).
+
+With `[photos] request_priority` an ask is on demand (owner, 2026-11-25: "i could dm a bot, request
+a selfie, and they do so immediately"): a plain ask ("send me a pic", "selfie?", "what are you
+wearing?") takes a ready, unsent situational photo of hers with her first answer when there is
+one; otherwise she answers at once that she is taking it, the queue renders it right after (one
+borrow at a time, ahead of background image work, swapping the live model out and back), and the
+photo follows. Her day plan does not put it off. A render that fails, or has not started within
+RENDER_WAIT_S, sends a retained photo of hers with an honest line, else says it didn't work out."""
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -24,7 +32,7 @@ from leeroy_mind.selfies.style import LUST, style_of
 from leeroy_mind.talk.pipeline import COMPOSING, TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
 from .offer import PhotoOffer
-from .request_words import request_target
+from .request_words import request_target, specific_ask
 from . import request_store as records
 
 # Her answer while she cannot take the photo yet (the scene's `wait`, by her day plan's block):
@@ -45,6 +53,14 @@ CANT_NOW = {
 DRIVES_RE = re.compile(r"\b(?:drives?|driving|driver|by car|in the car|van|lorry|truck)\b", re.I)
 SENT_LATER = ("This is the photo he asked you for earlier, when you couldn't take one; you just "
               "took it. Send it now with a short line in your own words.")
+# [photos] request_priority: her answer while the queue is about to render his photo.
+TAKING_NOW = ("You're taking the photo he asked for right now; it'll reach him in a minute or two. "
+              "Tell him so in a few words of your own. Don't refuse it or put it off, and don't "
+              "claim it is attached.")
+# ... and the follow-up when the new one failed and a photo she already had goes instead.
+SUBSTITUTE = ("The new photo you were taking for him didn't come out, so you're sending him one "
+              "you already had instead. Say so briefly and honestly in your own words.")
+RENDER_WAIT_S = 900.0  # a priority photo not rendered by then: a retained one, else the failure line
 
 
 class RequestPhotos:
@@ -56,6 +72,7 @@ class RequestPhotos:
         self._reserved = set()
         self._retry_at = {}
         self._closed = False
+        self._wake = asyncio.Event()  # an answered ask's render runs now, not at the next tick
         self._hello_seen = bool(getattr(app, 'hello', None))
         self._offline_at = app.clock.now() if self.known_offline() else None
         self.worker_factory = None  # fake-only injection; production uses the identity worker.
@@ -152,6 +169,7 @@ class RequestPhotos:
             self._tasks.pop(message, None)
         if not task.cancelled() and (error := task.exception()) is not None:
             log('selfie_request_failed', request=message, code=type(error).__name__)
+        self._wake.set()
 
     def _retry_after(self, message, seconds):
         self._retry_at[message] = self.app.clock.now() + seconds
@@ -224,6 +242,9 @@ class RequestPhotos:
                 # Preparation and its ordinary reply have one owner. The retry timer
                 # must not admit a second reply while the first still owns its photo.
                 await answer
+            latest = records.get(app.store, message)
+            if latest is not None and latest.initial_message is not None:
+                self._retry_at.pop(message, None)  # answered: its photo is the queue's now
 
     async def _prepare(self, request, words, *, immediate=False):
         app = self.app
@@ -242,17 +263,25 @@ class RequestPhotos:
         p, pick = ready
         if request.fresh_snap is None:
             from leeroy_mind.llm.client import GpuPaused
-            from leeroy_mind.selfies.request_scene import choose_scene
+            from leeroy_mind.selfies.request_scene import RequestSceneError, choose_scene
+            if (self.priority and request.fallback_snap is None and not specific_ask(words)
+                    and self._ready_made(request)):
+                return  # a plain ask: her ready photo goes with this answer
             not_before = None
-            if self.words:
-                scene, not_before = await self._words_scene(request, words, p)
-            else:
-                try:
-                    scene = await choose_scene(app, request.guid, words, request.audience)
-                except GpuPaused:
-                    # A pause (or one his post is ending) refuses the model, never the request.
-                    scene = await choose_scene(app, request.guid, words, request.audience, model=False)
-                scene = scene_json(scene)
+            try:
+                if self.words:
+                    scene, not_before = await self._words_scene(request, words, p)
+                else:
+                    try:
+                        scene = await choose_scene(app, request.guid, words, request.audience)
+                    except GpuPaused:
+                        # A pause (or one his post is ending) refuses the model, never the request.
+                        scene = await choose_scene(app, request.guid, words, request.audience, model=False)
+                    scene = scene_json(scene)
+            except RequestSceneError:
+                if self.priority and self._substitute(request, ended='passed'):
+                    return  # no scene she can take: a photo she already had, said so
+                raise
             if not self._source_open(request):
                 self._cancel(request)
                 return
@@ -265,6 +294,8 @@ class RequestPhotos:
         # A photo her day plan puts off (not_before) is neither rendered nor replaced by a
         # retained one now: she says she can't yet.
         due = photo is None or photo.not_before <= app.clock.now()
+        if photo is not None and photo.status == 'planned' and due and self.priority and self._renders_soon():
+            return  # her answer says she's taking it; the queue renders it straight after
         if photo is not None and photo.status == 'planned' and due and self.render_due(immediate=immediate):
             await self._render(request, photo)
         request = records.get(app.store, request.message)
@@ -273,6 +304,40 @@ class RequestPhotos:
                 and fresh is not None and fresh.status == 'planned' and due):
             from .request_stock import reserve_fallback
             reserve_fallback(app, request, now=app.clock.now())
+
+    def _renders_soon(self):
+        """[photos] request_priority: the queue can borrow the GPU now. Night, booth and bulk
+        image work give way to it; a pause, an offline raid, voice or the borrow caps do not."""
+        app = self.app
+        others = {h for h in app.arbiter.holders if not h.startswith('selfie_')}
+        return bool(self.render_allowed() and not app.gpu.paused
+                    and not others - {'server', 'discord', 'human'}
+                    and records.borrow_available(app.store, now=app.clock.now(),
+                                                 local_date=app.clock.local().date().isoformat()))
+
+    def _ready_made(self, request) -> bool:
+        """A plain ask, on demand: a ready, unsent situational photo of hers (the night's stock,
+        made for sending) becomes the request's photo and goes with her first answer. Her
+        profile galleries, which he browses, are only a substitute for a failed render."""
+        from .request_stock import reserve_fallback
+        app = self.app
+        try:
+            if reserve_fallback(app, request, now=app.clock.now(), gallery=False) is None:
+                return False
+            if not records.promote_fallback(app.store, request.message, now=app.clock.now(),
+                                            ended='passed'):
+                return False
+        except Exception as error:
+            log('selfie_request_fallback_failed', code=type(error).__name__)
+            return False
+        log('selfie_request_ready_made', request=request.message, guid=request.guid)
+        return True
+
+    def _copy(self, snap_id) -> bool:
+        """The request's photo is a copy of one she already had (not rendered for this ask)."""
+        row = self.app.store.conn.execute('SELECT identity FROM selfie_request_image WHERE snap=?',
+                                          (snap_id,)).fetchone()
+        return row is not None and row[0] != f'snap:{snap_id}'
 
     def _wait(self, request, p):
         """(her day plan's block, when she can next take a photo, the CANT_NOW code) while it has
@@ -306,7 +371,8 @@ class RequestPhotos:
         from leeroy_mind.llm.client import GpuPaused
         from leeroy_mind.selfies.request_scene import choose_scene, choose_words_scene
         app = self.app
-        wait = self._wait(request, p)
+        # On demand (request_priority): she takes it now, as her day finds her.
+        wait = None if self.priority else self._wait(request, p)
         at = wait[1] if wait else app.clock.now()
         her = local_time(app.clock.local() + timedelta(seconds=at - app.clock.now()),
                          p.identity.region)
@@ -387,6 +453,9 @@ class RequestPhotos:
                     if result.code == 'critic' and self._critic_fallback(request):
                         outcome = 'critic_fallback'
                         return False
+                    if self.priority and self._substitute(request, ended='passed'):
+                        outcome = 'substituted'
+                        return False
                     records.fail(app.store, request.message, result.code or 'render_failed', now=app.clock.now())
                 return outcome == 'ready'
         except (LiveLeaseHeld, GpuPaused):
@@ -409,6 +478,9 @@ class RequestPhotos:
             if room is None and isinstance(error, LiveReloadFailed):
                 return False
             outcome = 'timeout' if isinstance(error, TimeoutError) else 'render_failed'
+            if self.priority and self._substitute(request, ended='passed'):
+                outcome = 'substituted'
+                return False
             records.fail(app.store, request.message, outcome, now=app.clock.now())
             return False
         finally:
@@ -424,14 +496,22 @@ class RequestPhotos:
         """[selfies] critic refused every seed of the fresh render: a ready-made photo of hers
         (request_stock.reserve_fallback) takes the fresh photo's place (request_store.promote_
         fallback), so she sends that instead. False when there is none: the request fails."""
+        return self._substitute(request)
+
+    def _substitute(self, request, *, ended='flagged') -> bool:
+        """A ready-made photo of hers takes the planned fresh photo's place (which ends `ended`);
+        her follow-up then says the new one didn't come out (SUBSTITUTE). False when she has none."""
         from .request_stock import reserve_fallback
         app = self.app
         try:
             reserve_fallback(app, request, now=app.clock.now())
-            return records.promote_fallback(app.store, request.message, now=app.clock.now())
+            done = records.promote_fallback(app.store, request.message, now=app.clock.now(), ended=ended)
         except Exception as error:
             log('selfie_request_fallback_failed', code=type(error).__name__)
             return False
+        if done:
+            log('selfie_request_substituted', request=request.message, guid=request.guid)
+        return done
 
     def decorate(self, turn, meta, message):
         if request_target(self.app, message) != turn.speaker:
@@ -485,11 +565,19 @@ class RequestPhotos:
             if (self.words and meta.photo_request_part == 'followup'
                     and meta.photo.snap.scene.get('wait') in CANT_NOW):
                 note = SENT_LATER
+            if meta.photo_request_part == 'followup' and self._copy(meta.photo.snap.id):
+                note = SUBSTITUTE
         else:
             note = "The fresh photo he asked for isn't ready yet. Answer him naturally; you can send it later. Don't claim it is attached."
-            fresh = records.snap(self.app.store, request.fresh_snap) if self.words else None
+            planned = records.snap(self.app.store, request.fresh_snap)
+            fresh = planned if self.words else None
             if (wait := self._waiting(request)):
                 note = CANT_NOW[wait]
+            elif (self.priority and planned is not None and planned.status == 'planned'
+                    and planned.not_before <= self.app.clock.now() and self._renders_soon()):
+                note = TAKING_NOW
+                if fresh is not None and is_words(fresh.scene):
+                    note += " The photo you're taking: " + fresh.scene['shows']
             elif fresh is not None and fresh.status == 'planned' and is_words(fresh.scene):
                 note += " The photo you'll take: " + fresh.scene['shows']
         return instruction + ('\n' + note if note else '')
@@ -586,6 +674,11 @@ class RequestPhotos:
                     to_guid=app.human_guid if latest.audience == 'him' else 0, addressee=app.human_guid,
                     priority=Priority.REPLY_HUMAN, max_lines=1,
                     instruction="He asked you for a photo of yourself. Answer him in your own words.")
+        if latest.audience != 'him':
+            # Her follow-up in a channel all can read keeps the shared-channel interval after
+            # her first answer instead of being dropped by it (a fast render can beat it).
+            from leeroy_mind.talk.guards import REPLY_S
+            turn.delay = max(turn.delay, REPLY_S)
         same = latest.asked_channel == latest.photo_channel
         meta = TurnMeta(app.engine._new_id(), why='selfie:request', answers_human=True,
             single_line=True, keep_channel=True, review_required=True, photo_request=latest.message,
@@ -654,6 +747,14 @@ class RequestPhotos:
             if photo is not None and photo.status == 'planned':
                 if photo.not_before > app.clock.now():
                     continue  # her day plan: she can't take it yet
+                if (self.priority and request.initial_message is not None
+                        and app.clock.now() - max(request.created, photo.not_before) > RENDER_WAIT_S):
+                    # On demand means soon: a photo she already had, said so, else the failure line.
+                    if not self._substitute(request, ended='passed'):
+                        records.fail(app.store, request.message, 'render_wait', now=app.clock.now())
+                    latest = records.get(app.store, request.message)
+                    await self._send(latest, 'failure' if latest.failure else 'followup')
+                    continue
                 if (not self.render_due()
                         or not self.priority and app.nightly.running is not None):
                     continue
@@ -671,7 +772,22 @@ class RequestPhotos:
                 raise
             except Exception as error:
                 log('selfie_request_queue_failed', code=type(error).__name__)
-            await self.app.clock.sleep(15)
+            await self._idle(15)
+
+    async def _idle(self, seconds):
+        """The queue's pause between ticks; an answered ask (_done) ends it at once."""
+        if self._wake.is_set():
+            self._wake.clear()
+            return
+        sleeper = asyncio.ensure_future(self.app.clock.sleep(seconds))
+        waker = asyncio.ensure_future(self._wake.wait())
+        try:
+            await asyncio.wait({sleeper, waker}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (sleeper, waker):
+                task.cancel()
+            await asyncio.gather(sleeper, waker, return_exceptions=True)
+        self._wake.clear()
 
     async def close(self):
         self._closed = True
