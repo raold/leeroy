@@ -455,7 +455,7 @@ async def test_retry_of_cancelled_old_close_does_not_clear_a_new_raid_lead(setup
     ports, cfg, armory, plan = setup
     first = await opened(setup)
     original = ports.say
-    async def interrupted(*args):
+    async def interrupted(*args, **kw):
         raise asyncio.CancelledError
     ports.say = interrupted
     with pytest.raises(asyncio.CancelledError):

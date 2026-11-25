@@ -130,7 +130,7 @@ class RaidSession:
                                        (self.raid_id,)).fetchone() is not None
 
     async def _say_decay(self):
-        await self.ports.say(self.plan.loot_guid, "guild", template("dkp_decay", pct=f"{self.cfg.dkp.decay * 100:g}"))
+        await self.ports.say(self.plan.loot_guid, "guild", template("dkp_decay", pct=f"{self.cfg.dkp.decay * 100:g}"), window_exempt=True)
 
     async def attend(self):
         """Record attendance, its DKP and the bench's memories once, after an opening without them.
@@ -227,7 +227,7 @@ class RaidSession:
             self.kills, self.wipes = kills, wipes
             if ev.state == "killed" and (can_announce is None or can_announce()):
                 boss = public_text(self.ports, ev.boss_name or f"boss {ev.boss_id + 1}")
-                await self.ports.say(self.plan.loot_guid, "raid", template("dkp_kill", amount=self.cfg.dkp.kill, count=len(actual), boss=boss))
+                await self.ports.say(self.plan.loot_guid, "raid", template("dkp_kill", amount=self.cfg.dkp.kill, count=len(actual), boss=boss), window_exempt=True)
 
     async def on_loot_drop(self, ev):
         if not self._closing and self._fresh(ev):
@@ -268,7 +268,7 @@ class RaidSession:
                     current = balances(self.ports.conn)
                     ranked = sorted(self.ports.cast(), key=lambda g: (-current.get(g, 0), g))[:5]
                     top = ", ".join(f"{member_name(self.ports, g)} {current.get(g, 0):.1f}" for g in ranked)
-                    await self.ports.say(self.plan.loot_guid, "guild", template("dkp_standings", top=top))
+                    await self.ports.say(self.plan.loot_guid, "guild", template("dkp_standings", top=top), window_exempt=True)
                 if _once(self.ports.conn, self._prefix + "wrapup"):
                     self.ports.propose(self._speaker, "guild", instruction("raid_wrapup", raid=CATALOG[self.plan.raid_key].name,
                                        kills=shown_kills(self.plan.raid_key, self.kills), wipes=self.wipes, outcome=outcome_words(outcome)), kind=TurnKind.ASIDE)
