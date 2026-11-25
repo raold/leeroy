@@ -1,7 +1,7 @@
-From db7cbba4d661f543282ab60fc95fc5f332333d68 Mon Sep 17 00:00:00 2001
+From 23a2359a530ce31f6a3880eed8f97d3aa8e80fb3 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Wed, 25 Nov 2026 17:25:22 -0500
-Subject: [PATCH 31/31] fix(Ulduar): Try safe alternate illusion targets
+Subject: [PATCH 32/33] fix(Ulduar): Try safe alternate illusion targets
 
 ---
  src/Ai/Raid/Uld/YoggBrainActions.cpp | 23 ++++++++++++++++++++---

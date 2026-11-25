@@ -1,7 +1,7 @@
-From 46a747c1a25f5258e62dbe3ff8fa9ce5ca2669e1 Mon Sep 17 00:00:00 2001
+From a76af7a8d4fe29ba7b5f81a37e9200b0b53b3942 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Wed, 25 Nov 2026 16:54:21 -0500
-Subject: [PATCH 30/30] fix(Raid/Uld): Finish committed brain-room exits
+Subject: [PATCH 31/33] fix(Raid/Uld): Finish committed brain-room exits
 
 ---
  src/Ai/Raid/Uld/YoggBrainActions.cpp | 21 ++++++++++++++++++---

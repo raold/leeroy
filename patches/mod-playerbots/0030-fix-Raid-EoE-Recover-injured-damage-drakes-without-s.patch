@@ -1,7 +1,7 @@
-From ec2b976c0ae5b5f9c38434b0731f5a61e6f8652f Mon Sep 17 00:00:00 2001
+From 4042a321348efb554a60d09f13ea6f3be5547555 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Wed, 25 Nov 2026 15:53:45 -0500
-Subject: [PATCH 29/29] fix(Raid/EoE): Recover injured damage drakes without
+Subject: [PATCH 30/33] fix(Raid/EoE): Recover injured damage drakes without
  spending shield reserve
 
 ---

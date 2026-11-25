@@ -1,7 +1,7 @@
-From 3922c0d5667752ab04817ac23e5d69ca86059592 Mon Sep 17 00:00:00 2001
+From 55a1250426f6e4113fea777a3302fe2ce948879d Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Wed, 25 Nov 2026 17:28:44 -0500
-Subject: [PATCH 32/32] fix(Raid/EoE): Reserve energy until injured drakes can
+Subject: [PATCH 33/33] fix(Raid/EoE): Reserve energy until injured drakes can
  recover
 
 ---
