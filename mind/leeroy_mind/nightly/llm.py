@@ -55,6 +55,7 @@ THINK_OPTIONS = REASON.options | {"top_k": 20, "min_p": 0.0, "num_predict": THIN
 # chat_json adds (a retry's too) and the schema's JSON, which runs denser than 4 characters a
 # token.
 JSON_PREDICT = 1024
+JSON_RETRY_PREDICT = 2048
 CTX_SLACK = 320
 
 _TYPES = {
@@ -220,13 +221,14 @@ def think_predict(system: str, user: str) -> int:
     return max(THINK_PREDICT_MIN, min(THINK_PREDICT_MAX, room))
 
 
-def fit_notes(notes: str, system: str, user: str, schema_: dict) -> str:
+def fit_notes(notes: str, system: str, user: str, schema_: dict, *, output_tokens: int = JSON_PREDICT,
+              extra_slack: int = 0) -> str:
     """The reasoning pass's notes as the answer pass gets them: whole when the call fits num_ctx
-    with JSON_PREDICT tokens of answer and CTX_SLACK to spare, else only their end, where the
+    with output_tokens of answer and CTX_SLACK to spare, else only their end, where the
     conclusions are. Past num_ctx Ollama would cut the prompt's head, where the system prompt and
     INVARIANTS are (review M16)."""
     fixed = sum(estimate_tokens(t) for t in (system, user, json.dumps(schema_)))
-    room = max(0, (STRUCTURE.options["num_ctx"] - JSON_PREDICT - CTX_SLACK - fixed) * 4)
+    room = max(0, (STRUCTURE.options["num_ctx"] - output_tokens - CTX_SLACK - extra_slack - fixed) * 4)
     return notes if len(notes) <= room else notes[len(notes) - room:]
 
 
@@ -302,9 +304,14 @@ class Reasoner:
         """The answer pass: a JSON object that fits `schema`, from P1b's chat_json (one retry
         when the reply is not valid), with the reasoning pass's `notes` after the question,
         cut to their end when the call would not fit num_ctx (fit_notes). Two bad replies, or
-        an Ollama error, are a ReflectionError for this unit alone."""
+        an Ollama error, are a ReflectionError for this unit alone. A reply explicitly cut
+        by the model's length limit gives the existing correction attempt up to 2,048
+        output tokens, within the same context and timeout; no third call is added."""
         if notes:
-            user += "\n\nYour notes:\n" + fit_notes(notes, system, user, schema)
+            # Reserve the correction suffix before it exists. The request wrapper
+            # then checks the complete messages with a separate template margin.
+            user += "\n\nYour notes:\n" + fit_notes(notes, system, user, schema,
+                output_tokens=JSON_RETRY_PREDICT, extra_slack=CTX_SLACK)
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         options = STRUCTURE.options | {"temperature": temperature, "num_predict": JSON_PREDICT}
         preset = Preset(False, options, timeout=STRUCTURE.timeout)
@@ -313,17 +320,43 @@ class Reasoner:
             check_schema(schema, d)
             return d
 
-        async def chat(*args, **kwargs):
-            before_call()  # Runs immediately before each model request, including a JSON correction.
-            return await self._chat(*args, **kwargs)
+        attempts = 0
+        cut = False
+        diagnostics = None
+
+        async def chat(model, sent, **kwargs):
+            nonlocal attempts, cut, diagnostics
+            # Count the actual correction suffix as well as the original question.
+            # Leave the system prompt intact rather than asking Ollama to truncate it.
+            room = STRUCTURE.options["num_ctx"] - sum(estimate_tokens(m["content"]) for m in sent) - CTX_SLACK
+            if room < JSON_PREDICT:
+                raise ReflectionError("reflection JSON prompt exceeds context budget", fatal=False)
+            predict = min(JSON_RETRY_PREDICT, room) if cut else JSON_PREDICT
+            kwargs["options"] = dict(kwargs["options"]) | {"num_predict": predict}
+            if before_call is not None:
+                before_call()  # Immediately before each request, including its correction.
+            attempts += 1
+            diagnostics = None
+            result = await self._chat(model, sent, **kwargs)
+            diagnostics = result.diagnostics
+            cut = diagnostics is not None and diagnostics.done_reason == "length"
+            if cut:
+                log("nightly_json_cut", level=logging.WARNING, attempt=attempts, num_predict=predict,
+                    eval_count=diagnostics.eval_count, prompt_eval_count=diagnostics.prompt_eval_count,
+                    content_chars=diagnostics.content_chars)
+            return result
 
         async with self._slots:
             try:
-                client = SimpleNamespace(chat=self._chat if before_call is None else chat)
+                client = SimpleNamespace(chat=chat)
                 return await chat_json(client, self.model, messages, schema, preset, valid)
             except GpuPaused:
                 raise
             except (JSONJobFailed, LLMError) as e:
+                log("nightly_json_failed", level=logging.WARNING, attempts=attempts, error=type(e).__name__,
+                    done_reason=diagnostics.done_reason if diagnostics else None,
+                    eval_count=diagnostics.eval_count if diagnostics else None,
+                    content_chars=diagnostics.content_chars if diagnostics else None)
                 raise ReflectionError(
-                    f"reflection request {schema.get('title', 'json')!r} failed: {e}",
+                    f"reflection request {schema.get('title', 'json')!r} failed: {type(e).__name__}",
                     fatal=False) from e
