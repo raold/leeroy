@@ -487,6 +487,7 @@ Apply them to a checkout of each module with
 ./ac-build.sh                # preflight checks, configure, build
 ./ac-release.sh [--native] [--allow-scripts] [--dry-run] <commit>...  # deploy merged main commits
 ./ac-server.sh start|stop|status # the game servers and the mind; stops the worldserver cleanly over local SOAP
+                             # (only this install's servers, by executable path: never a dojo's)
 ./ac-voice.sh start|stop|status  # the voice service; a stop holds it down until his next login
 ./ac-health.sh [--json]      # read-only health check of the live install
 ./ac-guild-backup.sh         # verified, pruned backups of the guild's data to another machine
