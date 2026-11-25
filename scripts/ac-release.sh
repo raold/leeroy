@@ -55,10 +55,8 @@ def key(p):
     p=p.replace("/","\\").casefold()
     return p[4:] if p.startswith("\\\\?\\") else p
 live={key(sys.argv[1].rstrip("/\\")+"\\"+n) for n in ("authserver.exe","worldserver.exe")}
-try:
-    rows=[r.rstrip("\r").split("\t") for r in sys.stdin.read().split("\n") if r.rstrip("\r")]
-except UnicodeError:
-    rows=[]
+text=sys.stdin.buffer.read().decode("utf-8","replace")
+rows=[r.rstrip("\r").split("\t") for r in text.split("\n") if r.rstrip("\r")]
 valid=bool(rows) and rows[-1]==["end"] and all(len(r)==3 and r[0].isdigit() and r[1].strip() for r in rows[:-1])
 held=any(len(r)==3 and (key(r[2]) in live or not r[2] and r[1].strip().casefold() in ("authserver.exe","worldserver.exe")) for r in rows[:-1])
 if not valid or held:
