@@ -511,9 +511,16 @@ inert until a caller acquires a bot:
 
 `scripts/dojo/patches.ps1 -Layout <layout.json> [-Apply] [-Json]` checks the
 isolated checkout against the series: tracked files clean, and its commits
-since the provenance baseline exactly the series by stable patch id; `-Apply`
-applies a missing tail with `git am --3way` and never resets or drops a
-commit. It also checks the gate's place in `UpdateAI` on every run, as the pin
+since the unchanged production provenance baseline exactly the uninstalled tail
+of `patches/mod-playerbots`, followed by the dojo series, by stable patch id.
+Installed production entries are recognized by commit ancestry and content or
+by stable patch id in baseline history. A rewritten installed entry, a hole in
+the installed prefix, duplicate patches, merge commits, unrelated changes or
+the wrong order are refused. `-Apply` applies a missing tail with `git am
+--3way` and never resets or drops a commit. Keep unreleased production fixes in
+the committed production series before building their isolated candidate;
+do not rewrite the provenance baseline to make a candidate pass.
+It also checks the gate's place in `UpdateAI` on every run, as the pin
 guard check does. The nightly `patches` workflow applies the series on top of
 `patches/mod-playerbots` and runs the playerbots codestyle check.
 
