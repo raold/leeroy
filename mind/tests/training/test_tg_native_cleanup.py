@@ -22,6 +22,7 @@ from leeroy_mind.training.native_cleanup import NativeRun, NativeCleanup, PREFIX
 from leeroy_mind.training.protocol import CustomStrategy, DcSetting, GetTrainingCleanup, TrainingCleanup
 from leeroy_mind.training.ports import LivePorts
 from leeroy_mind.training.service import TrainingGround
+from leeroy_mind.testing.wire import port_send
 
 from guild.fakes import FakeArmory, FakePorts, member, persona
 from .test_tg_applier import Fake as ApplierPorts, MEMBERS, RUN, card, vocabulary
@@ -85,6 +86,7 @@ async def test_real_response_mailbox_preserves_proof_before_ack_and_remaps_uniqu
     protocol.register()
     entered, release = asyncio.Event(), asyncio.Event()
     wire_ids = []
+    @port_send
     async def send(command):
         wire_ids.append(command.id)
         assert isinstance(command, GetTrainingCleanup)
@@ -114,6 +116,7 @@ async def test_real_response_mailbox_preserves_proof_before_ack_and_remaps_uniqu
 @_run_async
 async def test_negative_ack_cannot_turn_early_cleanup_event_into_proof(store, clock):
     protocol.register()
+    @port_send
     async def send(command):
         ports.feed(receipt(ident=command.id, state="complete"))
         return Ack(0, command.id, False, "disabled")

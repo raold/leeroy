@@ -8,6 +8,7 @@ from leeroy_mind.protocol import Ack, Hello, Login
 from leeroy_mind.realm import protocol, store as realm_store
 from leeroy_mind.realm.ports import RealmDisabled
 from leeroy_mind.realm.service import JOB_COMMANDS, attach_realm
+from leeroy_mind.testing.wire import bridge_send
 from realm.fakes import RealmApp, enabled
 
 
@@ -281,6 +282,7 @@ def test_real_ports_transport_started_before_disable_settles_through_close(app):
     realm = attach_realm(app)
     async def go():
         started, release = asyncio.Event(), asyncio.Event()
+        @bridge_send
         async def send(cmd, *, preserve_id):
             app.sent.append(cmd)
             started.set()

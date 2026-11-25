@@ -15,6 +15,7 @@ from leeroy_mind.guild.store import add_ledger, balances
 from leeroy_mind.guild.upgrades import ItemInfo
 from leeroy_mind.protocol import Ack, LootDrop, LootItem
 from leeroy_mind.storage.store import Store
+from leeroy_mind.testing.wire import port_send
 from .fakes import FakeArmory, member, persona
 
 
@@ -98,6 +99,7 @@ async def test_review_active_reopen_cannot_spend_one_balance_on_two_inflight_awa
     await _due(ports)
     entered, release = asyncio.Event(), asyncio.Event()
 
+    @port_send
     async def send(command):
         ports.sent.append(command)
         if len(ports.sent) == 1:
@@ -130,6 +132,7 @@ async def test_review_close_waits_for_inflight_matching_ack_and_charges_before_e
     await _due(ports)
     entered, release = asyncio.Event(), asyncio.Event()
 
+    @port_send
     async def send(command):
         ports.sent.append(command)
         entered.set()

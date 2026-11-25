@@ -9,6 +9,7 @@ from leeroy_mind.guild.offline import CLEANUP_GRACE_S, LOST_TERMINAL_S
 from leeroy_mind.guild.ports import JobWaiter, LivePorts
 from leeroy_mind.protocol import Boss
 from leeroy_mind.bridge import AckTimeout
+from leeroy_mind.testing.wire import bridge_send
 from .test_offline import setup, start, event
 from .test_raid_night import _run_async, advance, setup as raid_setup
 
@@ -254,6 +255,7 @@ async def test_stop_retries_do_not_grow_the_job_mailbox():
     class App:
         class bridge:
             @staticmethod
+            @bridge_send
             async def send(cmd, preserve_id=False):
                 return None
     app = type('A', (), dict(clock=None, store=type('S', (), dict(conn=None))(), bridge=App.bridge))()

@@ -22,6 +22,7 @@ from leeroy_mind.learn.recipe import BEAT_SUFFIX
 from leeroy_mind.llm.client import GpuPaused, LLMError
 from leeroy_mind.llm.presets import BEAT, LIVE
 from leeroy_mind.storage.store import Store
+from leeroy_mind.testing.fake_llm import check_chat
 from leeroy_mind.talk import beat as beats
 from leeroy_mind.talk import pipeline as pipeline_mod
 from leeroy_mind.talk.discord_length import num_predict
@@ -381,6 +382,7 @@ class Failing(OrionLLM):
 
     async def chat(self, model_name, messages, *, options, think=None, format=None, **kw):
         if format is not None:
+            check_chat(model_name, messages, options=options, think=think, format=format, **kw)
             self.calls.append({"model": model_name, "messages": messages, "format": format})
             raise self.error
         return await super().chat(model_name, messages, options=options, think=think,
@@ -521,6 +523,7 @@ def test_an_in_turn_rescue_reuses_the_beat(rig, caplog):
 
         async def chat(self, model_name, messages, *, options, think=None, format=None, **kw):
             if format is None and not self.failed:
+                check_chat(model_name, messages, options=options, think=think, **kw)
                 self.failed = True
                 self.calls.append({"model": model_name, "messages": messages, "format": None})
                 raise LLMError("/api/chat: HTTP 500")

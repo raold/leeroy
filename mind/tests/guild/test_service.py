@@ -15,6 +15,7 @@ from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.protocol import Ack, Boss, Hello, Login, Logout, Resurrect
 from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.turns import TurnKind
+from leeroy_mind.testing.wire import bridge_mock, bridge_send
 
 from .fakes import FakeArmory, job, member
 from .test_raid_night import setup as raid_setup, form, inside, advance, controls
@@ -37,7 +38,7 @@ def app(fake, tmp_path):
         raid=SimpleNamespace(set_lead=lambda guid: None),
         writer=SimpleNamespace(write=AsyncMock()),
         event_rules=SimpleNamespace(on_loot_lost=AsyncMock()),
-        bridge=SimpleNamespace(send=AsyncMock()), arbiter=None, llm=object(),
+        bridge=SimpleNamespace(send=bridge_mock()), arbiter=None, llm=object(),
         handlers={}, before={}, backgrounds=[], connections=[], is_backlog=lambda ev: False)
     def register(name, handler, *, before=False):
         (app.before if before else app.handlers).setdefault(name, []).append(handler)
@@ -156,7 +157,8 @@ def test_identity_is_refreshed_after_login_config_reload(app):
 def test_job_can_arrive_before_ack_and_unknown_jobs_never_satisfy_waiter(app):
     async def go():
         ports = LivePorts(app)
-        command = BotDo("owned-command", (101,), "do", "drink")
+        command = BotDo("owned-command", (101,), "do", "buff")
+        @bridge_send
         async def send(cmd, **kwargs):
             assert kwargs == {"preserve_id": True}
             ports.jobs.feed(job("bot_do", "done", id="unrelated", guids=(101,)))

@@ -8,6 +8,7 @@ import pytest
 
 from conftest import TEST_CAST, run
 from leeroy_mind.llm.client import ChatResult, GpuPaused, LLMError
+from leeroy_mind.testing.fake_llm import check_chat
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.selfies import files
@@ -27,6 +28,7 @@ class ChoiceModel:
         self.events, self.calls, self.answers = events, [], [PICKS]
 
     async def chat(self, model, messages, **kwargs):
+        check_chat(model, messages, **kwargs)
         self.events.append("chat")
         self.calls.append((model, messages, kwargs))
         answer = self.answers.pop(0)

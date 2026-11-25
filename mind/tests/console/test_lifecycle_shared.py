@@ -10,7 +10,8 @@ import pytest
 from leeroy_mind import lifecycle
 from leeroy_mind.console.control import (Controls, MindHandle, Refused, VoiceHandle,
                                          control_problems)
-from leeroy_mind.lifecycle import OwnershipError, Process, VoiceControl, parse_where
+from leeroy_mind.lifecycle import (VOICE_HOLD_FILE, OwnershipError, Process, VoiceControl,
+                                   hold_voice, parse_where, release_voice_hold, voice_hold)
 
 
 class Clock:
@@ -406,6 +407,42 @@ def test_voice_restart_through_the_console_handle(tmp_path):
     rig.up()
     out = VoiceHandle(rig.control()).act("restart")
     assert rig.kills == [500] and len(rig.launched) == 1 and out.state == "running"
+    assert voice_hold(rig.data) is None  # the stop's hold went with the start
+
+
+def test_a_voice_stop_leaves_a_hold_that_a_start_lifts(tmp_path):
+    """The mind starts a stopped service again unless an operator's stop holds it down (until
+    his next login): every stop asked for here leaves voice.stopped, every start removes it."""
+    rig = VoiceRig(tmp_path)
+    rig.up()
+    rig.control().stop()
+    hold = voice_hold(rig.data)
+    assert hold["by"] == "console" and (rig.data / VOICE_HOLD_FILE).is_file()
+    rig.control().start()
+    assert voice_hold(rig.data) is None and not (rig.data / VOICE_HOLD_FILE).exists()
+    release_voice_hold(rig.data)  # nothing to lift is fine
+    rig.pid = None
+    assert rig.control().stop().message == "voice already stopped"
+    assert voice_hold(rig.data)["by"] == "console"  # a stop of a stopped service holds it too
+
+
+def test_a_refused_voice_stop_leaves_no_hold(tmp_path):
+    rig = VoiceRig(tmp_path)
+    rig.up(Process(500, 1, 7, str(tmp_path / "other.exe"), voice_run(tmp_path / "other.exe")))
+    with pytest.raises(OwnershipError):
+        rig.control().stop()
+    rig.pid = 0
+    with pytest.raises(OwnershipError, match="names nobody"):
+        rig.control().stop()
+    assert voice_hold(rig.data) is None
+
+
+def test_a_voice_hold_reads_whatever_wrote_it(tmp_path):
+    hold_voice(tmp_path, "script")
+    assert voice_hold(tmp_path)["by"] == "script"
+    (tmp_path / VOICE_HOLD_FILE).write_text("not json", encoding="utf-8")
+    assert voice_hold(tmp_path)["by"] == "unknown"  # still a hold: someone stopped it on purpose
+    assert voice_hold(tmp_path / "nowhere") is None
 
 
 def test_voice_control_without_a_venv_says_so(tmp_path):

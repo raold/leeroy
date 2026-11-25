@@ -14,6 +14,7 @@ from leeroy_mind.console.control import Controls
 from leeroy_mind.console.mindlink import LinkError
 from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.protocol import Member
+from leeroy_mind.testing import control
 from leeroy_mind.tuning import changes as C
 from console.rig import events, http, make_app, page_source, running
 
@@ -31,7 +32,7 @@ class FakeLink:
         self.calls.append((tuple(pids), op, args, timeout))
         if self.error:
             raise LinkError(self.error)
-        return self.reply(op, args) if callable(self.reply) else self.reply
+        return control.answer(op, args, self.reply)
 
 
 @pytest.fixture

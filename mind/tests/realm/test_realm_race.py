@@ -21,6 +21,7 @@ from leeroy_mind.realm.service import attach_realm
 from leeroy_mind.training.benchmark import allowed_bosses, pick_guild
 from leeroy_mind.training.ports import LivePorts as TrainingPorts
 from leeroy_mind.training.protocol import Rival
+from leeroy_mind.testing.wire import port_method
 from realm.fakes import RealmApp, enabled
 from test_realm_foundation_schema import _insert, _kill, _source
 
@@ -65,6 +66,7 @@ class FakePorts:
         self.remembered.append(candidate)
         return await self.write(candidate) if self.write is not None else WriteResult(1, "updated")
 
+    @port_method
     async def send(self, cmd):
         self.sent.append(("send", cmd))
 

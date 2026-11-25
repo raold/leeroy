@@ -17,6 +17,7 @@ from leeroy_mind.protocol import Ack, Hello
 from leeroy_mind.testing.fake_llm import FakeLLM, script_from
 from leeroy_mind.world import config, targets, stage, view, photos
 from leeroy_mind.world.protocol import WorldMember, WorldRoster, WorldSay
+from leeroy_mind.testing.wire import bridge_send
 
 
 @pytest.fixture(autouse=True)
@@ -194,6 +195,7 @@ def test_snapshot_pages_identity_ack_and_disconnect(h,online):
     async def scenario():
         app = NS(data_dir=h.settings.data_dir,store=h.store,clock=h.clock,is_backlog=lambda _:False)
         service = targets.Targets(app)
+        @bridge_send
         async def send(cmd,*,preserve_id=False):
             assert not preserve_id
             await service.event(WorldRoster(0,cmd.request,21,1,0,1,1,(member(h),)))
@@ -359,6 +361,7 @@ def test_incomplete_or_refused_roster_does_not_retire_members(h,refusal):
     async def scenario():
         app = NS(data_dir=h.settings.data_dir,store=h.store,clock=h.clock,is_backlog=lambda _:False)
         service = targets.Targets(app)
+        @bridge_send
         async def send(cmd,*,preserve_id=False):
             assert not preserve_id
             empty = WorldRoster(0,cmd.request,21,1,0,1,0,())

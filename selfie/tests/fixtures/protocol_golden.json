@@ -1,0 +1,24 @@
+{
+  "requests": [
+    {"name": "render", "line": "{\"id\": \"r1\", \"op\": \"render\", \"phrases\": [[\"photo of a woman in her thirties\", 0], [\"short auburn hair\", 1]], \"negative\": [[\"child, teenager\", 0], [\"blurry\", 1]], \"seed\": 1234, \"steps\": 30, \"cfg\": 5.0, \"size\": 1024, \"out\": \"@DIR@c0.jpg\", \"thumb\": \"@DIR@c0.thumb.jpg\", \"thumb_size\": 512}"},
+    {"name": "render with an identity, a portrait and the detailer", "line": "{\"id\": \"r2\", \"op\": \"render\", \"phrases\": [[\"photo of a woman in her thirties\", 0], [\"short auburn hair\", 1]], \"negative\": [[\"child, teenager\", 0], [\"blurry\", 1]], \"seed\": 1234, \"steps\": 30, \"cfg\": 5.0, \"size\": 1024, \"out\": \"@DIR@c0.jpg\", \"thumb\": \"@DIR@c0.thumb.jpg\", \"thumb_size\": 512, \"identity\": {\"ref\": \"@DIR@ref.jpg\", \"crop\": [0.1, 0.2, 0.6, 0.7], \"scale\": 0.6}, \"shape\": \"portrait\", \"detail_faces\": true, \"detail_hands\": true}"},
+    {"name": "render with the detailer on hands only", "line": "{\"id\": \"r3\", \"op\": \"render\", \"phrases\": [[\"photo of a woman in her thirties\", 0], [\"short auburn hair\", 1]], \"negative\": [[\"child, teenager\", 0], [\"blurry\", 1]], \"seed\": 1234, \"steps\": 30, \"cfg\": 7, \"size\": 768, \"out\": \"@DIR@c0.jpg\", \"thumb\": \"@DIR@c0.thumb.jpg\", \"thumb_size\": 512, \"detail_hands\": true}"},
+    {"name": "grid", "line": "{\"id\": \"g1\", \"op\": \"grid\", \"tiles\": [\"@DIR@t0.jpg\", \"@DIR@t1.jpg\", \"@DIR@t2.jpg\", \"@DIR@t3.jpg\"], \"tile\": 256, \"gutter\": 8, \"out\": \"@DIR@guild.jpg\", \"thumb\": \"@DIR@guild.thumb.jpg\", \"thumb_size\": 256}"},
+    {"name": "caption", "line": "{\"id\": \"c1\", \"op\": \"caption\", \"base_path\": \"@DIR@base.jpg\", \"top\": \"WHEN THE TANK PULLS\", \"bottom\": \"\", \"out_path\": \"@DIR@meme.jpg\"}"},
+    {"name": "critic", "line": "{\"id\": \"k1\", \"op\": \"critic\", \"path\": \"@DIR@c0.jpg\"}"},
+    {"name": "critic with a reference", "line": "{\"id\": \"k2\", \"op\": \"critic\", \"path\": \"@DIR@c0.jpg\", \"ref\": \"@DIR@ref.jpg\", \"crop\": [0.1, 0.2, 0.6, 0.7]}"},
+    {"name": "embed", "line": "{\"id\": \"e1\", \"op\": \"embed\", \"ref\": \"@DIR@c0.jpg\"}"},
+    {"name": "quit", "line": "{\"id\": \"quit\", \"op\": \"quit\"}"},
+    {"name": "retry", "line": "{\"id\": \"ready\", \"op\": \"retry\"}"}
+  ],
+  "answers": {
+    "ready": ["check_ms", "device", "error", "free_gib", "id", "identity", "load_ms", "ok", "versions"],
+    "render": ["dropped", "error", "flagged", "height", "id", "nsfw", "ok", "peak_gib", "prompt", "seconds", "tokens", "width"],
+    "render with the detailer": ["detail_code", "detail_faces", "detail_hands", "detail_ms", "detail_reverted", "detail_skipped", "dropped", "error", "flagged", "height", "id", "nsfw", "ok", "peak_gib", "prompt", "seconds", "tokens", "width"],
+    "grid": ["error", "height", "id", "ok", "seconds", "similarity", "width"],
+    "caption": ["error", "flagged", "height", "id", "lines", "nsfw", "ok", "seconds", "width"],
+    "critic": ["detectors", "error", "eyes", "face_score", "faces", "hand", "hands", "id", "identity", "identity_code", "ok", "seconds"],
+    "embed": ["device", "error", "id", "model", "ok", "seconds", "vector"],
+    "refused": ["error", "id", "ok"]
+  }
+}

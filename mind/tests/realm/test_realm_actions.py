@@ -14,6 +14,7 @@ from leeroy_mind.realm import protocol as p
 from leeroy_mind.realm.actions import ActionContext, ActionQueue, ActionRejected
 from leeroy_mind.realm.action_policy import classify, document
 from leeroy_mind.realm.action_store import ActionSpec, ActionStore
+from leeroy_mind.testing.wire import port_method
 
 # Every reason native names members by at a leave's ack, in the order it checks them.
 LEAVE_REASONS = ["wg_private_state_unavailable", "cleanup_member_not_admitted", "shared_lfg_queue",
@@ -43,6 +44,7 @@ class Harness:
         self.source_calls += 1
         return self.store.holds()
 
+    @port_method
     async def send(self, cmd):
         # Mirror LivePorts: final hook and writer entry have no intervening await.
         self.queue.before_send(cmd)

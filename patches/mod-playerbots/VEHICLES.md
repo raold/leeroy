@@ -1,5 +1,10 @@
 # Raid vehicle support
 
+Use the [supervised rehearsal checklist](VEHICLE_REHEARSAL.md) before activation.
+Patch 0020 adds separately opt-in `Playerbots.RaidVehicleDiagnostics = 0`: actual
+seat observations, core-accepted cast counts and lifecycle cleanup records. It
+does not change the controller or prove a successful raid by itself.
+
 Patch 0014 adds `Playerbots.RaidVehicleSupport`, default `0`. Apply the numbered
 playerbots series and rebuild the native server before enabling it in
 `playerbots.conf`. This is a separate switch from the raidplay responder and
