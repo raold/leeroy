@@ -102,6 +102,16 @@ an arena manifest; it disables `Leeroy.Enable` so no guild bridge starts.
 | Valithria | At least two effective heals on her GUID, with stock healer strategies and a distant injured raid member competing for heal reach | Remove the ICC strategy; no effective dragon heals |
 | Twin Val'kyr | Light Essence acquired from real gossip, then Dark Essence acquired in response to the core's Dark Touch spell | Disable Twin interactions; no essence acquired |
 | Living Poison | At least two completed hall crossings, real moving slimes present, no damage from them, sampled clearance above their 1.5-yard trigger radius | Disable the hazard group context; require a real poison hit |
+| Lich King: Terenas | At least two effective heals on the real Terenas in Frostmourne, with ordinary follow targeting a leader outside the room | Disable `LichKingMechanics`; require no effective Terenas healing |
+| Lich King: Defile | Actual exposure to a real Defile cast; leave its scaled radius within four seconds, remain outside and take no damage after a one-second escape grace | Disable `LichKingMechanics`; require real Defile damage |
+
+The default invocation keeps the original three scenarios. Select the Lich King
+probes explicitly with `raid-acceptance --scenario lk-terenas --scenario lk-defile`.
+Each selected scenario always runs both controls. These probes establish specific
+mechanics only; they do not certify an entire Lich King kill, heroic Frostmourne,
+Val'kyr rescue or spirit handling. Keep the feature off until the required
+encounter coverage has passing runtime evidence. Merely adding these gates or
+passing their verdict tests is not an enablement receipt.
 
 Every normal case and negative control must pass. A missing boss, stalled bot,
 absent slimes, insufficient samples, login failure or unproved cleanup fails the
@@ -122,7 +132,7 @@ playerbots movement callbacks and navmesh execute unchanged. Guild roster
 discovery and production scheduler integration are outside this gate.
 
 Reports and polled native observations go under `<data>/runs/*-raids-*/`.
-`report.json` includes candidate revisions, binary/layout hashes, all six case
+`report.json` includes candidate revisions, binary/layout hashes, all selected case
 verdicts and shutdown confirmation. The native `OnHeal` hook counts the core's
 effective health gain; neither a requested heal nor an action success counts.
 `dojo raid status` reports the current token and observations; `dojo raid abort`

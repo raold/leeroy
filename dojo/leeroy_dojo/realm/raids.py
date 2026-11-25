@@ -14,6 +14,8 @@ from .layout import LayoutError, read_conf
 from .ra import RaError
 
 SCENARIOS = ("valithria", "twins", "poison")
+LICH_KING_SCENARIOS = ("lk-terenas", "lk-defile")
+ALL_SCENARIOS = SCENARIOS + LICH_KING_SCENARIOS
 
 
 def verdict(observation, *, scenario, token, negative=False):
@@ -32,7 +34,7 @@ def verdict(observation, *, scenario, token, negative=False):
         return {"ok": False, "problems": problems + ["missing, negative or non-integer observation counter"]}
     if type(o.get("minimum_clearance")) not in (float, int) or not math.isfinite(o["minimum_clearance"]) or o["minimum_clearance"] < 0:
         return {"ok": False, "problems": problems + ["invalid clearance"]}
-    if o.get("map") != {"valithria": 631, "twins": 649, "poison": 533}[scenario] or o.get("instance", 0) <= 0:
+    if o.get("map") != {"valithria": 631, "twins": 649, "poison": 533, "lk-terenas": 631, "lk-defile": 631}.get(scenario) or o.get("instance", 0) <= 0:
         problems.append("wrong or absent raid instance")
     if o.get("samples", 0) < 10:
         problems.append("insufficient runtime observations")
@@ -50,7 +52,32 @@ def verdict(observation, *, scenario, token, negative=False):
             problems.append("disabled Twin interaction still acquired an essence")
         elif not negative and not (acquired and switched):
             problems.append("real essence acquisition and colour change not both observed")
-    else:
+    elif scenario in LICH_KING_SCENARIOS:
+        lk_counts = ("room_samples", "escape_ms", "outside_samples", "inside_samples", "late_hits", "encounter_samples", "defile_hits")
+        if any(type(o.get(k)) is not int or o[k] < 0 for k in lk_counts):
+            return {"ok": False, "problems": problems + ["invalid Lich King observation counter"]}
+        if o["encounter_samples"] < 10:
+            problems.append("native Lich King encounter was not active")
+        if scenario == "lk-terenas":
+            if o["room_samples"] < 10 or o.get("reach_competitor") is not True:
+                problems.append("Frostmourne room or outside follow competitor was not exercised")
+            if negative and (o["heal_events"] > 0 or o["effective_healing"] > 0):
+                problems.append("disabled Lich King strategy still healed Terenas")
+            elif not negative and (o["heal_events"] < 2 or o["effective_healing"] <= 0):
+                problems.append("fewer than two effective heals on real Terenas")
+        else:
+            clearance = o.get("final_hazard_clearance")
+            if type(clearance) not in (int, float) or not math.isfinite(clearance):
+                problems.append("invalid Defile clearance")
+            elif not negative and clearance <= 0:
+                problems.append("still inside the scaled Defile hazard")
+            if o["hazard_samples"] < 20 or o["inside_samples"] < 1 or o["max_gap_ms"] > 200:
+                problems.append("Defile exposure or observation cadence not proved")
+            if negative and o["defile_hits"] < 1:
+                problems.append("disabled Defile control did not take real damage")
+            elif not negative and (not 0 < o["escape_ms"] <= 4000 or o["outside_samples"] < 20 or o["late_hits"] != 0):
+                problems.append("Defile escape was late, unstable, or followed by further damage")
+    elif scenario == "poison":
         if o.get("hazard_samples", 0) < 20:
             problems.append("Living Poison was not present long enough")
         if o.get("max_gap_ms", 100000) > 200:
@@ -60,6 +87,8 @@ def verdict(observation, *, scenario, token, negative=False):
                 problems.append("negative control did not demonstrate a real poison hit")
         elif o.get("crossings", 0) < 2 or o.get("minimum_clearance", 0) <= 1.5 or o.get("poison_hits", -1) != 0:
             problems.append("crossing stalled, entered the trigger radius, or took poison damage")
+    else:
+        problems.append("unknown scenario")
     return {"ok": not problems, "problems": problems}
 
 
@@ -111,9 +140,11 @@ def provenance(layout):
     return dict(revisions=revisions, worldserver_sha256=digest, layout_sha256=fingerprint(layout.path), configs=configs)
 
 
-def run(layout, *, log=print):
+def run(layout, *, scenarios=SCENARIOS, log=print):
     # Refuse to adopt another experiment's process. All commands below pass the
     # ordinary dojo root, marker, live-path, port and MySQL identity checks.
+    if not scenarios or len(set(scenarios)) != len(scenarios) or any(s not in ALL_SCENARIOS for s in scenarios):
+        raise LayoutError("select distinct, known raid scenarios")
     if world.running(layout):
         raise world.WorldError("raid acceptance needs a stopped dedicated dojo instance")
     preflight = world.preflight(layout)
@@ -134,7 +165,7 @@ def run(layout, *, log=print):
         started = True
         world.start(layout, log=log)
         with world.ra(layout) as client:
-            for scenario in SCENARIOS:
+            for scenario in scenarios:
                 for negative in (True, False):
                     token = uuid.uuid4().hex
                     name = scenario + ("-negative" if negative else "-normal")
@@ -161,7 +192,7 @@ def run(layout, *, log=print):
                     log(f"raid check {name}: {'passed' if result['ok'] else 'FAILED'}")
                     if not state.get("cleanup"):
                         raise world.WorldError("fixture cleanup unproved; refusing the next scenario")
-        report["ok"] = len(results) == 6 and all(r["ok"] for r in results)
+        report["ok"] = len(results) == len(scenarios) * 2 and all(r["ok"] for r in results)
     except (world.WorldError, RaError, OSError, ValueError) as error:
         report["error"] = str(error)
     finally:
