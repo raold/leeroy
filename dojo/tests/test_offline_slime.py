@@ -1,7 +1,10 @@
 import copy
 import unittest
 
-from leeroy_dojo.realm.offline import reached
+from unittest.mock import patch
+
+from leeroy_dojo.realm.offline import reached, run
+from leeroy_dojo.realm.layout import LayoutError
 
 
 def sample():
@@ -15,6 +18,12 @@ def sample():
 
 
 class SlimeGateTest(unittest.TestCase):
+    def test_worm_flag_refuses_an_unrelated_target_before_any_service_access(self):
+        with patch("leeroy_dojo.realm.offline.world.running") as running:
+            with self.assertRaisesRegex(LayoutError, "ToC"):
+                run(None, target="icc-valithria", toc_worm_support=True)
+            running.assert_not_called()
+
     def test_requires_real_growth_escape_and_all_owned_bodies(self):
         self.assertTrue(reached(sample(), target="toc-slime-pools", token="run"))
         changes = (
