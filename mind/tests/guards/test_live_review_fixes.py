@@ -280,7 +280,7 @@ def test_reaction_mapping_distinguishes_laugh_from_acknowledgement(rig,question,
     assert result.action=="react" and result.reaction==emoji
 
 
-def test_loot_line_survives_a_full_guild_window_but_not_a_repeat(rig):
+def test_window_exempt_say_as_passes_a_full_guild_window_and_others_do_not(rig):
     async def go(text, **kw):
         task = asyncio.create_task(rig.engine.say_as(101,"raid",text,kind=TurnKind.CALLOUT,**kw))
         await rig.advance(100)
