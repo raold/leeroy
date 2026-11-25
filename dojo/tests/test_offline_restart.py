@@ -13,6 +13,15 @@ def observation():
 
 
 class RestartGateTest(unittest.TestCase):
+    def test_tank_swap_requires_actual_razorscale_role_change_and_restoration(self):
+        sample = observation() | dict(wipe_boss=2, main_tank_at_wipe=2, main_tank=1)
+        self.assertTrue(reached(sample, target="ulduar-tank-restart", token="run"))
+        for key, value in (("wipe_boss", 3), ("main_tank_at_wipe", 1), ("main_tank_at_wipe", 0),
+                           ("main_tank_at_wipe", None), ("main_tank", 2), ("main_tank", None),
+                           ("scripted_wipe", False), ("restarting_seen", False)):
+            with self.subTest(key=key, value=value):
+                self.assertFalse(reached(sample | {key: value}, target="ulduar-tank-restart", token="run"))
+
     def test_requires_the_real_post_wipe_restart_and_all_actual_bodies(self):
         self.assertTrue(reached(observation(), target="ulduar-restart", token="run"))
         for change in ("no_wipe", "not_seen", "no_restart", "two_restarts", "restarting", "short", "driver_lost",

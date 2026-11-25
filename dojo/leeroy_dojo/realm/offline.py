@@ -16,7 +16,7 @@ from .offline_fixture import FixtureCheckpoint
 TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
            "icc-deathwhisper": ("icc", 631, 1), "icc-gunship": ("icc", 631, 2),
            "icc-valithria": ("icc", 631, 10), "offline-reserves": ("toc-reserves", 649, None),
-           "ulduar-restart": ("ulduar", 603, None)}
+           "ulduar-restart": ("ulduar", 603, None), "ulduar-tank-restart": ("ulduar", 603, None)}
 
 
 def parse_status(reply):
@@ -40,7 +40,13 @@ def reached(observation, *, target, token):
     if event.get("id") != token or type(instance) is not int or instance <= 0 or native.get("stage") != "running":
         return False
     bodies = observation.get("bodies", [])
-    if target == "ulduar-restart":
+    if target in {"ulduar-restart", "ulduar-tank-restart"}:
+        if target == "ulduar-tank-restart" and not (
+                observation.get("wipe_boss") == 2 and type(observation.get("main_tank_at_wipe")) is int
+                and observation["main_tank_at_wipe"] > 0
+                and observation["main_tank_at_wipe"] != native.get("leader")
+                and observation.get("main_tank") == native.get("leader")):
+            return False
         members = native.get("bodies", [])
         before = observation.get("restarts_at_wipe")
         expected = {b.get("guid") for b in bodies if b.get("slot") in range(1, 11)}
@@ -184,15 +190,19 @@ def run(layout, *, target, log=print):
                     if stage != last_stage:
                         log(f"offline {target}: {stage or native.get('event', {}).get('state', 'unknown')}")
                         last_stage = stage
-                    if target == "ulduar-restart" and not observed.get("scripted_wipe") and stage == "running":
+                    if target in {"ulduar-restart", "ulduar-tank-restart"} and not observed.get("scripted_wipe") and stage == "running":
                         leader = next((b for b in observed.get("bodies", []) if b.get("slot") == 1), {})
                         states = leader.get("bosses", [])
-                        if len(states) > 3 and states[3] == 1:
+                        boss = 2 if target == "ulduar-tank-restart" else 3
+                        swapped = (type(observed.get("main_tank")) is int and observed["main_tank"] > 0
+                                   and observed["main_tank"] != native.get("leader"))
+                        if len(states) > boss and states[boss] == 1 and (target == "ulduar-restart" or swapped):
                             # Admission rechecks live ownership, the exact engaged
                             # boss and every actor before the native test stimulus.
-                            reply = client.command(f"dojo offline wipe {token}")
+                            command = "wipe-tank-swap" if target == "ulduar-tank-restart" else "wipe"
+                            reply = client.command(f"dojo offline {command} {token}")
                             if "dojo offline: wiped" in reply:
-                                log("offline ulduar-restart: applied scripted full-wipe stimulus")
+                                log(f"offline {target}: applied scripted full-wipe stimulus")
                     if reached(observed, target=target, token=token) and not report["reached"]:
                         report["reached"] = True
                         report["milestone"] = observed
