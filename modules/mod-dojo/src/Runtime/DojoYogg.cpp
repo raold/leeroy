@@ -28,6 +28,7 @@
 #include "PlayerScript.h"
 #include "Spell.h"
 #include "SpellMgr.h"
+#include "SpellAuras.h"
 #include "SpellAuraEffects.h"
 #include "TemporarySummon.h"
 #include "UnitScript.h"
@@ -164,8 +165,8 @@ struct Trial
             || base->GetExactDist2d(constrictorOrigins[i]) >
                 std::max(spell->Effects[EFFECT_0].CalcRadius(p), p->GetCombatReach()) + 0.1f)
             return false;
-        // Require the occupied seat witnessed by the native squeeze cast,
-        // after lunge has boarded its target. SetInFront can rotate the base without relocating
+        // Require the occupied seat witnessed after the native ride aura's
+        // effects applied. SetInFront can rotate the base without relocating
         // its passenger, so retain the seat destination witnessed when boarding
         // instead of assuming the later base orientation was used for arrival.
         auto const& seat = constrictorSeats[i];
@@ -548,7 +549,29 @@ public:
 class Effects : public UnitScript
 {
 public:
-    Effects() : UnitScript("DojoYoggEffects", true, {UNITHOOK_ON_DAMAGE, UNITHOOK_ON_UNIT_DEATH}) { }
+    Effects() : UnitScript("DojoYoggEffects", true, {UNITHOOK_ON_DAMAGE, UNITHOOK_ON_UNIT_DEATH, UNITHOOK_ON_AURA_APPLY}) { }
+    void OnAuraApply(Unit* unit, Aura* aura) override
+    {
+        if (!unit || unit->GetEntry() != 33983 || !aura || aura->GetId() != 64123) return;
+        std::lock_guard<std::recursive_mutex> lock(trial.mutex);
+        if (trial.state != "observe" && trial.state != "portals") return;
+        // Unit::_ApplyAura calls this after all aura effects, including
+        // HandleAuraControlVehicle -> _EnterVehicle -> AddPassenger. A cast
+        // callback is too early when the lunge has a missile travel delay.
+        auto* caster = aura->GetCaster();
+        auto* player = caster ? caster->ToPlayer() : nullptr;
+        auto* creature = unit->ToCreature();
+        auto* summon = creature ? creature->ToTempSummon() : nullptr;
+        auto* kit = player ? player->GetVehicle() : nullptr;
+        if (!kit || !summon || kit->GetBase() != unit || unit->GetMap() != player->GetMap()
+            || summon->GetSummonerGUID() != player->GetGUID()
+            || kit->GetPassenger(player->GetTransSeat()) != player) return;
+        auto found = std::find(trial.actors.begin(), trial.actors.end(), player->GetGUID());
+        if (found == trial.actors.end()) return;
+        auto& seat = trial.constrictorSeats[std::size_t(found - trial.actors.begin())];
+        if (seat.base != unit->GetGUID())
+            seat = {unit->GetGUID(), SeatPosition(player, unit), trial.elapsed};
+    }
     void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
     {
         std::lock_guard<std::recursive_mutex> lock(trial.mutex);
@@ -588,22 +611,6 @@ public:
         {
             trial.constrictorOrigins[i] = player->GetPosition();
             trial.constrictorCastMs[i] = trial.elapsed;
-        }
-        if (id == 64125 && spell->m_targets.GetUnitTarget() == player)
-        {
-            // GrabPlayer casts lunge synchronously, then squeeze. At this
-            // second cast the core has already installed the actual passenger.
-            // VehicleScript is not a global hook on this fork, so observe this
-            // existing player hook without replacing the encounter's AI.
-            auto* base = player->GetVehicleBase();
-            auto* creature = base ? base->ToCreature() : nullptr;
-            auto* summon = creature ? creature->ToTempSummon() : nullptr;
-            auto* kit = player->GetVehicle();
-            if (kit && summon && base->GetEntry() == 33983 && base->GetMap() == player->GetMap()
-                && summon->GetSummonerGUID() == player->GetGUID() && base->HasAura(64123, player->GetGUID())
-                && kit->GetPassenger(player->GetTransSeat()) == player
-                && trial.constrictorSeats[i].base != base->GetGUID())
-                trial.constrictorSeats[i] = {base->GetGUID(), SeatPosition(player, base), trial.elapsed};
         }
         if (spell->GetSpellInfo()->HasEffect(SPELL_EFFECT_CHARGE))
         {
