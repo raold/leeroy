@@ -15,8 +15,8 @@ from .test_session import _run_async, advance, drop, items_charged, loot_states,
 ALLIANCE = 1101  # human, dwarf, night elf, gnome, draenei
 
 
-def _chest(item_id=50001, race=-1, cls=-1):
-    return ItemInfo(item_id, "Testplate", 4, 264, 5, 4, 4, cls, frozenset({4}), allowable_race=race)
+def _chest(item_id=50001, race=-1, cls=-1, flags=0):
+    return ItemInfo(item_id, "Testplate", 4, 264, 5, 4, 4, cls, frozenset({4}), allowable_race=race, flags_extra=flags)
 
 
 def _bidders(ports):
@@ -37,7 +37,7 @@ def _arm(setup, item):
 @_run_async
 async def test_alliance_only_item_is_never_offered_to_a_horde_bidder(setup):
     ports, _, _, _ = setup
-    _arm(setup, _chest(race=ALLIANCE))
+    _arm(setup, _chest(race=EVERY_RACE, flags=0x2))
     session = await opened(setup)
     await session.on_loot_drop(drop())
     assert 105 not in _bidders(ports)[0] and 106 in _bidders(ports)[0]
@@ -49,7 +49,7 @@ async def test_alliance_only_item_is_never_offered_to_a_horde_bidder(setup):
 @_run_async
 async def test_alliance_only_item_with_only_horde_bidders_ends_unclaimed(setup):
     ports, _, _, _ = setup
-    _arm(setup, _chest(race=ALLIANCE))
+    _arm(setup, _chest(race=EVERY_RACE, flags=0x2))
     for guid in (101, 102, 103, 104, 105, 106, 107):
         ports.members[guid] = replace(ports.members[guid], race=2)
     session = await opened(setup)
@@ -99,6 +99,33 @@ def test_can_use_masks():
 
 def test_parse_items_reads_the_race_mask_as_the_last_column():
     row = ["1001", "Testplate", "4", "264", "5", "4", "4", "-1", "4", "7", "NULL",
-           "0", "0", "0", "0", "0", "0", "0", "NULL", "0", "1101"]
-    assert parse_items([row])[1001].allowable_race == 1101
-    assert parse_items([row[:20]])[1001].allowable_race == -1
+           "0", "0", "0", "0", "0", "0", "0", "NULL", "0", "1101", "2"]
+    assert parse_items([row])[1001].allowable_race == 1101 and parse_items([row])[1001].flags_extra == 2
+    assert parse_items([row[:20]])[1001].allowable_race == -1 and parse_items([row[:20]])[1001].flags_extra == 0
+
+
+EVERY_RACE = 2147483647  # the real VoA tier pieces: every race, faction only in FlagsExtra
+
+
+@_run_async
+async def test_horde_only_item_is_never_offered_to_an_alliance_bidder(setup):
+    ports, _, _, _ = setup
+    _arm(setup, _chest(race=EVERY_RACE, flags=0x1))
+    session = await opened(setup)
+    await session.on_loot_drop(drop())
+    assert 106 not in _bidders(ports)[0] and 105 in _bidders(ports)[0]
+
+
+@_run_async
+async def test_real_alliance_flag_shape_with_8194(setup):
+    ports, _, _, _ = setup
+    _arm(setup, _chest(race=EVERY_RACE, flags=8194))
+    session = await opened(setup)
+    await session.on_loot_drop(drop())
+    assert 105 not in _bidders(ports)[0] and 106 in _bidders(ports)[0]
+
+
+def test_can_use_faction_bits():
+    alliance, horde = _chest(race=EVERY_RACE, flags=2), _chest(race=EVERY_RACE, flags=1)
+    assert can_use(alliance, 1, 1) and not can_use(alliance, 2, 1)
+    assert can_use(horde, 10, 1) and not can_use(horde, 11, 1)
