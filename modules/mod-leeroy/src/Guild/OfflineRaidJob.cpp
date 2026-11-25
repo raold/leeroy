@@ -202,6 +202,9 @@ struct Job
 // World-thread only. Store identifiers and value snapshots; every Player/Group is resolved anew on each tick.
 std::unique_ptr<Job> active;
 std::string lastFinishedOffline;
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+nlohmann::json dojoLastTerminal;
+#endif
 uint64 nextRewardToken = 1; // Independent of the later instance-bound training-run token.
 
 ObjectGuid Guid(uint32 low) { return ObjectGuid::Create<HighGuid::Player>(low); }
@@ -1874,6 +1877,9 @@ bool RunTeardown(Job& job)
         event.state = failed ? "failed" : job.terminalState;
         event.stage.clear();
         event.reason = failed ? "cleanup_failed:" + job.terminalReason : job.terminalReason;
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+        dojoLastTerminal = {{"event", MakeJobEvent(event)}, {"cleanup", complete}, {"active", !complete}};
+#endif
         LOG_INFO("module.leeroy", "leeroy: {} {} {}: {} ({} kills, {} wipes); recovery retained={}",
             event.kind, event.id, event.state, event.reason, event.kills, event.wipes, !complete);
         if (Dungeon(job)) job.pendingTerminal = std::move(event);
@@ -2242,6 +2248,37 @@ std::string MemberDungeonFor([[maybe_unused]] uint32 guid)
 #endif
     return {};
 }
+
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+nlohmann::json DojoOfflineSnapshot()
+{
+    if (!active) return dojoLastTerminal.is_object() ? dojoLastTerminal : nlohmann::json{{"active", false}};
+    auto const& job = *active;
+    nlohmann::json bodies = nlohmann::json::array();
+    for (auto const& member : job.members)
+    {
+        auto* p = FindOnline(member.guid);
+        bodies.push_back({{"guid", member.guid}, {"present", Present(job, p)},
+            {"alive", p && p->IsAlive()}, {"teleport", p && p->IsBeingTeleported()},
+            {"restart_issued", member.restartIssued}, {"restart_dropped", member.restartDropped},
+            {"map", p ? p->GetMapId() : 0}, {"instance", p ? p->GetInstanceId() : 0}});
+    }
+    auto* leader = FindOnline(job.command.leaderGuid);
+    auto* elected = leader ? DcLeaderSignal::FindLeaderTank(leader) : nullptr;
+    return {{"active", true}, {"event", MakeJobEvent(job.event)}, {"stage", Name(job.stage)},
+        {"stage_ms", job.stageElapsed}, {"elapsed_ms", job.elapsed}, {"restarts", job.restarts},
+        {"driver", Driver(job) != nullptr}, {"leader", job.command.leaderGuid},
+        {"elected", elected ? elected->GetGUID().GetCounter() : 0}, {"bodies", bodies},
+        {"cleanup", false}};
+}
+
+bool DojoStopOffline(std::string const& id)
+{
+    if (!active || active->event.id != id) return false;
+    Stop(*active, "dojo_stop");
+    return true;
+}
+#endif
 
 bool CanProjectDungeonBody([[maybe_unused]] std::string const& start, [[maybe_unused]] uint32 guid)
 {

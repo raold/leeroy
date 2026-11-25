@@ -25,6 +25,36 @@ no Torch or Gymnasium dependency, and no learned policy is claimed.
 
 ## Running-world raid acceptance
 
+### Offline jobs with dungeon-clear
+
+The separate `-OfflineAcceptance -RaidAcceptance -Variant training` build also
+admits an isolated `mod-dungeon-clear` checkout. Add its absolute path as
+`roots.dungeonclear`, its module name to `modules`, and a dedicated unused
+`ports.leeroy` to the layout. Preflight refuses live links; configure/build
+attest this fourth checkout alongside source, core and playerbots.
+
+`realm --layout <layout> offline-acceptance --target toc-beasts` prepares a
+synthetic guild on `DOJORAID` and `RNDBOTDOJO`, using dungeon-clear's actual
+level-80 spec/gear factory capped at item level 245. It restarts only its owned
+world, enables the synthetic guild, sends the candidate mind's real playbook
+through the real bridge/command handler, and starts the production offline job.
+No model or live mind service is used. The connection must remain acknowledged
+and alive throughout the pull. Targets also include `ulduar-xt`,
+`icc-deathwhisper`, `icc-gunship`, and `icc-valithria`.
+
+The trace includes native restart readiness, actual instance boss states,
+positions and requested-damage counts by creature entry. A target needs the
+named encounter DONE in the owned leader's actual instance, followed by real
+job cleanup and world shutdown. A command acknowledgement, an arbitrary kill
+count, missing telemetry, setup failure, or a wipe cap is a failure. Gunship
+DONE is a scripted pass, not a boss kill. The Valithria target enables its
+switch only in the isolated configuration, then restores it to off.
+
+Use a fresh disposable character schema for each comparison: previous instance
+saves deliberately remain subject to the real admission fences. Fixtures and
+reports are private under the dojo runtime/data roots. These runs are 10-player
+normal checks; they do not certify other difficulties or enable live features.
+
 The separate raid acceptance build exercises the real playerbots strategies,
 core encounter scripts and mod-leeroy hazard filter. It uses a dedicated dojo
 layout, MySQL instance, synthetic `DOJORAID` account and two fixture characters.

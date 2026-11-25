@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-dojo), released under the GNU GPL v2. See LICENSE.
 #include "DojoRaid.h"
+#include "DojoOffline.h"
 
 #if DOJO_TRAINING_BUILD
 #if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
@@ -35,6 +36,34 @@
 
 using nlohmann::json;
 using namespace Acore::ChatCommands;
+
+namespace Dojo
+{
+namespace
+{
+bool FixtureAccount(ObjectGuid guid)
+{
+    uint32 const account = sCharacterCache->GetCharacterAccountIdByGuid(guid);
+    if (account && account == AccountMgr::GetId("DOJORAID")) return true;
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+    if (account && account == AccountMgr::GetId("RNDBOTDOJO")) return true;
+#endif
+    return false;
+}
+}
+bool LoginRaidFixture(ObjectGuid guid)
+{
+    if (!FixtureAccount(guid)) return false;
+    sRandomPlayerbotMgr.AddPlayerBot(guid, 0);
+    return true;
+}
+bool LogoutRaidFixture(ObjectGuid guid)
+{
+    if (!FixtureAccount(guid)) return false;
+    sRandomPlayerbotMgr.LogoutPlayerBot(guid);
+    return true;
+}
+}
 
 namespace
 {
@@ -128,7 +157,7 @@ struct RaidRun
         sPlayerbotAIConfig.TwinValkyrInteractions = !negative;
         active = true;
         Phase("login");
-        for (ObjectGuid guid : actors) sRandomPlayerbotMgr.AddPlayerBot(guid, 0);
+        for (ObjectGuid guid : actors) Dojo::LoginRaidFixture(guid);
         return "started";
     }
 
@@ -377,7 +406,7 @@ struct RaidRun
                     online = true;
                     Player* p = Actor(i);
                     if (p && !p->IsBeingTeleported() && p->GetMapId() == 0)
-                        sRandomPlayerbotMgr.LogoutPlayerBot(actors[i]);
+                        Dojo::LogoutRaidFixture(actors[i]);
                 }
             if (!online) { cleanup = true; active = false; Phase("done"); }
             else if (phaseMs > 60000) { failure += "; cleanup not proved"; active = false; Phase("cleanup_failed"); }
@@ -492,7 +521,7 @@ public:
 };
 }
 
-void AddSC_dojo_raid() { new RaidCommands(); new RaidTicks(); new RaidEvents(); }
+void AddSC_dojo_raid() { new RaidCommands(); new RaidTicks(); new RaidEvents(); AddSC_dojo_offline(); }
 #else
 void AddSC_dojo_raid() { }
 #endif

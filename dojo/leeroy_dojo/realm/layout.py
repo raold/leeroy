@@ -264,6 +264,8 @@ def load(path: str | os.PathLike) -> Layout:
     roots_in = data.get("roots") or {}
     roots = {name: _abs(roots_in.get(name), f"roots.{name}")
              for name in ("source", "core", "playerbots", "build", "runtime", "data")}
+    if "mod-dungeon-clear" in data.get("modules", []):
+        roots["dungeonclear"] = _abs(roots_in.get("dungeonclear"), "roots.dungeonclear")
     production = data.get("production") or {}
     if not isinstance(production, dict) or not production.get("install_root"):
         raise LayoutError("layout production section must name the live install")

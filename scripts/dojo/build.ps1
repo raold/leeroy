@@ -320,6 +320,7 @@ $receipt = [ordered]@{
     problems        = $problems
     log             = $log
 }
+if ($DojoLayout.roots.Contains('dungeonclear')) { $receipt.dungeonclear = $cleanRevisions.dungeonclear }
 $json = $receipt | ConvertTo-Json -Depth 5
 $json | Set-Content -LiteralPath "$build/dojo-build.json" -Encoding utf8NoBOM
 New-Item -ItemType Directory -Force -Path "$data/builds" | Out-Null

@@ -40,6 +40,11 @@ void EndBenchmark(std::string const& reason);
 void TickOfflineRaid(std::uint32_t diffMs);
 void SweepLeftoverGroups();
 void RegisterOfflineRaidHandler();
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+// Observes the real job; only compiled into the isolated acceptance variant.
+nlohmann::json DojoOfflineSnapshot();
+bool DojoStopOffline(std::string const& id);
+#endif
 }
 
 #endif

@@ -46,7 +46,8 @@ param(
     [Parameter(Mandatory = $true)][string] $Layout,
     [ValidateSet('disabled', 'training')][string] $Variant = 'disabled',
     [switch] $ApplyPatches,
-    [switch] $RaidAcceptance
+    [switch] $RaidAcceptance,
+    [switch] $OfflineAcceptance
 )
 
 Set-StrictMode -Version 3.0
@@ -110,6 +111,9 @@ if ($null -eq $patches -or $patchCode -ne 0 -or -not $patches.ok) {
 foreach ($name in @($patches.applied)) { Write-Output "configure: applied $name to roots.playerbots" }
 
 $DojoLayout = Get-Content -LiteralPath $Layout -Raw | ConvertFrom-Json -AsHashtable
+if ($OfflineAcceptance -and (-not $RaidAcceptance -or 'mod-dungeon-clear' -notin $DojoLayout.modules)) {
+    Stop-DojoConfigure 'OfflineAcceptance requires RaidAcceptance and an isolated mod-dungeon-clear'
+}
 try { $cleanRevisions = Get-DojoCleanRevisions $DojoLayout.roots }
 catch { Stop-DojoConfigure $_.Exception.Message }
 if ($RaidAcceptance -and ($Variant -ne 'training' -or 'mod-leeroy' -notin $DojoLayout.modules)) {
@@ -145,7 +149,8 @@ $cmakeArgs.AddRange([string[]] @(
         "-DCMAKE_INSTALL_PREFIX=$build/install",
         "-DBOOST_ROOT=$boost",
         "-DAC_ENABLE_DOJO=$(if ($Variant -eq 'training') { 'ON' } else { 'OFF' })",
-        "-DAC_DOJO_RAID_ACCEPTANCE=$(if ($RaidAcceptance) { 'ON' } else { 'OFF' })"))
+        "-DAC_DOJO_RAID_ACCEPTANCE=$(if ($RaidAcceptance) { 'ON' } else { 'OFF' })",
+        "-DAC_DOJO_OFFLINE_ACCEPTANCE=$(if ($OfflineAcceptance) { 'ON' } else { 'OFF' })"))
 if ($toolchain.Contains('mysql') -and $toolchain.mysql) {
     $mysql = ([string] $toolchain.mysql).Replace('\', '/').TrimEnd('/')
     $cmakeArgs.AddRange([string[]] @("-DMYSQL_INCLUDE_DIR=$mysql/include", "-DMYSQL_LIBRARY=$mysql/lib/libmysql.lib"))
@@ -220,6 +225,7 @@ $receipt = [ordered]@{
     instance    = $DojoLayout.instance
     variant     = $Variant
     raid_acceptance = [bool] $RaidAcceptance
+    offline_acceptance = [bool] $OfflineAcceptance
     clean_revisions = $cleanRevisions
     fresh       = $fresh
     core        = [ordered]@{ path = $core; head = Get-DojoHead $core }
@@ -231,6 +237,9 @@ $receipt = [ordered]@{
     cmake       = "$(& cmake --version | Select-Object -First 1)".Trim()
     arguments   = $cmakeArgs
     log         = $log
+}
+if ($DojoLayout.roots.Contains('dungeonclear')) {
+    $receipt.dungeonclear = [ordered]@{ path = $DojoLayout.roots.dungeonclear; head = $cleanRevisions.dungeonclear }
 }
 $receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$build/dojo-configure.json" -Encoding utf8NoBOM
 Write-Output "configure: ok ($Variant; loader registers $($registered -join ', ')); wrote $build/dojo-configure.json"
