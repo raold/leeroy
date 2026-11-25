@@ -18,6 +18,7 @@ def sample(control=False):
             passes=16 if control else 1, setup_bosses=[3, 4, 5, 6, 7, 8, 10], setup_completed_mask=127,
             setup_boss_deaths=[15956,15953,15952,15954,15936,16011,16061], setup_add_deaths=2,
             setup_trash_deaths=APPROACH_SPAWNS.copy(),
+            setup_location="razuvious_room",
             strategies_restored=True))
 
 
@@ -33,6 +34,7 @@ class NaxxPassTest(unittest.TestCase):
             ("gate", "setup_completed_mask", 255), ("gate", "strategies_restored", False),
             ("gate", "setup_boss_deaths", []), ("gate", "setup_add_deaths", 0),
             ("gate", "setup_trash_deaths", []),
+            ("gate", "setup_location", "gothik_corridor"),
             ("gate", "setup_trash_deaths", APPROACH_SPAWNS[:-1]),
             ("gate", "setup_trash_deaths", APPROACH_SPAWNS + [97736]),
             ("body", "map", 649), ("body", "instance", 456), ("body", "alive", False),

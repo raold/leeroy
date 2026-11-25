@@ -34,7 +34,7 @@ admits an isolated `mod-dungeon-clear` checkout. Add its absolute path as
 attest this fourth checkout alongside source, core and playerbots.
 
 `realm --layout <layout> offline-acceptance --target naxx-gothik-pass` tests
-the #476 route from the Gothik corridor. Setup marks only Anub'Rekhan,
+the #476 route starting in Razuvious' room. Setup marks only Anub'Rekhan,
 Faerlina, Maexxna, Noth, Heigan, Loatheb and Razuvious done and restores
 ordinary bot strategies before measurement. These seven are fixture
 prerequisites, excluded from earned kill accounting. Setup kills their real
