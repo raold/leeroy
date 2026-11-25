@@ -563,6 +563,10 @@ patch ID. Otherwise, in series order on the rehearsed tip, a patch is already
 installed when undoing and redoing it gives back exactly that tree; one that
 would also still change the tree when applied is ambiguous and refuses the
 release.
+The release runner freezes the installed helpers before cherry-picking, so the first
+release that adds a module to the planner's list (mod-individual-progression, this
+change) must first copy the updated `scripts/ac-release-patches.py` onto the live
+branch by hand (`scripts/` is not releasable); otherwise the old list skips the new series.
 Reapplying a reverted change requires a new patch entry. The playerbot pin guard
 is checked before services stop and again before building. Dirty module repos,
 unfinished Git operations and failed rehearsal refuse the release. Even if all
