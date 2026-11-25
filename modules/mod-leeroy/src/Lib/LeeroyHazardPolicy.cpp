@@ -2,7 +2,9 @@
 #include "LeeroyHazardPolicy.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <tuple>
 #include <utility>
 
@@ -75,9 +77,56 @@ std::pair<float, float> Closest(HazardPoint a, HazardPoint b, HazardZone const& 
     return {t, std::hypot(a.x + t * dx - zone.x, a.y + t * dy - zone.y)};
 }
 
+// How near a bot walking from a to b (then standing there) comes to a moving npc (HazardZone's motion fields).
+float Approach(HazardPoint a, HazardPoint b, HazardZone const& zone)
+{
+    float const walk = Distance2d(a, b.x, b.y) / kHazardWalkSpeed;
+    float const moves = std::max(0.0f, zone.until - kHazardScanAge); // it moved for up to a pass already
+    float const lag = std::min(zone.until, kHazardScanAge);
+    float const nx = zone.px + zone.vx * lag;
+    float const ny = zone.py + zone.vy * lag;
+    // Both motions are straight between these moments: closest approach on each piece.
+    std::array<float, 4> cuts{0.0f, std::min(walk, moves), std::max(walk, moves), walk + kHazardStandAfter};
+    std::sort(cuts.begin(), cuts.end());
+    auto botAt = [&](float t)
+    {
+        float const f = walk > 0.0001f ? std::min(t, walk) / walk : 1.0f;
+        return std::pair<float, float>{a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f};
+    };
+    auto npcAt = [&](float t)
+    {
+        float const m = std::min(t, moves);
+        return std::pair<float, float>{nx + zone.vx * m, ny + zone.vy * m};
+    };
+    float best = std::numeric_limits<float>::max();
+    for (std::size_t i = 0; i + 1 < cuts.size(); ++i)
+    {
+        float const t0 = cuts[i];
+        float const t1 = std::min(cuts[i + 1], walk + kHazardStandAfter);
+        if (t1 < t0)
+            continue;
+        auto const [bx0, by0] = botAt(t0);
+        auto const [bx1, by1] = botAt(t1);
+        auto const [nx0, ny0] = npcAt(t0);
+        auto const [nx1, ny1] = npcAt(t1);
+        float const rx = bx0 - nx0;
+        float const ry = by0 - ny0;
+        float const dx = (bx1 - nx1) - rx;
+        float const dy = (by1 - ny1) - ry;
+        float const length2 = dx * dx + dy * dy;
+        float const s = length2 > 0.0000001f ? std::clamp(-(rx * dx + ry * dy) / length2, 0.0f, 1.0f) : 0.0f;
+        best = std::min(best, std::hypot(rx + dx * s, ry + dy * s));
+    }
+    return best;
+}
+
 bool Crosses(HazardPoint a, HazardPoint b, HazardZone const& zone, float reach)
 {
-    return (SameFloor(a, zone) || SameFloor(b, zone)) && Closest(a, b, zone).second <= zone.radius + reach;
+    if (!SameFloor(a, zone) && !SameFloor(b, zone))
+        return false;
+    if (Closest(a, b, zone).second <= zone.radius + reach)
+        return true;
+    return zone.moving && Approach(a, b, zone) <= zone.core + reach;
 }
 
 // Every clear spot near p with its shift, nearest first, then nearest `toward`.
@@ -213,6 +262,12 @@ HazardZone HazardLeadZone(HazardZone zone, std::optional<HazardPoint> next, floa
     float const travel = std::min(left, speed * kHazardLeadSeconds);
     if (!(travel > 0.01f))
         return zone;
+    zone.px = zone.x;
+    zone.py = zone.y;
+    zone.core = zone.radius;
+    zone.vx = dx / left * speed;
+    zone.vy = dy / left * speed;
+    zone.until = left / speed;
     zone.x += dx / left * travel / 2.0f;
     zone.y += dy / left * travel / 2.0f;
     zone.radius += travel / 2.0f;

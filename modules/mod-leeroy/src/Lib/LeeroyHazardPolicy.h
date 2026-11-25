@@ -104,6 +104,8 @@ struct HazardZone
     std::uint32_t phase = 0; // the object's phase mask: a body in no shared phase never meets it (0: every phase)
     bool held = false;       // an add's own aura (HeldAuraHazard): tanks hold the add in it
     bool moving = false;     // it walks, and is led along its path (HazardLeadZone)
+    // moving: where it is, its own radius before the lead, its velocity (yards a second) and how long it keeps it
+    float px = 0, py = 0, core = 0, vx = 0, vy = 0, until = 0;
     bool operator==(HazardZone const&) const = default;
 };
 
@@ -112,6 +114,13 @@ struct HazardZone
 // path makes for, at `speed` yards a second, never past that point. Unchanged when it stands still.
 inline constexpr float kHazardLeadSeconds = 1.0f;
 HazardZone HazardLeadZone(HazardZone zone, std::optional<HazardPoint> next, float speed);
+// A walk meets a moving npc as both move: the bot at kHazardWalkSpeed from start to end, then standing
+// kHazardStandAfter at the end (until its next leg), the npc on its way from a pass up to kHazardScanAge old. The
+// walk crosses its zone when the two come within the npc's own radius plus the bot's reach at any moment; passing
+// behind it is clear, stepping into its way is not.
+inline constexpr float kHazardWalkSpeed = 7.0f;
+inline constexpr float kHazardStandAfter = 1.0f;
+inline constexpr float kHazardScanAge = 0.5f;
 
 // Whether a zone concerns a body in these phases: a zone in another phase never does (Halion's two realms), nor an
 // add's own aura a tank (it holds the add there).

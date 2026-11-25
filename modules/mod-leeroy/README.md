@@ -521,10 +521,14 @@ training state or pending bot command leaves the body to its owner (nothing adde
   his spot moves 3 yards.
 - **Moving npcs** (2026-11-24). A zone that moves is never a pocket: while the first zone across the straight
   way moves (`HazardFirstCrossingMoves`) the detour never gives up, and with no waypoint round it the bot waits
-  where it stands for the way to clear. While a moving zone lies within 20 yards, follow walks legs of at most 4
-  yards (`HazardMovingLeg`): playerbots commits a bot to the leg it sets out on for that leg's walk time, up to
+  where it stands for the way to clear. While a moving zone lies within 20 yards, follow walks short legs
+  (`HazardMovingLeg`): playerbots commits a bot to the leg it sets out on for that leg's walk time, up to
   `Playerbots.MaxWaitForMove` (5 s, 35 yards at run speed), so a short leg makes it plan again from each fresh
-  pass. Map threads take only the bots of the master whose group the last pass made aware.
+  pass. A leg is 4 yards, or longer to lie beyond where follow stops: the bot's own formation distance from its
+  edge (`FollowStop`; playerbots' default chaos formation widens `Playerbots.FollowDistance` by up to 3.5 yards
+  every 3 s), and so is a detour step; a nearer spot made follow judge itself done, and the bot stood still
+  beside the lanes. Map threads take only the bots of the master whose group the last pass made aware (before,
+  `Leeroy.HumanGuid`'s, which left the dojo's synthetic leader's bot without zones).
 - **Exits.** `avoid aoe` (after its three stock cases, in combat as well) walks a bot standing in a zone to the
   nearest clear spot and keeps that exit while it stays clear. Out of combat the exit ranks by the follow goal:
   one from which the goal is in plain view (his side) beats a nearer one unless the nearer saves more than 4
@@ -577,9 +581,20 @@ A replay of the hall from `LivingPoisonDataList` (`Hazard_AFollowerCrossesTheLiv
 a follower at run speed across all three lanes, 120 starts over every phase of the waves, the zones 500 ms old)
 reaches the far side every time and never comes within 3 yards of a slime; walking straight sets one off in 57.
 Its first run counted each re-planned exit as an entry (the job counted whenever its exit memo was not reusable),
-so a slime walking onto a bot yielded the bot to follow within a second; hence the per-hazard entry rule above. A slime that appears on a bot standing at its pipe (a lane's start)
-is not foreseen. While such an npc is within the scan the zones change every pass, so follow spots and detours are
-worked out again every 500 ms (as when an area appears or ends).
+so a slime walking onto a bot yielded the bot to follow within a second; hence the per-hazard entry rule above.
+`Hazard_TheDojoHallCrossingSetsNoSlimeOff` replays the dojo's crossing (below) with legs committed as playerbots
+commits them, a turn of the bot's AI every 0.1 s and both formations, over 200 phases of the waves: no slime goes
+off and no crossing stalls; #424's rules alone set off 5, stock 954. A slime that appears on a bot standing at its
+pipe (a lane's start) is not foreseen. While such an npc is within the scan the zones change every pass, so follow
+spots and detours are worked out again every 500 ms (as when an area appears or ends).
+
+**The dojo's crossing (#452, 2026-11-24).** The isolated raid dojo walks a stock bot after a held leader across the
+hall for 70 s. As first measured it set off 3-6 slimes a run: the filter took only `Leeroy.HumanGuid`'s bots
+(the dojo leaves it 0), so the bot walked straight. Given its zones (#424 as released) it still set off 2-5 a run:
+long legs walked blind and crossings given up as pockets. With the rules above: 0 in 3 runs of 3 crossings,
+nearest 2.4 yards. The filter serves bots whose master is the owner, a game client, whose AI takes a turn every
+0.1 s; under a bot master playerbots waits 1-3 s between turns out of combat (`GetReactDelay`), which no bot of his
+group meets, so the dojo holds its leader as a self-bot (its own master) between teleports to measure that cadence.
 
 Looked at and left out: Fallout Slime (16290, Grobbulus) and Sewage Slime (16375, Construct Quarter trash) carry
 Disease Cloud (28156 -> 28153, 15 yards) and Embalming Slime (16024) casts Embalming Cloud in combat, but each is

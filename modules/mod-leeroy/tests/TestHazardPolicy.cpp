@@ -719,6 +719,24 @@ LEEROY_TEST(Hazard_AMovingHazardLeadsAlongItsPath)
     CHECK(led.moving && close.moving && !poison.moving);
 }
 
+// A walk near a slime walking south at 2.5 yards a second, judged as both move (the dojo's after-run 4: a bot that
+// crossed a lane a yard in front of one set it off, the led circle being clear at the start).
+LEEROY_TEST(Hazard_AWalkIsJudgedAgainstWhereAMovingNpcGoes)
+{
+    HazardZone const slime = HazardLeadZone({0, 0, 0, 1.5f, 1}, HazardPoint{0, -40, 0}, 2.5f);
+    float const reach = 1.5f;
+    std::vector<HazardZone> const zones{slime};
+    // Its led circle (2.75 yards round a point 1.25 ahead) leaves this line clear, but it comes down onto the bot.
+    CHECK(Dist({0, -6, 0}, {slime.x, slime.y, 0}) > slime.radius + reach);
+    CHECK(!HazardSegmentClear({-10, -6, 0}, {10, -6, 0}, zones, reach));
+    CHECK(HazardSegmentClear({-10, 6, 0}, {10, 6, 0}, zones, reach)); // behind it: it has gone
+    CHECK(!HazardSegmentClear({-10, -8, 0}, {0, -8, 0}, zones, reach)); // stopping in its way: it arrives
+    CHECK(HazardSegmentClear({-10, -8, 0}, {-5, -8, 0}, zones, reach)); // stopping off its way
+    HazardZone parked = slime;
+    parked.until = 0.0f; // at its path's end: it stays
+    CHECK(HazardSegmentClear({-10, -8, 0}, {0, -8, 0}, {parked}, reach));
+}
+
 // A slime that walks onto a bot again and again is no mover walking the bot back in: never counted, never yielded.
 LEEROY_TEST(Hazard_AMovingHazardNeverYieldsTheExit)
 {
