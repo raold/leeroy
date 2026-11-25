@@ -51,6 +51,7 @@ struct Trial
     ObjectGuid group, bossGuid;
     uint32 elapsed = 0, phaseMs = 0, samples = 0, maxGap = 0, deathAt = 0;
     uint32 startingBossHealth = 0, leastBossHealth = 0;
+    json lastBodies = json::array(), lastBoss = json::object();
     bool active = false, negative = false, ready = false, humanBoarded = false, cleanup = false, humanGone = false;
     bool oldSupport = false;
 
@@ -65,7 +66,32 @@ struct Trial
         return p ? p->GetMap()->GetCreature(bossGuid) : nullptr;
     }
     void Phase(std::string const& next) { state = next; phaseMs = 0; }
-    void Fail(std::string const& why) { failure = why; Phase("cleanup"); }
+    void Capture()
+    {
+        lastBodies = json::array();
+        for (std::size_t i = 0; i < actors.size(); ++i)
+            if (auto* p = Actor(i))
+            {
+                auto* ai = GET_PLAYERBOT_AI(p);
+                auto* base = p->GetVehicleBase();
+                auto* target = ai->GetAiObjectContext()->GetValue<Unit*>("current target")->Get();
+                json body{{"slot", i}, {"alive", p->IsAlive()}, {"health", p->GetHealth()},
+                    {"combat", p->IsInCombat()}, {"target_entry", target ? target->GetEntry() : 0},
+                    {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
+                    {"combat_strategy", ai->HasStrategy(scenario == "malygos" ? "wotlk-eoe" : "ulduar", BOT_STATE_COMBAT)},
+                    {"idle_strategy", ai->HasStrategy(scenario == "malygos" ? "wotlk-eoe" : "ulduar", BOT_STATE_NON_COMBAT)}};
+                if (base) body["vehicle"] = {{"entry", base->GetEntry()}, {"alive", base->IsAlive()},
+                    {"health", base->GetHealth()}, {"max_health", base->GetMaxHealth()},
+                    {"energy", base->GetPower(POWER_ENERGY)}, {"combo_points", base->GetComboPoints()},
+                    {"combat", base->IsInCombat()}, {"moving", base->isMoving()}};
+                lastBodies.push_back(std::move(body));
+            }
+        if (auto* boss = Boss()) lastBoss = {{"health", boss->GetHealth()}, {"combat", boss->IsInCombat()},
+            {"x", boss->GetPositionX()}, {"y", boss->GetPositionY()}, {"z", boss->GetPositionZ()},
+            {"boss_state", uint32(boss->GetInstanceScript()->GetBossState(0))},
+            {"non_attackable", boss->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE)}, {"immune_pc", boss->IsImmuneToPC()}};
+    }
+    void Fail(std::string const& why) { Capture(); failure = why; Phase("cleanup"); }
     std::string Start(std::string const& encounter, std::string const& id, bool control)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -85,6 +111,7 @@ struct Trial
         auto why = Dojo::BeginHumanFixture(id);
         if (!why.empty()) return why;
         token = id; scenario = encounter; negative = control; failure.clear(); group.Clear(); bossGuid.Clear(); mounts = {};
+        lastBodies = json::array(); lastBoss = json::object();
         elapsed = samples = maxGap = deathAt = startingBossHealth = leastBossHealth = 0;
         travelled = {}; hits = {}; movingHits = {}; afterDeathHits = {}; seats = {};
         surgeSamples = {}; shieldSamples = {}; ringSamples = {};
@@ -350,6 +377,7 @@ struct Trial
     json Status()
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
+        if (active && state != "cleanup" && state != "logout") Capture();
         return {{"kind", "dojo-vehicle-observation"}, {"format", 1}, {"scenario", scenario},
             {"token", token}, {"state", state}, {"failure", failure}, {"negative", negative},
             {"ready", ready}, {"human_boarded", humanBoarded}, {"cleanup", cleanup}, {"samples", samples},
@@ -359,7 +387,8 @@ struct Trial
             {"setup_add_kills", setupKills}, {"heal_events", healEvents}, {"effective_healing", effectiveHealing},
             {"dot_samples", dotSamples}, {"field_samples", fieldSamples}, {"surge_samples", surgeSamples},
             {"shield_samples", shieldSamples}, {"safe_ring_samples", ringSamples},
-            {"field_escapes", fieldEscapes}, {"longest_field_ms", longestFieldMs}};
+            {"field_escapes", fieldEscapes}, {"longest_field_ms", longestFieldMs},
+            {"bodies", lastBodies}, {"boss", lastBoss}};
     }
 };
 Trial trial;
