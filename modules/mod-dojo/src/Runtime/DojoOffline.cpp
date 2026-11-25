@@ -92,6 +92,7 @@ struct OfflineFixture
     uint32 restartsAtWipe = 0;
     uint32 wipeBoss = 0, mainTankAtWipe = 0;
     bool tankSwapForced = false;
+    uint32 selfResSuppressed = 0;
     std::map<uint32, std::pair<uint64, uint64>> hits;
     std::map<ObjectGuid, SlimePool> slimePools;
     uint32 clockMs = 0, slimeGap = 0, slimeInside = 0, slimeEscapes = 0, slimeOutsideMs = 0;
@@ -395,10 +396,12 @@ struct OfflineFixture
             return "isolated guild/owner identity mismatch";
         guildId = guild->GetId();
         bool const reserveTrial = scenario == "toc-reserves";
-        bool const wormTrial = scenario == "toc-worms";
+        bool const fullRun = scenario == "toc-full" || scenario == "toc-full-worms" || scenario == "ulduar-full";
+        bool const wormTrial = scenario == "toc-worms" || scenario == "toc-full-worms";
         bool const valithriaTrial = scenario == "icc-valithria-frontier";
         if (wormTrial && !DOJO_HAS_TOC_WORM_SUPPORT) return "toc_worm_feature_missing_from_candidate";
-        map = scenario == "toc" || reserveTrial || wormTrial ? 649 : scenario == "ulduar" ? 603 : scenario == "icc" || valithriaTrial ? 631 : 0;
+        map = scenario == "toc" || scenario == "toc-full" || reserveTrial || wormTrial ? 649
+            : scenario == "ulduar" || scenario == "ulduar-full" ? 603 : scenario == "icc" || valithriaTrial ? 631 : 0;
         if (!map) return "unknown offline scenario";
         std::vector<std::size_t> requested{1, 2, 3, 4, 5, 6, 7, 8, 9};
         requested.push_back(reserveTrial ? 11 : 10);
@@ -411,7 +414,7 @@ struct OfflineFixture
         Leeroy::Guild::OfflineRaidCmd cmd;
         cmd.mapId = map; cmd.size = 10; cmd.leaderGuid = actors[1].GetCounter();
         cmd.lootMasterGuid = cmd.leaderGuid; cmd.minMembers = 10;
-        cmd.maxWipes = cmd.maxWipesPerBoss = 3; cmd.timeoutMin = 45;
+        cmd.maxWipes = cmd.maxWipesPerBoss = 3; cmd.timeoutMin = fullRun ? 180 : 45;
         for (std::size_t i = 2; i <= (reserveTrial ? 9 : 10); ++i) cmd.members.push_back(actors[i].GetCounter());
         if (reserveTrial) cmd.reserves.push_back(actors[11].GetCounter());
         cmd.assistants.push_back(actors[2].GetCounter());
@@ -421,6 +424,7 @@ struct OfflineFixture
         token = id; state = "running"; error.clear(); samples = 0; hits.clear();
         scriptedWipe = restartingSeen = false; restartsAtWipe = wipeBoss = mainTankAtWipe = 0;
         tankSwapForced = false;
+        selfResSuppressed = 0;
         slimePools.clear(); clockMs = slimeGap = slimeInside = slimeEscapes = slimeOutsideMs = 0;
         slimeHits = slimeLateHits = slimeUnknownHits = 0;
         wormRequested = wormTrial; wormSamples = 0; wormRestored = !wormTrial;
@@ -475,6 +479,17 @@ struct OfflineFixture
         // A test stimulus, never an earned combat outcome. All recovery after
         // these real deaths belongs to the ordinary offline job and core.
         for (std::size_t i = 1; i <= 10; ++i) Unit::Kill(boss, Actor(i));
+        // The forced full-wipe stimulus includes declining pending Ankh and
+        // Soulstone offers. Otherwise automatic self-rescues turn it into a
+        // partial wipe before the ordinary full-wipe detector can observe it.
+        // Spirit of Redemption expires naturally; no healing/revival is supplied.
+        if (forceTankSwap)
+            for (std::size_t i = 1; i <= 10; ++i)
+                if (auto* p = Actor(i); p && p->GetUInt32Value(PLAYER_SELF_RES_SPELL))
+                {
+                    ++selfResSuppressed;
+                    p->SetUInt32Value(PLAYER_SELF_RES_SPELL, 0);
+                }
         return "wiped";
     }
     json Status()
@@ -516,6 +531,7 @@ struct OfflineFixture
             {"scripted_wipe", scriptedWipe}, {"restarting_seen", restartingSeen}, {"restarts_at_wipe", restartsAtWipe},
             {"main_tank", MainTank(Actor(1))}, {"wipe_boss", wipeBoss}, {"main_tank_at_wipe", mainTankAtWipe},
             {"tank_swap_forced", tankSwapForced},
+            {"self_res_suppressed", selfResSuppressed},
             {"slime", {{"pools", pools}, {"max_gap_ms", slimeGap}, {"inside_samples", slimeInside},
                 {"escapes", slimeEscapes}, {"outside_ms", slimeOutsideMs}, {"hits", slimeHits},
                 {"late_hits", slimeLateHits}, {"unknown_hits", slimeUnknownHits},

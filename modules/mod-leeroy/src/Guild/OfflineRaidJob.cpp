@@ -1893,7 +1893,8 @@ bool RunTeardown(Job& job)
         event.stage.clear();
         event.reason = failed ? "cleanup_failed:" + job.terminalReason : job.terminalReason;
 #if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
-        dojoLastTerminal = {{"event", MakeJobEvent(event)}, {"cleanup", complete}, {"active", !complete}};
+        dojoLastTerminal = {{"event", MakeJobEvent(event)}, {"cleanup", complete}, {"active", !complete},
+            {"map", job.command.mapId}, {"boss_states", job.previousBossStates}};
 #endif
         LOG_INFO("module.leeroy", "leeroy: {} {} {}: {} ({} kills, {} wipes); recovery retained={}",
             event.kind, event.id, event.state, event.reason, event.kills, event.wipes, !complete);
@@ -2281,6 +2282,7 @@ nlohmann::json DojoOfflineSnapshot()
     auto* leader = FindOnline(job.command.leaderGuid);
     auto* elected = leader ? DcLeaderSignal::FindLeaderTank(leader) : nullptr;
     return {{"active", true}, {"event", MakeJobEvent(job.event)}, {"stage", Name(job.stage)},
+        {"map", job.command.mapId}, {"boss_states", job.previousBossStates},
         {"stage_ms", job.stageElapsed}, {"elapsed_ms", job.elapsed}, {"restarts", job.restarts},
         {"driver", Driver(job) != nullptr}, {"leader", job.command.leaderGuid},
         {"elected", elected ? elected->GetGUID().GetCounter() : 0}, {"bodies", bodies},
