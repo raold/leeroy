@@ -42,13 +42,13 @@ namespace
 struct Fixture { char const* name; uint8 cls; char const* spec; };
 // Fixed synthetic identities; the command never accepts a caller-supplied GUID.
 constexpr std::array<Fixture, 13> Fixtures{{
-    {"Dojomaster", CLASS_WARRIOR, "arms"},
-    {"Dojotank", CLASS_PALADIN, "prot"}, {"Dojoguard", CLASS_WARRIOR, "prot"},
-    {"Dojoheala", CLASS_PALADIN, "holy"}, {"Dojohealb", CLASS_PRIEST, "holy"},
-    {"Dojohealc", CLASS_SHAMAN, "resto"}, {"Dojodpsa", CLASS_MAGE, "fire"},
-    {"Dojodpsb", CLASS_WARLOCK, "affliction"}, {"Dojodpsc", CLASS_HUNTER, "marks"},
-    {"Dojodpsd", CLASS_ROGUE, "combat"}, {"Dojodpse", CLASS_WARRIOR, "fury"},
-    {"Dojobench", CLASS_PALADIN, "holy"}, {"Dojobencha", CLASS_MAGE, "fire"}}};
+    {"Dojomaster", CLASS_WARRIOR, "arms pve"},
+    {"Dojotank", CLASS_PALADIN, "prot pve"}, {"Dojoguard", CLASS_WARRIOR, "prot pve"},
+    {"Dojoheala", CLASS_PALADIN, "holy pve"}, {"Dojohealb", CLASS_PRIEST, "holy pve"},
+    {"Dojohealc", CLASS_SHAMAN, "resto pve"}, {"Dojodpsa", CLASS_MAGE, "fire pve"},
+    {"Dojodpsb", CLASS_WARLOCK, "affli pve"}, {"Dojodpsc", CLASS_HUNTER, "mm pve"},
+    {"Dojodpsd", CLASS_ROGUE, "combat pve"}, {"Dojodpse", CLASS_WARRIOR, "fury pve"},
+    {"Dojobench", CLASS_PALADIN, "holy pve"}, {"Dojobencha", CLASS_MAGE, "fire pve"}}};
 constexpr char const* GuildName = "Dojo Acceptance";
 
 struct OfflineFixture
@@ -102,6 +102,9 @@ struct OfflineFixture
     {
         if (!Armed() || LeeroyModule::Instance().Enabled()) return "prepare requires an armed realm with Leeroy disabled";
         if (state != "idle" && state != "prepared") return "fixture is busy";
+        for (std::size_t i = 0; i < Fixtures.size(); ++i)
+            if (DcBotProvisioning::ResolveSpecNo(Fixtures[i].cls, Fixtures[i].spec, Fixtures[i].spec) < 0)
+                return "missing premade spec for fixture slot " + std::to_string(i);
         auto why = Identify(true);
         if (!why.empty()) return why;
         for (auto guid : actors) if (ObjectAccessor::FindConnectedPlayer(guid)) return "fixture already online";
