@@ -111,6 +111,14 @@ exposure, attackability and combat state, zero wipes, restored strategies,
 cleanup and shutdown. This checks the chamber transition on either core
 version; it does not certify an Anub'arak kill or a full ToC clear.
 
+`--target offline-native-stall` requests the ordinary ten-minute native stall
+limit and records a plateau by holding the ten owned synthetic bots through the
+external-control fence. It changes no clock or deadline. The actual job must
+end with `stalled` after the full interval and perform ordinary cleanup; an
+operator stop, overall timeout, early stop or unreleased hold cannot pass.
+The harness supplies no stop command to achieve this milestone. Older native
+candidates refuse the target before starting a job.
+
 Ulduar's current offline route only covers Ignis, Razorscale, XT-002, Kologarn and
 Auriaya. `--target ulduar-route` checks completion of that entire supported route
 with the native `cleared_reachable` terminal. Its receipt explicitly lists the
