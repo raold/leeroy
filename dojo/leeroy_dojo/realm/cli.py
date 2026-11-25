@@ -21,6 +21,7 @@ def add_parser(sub) -> None:
     cmds.add_parser("db-stop", help="shut the dojo MySQL instance down cleanly")
     cmds.add_parser("db-status", help="report whether the dojo MySQL instance runs and is the dojo's")
     cmds.add_parser("db-check", help="check the instance's identity, schema set and the restricted user's grants")
+    cmds.add_parser("raid-acceptance", help="run Valithria, Twins and Living Poison in a dedicated stopped dojo realm")
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)
     acc_run.add_argument("--keep-running", action="store_true", help="leave a worldserver this command started")
@@ -131,6 +132,11 @@ def run(args: argparse.Namespace) -> int:
             for check in report["checks"]:
                 print(f"{'ok  ' if check['ok'] else 'FAIL'} {check['check']}")
             print(f"G1: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
+            return 0 if report["ok"] else 1
+        elif command == "raid-acceptance":
+            from .raids import run as run_raids
+            report = run_raids(layout)
+            print(f"Raid acceptance: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "provision":
             manifest = None
