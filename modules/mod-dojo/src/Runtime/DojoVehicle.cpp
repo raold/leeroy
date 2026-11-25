@@ -51,7 +51,7 @@ struct Trial
     ObjectGuid group, bossGuid;
     uint32 elapsed = 0, phaseMs = 0, samples = 0, maxGap = 0, deathAt = 0;
     uint32 startingBossHealth = 0, leastBossHealth = 0;
-    json lastBodies = json::array(), lastBoss = json::object();
+    json lastBodies = json::array(), lastBoss = json::object(), recentEffects = json::array();
     bool active = false, negative = false, ready = false, humanBoarded = false, cleanup = false, humanGone = false;
     bool oldSupport = false;
 
@@ -66,6 +66,32 @@ struct Trial
         return p ? p->GetMap()->GetCreature(bossGuid) : nullptr;
     }
     void Phase(std::string const& next) { state = next; phaseMs = 0; }
+    void RecordEffect(char const* kind, Unit* source, Unit* receiver, uint32 amount)
+    {
+        if ((state != "observe" && state != "drakes") || !receiver) return;
+        auto identity = [this](Unit* unit)
+        {
+            json result{{"entry", unit ? unit->GetEntry() : 0}};
+            if (!unit) return result;
+            result["boss"] = unit->GetGUID() == bossGuid;
+            for (std::size_t i = 0; i < actors.size(); ++i)
+            {
+                if (unit->GetGUID() == actors[i]) result["actor_slot"] = i;
+                if (unit->GetGUID() == mounts[i]) result["mount_slot"] = i;
+            }
+            return result;
+        };
+        json from = identity(source), to = identity(receiver);
+        bool const tracked = from.contains("actor_slot") || from.contains("mount_slot") ||
+            to.contains("actor_slot") || to.contains("mount_slot");
+        if (!tracked) return;
+        if (recentEffects.size() == 32) recentEffects.erase(recentEffects.begin());
+        recentEffects.push_back({{"kind", kind}, {"elapsed_ms", elapsed}, {"phase_ms", phaseMs},
+            {"source", std::move(from)}, {"receiver", std::move(to)}, {"requested_amount", amount},
+            {"receiver_health", receiver->GetHealth()}, {"receiver_max_health", receiver->GetMaxHealth()},
+            {"surge", receiver->HasAura(57407) || receiver->HasAura(60936)},
+            {"shield", receiver->HasAura(57108)}, {"revivify", receiver->HasAura(57090)}});
+    }
     void Capture()
     {
         lastBodies = json::array();
@@ -111,7 +137,7 @@ struct Trial
         auto why = Dojo::BeginHumanFixture(id);
         if (!why.empty()) return why;
         token = id; scenario = encounter; negative = control; failure.clear(); group.Clear(); bossGuid.Clear(); mounts = {};
-        lastBodies = json::array(); lastBoss = json::object();
+        lastBodies = json::array(); lastBoss = json::object(); recentEffects = json::array();
         elapsed = samples = maxGap = deathAt = startingBossHealth = leastBossHealth = 0;
         travelled = {}; hits = {}; movingHits = {}; afterDeathHits = {}; seats = {};
         surgeSamples = {}; shieldSamples = {}; ringSamples = {};
@@ -388,7 +414,7 @@ struct Trial
             {"dot_samples", dotSamples}, {"field_samples", fieldSamples}, {"surge_samples", surgeSamples},
             {"shield_samples", shieldSamples}, {"safe_ring_samples", ringSamples},
             {"field_escapes", fieldEscapes}, {"longest_field_ms", longestFieldMs},
-            {"bodies", lastBodies}, {"boss", lastBoss}};
+            {"bodies", lastBodies}, {"boss", lastBoss}, {"recent_effects", recentEffects}};
     }
 };
 Trial trial;
@@ -424,10 +450,12 @@ public:
 class Effects : public UnitScript
 {
 public:
-    Effects() : UnitScript("DojoVehicleEffects", true, {UNITHOOK_ON_DAMAGE, UNITHOOK_ON_HEAL}) { }
+    Effects() : UnitScript("DojoVehicleEffects", true,
+        {UNITHOOK_ON_DAMAGE, UNITHOOK_ON_HEAL, UNITHOOK_ON_UNIT_DEATH}) { }
     void OnHeal(Unit* healer, Unit* receiver, uint32& gain) override
     {
         std::lock_guard<std::recursive_mutex> lock(trial.mutex);
+        trial.RecordEffect("heal", healer, receiver, gain);
         if (trial.state != "drakes" || !healer || !receiver || healer->GetGUID() != trial.mounts[0] ||
             std::find(trial.mounts.begin(), trial.mounts.end(), receiver->GetGUID()) == trial.mounts.end()) return;
         auto const effective = std::min(gain, receiver->GetMaxHealth() - receiver->GetHealth());
@@ -436,6 +464,7 @@ public:
     void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
     {
         std::lock_guard<std::recursive_mutex> lock(trial.mutex);
+        trial.RecordEffect("damage", attacker, victim, damage);
         if ((trial.state != "observe" && trial.state != "drakes") || !attacker || !victim || !damage || victim->GetGUID() != trial.bossGuid) return;
         for (std::size_t i = 0; i < trial.mounts.size(); ++i)
             if (attacker->GetGUID() == trial.mounts[i])
@@ -444,6 +473,11 @@ public:
                 if (attacker->isMoving()) ++trial.movingHits[i];
                 if (trial.deathAt && trial.phaseMs >= trial.deathAt + 5000) ++trial.afterDeathHits[i];
             }
+    }
+    void OnUnitDeath(Unit* victim, Unit* killer) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(trial.mutex);
+        trial.RecordEffect("death", killer, victim, 0);
     }
 };
 }
