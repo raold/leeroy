@@ -23,7 +23,7 @@ def add_parser(sub) -> None:
     cmds.add_parser("db-check", help="check the instance's identity, schema set and the restricted user's grants")
     cmds.add_parser("raid-acceptance", help="run Valithria, Twins and Living Poison in a dedicated stopped dojo realm")
     offline = cmds.add_parser("offline-acceptance", help="prepare a synthetic guild and observe a real offline raid job")
-    offline.add_argument("--target", required=True, choices=("toc-beasts", "ulduar-xt", "icc-deathwhisper", "icc-gunship", "icc-valithria"))
+    offline.add_argument("--target", required=True, choices=("toc-beasts", "ulduar-xt", "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves"))
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)
     acc_run.add_argument("--keep-running", action="store_true", help="leave a worldserver this command started")
