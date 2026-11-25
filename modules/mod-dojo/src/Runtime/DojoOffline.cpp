@@ -179,9 +179,12 @@ struct OfflineFixture
             || LeeroyModule::Instance().HumanGuid() != actors[0].GetCounter() || ObjectAccessor::FindConnectedPlayer(actors[0]))
             return "isolated guild/owner identity mismatch";
         guildId = guild->GetId();
-        map = scenario == "toc" ? 649 : scenario == "ulduar" ? 603 : scenario == "icc" ? 631 : 0;
+        bool const reserveTrial = scenario == "toc-reserves";
+        map = scenario == "toc" || reserveTrial ? 649 : scenario == "ulduar" ? 603 : scenario == "icc" ? 631 : 0;
         if (!map) return "unknown offline scenario";
-        for (std::size_t i = 1; i <= 10; ++i)
+        std::vector<std::size_t> requested{1, 2, 3, 4, 5, 6, 7, 8, 9};
+        requested.push_back(reserveTrial ? 11 : 10);
+        for (auto i : requested)
         {
             if (!Actor(i)) { Dojo::LoginRaidFixture(actors[i]); return "actors_pending"; }
             if (Actor(i)->GetGuildId() != guildId) return "actor guild mismatch";
@@ -190,7 +193,8 @@ struct OfflineFixture
         cmd.mapId = map; cmd.size = 10; cmd.leaderGuid = actors[1].GetCounter();
         cmd.lootMasterGuid = cmd.leaderGuid; cmd.minMembers = 10;
         cmd.maxWipes = cmd.maxWipesPerBoss = 3; cmd.timeoutMin = 45;
-        for (std::size_t i = 2; i <= 10; ++i) cmd.members.push_back(actors[i].GetCounter());
+        for (std::size_t i = 2; i <= (reserveTrial ? 9 : 10); ++i) cmd.members.push_back(actors[i].GetCounter());
+        if (reserveTrial) cmd.reserves.push_back(actors[11].GetCounter());
         cmd.assistants.push_back(actors[2].GetCounter());
         auto result = Leeroy::Guild::StartRaidJob(id, cmd, Leeroy::Guild::RaidJobMode::Offline);
         if (!result.ok) return result.error;
@@ -214,7 +218,9 @@ struct OfflineFixture
                     {"map", p->GetMapId()}, {"instance", p->GetInstanceId()}, {"health", p->GetHealth()},
                     {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
                     {"combat", p->IsInCombat()}, {"bosses", bosses}, {"auras", auras},
-                    {"speed_run", p->GetSpeed(MOVE_RUN)}, {"tank", PlayerbotAI::IsTank(p)}});
+                    {"speed_run", p->GetSpeed(MOVE_RUN)}, {"tank", PlayerbotAI::IsTank(p)},
+                    {"grouped", p->GetGroup() != nullptr}, {"owned", Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter())},
+                    {"master", GET_PLAYERBOT_AI(p)->GetMaster() ? GET_PLAYERBOT_AI(p)->GetMaster()->GetGUID().GetCounter() : 0}});
             }
         for (auto const& [entry, value] : hits) damage.push_back({{"entry", entry}, {"hits", value.first}, {"requested", value.second}});
         return {{"kind", "dojo-offline-observation"}, {"format", 1}, {"state", state}, {"error", error},

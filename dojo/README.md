@@ -50,6 +50,13 @@ count, missing telemetry, setup failure, or a wipe cap is a failure. Gunship
 DONE is a scripted pass, not a boss kill. The Valithria target enables its
 switch only in the isolated configuration, then restores it to off.
 
+`--target offline-reserves` starts with nine primary members and offers the
+fixed benched healer through the production reserve field. Its gate requires
+ten distinct owned members, including that reserve, alive in the same running
+instance for five seconds with the correct elected leader. Cleanup must return
+the reserve to the open world without a group, master or offline-job ownership.
+This proves reserve admission and return, not an encounter kill.
+
 After preparation and shutdown, the runner checkpoints the synthetic auth,
 character and playerbots schemas under `secrets/offline-fixture`. Each later
 pull restores that same guild, equipment and unbound instance state while the

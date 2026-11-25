@@ -15,7 +15,7 @@ from .offline_fixture import FixtureCheckpoint
 
 TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
            "icc-deathwhisper": ("icc", 631, 1), "icc-gunship": ("icc", 631, 2),
-           "icc-valithria": ("icc", 631, 10)}
+           "icc-valithria": ("icc", 631, 10), "offline-reserves": ("toc-reserves", 649, None)}
 
 
 def parse_status(reply):
@@ -39,6 +39,18 @@ def reached(observation, *, target, token):
     if event.get("id") != token or type(instance) is not int or instance <= 0 or native.get("stage") != "running":
         return False
     bodies = observation.get("bodies", [])
+    if target == "offline-reserves":
+        reserve = next((b for b in bodies if b.get("slot") == 11), {})
+        members = native.get("bodies", [])
+        expected = {b.get("guid") for b in bodies if b.get("slot") in (*range(1, 10), 11)}
+        return (type(native.get("stage_ms")) is int and native["stage_ms"] >= 5000 and len(members) == 10
+                and len(expected) == 10 and None not in expected and {b.get("guid") for b in members} == expected
+                and native.get("elected") == native.get("leader") and reserve.get("guid") is not None
+                and any(b.get("guid") == reserve["guid"] for b in members)
+                and reserve.get("alive") is True and reserve.get("owned") is True
+                and reserve.get("grouped") is True and type(reserve.get("master")) is int and reserve["master"] > 0
+                and all(b.get("present") is True and b.get("alive") is True and b.get("map") == map_id
+                        and b.get("instance") == instance for b in members))
     return any(b.get("slot") == 1 and b.get("map") == map_id and b.get("instance") == instance
                and len(b.get("bosses", [])) > boss and b["bosses"][boss] == 3 for b in bodies)
 
@@ -160,6 +172,11 @@ def run(layout, *, target, log=print):
                     if not native.get("active", True):
                         report["terminal"] = observed
                         report["cleanup"] = native.get("cleanup") is True
+                        if target == "offline-reserves":
+                            reserve = next((b for b in observed.get("bodies", []) if b.get("slot") == 11), {})
+                            report["reserve_returned"] = (reserve.get("map") == 0 and reserve.get("alive") is True
+                                and reserve.get("grouped") is False and reserve.get("owned") is False and reserve.get("master") == 0)
+                            report["cleanup"] = report["cleanup"] and report["reserve_returned"]
                         break
                     time.sleep(1)
                 else:
