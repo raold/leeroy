@@ -62,6 +62,14 @@ for an accidental wipe. The existing setup timeout and cleanup requirements appl
 reassignment before applying that wipe. Recovery must restore the job's designated
 tank as well as the complete roster and driver; it does not replace the XT check.
 
+`--target ulduar-forced-tank-restart` is a separate deterministic role-recovery
+check. After real Razorscale engagement it explicitly assigns the other tank's
+ordinary group main-tank flag and records that setup before the full wipe.
+Recovery must restore the designated job tank and satisfy the same restart gate.
+The report marks the forced assignment; it cannot pass either natural-role or
+XT target. This avoids depending on a role change that correct initial grouping
+can prevent. It does not claim Razorscale was defeated.
+
 Run both `--target toc-slime-pools-control` and `--target toc-slime-pools` to check
 Slime Pool avoidance during the actual Northrend Beasts pull. The control disables
 only the isolated mechanic responder and must take real pool damage. The enabled

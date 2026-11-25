@@ -19,7 +19,8 @@ TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
            "icc-deathwhisper": ("icc", 631, 1), "icc-gunship": ("icc", 631, 2),
            "icc-valithria": ("icc", 631, 10), "icc-valithria-frontier": ("icc-valithria-frontier", 631, 10),
            "offline-reserves": ("toc-reserves", 649, None),
-           "ulduar-restart": ("ulduar", 603, None), "ulduar-tank-restart": ("ulduar", 603, None)}
+           "ulduar-restart": ("ulduar", 603, None), "ulduar-tank-restart": ("ulduar", 603, None),
+           "ulduar-forced-tank-restart": ("ulduar", 603, None)}
 
 
 def parse_status(reply):
@@ -93,8 +94,11 @@ def reached(observation, *, target, token):
             return slime["hits"] > 0
         return (grew and slime["inside_samples"] > 0 and slime["escapes"] > 0
                 and slime["outside_ms"] >= 3000 and slime["late_hits"] == 0)
-    if target in {"ulduar-restart", "ulduar-tank-restart"}:
-        if target == "ulduar-tank-restart" and not (
+    if target in {"ulduar-restart", "ulduar-tank-restart", "ulduar-forced-tank-restart"}:
+        forced = target == "ulduar-forced-tank-restart"
+        if (forced and observation.get("tank_swap_forced") is not True) or (not forced and observation.get("tank_swap_forced") is True):
+            return False
+        if target != "ulduar-restart" and not (
                 observation.get("wipe_boss") == 2 and type(observation.get("main_tank_at_wipe")) is int
                 and observation["main_tank_at_wipe"] > 0
                 and observation["main_tank_at_wipe"] != native.get("leader")
@@ -255,16 +259,18 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                     if stage != last_stage:
                         log(f"offline {target}: {stage or native.get('event', {}).get('state', 'unknown')}")
                         last_stage = stage
-                    if target in {"ulduar-restart", "ulduar-tank-restart"} and not observed.get("scripted_wipe") and stage == "running":
+                    if target in {"ulduar-restart", "ulduar-tank-restart", "ulduar-forced-tank-restart"} and not observed.get("scripted_wipe") and stage == "running":
                         leader = next((b for b in observed.get("bodies", []) if b.get("slot") == 1), {})
                         states = leader.get("bosses", [])
-                        boss = 2 if target == "ulduar-tank-restart" else 3
+                        boss = 3 if target == "ulduar-restart" else 2
                         swapped = (type(observed.get("main_tank")) is int and observed["main_tank"] > 0
                                    and observed["main_tank"] != native.get("leader"))
-                        if len(states) > boss and states[boss] == 1 and (target == "ulduar-restart" or swapped):
+                        if len(states) > boss and states[boss] == 1 and (target != "ulduar-tank-restart" or swapped):
                             # Admission rechecks live ownership, the exact engaged
                             # boss and every actor before the native test stimulus.
                             command = "wipe-tank-swap" if target == "ulduar-tank-restart" else "wipe"
+                            if target == "ulduar-forced-tank-restart":
+                                command = "wipe-force-tank-swap"
                             reply = client.command(f"dojo offline {command} {token}")
                             if "dojo offline: wiped" in reply:
                                 log(f"offline {target}: applied scripted full-wipe stimulus")
