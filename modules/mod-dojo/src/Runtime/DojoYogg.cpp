@@ -54,6 +54,15 @@ bool Below(Player* p)
         p->GetPositionY() > -190.f && p->GetPositionY() < 125.f && p->GetPositionZ() > 225.f && p->GetPositionZ() < 285.f;
 }
 bool Influence(uint32 entry) { return entry == 33943 || (entry >= 33716 && entry <= 33720) || entry == 33567 || entry == 33433; }
+Position SeatPosition(Unit* passenger, Unit* base)
+{
+    float const angle = base->GetOrientation();
+    float const x = base->GetPositionX() + passenger->GetTransOffsetX() * std::cos(angle)
+        - passenger->GetTransOffsetY() * std::sin(angle);
+    float const y = base->GetPositionY() + passenger->GetTransOffsetY() * std::cos(angle)
+        + passenger->GetTransOffsetX() * std::sin(angle);
+    return Position(x, y, base->GetPositionZ() + passenger->GetTransOffsetZ());
+}
 struct Trial
 {
     std::recursive_mutex mutex;
@@ -119,17 +128,13 @@ struct Trial
         auto* creature = base->ToCreature();
         auto* summon = creature ? creature->ToTempSummon() : nullptr;
         auto const* spell = sSpellMgr->GetSpellInfo(64133);
-        float const angle = base->GetOrientation();
-        float const x = base->GetPositionX() + p->GetTransOffsetX() * std::cos(angle) - p->GetTransOffsetY() * std::sin(angle);
-        float const y = base->GetPositionY() + p->GetTransOffsetY() * std::cos(angle) + p->GetTransOffsetX() * std::sin(angle);
-        float const z = base->GetPositionZ() + p->GetTransOffsetZ();
         return {{"summoned_by_actor", summon && summon->GetSummonerGUID() == p->GetGUID()},
             {"already_observed", observedConstrictors[i] == base->GetGUID()},
             {"lunge_aura", base->HasAura(64123, p->GetGUID())}, {"squeeze_aura", p->HasAura(64125)},
             {"spawn_radius", spell ? spell->Effects[EFFECT_0].CalcRadius(p) : 0.f},
             {"spawn_distance", base->GetExactDist(previous[i])},
             {"spawn_distance_2d", base->GetExactDist2d(previous[i])},
-            {"seat_error", p->GetExactDist(x, y, z)},
+            {"seat_error", p->GetExactDist(SeatPosition(p, base))},
             {"boarding_witness", constrictorSeats[i].base == base->GetGUID()},
             {"boarding_seat_error", p->GetExactDist(constrictorSeats[i].destination)},
             {"base_orientation", base->GetOrientation()},
@@ -166,11 +171,7 @@ struct Trial
         // instead of assuming the later base orientation was used for arrival.
         auto const& seat = constrictorSeats[i];
         if (seat.base != base->GetGUID() || elapsed - seat.boardedMs > 250) return false;
-        float const angle = base->GetOrientation();
-        float const x = base->GetPositionX() + p->GetTransOffsetX() * std::cos(angle) - p->GetTransOffsetY() * std::sin(angle);
-        float const y = base->GetPositionY() + p->GetTransOffsetY() * std::cos(angle) + p->GetTransOffsetX() * std::sin(angle);
-        float const z = base->GetPositionZ() + p->GetTransOffsetZ();
-        if (p->GetExactDist(x, y, z) > 0.1f && p->GetExactDist(seat.destination) > 0.1f) return false;
+        if (p->GetExactDist(SeatPosition(p, base)) > 0.1f && p->GetExactDist(seat.destination) > 0.1f) return false;
         observedConstrictors[i] = base->GetGUID();
         ++constrictorAttachments;
         return true;
@@ -527,10 +528,8 @@ public:
             || summon->GetSummonerGUID() != passenger->GetGUID()) return;
         auto found = std::find(trial.actors.begin(), trial.actors.end(), passenger->GetGUID());
         if (found == trial.actors.end()) return;
-        float x = passenger->GetTransOffsetX(), y = passenger->GetTransOffsetY(), z = passenger->GetTransOffsetZ();
-        static_cast<TransportBase*>(vehicle)->CalculatePassengerPosition(x, y, z, nullptr);
         trial.constrictorSeats[std::size_t(found - trial.actors.begin())] =
-            {base->GetGUID(), Position(x, y, z), trial.elapsed};
+            {base->GetGUID(), SeatPosition(passenger, base), trial.elapsed};
     }
 };
 class Commands : public CommandScript
