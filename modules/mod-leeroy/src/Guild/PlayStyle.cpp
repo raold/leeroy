@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "PlayStyle.h"
 #include "LeeroyPlayStyle.h"
+#include "LeeroyGuildCommands.h"
 #include "GuildPorts.h"
 #include "OfflineRaidJob.h"
 #include "Training/TrainingCommands.h"
@@ -14,7 +15,9 @@
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
 #include "WorldSession.h"
+#include <chrono>
 #include <map>
+#include <string>
 #include <vector>
 
 namespace Leeroy::PlayStyle
@@ -28,9 +31,28 @@ struct Owned
     WorldSession* session = nullptr;
     uint32 guild = 0, human = 0;
     Journal journal{};
+    Holder holder = Holder::Other; // the table's own, or an explicit bot_do's
+    Request request{};             // what was carried out
 };
 std::map<uint32, Owned> journals; // World thread; neither another body nor an AI replacement inherits ownership.
 std::uint64_t epoch = 0;
+
+// World thread: the connected mind's playstyle_table (LeeroyPlayStyle.h), held for the connection that sent it.
+Table table;
+bool tableHeld = false;
+std::uint64_t tableSerial = 0;
+// The summary line: tries and outcomes since the last one, and the styled count it last gave.
+std::map<std::string, std::uint32_t, std::less<>> refusals;
+std::uint32_t tried = 0, applied = 0;
+std::size_t styledLogged = 0;
+std::int64_t summaryAt = 0;
+constexpr std::int64_t kSummaryMs = 60000;
+
+std::int64_t SteadyMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 Life Identity(Player* player, PlayerbotAI* ai, WorldSession* session)
 {
     return {reinterpret_cast<std::uintptr_t>(player), reinterpret_cast<std::uintptr_t>(ai),
@@ -148,22 +170,22 @@ bool Restore(Player* bot, std::string_view name)
     if (!saved.journal.Owns()) journals.erase(found);
     return true;
 }
-std::string_view Apply(Player* bot, std::string_view param)
+namespace
 {
-    auto request = Parse(param);
-    if (!request) return "bad field: param";
+std::string_view Carry(Player* bot, Request request, Holder holder)
+{
     if (auto why = Refusal(ReadFacts(bot)); !why.empty()) return why;
     auto guid = bot->GetGUID().GetCounter();
     // A fresh desired-state request first unwinds our previous baseline, never stacks it.
     if (!Restore(bot)) return "playstyle_cleanup";
     auto* ai = GET_PLAYERBOT_AI(bot);
     auto current = Read(bot);
-    if (!current || (request->potions && !ai->GetAiObjectContext()->GetStrategy("potions"))
-        || (request->wait && !ai->GetAiObjectContext()->GetStrategy("wait for attack"))) return "unsupported";
-    auto desired = Plan(*current, *request, !PlayerbotAI::IsTank(bot, true) && !PlayerbotAI::IsHeal(bot, true));
+    if (!current || (request.potions && !ai->GetAiObjectContext()->GetStrategy("potions"))
+        || (request.wait && !ai->GetAiObjectContext()->GetStrategy("wait for attack"))) return "unsupported";
+    auto desired = Plan(*current, request, !PlayerbotAI::IsTank(bot, true) && !PlayerbotAI::IsHeal(bot, true));
     if (desired == *current) return {};
     auto& saved = journals[guid];
-    saved = {bot, ai, bot->GetSession(), bot->GetGuildId(), Guild::HumanGuid(), {}};
+    saved = {bot, ai, bot->GetSession(), bot->GetGuildId(), Guild::HumanGuid(), {}, holder, request};
     saved.journal.Note(*current, desired); // Before the first mutation; failed writes retain cleanup.
     if (!Write(bot, desired)) { Restore(bot); return "playstyle_failed"; }
     bool const waitChanged = current->wait != desired.wait || current->seconds != desired.seconds;
@@ -171,8 +193,102 @@ std::string_view Apply(Player* bot, std::string_view param)
         waitChanged ? unsigned(desired.seconds) : 0u, !current->potions && desired.potions ? 1 : 0);
     return {};
 }
+
+Held HolderOf(uint32 guid)
+{
+    auto found = journals.find(guid);
+    if (found == journals.end() || !found->second.journal.Owns()) return {};
+    return {found->second.holder, found->second.request};
+}
+
+void DropTable(std::string_view why)
+{
+    LOG_INFO("module.leeroy", "mod-leeroy: playstyle_table dropped styles={} why={}", table.size(), why);
+    table.clear();
+    tableHeld = false; // Tick then undoes every journal the table made (TableUndo).
+}
+
+void CarryTable()
+{
+    if (!tableHeld || table.empty()) return;
+    auto& module = LeeroyModule::Instance();
+    Player* human = Guild::FindOnline(module.HumanGuid());
+    TableGate gate;
+    gate.enabled = module.Enabled() && module.Config().playStyleEnable;
+    gate.table = module.Config().playStyleTable;
+    gate.held = tableHeld;
+    gate.human = human != nullptr;
+    gate.humanRaid = human && human->GetGroup() && human->GetGroup()->isRaidGroup();
+    if (!TableRefusal(gate).empty()) return;
+    auto const now = SteadyMs();
+    for (auto guid : TableTries(table, [](uint32 member) { return HolderOf(member); }, now))
+    {
+        auto& slot = table.at(guid);
+        TableTried(slot, now);
+        ++tried;
+        Player* bot = Guild::FindOnline(guid);
+        auto const why = bot ? Carry(bot, slot.request, Holder::Table) : std::string_view{"offline"};
+        if (!why.empty())
+            ++refusals[std::string(why)];
+        else if (HolderOf(guid).holder == Holder::Table)
+            ++applied;
+    }
+}
+
+// Counts and codes only, at most once a minute, and only when a style was added or the styled count moved.
+void Summarize()
+{
+    auto const now = SteadyMs();
+    if (now < summaryAt) return;
+    std::size_t styled = 0;
+    for (auto const& [guid, saved] : journals)
+        if (saved.holder == Holder::Table && saved.journal.Owns()) ++styled;
+    if (applied || styled != styledLogged)
+    {
+        std::string codes;
+        for (auto const& [code, count] : refusals)
+            codes += (codes.empty() ? "" : ",") + code + "=" + std::to_string(count);
+        LOG_INFO("module.leeroy", "mod-leeroy: playstyle_table styles={} styled={} tried={} applied={} refused={}",
+            table.size(), styled, tried, applied, codes.empty() ? std::string("-") : codes);
+        styledLogged = styled;
+    }
+    refusals.clear();
+    tried = applied = 0;
+    summaryAt = now + kSummaryMs;
+}
+
+LeeroyCommandResult HandleTable(nlohmann::json const& message)
+{
+    std::string error;
+    auto command = Guild::ParsePlayStyleTable(message, error);
+    if (!command) return {false, std::move(error)};
+    auto& module = LeeroyModule::Instance();
+    if (!module.Enabled()) return {false, "disabled"};
+    if (!module.Config().playStyleEnable) return {false, "playstyle_off"};
+    if (!module.Config().playStyleTable) return {false, "playstyle_table_off"};
+    // A table belongs to the mind connection that sent it; a new mind's replaces the last one's whole.
+    std::uint64_t const serial = module.Bridge().ConnectionSerial();
+    table = ReplaceTable(tableHeld && serial == tableSerial ? table : Table{}, command->styles, SteadyMs());
+    tableHeld = true;
+    tableSerial = serial;
+    LOG_INFO("module.leeroy", "mod-leeroy: playstyle_table held styles={}", table.size());
+    return {true, {}};
+}
+}
+
+std::string_view Apply(Player* bot, std::string_view param)
+{
+    auto request = Parse(param);
+    if (!request) return "bad field: param";
+    return Carry(bot, *request, Holder::Other);
+}
 void Tick()
 {
+    auto& module = LeeroyModule::Instance();
+    auto& bridge = module.Bridge();
+    bool const tableOn = module.Enabled() && module.Config().playStyleTable;
+    if (tableHeld && (!tableOn || !bridge.Connected() || bridge.ConnectionSerial() != tableSerial))
+        DropTable(tableOn ? "mind" : "off");
     std::vector<uint32> guids;
     for (auto const& [guid, saved] : journals) { (void)saved; guids.push_back(guid); }
     for (auto guid : guids)
@@ -189,8 +305,12 @@ void Tick()
         bool const roleChanged = GET_PLAYERBOT_AI(bot)
             && (PlayerbotAI::IsTank(bot, true) || PlayerbotAI::IsHeal(bot, true))
             && saved.journal.OwnsOpeningHold();
-        if (CleanupDue(facts, changed, roleChanged))
+        bool const undo = TableUndo(saved.holder, table.contains(guid));
+        if (CleanupDue(facts, changed, roleChanged) || undo)
             Restore(bot);
     }
+    CarryTable();
+    Summarize();
 }
+void RegisterTableHandler() { Guild::RegisterCommand("playstyle_table", HandleTable); }
 }

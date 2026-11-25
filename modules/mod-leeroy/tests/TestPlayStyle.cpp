@@ -2,6 +2,10 @@
 #include "LeeroyPlayStyle.h"
 #include "LeeroyGuildCommands.h"
 #include "TestHarness.h"
+#include <algorithm>
+#include <map>
+#include <string>
+#include <vector>
 using namespace Leeroy::PlayStyle;
 
 LEEROY_TEST(PlayStyle_StrictWireBounds)
@@ -105,4 +109,135 @@ LEEROY_TEST(PlayStyle_RoleChangeRemovesAddedHoldEvenWhenTimerWasAlreadyEqual)
         CHECK(journal.Owns("potions") && !journal.OwnsOpeningHold());
         CHECK(!CleanupDue(f,false,journal.OwnsOpeningHold()));
     }
+}
+
+namespace
+{
+using nlohmann::json;
+json TableMessage(json styles) { return json{{"v", 1}, {"type", "playstyle_table"}, {"id", "t"}, {"ts", 0}, {"styles", std::move(styles)}}; }
+bool TableParses(json styles)
+{
+    std::string error;
+    auto parsed = Leeroy::Guild::ParsePlayStyleTable(TableMessage(std::move(styles)), error);
+    CHECK(parsed.has_value() == error.empty());
+    CHECK(parsed || error == "bad field: styles");
+    return parsed.has_value();
+}
+}
+
+LEEROY_TEST(PlayStyle_TableWireIsStrictAndBounded)
+{
+    CHECK(TableParses(json::array()));
+    CHECK(TableParses(json::array({{{"guid", 1101}, {"param", "4:1"}}, {{"guid", 1102}, {"param", "0:0"}}})));
+    json full = json::array();
+    for (std::uint32_t guid = 1; guid <= kTableMax; ++guid) full.push_back({{"guid", guid}, {"param", "2:1"}});
+    CHECK(TableParses(full));
+    full.push_back({{"guid", 9999}, {"param", "2:1"}});
+    CHECK(!TableParses(full));
+    for (auto bad : {json::array({{{"guid", 1101}, {"param", "7:1"}}}), json::array({{{"guid", 0}, {"param", "2:1"}}}),
+             json::array({{{"guid", 1101}, {"param", "2:1"}}, {{"guid", 1101}, {"param", "3:0"}}}),
+             json::array({{{"guid", 1101}}}), json::array({{{"param", "2:1"}}}),
+             json::array({{{"guid", -1}, {"param", "2:1"}}}), json::array({{{"guid", 4294967296ull}, {"param", "2:1"}}}),
+             json::array({{{"guid", "1101"}, {"param", "2:1"}}}), json::array({{{"guid", 1101}, {"param", 21}}}),
+             json::array({json::array({1101, "2:1"})}), json::array({1101})})
+        CHECK(!TableParses(bad));
+    std::string error;
+    CHECK(!Leeroy::Guild::ParsePlayStyleTable(json{{"v", 1}, {"type", "playstyle_table"}, {"id", "t"}}, error));
+    CHECK(error == "bad field: styles");
+    CHECK(!Leeroy::Guild::ParsePlayStyleTable(TableMessage({{"guid", 1}}), error));
+    std::string parsedError = "stale";
+    auto parsed = Leeroy::Guild::ParsePlayStyleTable(
+        TableMessage(json::array({{{"guid", 1102}, {"param", "6:0"}}, {{"guid", 1101}, {"param", "0:1"}}})), parsedError);
+    CHECK(parsed && parsedError.empty() && parsed->styles.size() == 2);
+    if (parsed)
+    {
+        CHECK(parsed->styles[0].guid == 1102 && parsed->styles[0].request == (Request{6, false}));
+        CHECK(parsed->styles[1].guid == 1101 && parsed->styles[1].request == (Request{0, true}));
+    }
+}
+
+LEEROY_TEST(PlayStyle_TableReplacementKeepsUnchangedEntriesAndDropsTheRest)
+{
+    Table held = ReplaceTable({}, {{1, {4, true}}, {2, {0, true}}, {3, {6, false}}}, 1000);
+    CHECK(held.size() == 3 && held.at(1).dueMs == 1000 && held.at(3).request == (Request{6, false}));
+    TableTried(held.at(1), 1000);
+    TableTried(held.at(2), 1000);
+    Table next = ReplaceTable(held, {{1, {4, true}}, {2, {2, true}}, {4, {3, true}}}, 5000);
+    CHECK(next.size() == 3 && !next.contains(3));
+    CHECK(next.at(1).dueMs == 1000 + kTableRetryMs); // unchanged: keeps its wait
+    CHECK(next.at(2).dueMs == 5000 && next.at(2).request == (Request{2, true})); // changed: due now
+    CHECK(next.at(4).dueMs == 5000);
+    CHECK(TableUndo(Holder::Table, next.contains(3)) && !TableUndo(Holder::Table, next.contains(1)));
+    CHECK(!TableUndo(Holder::Other, false) && !TableUndo(Holder::None, false));
+    CHECK(ReplaceTable(next, {}, 9000).empty()); // an empty table lists nobody: every table journal is undone
+}
+
+LEEROY_TEST(PlayStyle_TableGateNeedsBothSwitchesATableAndHimOutsideARaid)
+{
+    TableGate open{true, true, true, true, false};
+    CHECK(TableRefusal(open).empty());
+    auto with = [&](auto field, bool value) { auto g = open; g.*field = value; return TableRefusal(g); };
+    CHECK(with(&TableGate::enabled, false) == "playstyle_off");
+    CHECK(with(&TableGate::table, false) == "playstyle_table_off");
+    CHECK(with(&TableGate::held, false) == "no_table");
+    CHECK(with(&TableGate::human, false) == "human_offline");
+    CHECK(with(&TableGate::humanRaid, true) == "human_raid");
+}
+
+LEEROY_TEST(PlayStyle_TableLeavesAnotherWritersJournalAndRedoesItsOwnOnlyOnChange)
+{
+    Slot slot{{4, true}, 100};
+    CHECK(!TableDue(slot, {}, 99) && TableDue(slot, {}, 100));
+    CHECK(!TableDue(slot, {Holder::Other, {4, true}}, 1000000));    // an explicit bot_do's style stays its own
+    CHECK(!TableDue(slot, {Holder::Table, {4, true}}, 1000000));    // carried out and still in place
+    CHECK(TableDue(slot, {Holder::Table, {3, true}}, 100));         // the mind changed it: undo, then carry out anew
+    CHECK(!TableDue(slot, {Holder::Table, {3, true}}, 99));
+}
+
+LEEROY_TEST(PlayStyle_TableTriesStayInBudgetAndReachEveryMember)
+{
+    std::vector<TableEntry> entries;
+    for (std::uint32_t guid = 1; guid <= 150; ++guid) entries.push_back({guid, {3, true}});
+    Table table = ReplaceTable({}, entries, 0);
+    std::map<std::uint32_t, int> seen;
+    auto none = [](std::uint32_t) { return Held{}; };
+    std::int64_t now = 0;
+    for (int pass = 0; pass < 10; ++pass, now += 1000)
+    {
+        auto tries = TableTries(table, none, now);
+        CHECK(tries.size() == kTableTriesPerPass || (pass == 9 && tries.size() == 150 - 9 * kTableTriesPerPass));
+        for (auto guid : tries) { ++seen[guid]; TableTried(table.at(guid), now); }
+    }
+    CHECK(seen.size() == 150);
+    CHECK(std::all_of(seen.begin(), seen.end(), [](auto const& kv) { return kv.second == 1; }));
+    CHECK(TableTries(table, none, now).empty());                   // everyone waits out its retry
+    CHECK(TableTries(table, none, kTableRetryMs).size() == kTableTriesPerPass); // the first ones are due again
+}
+
+// The scenario the table exists for, against the old request-at-his-login model. 150 cast members; at his login half
+// are busy (a battleground, dead, a Realm hold) and come free over the next ten minutes. The old way tried each once at
+// his login; the table tries again until each one is free.
+LEEROY_TEST(PlayStyle_TableStylesMembersBusyAtHisLoginOnceTheyAreFree)
+{
+    constexpr std::uint32_t kMembers = 150;
+    auto freeAt = [](std::uint32_t guid) -> std::int64_t { return guid % 2 ? 0 : (guid % 10 + 1) * 60000; };
+    std::map<std::uint32_t, Held> held;
+    std::vector<TableEntry> entries;
+    for (std::uint32_t guid = 1; guid <= kMembers; ++guid) entries.push_back({guid, {static_cast<std::uint8_t>(guid % 5 + 2), guid % 3 == 0}});
+    Table table = ReplaceTable({}, entries, 0);
+    std::size_t legacy = 0;
+    for (std::uint32_t guid = 1; guid <= kMembers; ++guid) legacy += freeAt(guid) <= 0;
+    std::size_t tries = 0;
+    for (std::int64_t now = 0; now <= 15 * 60000; now += 1000)
+        for (auto guid : TableTries(table, [&](std::uint32_t g) { return held[g]; }, now))
+        {
+            ++tries;
+            TableTried(table.at(guid), now);
+            if (now >= freeAt(guid)) held[guid] = {Holder::Table, table.at(guid).request};
+        }
+    std::size_t styled = 0;
+    for (auto const& [guid, h] : held) styled += h.holder == Holder::Table;
+    CHECK(legacy == kMembers / 2);
+    CHECK(styled == kMembers);
+    CHECK(tries < kMembers * 50);      // bounded: one try a member every kTableRetryMs at most
 }

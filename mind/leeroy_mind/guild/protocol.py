@@ -170,6 +170,24 @@ class BotDo:
 
 
 @dataclass(frozen=True, slots=True)
+class PlayStyleEntry:
+    """One member's style in a playstyle_table: a bot_do "playstyle" param ("<delay>:<potions>")."""
+    guid: int
+    param: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlayStyleTable:
+    """The whole play-style table (playstyle/), at most 512 members, held natively for this connection
+    only: native styles each member whenever she is free and he is in game outside a raid group, and
+    takes back what the table added once it no longer lists her (an empty table, or the mind gone).
+    Sent only to a hello that lists playstyle_table; refused playstyle_table_off with
+    Leeroy.PlayStyle.Table at 0, when the mind keeps its one bot_do a member."""
+    id: str
+    styles: tuple[PlayStyleEntry, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class StockItems:
     id: str
     guid: int
@@ -325,6 +343,7 @@ COMMANDS: dict[str, type] = {
     "stock_items": StockItems,
     "string_do": StringDo,
     "guild_add_roster": GuildAddRoster,
+    "playstyle_table": PlayStyleTable,
 }
 
 

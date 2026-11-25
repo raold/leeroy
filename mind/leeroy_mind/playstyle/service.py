@@ -8,7 +8,7 @@ import uuid
 from collections import Counter
 
 from leeroy_mind.guild.ports import JobWaiter
-from leeroy_mind.guild.protocol import BotDo, register
+from leeroy_mind.guild.protocol import BotDo, PlayStyleEntry, PlayStyleTable, register
 from leeroy_mind.logs import log
 from leeroy_mind.protocol import Boss, Cast, Group, Hello, Login, Logout
 from leeroy_mind.wow import BOSS_NAMES, CAST_MIN_LEVEL, DUNGEONS
@@ -16,6 +16,10 @@ from . import style
 
 KEY = 'playstyle:owned'
 LIMIT = 512
+# A native that holds the whole table (playstyle_table) and styles each member itself whenever she is free.
+TABLE_FEATURE = 'playstyle_table'
+# Refusals of the table that one bot_do a member would get as well: wait for his login or the next hello.
+TABLE_OFF = frozenset({'playstyle_off', 'disabled'})
 INSTANCE_MAPS = frozenset(map_id for map_id,boss_id in BOSS_NAMES) | frozenset(DUNGEONS)
 _CODE = re.compile(r'[A-Za-z0-9_:.,-]{1,64}')
 
@@ -77,6 +81,33 @@ class PlayStyles:
         self.wake = asyncio.Event()
         self.stopping = False
         self.tally = Counter()  # (restore, reason) of the commands since the last summary
+        # The table (playstyle_table) on this connection: whether hello lists it, and its mode: None
+        # (not tried yet), 'table' (native holds `sent`), 'off' (native's style switch refused it) or
+        # 'legacy' (refused for itself: one bot_do a member, as without the feature).
+        self.table_supported = False
+        self.mode = None
+        self.sent = None
+        self.table_due = False
+
+    def tabled(self):
+        """Native holds (or is about to be sent) the table: no per-member style request is made."""
+        return self.table_supported and self.mode != 'legacy'
+
+    def want_table(self):
+        if self.table_supported and self.mode in (None, 'table'):
+            self.table_due = True
+            self.wake.set()
+
+    def styles(self):
+        """The cast's whole table, in guid order: every member with a persona, online or not."""
+        out = []
+        for guid in sorted(self.app.world.cast_guids()):
+            persona = self.app.personas.get(guid)
+            if persona is not None and guid != self.app.human_guid:
+                out.append(PlayStyleEntry(guid, style(persona).param))
+            if len(out) >= LIMIT:
+                break
+        return tuple(out)
 
     def present(self):
         """He is in game. A style is only added then: it changes how his bots fight beside
@@ -123,7 +154,8 @@ class PlayStyles:
     async def connection(self,connected):
         self.connected = connected
         if not connected:
-            self.supported = False
+            self.supported = self.table_supported = self.table_due = False
+            self.mode = self.sent = None  # native drops the table with this connection and takes back its styles
             self.pending.clear()
             self.jobs.close()
 
@@ -132,6 +164,8 @@ class PlayStyles:
             return
         if isinstance(ev,Hello):
             self.supported = 'playstyle' in ev.features
+            self.table_supported = self.supported and TABLE_FEATURE in ev.features
+            self.mode = self.sent = None
             self.on = enabled(self.app.data_dir/'mind.toml')
             self.seen.clear()
             self.group_members.clear()
@@ -139,6 +173,7 @@ class PlayStyles:
             if self.owned:
                 for guid in sorted(self.owned):
                     self.queue(guid,True) # reconcile old/unknown receipts before any new style
+            self.want_table()
         elif isinstance(ev,Boss):
             key = (ev.map,ev.instance_id,ev.boss_id)
             if ev.state=='engaged' and (key in self.fights or len(self.fights)<LIMIT):
@@ -152,18 +187,28 @@ class PlayStyles:
             self.on = enabled(self.app.data_dir/'mind.toml')
             if not self.on and self.owned:
                 for guid in sorted(self.owned): self.queue(guid,True)
-            if not ev.human: self.queue(ev.guid)
+            if ev.human and self.table_supported:
+                if self.mode in ('off','legacy'): self.mode = None # his login tries the table again
+                self.want_table()
+            elif self.tabled(): self.want_table() # a member's persona or the switch may have changed
+            elif not ev.human: self.queue(ev.guid)
             else:
                 # he is here now: the members a hello or a cast found while he was away
                 for guid in sorted(self.seen): self.queue(guid)
         elif isinstance(ev,Cast):
             online = {member.guid for member in ev.members if member.online}
-            for guid in sorted(online-self.seen): self.queue(guid)
+            if self.tabled(): self.want_table()
+            else:
+                for guid in sorted(online-self.seen): self.queue(guid)
             self.seen = online
         elif isinstance(ev,Group):
             members = set(ev.members)
-            for guid in sorted(members-self.group_members if not ev.raid else members):
-                self.queue(guid,ev.raid and bool(self.owned and guid in self.owned))
+            if self.tabled(): # native takes the table's styles back in a raid; only old receipts are ours
+                for guid in sorted(members if ev.raid else ()):
+                    if self.owned and guid in self.owned: self.queue(guid,True)
+            else:
+                for guid in sorted(members-self.group_members if not ev.raid else members):
+                    self.queue(guid,ev.raid and bool(self.owned and guid in self.owned))
             self.group_members = members
 
     async def command(self,guids,restore):
@@ -204,6 +249,33 @@ class PlayStyles:
         finally:
             self.jobs.close()
 
+    async def send_table(self):
+        """The whole table in one command, when it differs from what native holds. Refused
+        playstyle_table_off (Leeroy.PlayStyle.Table at 0) or for any reason of its own, this
+        connection keeps one bot_do a member; refused as one bot_do would be, it waits."""
+        if (not self.connected or not self.supported or not self.table_supported or self.owned is None
+                or self.stopping or self.app.stopping or self.mode not in (None, 'table')):
+            return
+        styles = self.styles() if self.on else ()
+        if self.mode == 'table' and styles == self.sent:
+            return # native holds this very table
+        if self.mode is None and not styles:
+            return # nothing held to clear, and no cast to style yet
+        try:
+            ack = await self.app.bridge.send(PlayStyleTable(uuid.uuid4().hex,styles), preserve_id=True)
+        except Exception as exc:
+            log('playstyle_table_failed',error=type(exc).__name__) # the next hello, login or cast sends it
+            return
+        if ack.ok:
+            self.mode,self.sent = 'table',styles
+            log('playstyle_table_sent',styles=len(styles),on=int(self.on),owner=int(self.present()))
+            return
+        self.sent = None
+        self.mode = 'off' if ack.error in TABLE_OFF else 'legacy'
+        log('playstyle_table_refused',error=_code(ack.error),mode=self.mode)
+        if self.mode=='legacy' and self.present():
+            for guid in sorted(self.seen): self.queue(guid)
+
     async def run(self):
         while True:
             await self.wake.wait()
@@ -212,12 +284,15 @@ class PlayStyles:
                 guid = next(iter(self.pending))
                 restore = self.pending.pop(guid)
                 if restore:
-                    if await self.command([guid],True) and self.safe(guid):
+                    if await self.command([guid],True) and self.safe(guid) and not self.tabled():
                         self.queue(guid)
-                elif self.present():
+                elif self.present() and not self.tabled():
                     await self.command([guid],False)
                 await asyncio.sleep(0) # bounded work and cancellation between members
             self.flush()
+            if self.table_due:
+                self.table_due = False
+                await self.send_table()
 
     async def close(self):
         self.stopping = True

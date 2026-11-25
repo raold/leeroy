@@ -1070,3 +1070,25 @@ true once a fill of that group added at least one of the roster's members or ben
 (`GuildAddRosterFollowed`), so the mind can record the lineup in effect through his add. Server.log:
 `guild_add_roster held (N members, M bench)` and `add<N> from the guild follows the posted roster
 (...)`, counts only. **Native rebuild required.**
+
+# The play-style table (`playstyle_table`)
+
+`playstyle_table {styles: [{guid, param}, ...]}` (pure policy `Lib/LeeroyPlayStyle.h`, parser
+`ParsePlayStyleTable`, adapter `Guild/PlayStyle.cpp`; hello feature `playstyle_table`) is the mind's
+whole persona play-style table, at most 512 members, none twice, each `param` a `bot_do playstyle`
+param. It replaces the last table whole and belongs to the bridge connection that sent it; a member
+it repeats unchanged keeps its retry time. With `Leeroy.PlayStyle.Enable` and `Leeroy.PlayStyle.Table`
+(default 1, `.reload config`) on, he online and his group no raid group, the play-style tick (once a
+second) tries at most 16 due members in guid order through the same admission and journal as `bot_do
+playstyle`, and checks each tried member again 15 seconds later whatever came of it. A member whose
+journal is the table's with the same request is not tried; one whose journal another writer made
+(an explicit `bot_do playstyle`) is left to that writer. The tick takes back a journal the table made
+once the table no longer lists its member: a smaller or empty table, the mind's disconnect (the
+table is dropped, `why=mind`) or either switch off (`why=off`); the usual cleanup (PvP, instance,
+raid, role, another owner) still applies, and the table then styles her again once she is free.
+
+The handler refuses `disabled`, `playstyle_off` and `playstyle_table_off` (the mind then keeps one
+`bot_do` a member). Server.log: `mod-leeroy: playstyle_table held styles=N`, `mod-leeroy:
+playstyle_table dropped styles=N why=mind|off`, and at most once a minute, when a style was added or
+the styled count moved, `mod-leeroy: playstyle_table styles= styled= tried= applied=
+refused=<code=n,...>`; counts and codes only. **Native rebuild required.**

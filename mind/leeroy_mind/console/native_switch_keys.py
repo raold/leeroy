@@ -28,6 +28,7 @@ Leeroy.LootReceipts.Enable
 Leeroy.Mechanics.Enable
 Leeroy.MemberDungeon.Enable
 Leeroy.PlayStyle.Enable
+Leeroy.PlayStyle.Table
 Leeroy.QueueFence.Enable
 Leeroy.RaidLead.Enable
 Leeroy.Realm.Announce

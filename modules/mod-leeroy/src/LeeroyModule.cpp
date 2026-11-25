@@ -51,6 +51,7 @@ void LeeroyModule::LoadConfig(bool /*reload*/)
     cfg.lootReceipts = sConfigMgr->GetOption<bool>("Leeroy.LootReceipts.Enable", false);
     cfg.worldEnable = sConfigMgr->GetOption<bool>("Leeroy.World.Enable", false);
     cfg.playStyleEnable = sConfigMgr->GetOption<bool>("Leeroy.PlayStyle.Enable", false);
+    cfg.playStyleTable = sConfigMgr->GetOption<bool>("Leeroy.PlayStyle.Table", true);
     cfg.raidLeadEnable = sConfigMgr->GetOption<bool>("Leeroy.RaidLead.Enable", false);
     cfg.realmMaxActionsPerTick = std::clamp(sConfigMgr->GetOption<uint32>("Leeroy.Realm.MaxActionsPerTick", 5), 1u, 20u);
     cfg.realmAnnounce = sConfigMgr->GetOption<bool>("Leeroy.Realm.Announce", true);

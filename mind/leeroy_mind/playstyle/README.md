@@ -69,3 +69,35 @@ logs one `playstyle_pass` line: `commands`, `applied`, `restored`, `other` (coun
 `no_job`, `guids`, `kind`, `transport:<class>`), `owner` and `owned`; the per-command
 `playstyle_result`, `playstyle_refused` and `playstyle_transport` lines are DEBUG.
 Logs contain ids, counts, numeric style codes and exception classes only; the off/no-receipt path attaches no hooks or tasks and changes no prompt.
+
+## The table (`playstyle_table`)
+
+A native whose hello lists `playstyle_table` gets the whole table in one command instead of one
+`bot_do` a member: `{styles: [{guid, param}, ...]}`, every cast member with a persona (online or
+not, at most 512), each `param` the `bot_do` form above. Native holds it for this connection only
+and styles each member itself, once a second at most 16 tries, whenever she is free and he is in
+game outside a raid group (the same admission as a single request: alive, out of combat, no
+instance, raid group, PvP, foreign controller or other owner). A refused, offline or already-styled
+member is checked again 15 seconds later, so a member in a battleground, dead or held by the Realm
+at his login is styled once she is free, and again after a cleanup took the style back. Until
+then the mind tried each member once at his login and at a few other events, and on 2026-11-11..25
+63% of those attempts were refused for a passing state (busy:pvp 1,040, busy:body 322,
+realm_owner 173, dead 66) and never retried: his login passes styled 34% of the cast on average.
+
+The mind sends the table at hello (after restoring any receipts the one-`bot_do` path left), again
+at his login, and on a member login or cast when it differs from the one native holds; unchanged
+it sends nothing. `[playstyle] enabled = false` sends an empty table. Native takes back every
+style the table added once the table no longer lists that member: an empty or smaller table, the
+mind's disconnect, `Leeroy.PlayStyle.Table = 0` or `Leeroy.Enable = 0`. A style from an explicit
+`bot_do playstyle` stays that writer's; the table never takes it over. The table records no
+receipt in `playstyle:owned`: native's journal is the only owner, and native restores it with the
+connection that sent the table.
+
+Fallback: refused `playstyle_table_off` (native `Leeroy.PlayStyle.Table = 0`, reloadable) or for
+any reason of its own, the connection keeps one `bot_do` a member exactly as before; refused as one
+`bot_do` would be (`playstyle_off`, `disabled`), it sends nothing until his next login or hello.
+His login always tries the table again. Logs: `playstyle_table_sent styles= on= owner=`,
+`playstyle_table_refused error= mode=` (`legacy` or `off`), `playstyle_table_failed error=` (an
+exception class); Server.log `mod-leeroy: playstyle_table held styles=`, `... dropped styles=
+why=` (`mind`, `off`) and, at most once a minute when a style was added or the styled count moved,
+`mod-leeroy: playstyle_table styles= styled= tried= applied= refused=<code=n,...>`.

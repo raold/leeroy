@@ -3,12 +3,19 @@
 #define MOD_LEEROY_PLAY_STYLE_H
 #include <algorithm>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace Leeroy::PlayStyle
 {
-struct Request { std::uint8_t wait = 0; bool potions = false; };
+struct Request
+{
+    std::uint8_t wait = 0;
+    bool potions = false;
+    bool operator==(Request const&) const = default;
+};
 inline std::optional<Request> Parse(std::string_view text)
 {
     if (text.size() != 3 || text[1] != ':' || (text[2] != '0' && text[2] != '1')
@@ -94,5 +101,91 @@ private:
     Values baseline{}, applied{};
     unsigned owned = 0;
 };
+
+// The play-style table (playstyle_table): the connected mind's whole desired style a cast member, held for that
+// connection only. Native carries each entry out itself whenever the member is free and he is in game outside a raid
+// group, and again once a cleanup has taken it back (a battleground, an instance, a role change, another owner). The
+// mind used to send one bot_do a member at his login and at a few other events, and a member busy then (in a
+// battleground, dead, held by the Realm) kept no style for the rest of his session.
+inline constexpr std::size_t kTableMax = 512;         // the mind's own receipt cap (playstyle/service.py LIMIT)
+inline constexpr std::int64_t kTableRetryMs = 15000;  // a tried entry is checked again after this, whatever came of it
+inline constexpr std::size_t kTableTriesPerPass = 16; // bodies tried a pass (the cleanup tick, once a second)
+struct TableEntry
+{
+    std::uint32_t guid = 0;
+    Request request{};
+};
+struct Slot
+{
+    Request request{};
+    std::int64_t dueMs = 0;
+};
+using Table = std::map<std::uint32_t, Slot>;
+
+// A new table replaces the last one whole: an entry it repeats unchanged keeps its retry time, a new or changed
+// entry is due at once, and a member it leaves out is no longer the table's (TableUndo).
+inline Table ReplaceTable(Table const& held, std::vector<TableEntry> const& entries, std::int64_t nowMs)
+{
+    Table next;
+    for (auto const& entry : entries)
+    {
+        auto const old = held.find(entry.guid);
+        next[entry.guid] = old != held.end() && old->second.request == entry.request
+            ? old->second : Slot{entry.request, nowMs};
+    }
+    return next;
+}
+
+// The table adds styles only with both switches on, a table held, and him in game outside a raid group (his raid is
+// RaidHabits' to set, as the mind's own requests left it).
+struct TableGate
+{
+    bool enabled = false, table = false, held = false, human = false, humanRaid = false;
+};
+inline std::string_view TableRefusal(TableGate const& g)
+{
+    if (!g.enabled) return "playstyle_off";
+    if (!g.table) return "playstyle_table_off";
+    if (!g.held) return "no_table";
+    if (!g.human) return "human_offline";
+    if (g.humanRaid) return "human_raid";
+    return {};
+}
+
+// Whose style journal a member carries: nobody's, the table's (with the request it carried out), or another writer's
+// (an explicit bot_do playstyle), which that writer keeps or undoes and the table leaves alone.
+enum class Holder : std::uint8_t { None, Table, Other };
+struct Held
+{
+    Holder holder = Holder::None;
+    Request request{};
+};
+inline bool TableDue(Slot const& slot, Held const& held, std::int64_t nowMs)
+{
+    if (held.holder == Holder::Other || (held.holder == Holder::Table && held.request == slot.request))
+        return false;
+    return nowMs >= slot.dueMs;
+}
+// A journal the table made is undone once the table no longer lists its member: a new table without it, or no table
+// at all (its mind disconnected, or Leeroy.PlayStyle.Table went 0).
+inline bool TableUndo(Holder holder, bool listed) { return holder == Holder::Table && !listed; }
+
+// This pass's tries in guid order, at most `budget`. Each tried entry then waits kTableRetryMs (TableTried), so the
+// entries past the budget come first in the next pass and none is starved.
+template <typename Lookup>
+std::vector<std::uint32_t> TableTries(Table const& table, Lookup const& heldOf, std::int64_t nowMs,
+    std::size_t budget = kTableTriesPerPass)
+{
+    std::vector<std::uint32_t> tries;
+    for (auto const& [guid, slot] : table)
+    {
+        if (tries.size() >= budget)
+            break;
+        if (TableDue(slot, heldOf(guid), nowMs))
+            tries.push_back(guid);
+    }
+    return tries;
+}
+inline void TableTried(Slot& slot, std::int64_t nowMs) { slot.dueMs = nowMs + kTableRetryMs; }
 }
 #endif
