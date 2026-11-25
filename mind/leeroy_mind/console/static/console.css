@@ -772,6 +772,26 @@ td > div.who { color: var(--ink); font-weight: 600; }
 .dc-photo img { width:100%; height:100%; object-fit:contain; }
 #dc-photo-preview:not([hidden]) { display:flex; align-items:center; gap:12px; margin:8px 0; }
 #dc-photo-preview-img { width:80px; height:80px; object-fit:contain; }
+#dc-video-preview { width:160px; max-width:100%; max-height:120px; background:#000; border-radius:6px; }
+/* His videos take their own shape (--video-ratio, --video-w, set by photoview.mjs); the poster is
+   the middle of the stills strip, which is the middle still. */
+.dc-video { position:relative; width:min(100%, var(--video-w, 360px)); aspect-ratio:var(--video-ratio, 16 / 9);
+  margin-top:8px; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:#000; }
+.dc-video-still, .dc-video-player { display:block; width:100%; height:100%; }
+.dc-video-still { object-fit:cover; object-position:center; }
+.dc-video-player { object-fit:contain; background:#000; }
+.dc-video-play { position:absolute; left:50%; top:50%; transform:translate(-50%, -50%); min-height:44px;
+  padding:8px 16px; font-weight:600; color:var(--accent-ink); background:var(--accent); border-color:var(--accent); }
+.dc-video-status { position:absolute; left:0; right:0; bottom:0; margin:0; padding:4px 8px; font-size:12px;
+  color:var(--ink); background:var(--surface); }
+.dc-video-status:empty { display:none; }
+/* Files dragged over the open conversation: where they will go, or why they cannot */
+.dc-drop { position:absolute; inset:6px; z-index:20; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:4px; padding:16px; text-align:center; border:2px dashed var(--accent);
+  border-radius:var(--radius); background:var(--surface-2); }
+.dc-drop > * { pointer-events:none; margin:0; }
+#dc-drop-title { font:600 20px/1.3 var(--f-display); color:var(--ink); }
+#dc-drop-hint { font-size:14px; color:var(--ink-2); }
 .dc-voice-note { max-width:460px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; margin:5px 0; }
 .dc-voice-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
 .dc-voice-controls input[type="range"] { width:100%; min-width:0; padding:0; }

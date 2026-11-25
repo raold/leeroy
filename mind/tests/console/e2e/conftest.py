@@ -47,7 +47,7 @@ def rehearsal(tmp_path, monkeypatch, pytestconfig):
 
     @asynccontextmanager
     async def start(*, width=1440, height=1000, theme="dark", state="running", photos=False, learning=False,
-                    voice_notes=False, godmode=False):
+                    voice_notes=False, godmode=False, videos=False):
         # A rehearsal that runs past 75 s prints every asyncio task's stack once, so a
         # wait with no deadline names itself before the job's timeout cancels it. Capture
         # is suspended for it: a job killed mid-test never shows captured output.
@@ -68,13 +68,13 @@ def rehearsal(tmp_path, monkeypatch, pytestconfig):
         watchdog.daemon = True
         watchdog.start()
         try:
-            async with _browser(width, theme, state, photos, learning, voice_notes, godmode, height) as fixture:
+            async with _browser(width, theme, state, photos, learning, voice_notes, godmode, height, videos) as fixture:
                 yield fixture
         finally:
             watchdog.cancel()
 
     @asynccontextmanager
-    async def _browser(width, theme, state, photos, learning, voice_notes, godmode=False, height=1000):
+    async def _browser(width, theme, state, photos, learning, voice_notes, godmode=False, height=1000, videos=False):
         async with playwright.async_playwright() as pw:
             if not Path(pw.chromium.executable_path).is_file():
                 message = "Chromium is not installed; run python -m playwright install chromium"
@@ -116,7 +116,7 @@ def rehearsal(tmp_path, monkeypatch, pytestconfig):
             fixture.page, fixture.context, fixture.errors = page, context, errors
             try:
                 await fixture.start(state, photos=photos, learning=learning, voice_notes=voice_notes,
-                                    godmode=godmode)
+                                    godmode=godmode, videos=videos)
                 # Browser requests may reach ONLY this fixture's own console: the console's
                 # CSP ('self') confines the page, and any other destination fails the test.
                 # Observed, not intercepted: with context.route() interception Chromium now
