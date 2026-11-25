@@ -8,7 +8,7 @@ def observed(negative=False):
     return dict(kind="dojo-yogg-observation", format=1, token="test", state="done", failure="",
                 negative=negative, ready=True, cleanup=True, portals=4, initial_sanity_members=9,
                 samples=500, max_gap_ms=60, illusion=1, max_below=0 if negative else 4,
-                max_healers_below=0 if negative else 1, min_healers_above=2, tank_below_samples=0,
+                max_healers_below=0 if negative else 1, healer_entrants=0 if negative else 1, min_healers_above=2, tank_below_samples=0,
                 influence_deaths=0 if negative else 8, brain_hits=0 if negative else 10,
                 brain_start_health=1000000, brain_least_health=1000000 if negative else 900000,
                 exit_remaining_ms=0 if negative else 8000,
@@ -30,7 +30,7 @@ class YoggGateTest(unittest.TestCase):
 
     def test_roles_actual_effects_and_deadline_are_all_required(self):
         for key, value in (("ready", False), ("cleanup", False), ("max_below", 5), ("max_healers_below", 0),
-                           ("min_healers_above", 0), ("tank_below_samples", 1), ("influence_deaths", 0),
+                           ("min_healers_above", 0), ("healer_entrants", 2), ("tank_below_samples", 1), ("influence_deaths", 0),
                            ("brain_hits", 0), ("brain_least_health", 1000000), ("exit_remaining_ms", 999),
                            ("portal_casts", [0] * 9), ("exit_casts", [0] * 9), ("exited", [False] * 9),
                            ("minimum_sanity", [0] + [80] * 8), ("max_gap_ms", 201), ("illusion", 0)):

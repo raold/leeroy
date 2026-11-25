@@ -17,7 +17,7 @@ def verdict(o, *, token, negative=False):
     for key, value in expected.items():
         if type(o.get(key)) is not type(value) or o[key] != value:
             problems.append(f"invalid {key}")
-    counts = ("samples", "max_gap_ms", "illusion", "max_below", "max_healers_below", "min_healers_above",
+    counts = ("samples", "max_gap_ms", "illusion", "max_below", "max_healers_below", "healer_entrants", "min_healers_above",
               "tank_below_samples", "influence_deaths", "brain_hits", "brain_start_health", "brain_least_health",
               "exit_remaining_ms")
     for key in counts:
@@ -40,7 +40,7 @@ def verdict(o, *, token, negative=False):
     else:
         if sum(o["entered"]) != 4 or o["entered"] != o["exited"]:
             problems.append("exactly four actual entrants must return alive")
-        if o["max_below"] != 4 or o["max_healers_below"] != 1 or o["min_healers_above"] < 1 or o["tank_below_samples"]:
+        if o["max_below"] != 4 or o["max_healers_below"] != 1 or o["healer_entrants"] != 1 or o["min_healers_above"] < 1 or o["tank_below_samples"]:
             problems.append("brain-team roles or upstairs healer reserve invalid")
         for i, entered in enumerate(o["entered"]):
             if entered and (o["portal_casts"][i] < 1 or o["exit_casts"][i] < 1):

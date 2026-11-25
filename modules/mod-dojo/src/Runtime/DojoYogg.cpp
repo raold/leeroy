@@ -48,7 +48,7 @@ struct Trial
 {
     std::recursive_mutex mutex;
     std::array<ObjectGuid, Names.size()> actors{};
-    std::array<bool, Names.size()> entered{}, exited{};
+    std::array<bool, Names.size()> entered{}, exited{}, healerEntrants{};
     std::array<bool, Names.size()> positioned{}, wasBelow{};
     std::array<Position, Names.size()> previous{};
     std::array<uint32, Names.size()> portalCasts{}, exitCasts{}, minimumSanity{};
@@ -86,7 +86,7 @@ struct Trial
         token = id; negative = control; failure.clear(); group.Clear(); brainGuid.Clear(); saraGuid.Clear();
         elapsed = samples = maxGap = illusion = portals = brainStart = brainLeast = brainHits = exitRemaining = initialSanity = 0;
         maxBelow = maxHealersBelow = tanksBelow = 0; minHealersAbove = 100;
-        entered = {}; exited = {}; positioned = {}; wasBelow = {};
+        entered = {}; exited = {}; healerEntrants = {}; positioned = {}; wasBelow = {};
         portalCasts = {}; exitCasts = {}; minimumSanity.fill(100); influenceDeaths.clear();
         ready = cleanup = humanGone = false; active = true;
         oldSupport = sPlayerbotAIConfig.YoggBrainSupport;
@@ -225,7 +225,7 @@ struct Trial
                 if (downstairs)
                 {
                     ++below; entered[i] = true;
-                    if (PlayerbotAI::IsHeal(p)) ++healingBelow;
+                    if (PlayerbotAI::IsHeal(p)) { ++healingBelow; healerEntrants[i] = true; }
                     if (PlayerbotAI::IsTank(p)) ++tanksBelow;
                 }
                 else if (p->GetPositionZ() > 300.f)
@@ -272,6 +272,7 @@ struct Trial
             {"illusion", illusion}, {"portals", portals}, {"initial_sanity_members", initialSanity},
             {"entered", entered}, {"exited", exited}, {"portal_casts", portalCasts}, {"exit_casts", exitCasts},
             {"minimum_sanity", minimumSanity}, {"max_below", maxBelow}, {"max_healers_below", maxHealersBelow},
+            {"healer_entrants", std::count(healerEntrants.begin(), healerEntrants.end(), true)},
             {"min_healers_above", minHealersAbove}, {"tank_below_samples", tanksBelow},
             {"influence_deaths", influenceDeaths.size()}, {"brain_hits", brainHits},
             {"brain_start_health", brainStart}, {"brain_least_health", brainLeast}, {"exit_remaining_ms", exitRemaining}};
