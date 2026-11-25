@@ -8,6 +8,28 @@
 
 using namespace Leeroy::Guild;
 
+LEEROY_TEST(OfflineRaid_NoProgressRunsWithoutHeartbeatsAndWaitsForSafeState)
+{
+    OfflineProgressClock clock;
+    clock.Tick(1800000);
+    CHECK(!clock.Expired(1800000, false)); // setup is not a started encounter baseline
+    clock.Progress();
+    clock.Tick(1799999);
+    CHECK(!clock.Expired(1800000, false));
+    clock.Tick(1);
+    CHECK(clock.Expired(1800000, false));
+    CHECK(!clock.Expired(1800000, true));
+    CHECK(!clock.Expired(1800000, std::nullopt));
+    CHECK(!clock.Expired(0, false)); // omitted by an older mind
+    clock.Progress(); // new engagement, completion or wipe
+    CHECK_EQ(clock.idleMs, 0u);
+    CHECK(!clock.Expired(1800000, false));
+    clock.Tick(std::numeric_limits<std::uint32_t>::max());
+    clock.Tick(1);
+    CHECK_EQ(clock.idleMs, std::numeric_limits<std::uint32_t>::max());
+    CHECK(clock.Expired(360 * 60000, false));
+}
+
 LEEROY_TEST(OfflineRaid_ReservesAddHeadroomWithoutIncreasingRaidCapacity)
 {
     auto ready = [](auto) { return std::string{}; };

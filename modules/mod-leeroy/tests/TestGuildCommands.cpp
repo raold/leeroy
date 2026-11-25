@@ -342,6 +342,24 @@ LEEROY_TEST(Guild_BoundsAndRequiredFields)
     CHECK(ParseGiveLoot(world, error).has_value());
 }
 
+LEEROY_TEST(Guild_OfflineNativeStallIsOptionalAndBounded)
+{
+    auto msg = Message("start_offline_raid_ok");
+    std::string error;
+    auto old = ParseOfflineRaid(msg, error);
+    CHECK(old.has_value());
+    CHECK_EQ(old->stallTimeoutMin, 0u);
+    for (auto minutes : {10u, 17u, 30u, 360u})
+    {
+        msg["stall_timeout_min"] = minutes;
+        auto cmd = ParseOfflineRaid(msg, error);
+        CHECK(cmd.has_value());
+        CHECK_EQ(cmd->stallTimeoutMin, minutes);
+    }
+    for (auto const& bad : json::array({0, 9, 361, -1, true, nullptr, 30.5, "30"}))
+        RejectField("start_offline_raid_ok", "stall_timeout_min", bad);
+}
+
 LEEROY_TEST(Guild_BooleanStringTypesAndFirstErrorOrder)
 {
     for (auto const& [fixture, field] : std::vector<std::pair<std::string_view, char const*>>{
