@@ -94,7 +94,7 @@ EXEMPLARS_BEFORE = "2026-11-19T14:22:45-05:00"
 EXTENSION_SECTIONS = frozenset({"console", "guild", "dkp", "voice", "training", "realm",
                                 "control", "selfies", "health", "claims", "personas", "guards",
                                 "tuning", "playstyle", "signals", "fingerprint", "callbacks", "world", "learn", "looks", "server",
-                                "banter", "photos", "voice_notes", "groups", "culture", "outreach",
+                                "banter", "photos", "videos", "voice_notes", "groups", "culture", "outreach",
                                 "godmode", "decisions", "raidlead", "raidplay", "drama", "turing",
                                 "bakeoff", "lab", "prune", "heat", "geography", "owner", "watchdog"})
 _HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})

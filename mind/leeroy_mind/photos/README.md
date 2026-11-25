@@ -266,9 +266,14 @@ and inspect the live model's GPU residency after handback.
 
 ## Uploads
 
-- Attach or paste an image in a Discord channel or DM. The page resizes it to a JPEG and
-  strips its metadata locally before upload. Send stays disabled while a photo is being
-  prepared.
+- Attach, paste, or drag an image from the desktop onto the open channel or DM (a "Drop to
+  attach" overlay covers the conversation while a file is over it). All three take the same
+  path: the page resizes it to a JPEG and strips its metadata locally before upload. Send
+  stays disabled while a photo is being prepared. One photo goes with a message; of several
+  dropped or pasted files the first that can be attached is taken and the page says so; other
+  files are refused in words. Dragged text and links drop as before, and a file dropped
+  elsewhere on the page is refused there rather than opening in place of the console. With
+  `[videos] enabled` the same path takes a short video (`videos/README.md`).
 - Limits: 4 MiB a photo, four a minute and 200 a local day. After a console restart, the
   day's count is rebuilt from the staged files. Images refused before they are written
   do not count.

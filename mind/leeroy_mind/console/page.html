@@ -166,7 +166,7 @@
           <label for="dc-text">Message <b id="dc-to"></b> as you</label>
           <textarea id="dc-text" rows="2" aria-describedby="dc-why dc-count" disabled></textarea>
           <input id="dc-photo-file" type="file" accept="image/*" hidden>
-          <div id="dc-photo-preview" hidden><img id="dc-photo-preview-img" alt="Photo to attach"><button id="dc-photo-remove" type="button">Remove photo</button></div>
+          <div id="dc-photo-preview" hidden><img id="dc-photo-preview-img" alt="Photo to attach"><video id="dc-video-preview" controls muted playsinline preload="metadata" aria-label="Video to attach" hidden></video><button id="dc-photo-remove" type="button">Remove photo</button></div>
           <div id="dc-voice-preview" hidden>
             <audio id="dc-voice-preview-audio" controls preload="metadata" aria-label="Preview your voice note"></audio>
             <button id="dc-voice-discard" type="button">Discard voice note</button>
@@ -188,6 +188,7 @@
           </div>
           <p id="say-why" class="why" role="status"></p>
         </div>
+        <div id="dc-drop" class="dc-drop" hidden><p id="dc-drop-title">Drop to attach</p><p id="dc-drop-hint"></p></div>
       </section>
       <aside id="comms-right" class="panel right" aria-labelledby="here-title">
         <button id="c-panel" type="button" class="panel-toggle" aria-controls="comms-right"

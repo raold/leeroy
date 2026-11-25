@@ -70,6 +70,7 @@ SWITCHES = (
     ('heat','public_cap','Heat: channels others read capped at flirty','heat.enabled'),
     ('drama','member_romance','Member romances',''),
     ('photos','enabled','Discord photos','restart the console too'), ('selfies','enabled','Selfies',''),
+    ('videos','enabled','Discord videos from him','photos.enabled; ffmpeg and ffprobe on PATH; restart the console too'),
     ('photos','send','Members send photos','selfies.enabled; selfies.snaps; server.enabled'),
     ('photos','requests','Selfie requests','photos.send; selfies.enabled; selfies.snaps; server.enabled'),
     ('photos','request_priority','Priority selfie requests while playing','photos.requests; chat waits during rendering'),
