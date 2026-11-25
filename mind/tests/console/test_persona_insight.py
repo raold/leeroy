@@ -16,6 +16,7 @@ from leeroy_mind.console import feed, insightreports as reports, insightview as 
 from leeroy_mind.console.control import Controls
 from leeroy_mind.storage.rows import pack_vec
 from leeroy_mind.protocol import Chat
+from leeroy_mind.testing import control
 
 NOW = 1_793_304_000.0
 SECRET = 'PRIVATE_TYPED_SENTINEL'
@@ -299,7 +300,7 @@ def test_read_post_works_with_controls_disabled(store, data, caplog):
 
         def call(self, pids, op, args, *, timeout):
             assert op == 'claim_check' and args == {'guid':101, 'text':SECRET}
-            return {'ok':True, 'conflicts':[]}
+            return control.answer(op, args, {'ok':True, 'conflicts':[]})
 
     async def scenario():
         mind = running(data)

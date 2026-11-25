@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from .. import config, protocol
+from . import wire
 
 CORE_COMMAND_TYPES = frozenset(protocol._CORE_COMMANDS)
 
@@ -31,6 +32,16 @@ def load_fixture(path) -> list[dict]:
     return [json.loads(line) for line in lines if line.strip()]
 
 
+class _Known:
+    """The server's registry as decode_command asks it, through FakeBridge._is_known."""
+
+    def __init__(self, bridge):
+        self._bridge = bridge
+
+    def __contains__(self, type_name) -> bool:
+        return self._bridge._is_known(type_name)
+
+
 class FakeBridge:
     """mod-leeroy's bridge as the mind sees it (modules/mod-leeroy/src/Lib/LeeroyBridge.cpp,
     LeeroyWorldScript.cpp):
@@ -44,7 +55,12 @@ class FakeBridge:
       goes with the process), then listens again on the same port.
 
     push() writes straight to the greeted mind. With echo_first, a say's echo is written
-    before its ack (mod-leeroy writes them from separate queues, so either may come first)."""
+    before its ack (mod-leeroy writes them from separate queues, so either may come first).
+
+    Every command line goes through mod-leeroy's own decoder (wire.decode_command): a bad field
+    of a core command is acked ok false, a bad envelope or a type the server never registered
+    (known_types, by default every type mod-leeroy's source registers) answered with an error, as
+    LeeroyBridge.cpp does; `refused` keeps each, and `ack` scripts only what native accepted."""
 
     def __init__(self, events: list[dict] | None = None, *, cast: list[dict] | None = None,
                  human_guid: int = 1,
@@ -66,6 +82,7 @@ class FakeBridge:
         self._echo_first = echo_first
         self._known_types = known_types
         self.commands: list[dict] = []
+        self.refused: list[tuple[dict, str]] = []  # (command, the error native refused it with)
         self.written: list[str] = []  # the type of every line written to a mind, in order
         self.connections = 0
         self.port = 0
@@ -174,9 +191,11 @@ class FakeBridge:
         return await asyncio.wait_for(scan(), timeout)
 
     def _is_known(self, type_name) -> bool:
+        """Whether this server registered the extension type: `known_types` when given, else
+        the ones mod-leeroy's source registers (wire.native_command_types)."""
         known = self._known_types
         if known is None:
-            known = set(CORE_COMMAND_TYPES) | set(protocol._commands)
+            known = wire.native_command_types() or protocol.wire_command_types()
         return type_name in known
 
     def _member_name(self, guid) -> str:
@@ -209,17 +228,14 @@ class FakeBridge:
                     if reader.at_eof():
                         return
                     continue
-                try:
-                    cmd = json.loads(raw)
-                    if type(cmd) is not dict:
-                        raise ValueError
-                except ValueError:
-                    await self._write(writer, {"type": "error", "message": "bad json"})
+                if wire.decode_command(raw, known=()).error == wire.BAD_JSON:
+                    wire.capture(raw, wire.BAD_JSON)
+                    await self._write(writer, {"type": "error", "message": wire.BAD_JSON})
                     if first:
                         return  # as-built: error "bad json", then close
                     continue
                 first = False
-                await self._command(writer, cmd)
+                await self._command(writer, json.loads(raw))
         except (OSError, asyncio.IncompleteReadError, asyncio.CancelledError):
             pass
         finally:
@@ -229,14 +245,21 @@ class FakeBridge:
             self._handlers.discard(task)
 
     async def _command(self, writer: asyncio.StreamWriter, cmd: dict) -> None:
+        line = json.dumps(cmd)
+        decoded = wire.decode_command(line, known=_Known(self))
+        wire.capture(line.encode(), decoded.error)
         self.commands.append(cmd)
-        cmd_id = cmd.get("id") if isinstance(cmd.get("id"), str) else None
+        cmd_id = decoded.id
         type_name = cmd.get("type")
-        if not self._is_known(type_name):
-            err = {"type": "error", "message": f"unknown type: {type_name}"}
-            if cmd_id is not None:
-                err["id"] = cmd_id
-            await self._write(writer, err)
+        if decoded.error:  # LeeroyBridge.cpp: a core command's bad field is acked, the rest is an error
+            self.refused.append((cmd, decoded.error))
+            if decoded.ackable:
+                await self._write(writer, {"type": "ack", "id": cmd_id, "ok": False, "error": decoded.error})
+            else:
+                err = {"type": "error", "message": decoded.error}
+                if cmd_id:
+                    err["id"] = cmd_id
+                await self._write(writer, err)
             return
         result = self._ack(cmd)
         if result is None:

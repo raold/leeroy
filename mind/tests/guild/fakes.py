@@ -1,15 +1,14 @@
 """In-process guild ports: no sockets, models, game processes, or live databases."""
 
 import dataclasses
-import json
 from collections import defaultdict, deque
 from pathlib import Path
 from types import SimpleNamespace
 
-from leeroy_mind.bridge import valid_preserved_id
 from leeroy_mind.guild.protocol import Job, register
 from leeroy_mind.human import HumanIdentity
-from leeroy_mind.protocol import Ack, Member, encode_command
+from leeroy_mind.protocol import Ack, Member
+from leeroy_mind.testing.wire import WireContract
 from dbtemplate import open_migrated
 from leeroy_mind.storage.rows import PersonaStateRow, Relationship
 from leeroy_mind.talk.turns import TurnKind
@@ -65,6 +64,7 @@ class FakePorts:
         self.acks = defaultdict(deque)
         self.jobs = defaultdict(deque)
         self._command_types = {}
+        self.wire = WireContract()
         register()
 
     def close(self):
@@ -91,14 +91,17 @@ class FakePorts:
     async def send(self, cmd, *, expected_epoch=None):
         if expected_epoch is not None:
             assert expected_epoch == self.app.realm._transport_epoch
-        if not valid_preserved_id(cmd.id):  # LivePorts sends every guild command preserve_id=True
-            raise ValueError("invalid preserved command identity")
-        type_name = json.loads(encode_command(cmd, int(self.clock.now() * 1000)))["type"]
+        ts = int(self.clock.now() * 1000)
+        # LivePorts sends every guild command preserve_id=True: BridgeClient's rules, then native's decoder.
+        _, refusal = self.wire.send(cmd, preserve_id=True, ts_ms=ts)
+        type_name = self.wire.lines[-1]["type"]
         self.sent.append(cmd)
         self._command_types[cmd.id] = type_name
+        if refusal:
+            return Ack(ts=ts, id=cmd.id, ok=False, error=refusal)
         script = self.acks[type_name]
         ok, error = script.popleft() if script else (True, "")
-        return Ack(ts=int(self.clock.now() * 1000), id=cmd.id, ok=ok, error=error)
+        return Ack(ts=ts, id=cmd.id, ok=ok, error=error)
 
     async def wait_job(self, cmd_id, timeout_s):
         type_name = self._command_types.get(cmd_id)

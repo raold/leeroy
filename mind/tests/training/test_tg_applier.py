@@ -15,6 +15,7 @@ from leeroy_mind.training.config import TrainingConfig
 from leeroy_mind.training.levers import MemberInfo
 from leeroy_mind.training.protocol import CustomStrategy, DcKey, DcSetting
 from leeroy_mind.training.vocab import ClassVocab, Vocab
+from leeroy_mind.testing.wire import port_method
 
 
 CTX = "631:0:0"
@@ -79,6 +80,7 @@ class Fake:
             if self.holder(guid) == owner:
                 self.holders.pop(guid)
 
+    @port_method
     async def send(self, command):
         assert any(json.loads(r["command"])["wire"]["data"]["id"] == command.id
                    for r in ts.open_applied(self.conn, 0)), "journal must precede dispatch"

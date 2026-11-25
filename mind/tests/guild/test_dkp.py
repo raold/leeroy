@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import sqlite3
 from datetime import datetime, timezone
 
@@ -244,7 +245,9 @@ def test_fake_ports_scripted_ack_job_and_distinct_turn_kinds(fake):
                        map_id=631, main_tank_guid=1101)
         fake.acks["form_raid"].extend([(False, "busy"), (True, "")])
         assert not (await fake.send(cmd)).ok
-        assert (await fake.send(cmd)).ok
+        with pytest.raises(ValueError, match="already issued"):  # BridgeClient never reissues an identity
+            await fake.send(cmd)
+        assert (await fake.send(dataclasses.replace(cmd, id="r2"))).ok
         fake.jobs["form_raid"].append(job("form_raid", "done", guids=(1101,)))
         assert (await fake.wait_job("r1", 5)).id == "r1"
         assert await fake.wait_job("r1", 5) is None

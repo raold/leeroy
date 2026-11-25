@@ -14,6 +14,7 @@ from leeroy_mind.protocol import Ack, Hello
 from leeroy_mind.realm import bank, cli, protocol, steps
 from leeroy_mind.realm.service import attach_realm
 from leeroy_mind.testing.fake_clock import FakeClock
+from leeroy_mind.testing.wire import bridge_method
 from realm.fakes import RealmApp, enabled
 
 DKP = 104  # Dunna, the guild's DKP officer in these tests.
@@ -43,6 +44,7 @@ class Native(RealmApp):
         self.after = None  # called with each command once its ack is decided
         self.realm = None
 
+    @bridge_method
     async def send(self, cmd, *, preserve_id=False):
         assert preserve_id is True
         self.sent.append(cmd)

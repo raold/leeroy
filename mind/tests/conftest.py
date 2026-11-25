@@ -276,6 +276,17 @@ def _pictures_off():
 
 
 @pytest.fixture(autouse=True)
+def _control_contract():
+    """A control endpoint double asked for what the real endpoint refuses or cannot answer
+    (leeroy_mind.testing.control) fails the test that asked, even when the console swallowed
+    the refusal."""
+    from leeroy_mind.testing import control
+    control.breaches.clear()
+    yield
+    control.verify()
+
+
+@pytest.fixture(autouse=True)
 def _coherence_switches():
     """[talk] coherence's module switches (LifeService.configure sets them from a rig's config)
     start every test off, as the default has them; a test of the switch turns them on

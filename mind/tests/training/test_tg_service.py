@@ -12,6 +12,7 @@ from leeroy_mind.training.listener import TrainingListener
 from leeroy_mind.training.ports import EventWaiter, LivePorts
 from leeroy_mind.training.protocol import GetStats, ServerStats, TG_EVENT_TYPES
 from leeroy_mind.training.spells import SpellBook
+from leeroy_mind.testing.wire import port_mock
 
 from .test_tg_gate import _run_async, boss, run_for
 from .test_tg_ledger import header, member
@@ -226,7 +227,7 @@ async def test_request_early_reply_wrong_ack_and_repeated_public_ids(app_stub):
         rows = await ports.request(GetStats("public"), "server_stats", until=lambda ev: ev.id == "public", timeout_s=1)
         assert len(rows) == 1 and rows[0].id == "public"
     assert ids[0] != ids[1]
-    ports.guild.send = AsyncMock(return_value=Ack(0, "wrong", True, ""))
+    ports.guild.send = port_mock(return_value=Ack(0, "wrong", True, ""))
     assert await ports.request(GetStats("bad"), "server_stats", until=lambda ev: True, timeout_s=1) == []
     assert not ports._requests and not ports.waiter._streams
 

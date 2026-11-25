@@ -13,6 +13,7 @@ from leeroy_mind.realm.actions import ActionContext
 from leeroy_mind.realm.ports import RealmDisabled
 from leeroy_mind.realm.service import attach_realm
 from leeroy_mind.realm.steps import Steps, approve, digest, write_plan
+from leeroy_mind.testing.wire import port_method
 from realm.fakes import RealmApp
 
 
@@ -59,6 +60,7 @@ class FakeRealm:
     def add_part(self, part, *, event_types=()):
         self.parts.append((part, tuple(event_types)))
 
+    @port_method
     async def send(self, cmd):
         if not self.enabled:
             raise RealmDisabled("realm disabled")

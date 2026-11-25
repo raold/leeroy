@@ -10,6 +10,7 @@ import pytest
 
 from leeroy_mind.console import feed, httpd, status
 from leeroy_mind.console.control import Controls
+from leeroy_mind.testing import control
 from console.rig import KEY, FakeMind, events, http, make_app, page_source, running
 
 LINKED = [SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)]
@@ -751,10 +752,10 @@ class WorldLink:
         if self.error:
             from leeroy_mind.console.mindlink import LinkError
             raise LinkError(self.error)
-        return self.reply
+        return control.answer(op, args, self.reply)
 
 
-WORLD = {"connected": True, "server": "Acme", "version": "3.3.5", "hello_at": 1793304000.0,
+WORLD ={"connected": True, "server": "Acme", "version": "3.3.5", "hello_at": 1793304000.0,
          "cast": 5, "cast_online": 3, "human_online": False}
 
 

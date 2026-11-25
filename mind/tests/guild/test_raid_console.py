@@ -396,6 +396,22 @@ async def test_status_shows_the_state_its_timers_and_each_refusal(setup):
 
 
 @_run_async
+async def test_the_consoles_scripted_raid_status_is_one_this_status_can_be(setup):
+    """The raid the console tests' fake status carries (console.test_console_raid.STATUS) holds
+    only keys a running night's status has, of the same kinds, and actions it names."""
+    from console.test_console_contract import within
+    from console.test_console_raid import STATUS
+    from leeroy_mind.testing import control
+    _, _, night = setup
+    await logged_in_and_called(setup)
+    await running(setup)
+    real = control.wire({"ok": True, "raid": night.console_status()})["raid"]
+    fake = STATUS["raid"]
+    within(fake, real, "raid status", deep=("run",))
+    assert fake["state"] == real["state"] and set(fake["actions"]) <= set(CONSOLE_ACTIONS)
+
+
+@_run_async
 async def test_an_unknown_action_is_refused(setup):
     ports, _, night = setup
     with pytest.raises(ConsoleRefused, match="unknown"):

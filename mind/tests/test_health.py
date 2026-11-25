@@ -28,6 +28,7 @@ from leeroy_mind.protocol import Member
 from leeroy_mind.storage.db import open_db
 from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
+from leeroy_mind.testing import control
 from leeroy_mind.testing.fake_clock import FakeClock
 
 NOW = 1_793_900_000.0  # 2026-11-05
@@ -76,7 +77,7 @@ class Endpoint:
         self.calls.append((port, key, op, args))
         if isinstance(self.reply, Exception):
             raise self.reply
-        return self.reply
+        return control.answer(op, args, self.reply, key=key)
 
 
 class Voice:
