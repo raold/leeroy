@@ -1,7 +1,14 @@
 """The voice extension: attach_voice(app) builds it at the end of MindApp.__init__ and starts
 nothing. Only an enabled voice registers a background task (the client's reconnect loop and a
 1 s tick) and gives the talk engine its Comms, so a mind without a [voice] section behaves
-exactly as before."""
+exactly as before.
+
+With `autostart`, the mind starts leeroy-voice when it starts and nothing listens, and a
+supervisor starts it again whenever it has been unreachable for RELAUNCH_AFTER_S, then at
+RELAUNCH_BACKOFF_S intervals while it stays down. A stop an operator asked for (the console's,
+or scripts/ac-voice.sh's) leaves voice.stopped in its data dir: that holds it down until his
+next login, when the mind starts it at once. Any start removes the hold, and a hold older than
+the service's last greeting (started by hand since) no longer counts."""
 import asyncio
 import json
 import logging
@@ -9,11 +16,14 @@ import os
 import random
 import socket
 import subprocess
+import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Callable
 
 from leeroy_mind.clock import night_of
 from leeroy_mind.config import ConfigError
+from leeroy_mind.lifecycle import release_voice_hold, voice_hold
 from leeroy_mind.logs import log as event
 from leeroy_mind.voice import wire
 from leeroy_mind.voice.brief import SpecWatch, load_specs
@@ -32,6 +42,11 @@ log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]  # mind/leeroy_mind/voice/attach.py
 PROBE_S = 1.0  # ensure_service: how long a probe of the port may take
+SUPERVISE_S = 5.0  # how often the supervisor looks at a service that is down
+RELAUNCH_AFTER_S = 60.0  # unreachable this long before the mind starts it again
+START_GRACE_S = 90.0  # a launch loads its models before it listens: no second one sooner
+RELAUNCH_BACKOFF_S = (120.0, 300.0, 600.0, 1800.0)  # between its own launches; the last repeats
+STABLE_S = 600.0  # up this long, the next outage starts the backoff afresh (a crash loop doesn't)
 TICK_S = 1.0
 RESTORE_S = 1800.0  # seats saved at a clean stop are restored if he is back within this
 STOP_KEY = "voice_stop_seats"  # meta: the seats at the last clean stop
@@ -80,6 +95,16 @@ class VoiceExtension:
             self.movement = Movement(self, rng=random.Random())
             self.tickers.append(lambda: self.movement.tick(app.clock.now()))
         self._service_checked = False
+        # The supervisor (autostart): clock times, except _greeted_wall (a hold file's mtime
+        # is compared with it)
+        self._down_since: float | None = app.clock.now()  # the mind starts unconnected
+        self._launched_at: float | None = None  # the mind's last launch
+        self._launches = 0  # the supervisor's, since the service last stayed up STABLE_S
+        self._up_since: float | None = None
+        self._greeted_wall = 0.0
+        self._login_due = False  # his login: start a service that is down at once
+        self._login_wall = 0.0  # time.time() of that login: a hold written after it still holds
+        self._held_logged = self._skipped_logged = False
         self.client = VoiceClient(cfg.host, cfg.port, self.on_message, clock=app.clock,
                                   on_connection=self.on_connection)
 
@@ -199,6 +224,15 @@ class VoiceExtension:
             await arbiter.release_live(VOICE_GPU)
 
     async def on_connection(self, up: bool) -> None:
+        now = self.app.clock.now()
+        if up:
+            self._down_since, self._up_since, self._login_due = None, now, False
+            self._greeted_wall = time.time()
+            self._held_logged = self._skipped_logged = False
+        else:
+            if self._up_since is not None and now - self._up_since >= STABLE_S:
+                self._launches = 0
+            self._down_since, self._up_since = now, None
         if self.movement is not None:
             self._guard("room_connection", lambda: self.movement.on_connection(up))
         if not up:
@@ -229,6 +263,8 @@ class VoiceExtension:
 
     async def _on_login(self, ev) -> None:
         if ev.human:
+            # The supervisor starts a service his login finds down, held or not
+            self._login_due, self._login_wall = not self.client.greeted, time.time()
             self._guard("login", self.begin_session)
         elif self.movement is not None:
             self._guard("member_login", lambda: self.movement.on_login(ev.guid))
@@ -434,29 +470,126 @@ class VoiceExtension:
 
     def ensure_service(self) -> None:
         """Once per mind start, with autostart on: when nothing accepts on the port within 1 s,
-        start leeroy-voice detached. Skipped, and logged, without the service's venv."""
+        start leeroy-voice detached (an operator's hold ends here, as it always has with a mind
+        restart). Skipped, and logged, without the service's venv."""
         if not self.cfg.autostart or self._service_checked:
             return
         self._service_checked = True
-        try:
-            socket.create_connection((self.cfg.host, self.cfg.port), PROBE_S).close()
+        if self._port_open():
             return
-        except OSError:
-            pass
-        voice = REPO_ROOT / "voice"
-        pythonw = voice / ".venv" / "Scripts" / "pythonw.exe"
-        if not pythonw.exists():
+        pythonw = self._pythonw()
+        if pythonw is None:
             event("voice_autostart_skipped", level=logging.WARNING, reason="no_venv")
             return
-        logs = voice_data_dir() / "logs"
+        self._spawn(pythonw)
+        event("voice_autostarted")
+
+    def _port_open(self) -> bool:
+        try:
+            socket.create_connection((self.cfg.host, self.cfg.port), PROBE_S).close()
+        except OSError:
+            return False
+        return True
+
+    @staticmethod
+    def _pythonw() -> Path | None:
+        pythonw = REPO_ROOT / "voice" / ".venv" / "Scripts" / "pythonw.exe"
+        return pythonw if pythonw.exists() else None
+
+    def _spawn(self, pythonw: Path) -> None:
+        """Start leeroy-voice detached. A start ends an operator's hold. A launch that fails
+        still counts as one, for the supervisor's waits."""
+        self._launched_at = self.app.clock.now()
+        data = voice_data_dir()
+        with suppress(OSError):  # one that stays is stale after the service's first greeting
+            release_voice_hold(data)
+        logs = data / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         with open(logs / "voice-stdout.log", "ab") as out:
             subprocess.Popen(
-                [str(pythonw), "-m", "leeroy_voice", "run"], cwd=str(voice),
+                [str(pythonw), "-m", "leeroy_voice", "run"], cwd=str(REPO_ROOT / "voice"),
                 stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                 close_fds=True,
                 creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
-        event("voice_autostarted")
+
+    # -- the supervisor (autostart) ------------------------------------------------------------
+
+    def _hold(self) -> dict | None:
+        """An operator's stop that still holds the service down; None when none does. One older
+        than its last greeting is stale (something started it since) and is removed."""
+        data = voice_data_dir()
+        hold = voice_hold(data)
+        if hold is not None and self._greeted_wall and hold["at"] < self._greeted_wall:
+            with suppress(OSError):
+                release_voice_hold(data)
+            return None
+        return hold
+
+    def _relaunch_due(self, now: float) -> str | None:
+        """Why the supervisor would start the service now: "login" (his login found it down)
+        or "down" (unreachable RELAUNCH_AFTER_S, and its backoff is over); None to wait."""
+        if not self.cfg.autostart:
+            return None
+        if self.client.greeted:  # a login that found it up: a later stop holds as any other
+            self._login_due = False
+            return None
+        if self._down_since is None:
+            self._down_since = now
+        login, hold = self._login_due, self._hold()
+        if login and hold is not None and hold["at"] > self._login_wall:
+            login = self._login_due = False  # stopped since his login: held until the next one
+        if not login:
+            if hold is not None:
+                if not self._held_logged:
+                    self._held_logged = True
+                    event("voice_relaunch_held", by=hold["by"],
+                          down_s=int(now - self._down_since))
+                return None
+            if now - self._down_since < RELAUNCH_AFTER_S:
+                return None
+        if self._launched_at is not None:
+            wait = (START_GRACE_S if login or not self._launches else
+                    RELAUNCH_BACKOFF_S[min(self._launches, len(RELAUNCH_BACKOFF_S)) - 1])
+            if now - self._launched_at < wait:
+                return None
+        return "login" if login else "down"
+
+    async def _supervise_once(self) -> None:
+        now = self.app.clock.now()
+        why = self._relaunch_due(now)
+        if why is None:
+            return
+        pythonw = self._pythonw()
+        if pythonw is None:
+            if not self._skipped_logged:
+                self._skipped_logged = True
+                event("voice_relaunch_skipped", level=logging.WARNING, reason="no_venv")
+            return
+        if await asyncio.to_thread(self._port_open):
+            return  # started by someone else: the client's next try finds it
+        hold = self._hold()
+        self._login_due = False
+        self._launches += 1
+        down_s = int(now - self._down_since)
+        try:
+            await asyncio.to_thread(self._spawn, pythonw)
+        except OSError as exc:  # tried again after the next wait
+            event("voice_relaunch_failed", level=logging.WARNING, why=why,
+                  attempt=self._launches, reason=type(exc).__name__)
+            return
+        if hold is not None:
+            event("voice_hold_lifted", by=hold["by"])
+        event("voice_relaunched", why=why, attempt=self._launches, down_s=down_s)
+
+    async def _supervise(self) -> None:
+        while True:
+            await self.app.clock.sleep(SUPERVISE_S)
+            try:
+                await self._supervise_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # a failed launch is tried again at the next look
+                self._failed("supervise", exc)
 
     # -- the background task ---------------------------------------------------------------
 
@@ -491,6 +624,8 @@ class VoiceExtension:
         except Exception as exc:
             event("voice_autostart_failed", level=logging.WARNING, reason=type(exc).__name__)
         tasks = [asyncio.create_task(self.client.run()), asyncio.create_task(self._tick_loop())]
+        if self.cfg.autostart:
+            tasks.append(asyncio.create_task(self._supervise(), name="voice-supervisor"))
         try:
             await asyncio.gather(*tasks)
         finally:
