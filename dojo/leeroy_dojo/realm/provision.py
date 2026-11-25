@@ -146,6 +146,10 @@ def write_configs(layout: Layout, manifest: tuple[Path, str] | None = None, only
         if not port:
             raise LayoutError("offline acceptance requires a separate ports.leeroy endpoint")
         extras = {
+            # Log initializes before module configs are loaded. Register the
+            # timestamped appender in the core config for the very first pull.
+            "worldserver.conf": {"Appender.DungeonClear": "2,4,1,DungeonClear.log",
+                                 "Logger.playerbots.dungeonclear": "4,DungeonClear"},
             "modules/mod_dungeon_clear.conf": {
                 "DungeonClear.TestRun.DriverCharacter": "Dojodriver",
                 "DungeonClear.TestRun.DriverAccount": "DOJODRIVER",
