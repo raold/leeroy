@@ -47,7 +47,9 @@ def prompts(app):
 async def ask(app, text, channel='dm:101'):
     posted = await app.discord.handle({'action': 'post', 'channel': channel, 'text': text})
     assert posted['ok']
-    await drive(app, lambda: bool((r := records.get(app.store, posted['id'])) and r.initial_message))
+    # Her answer is stored and its preparation has finished (the queue wakes only then).
+    await drive(app, lambda: bool((r := records.get(app.store, posted['id'])) and r.initial_message
+                                  and posted['id'] not in app.photos.requests._tasks))
     return posted['id']
 
 

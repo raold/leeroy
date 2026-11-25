@@ -59,7 +59,8 @@ def test_borrow_refused_at_admission_keeps_the_plan_and_sends_a_ready_photo(
                 yield
             monkeypatch.setattr(app.arbiter, 'borrow', refused)
             posted = await app.discord.handle({'action': 'post', 'channel': 'dm:101', 'text': 'send me a selfie'})
-            await drive(app, lambda: answered(app, posted['id']))
+            await drive(app, lambda: answered(app, posted['id'])
+                        and posted['id'] not in app.photos.requests._tasks)
             request = records.get(app.store, posted['id'])
             assert request.failure is None and request.ended is None and not made
             assert records.snap(app.store, request.fresh_snap).status == 'planned'

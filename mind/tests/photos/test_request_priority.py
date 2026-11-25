@@ -60,7 +60,9 @@ def test_online_ask_delivers_new_image_once_without_offline_grace(tmp_path, monk
             assert posted['ok']
             message = posted['id']
             # On demand: her answer comes at once, saying she's taking it, before any render.
-            await drive(app, lambda: bool((r := records.get(app.store, message)) and r.initial_message))
+            # ... and its preparation has finished, as the queue's own wake waits for.
+            await drive(app, lambda: bool((r := records.get(app.store, message)) and r.initial_message
+                                          and message not in app.photos.requests._tasks))
             request = records.get(app.store, message)
             assert request.fresh_message is None and not made
             instructions = '\n'.join(m['content'] for call in app.llm.calls for m in call.get('messages', ()))
