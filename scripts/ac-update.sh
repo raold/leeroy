@@ -6,6 +6,7 @@
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/config-keys.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/subtree-module.sh"
 
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
@@ -22,16 +23,24 @@ for r in "${REPOS[@]}"; do
         git -C "$r" status --short --untracked-files=no | sed 's/^/      /'
         dirty=1
     fi
+    # Validate every recorded split before updating any checkout.
+    if ac_subtree_read "$r"; then :; fi
 done
 [ "$dirty" -eq 0 ] || die "refusing to update with local modifications. Commit, stash, or revert them first."
 
 # --- record rollback points ---------------------------------------------
 if [ "$DRY" -eq 0 ]; then
     : > "$STATE"
+    : > "$STATE.subtrees"
     for r in "${REPOS[@]}"; do
         printf '%s %s\n' "$r" "$(git -C "$r" rev-parse HEAD)" >> "$STATE"
+        if ac_subtree_read "$r"; then
+            printf 'git -C %q config --local leeroy.subtreeRevision %q\n' \
+                "$r" "$AC_SUBTREE_SOURCE $AC_SUBTREE_BASE" >> "$STATE.subtrees"
+        fi
     done
     log "rollback points written to $STATE"
+    [ ! -s "$STATE.subtrees" ] || log "subtree rollback metadata written to $STATE.subtrees (restore with the saved HEADs)"
 fi
 
 # --- fetch + fast-forward ------------------------------------------------
@@ -40,6 +49,58 @@ for r in "${REPOS[@]}"; do
     name="$(basename "$r")"
     branch="$(git -C "$r" branch --show-current)"
     [ -n "$branch" ] || { warn "$name: detached HEAD, skipping"; continue; }
+
+    if ac_subtree_read "$r"; then
+        remote=${AC_SUBTREE_UPSTREAM%%/*}
+        remote_branch=${AC_SUBTREE_UPSTREAM#*/}
+        git -C "$r" fetch --quiet --no-tags "$remote" \
+            "refs/heads/$remote_branch:refs/remotes/$AC_SUBTREE_UPSTREAM"
+        source=$(git -C "$r" rev-parse --verify "refs/remotes/$AC_SUBTREE_UPSTREAM^{commit}")
+        git -C "$r" merge-base --is-ancestor "$AC_SUBTREE_SOURCE" "$source" \
+            || die "$name: upstream history changed; review the subtree manually"
+        [ "$(git -C "$r" cat-file -t "$source:$AC_SUBTREE_PREFIX" 2>/dev/null)" = tree ] \
+            || die "$name: upstream no longer contains the subtree folder; checkout unchanged"
+        target=$(ac_subtree_split "$r" "$AC_SUBTREE_PREFIX" "$source") \
+            || die "$name: subtree split failed; module checkout unchanged"
+        git -C "$r" merge-base --is-ancestor "$AC_SUBTREE_BASE" "$target" \
+            || die "$name: new split does not extend the recorded base; review manually"
+        # The checkout can advance before the metadata write fails or the process
+        # stops. Upstream may advance again before retry: recover the intermediate
+        # applied split, not just the special case where the latest target is in HEAD.
+        applied=$(git -C "$r" merge-base --all HEAD "$target") \
+            || die "$name: cannot recover the applied subtree base; review manually"
+        [[ "$applied" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] \
+            || die "$name: ambiguous subtree ancestry; review manually"
+        git -C "$r" merge-base --is-ancestor "$AC_SUBTREE_BASE" "$applied" \
+            || die "$name: recovered split predates the recorded base; review manually"
+        # Recreating a merge preserves topology but can discard edits made only
+        # in the merge commit. Never rewrite a local merge automatically.
+        local_merges=$(git -C "$r" rev-list --count --merges "$applied..HEAD")
+        [ "$local_merges" -eq 0 ] \
+            || die "$name: local subtree merges require manual updating; checkout unchanged"
+        ahead=$(git -C "$r" rev-list --count "$applied..HEAD")
+        behind=$(git -C "$r" rev-list --count "$applied..$target")
+        printf '    %-28s subtree: %s upstream commits, %s local commits\n' "$name" "$behind" "$ahead"
+        if [ "$behind" -gt 0 ]; then
+            changed=1
+            if [ "$DRY" -eq 0 ]; then
+                if [ "$ahead" -gt 0 ]; then
+                    git -C "$r" rebase --quiet --onto "$target" "$applied" \
+                        || { git -C "$r" rebase --abort; die "$name: subtree conflict; original checkout restored. Rebase manually."; }
+                else
+                    git -C "$r" merge --ff-only --quiet "$target" || die "$name: subtree fast-forward failed"
+                fi
+            fi
+        fi
+        if [ "$DRY" -eq 0 ]; then
+            if ! git -C "$r" config --local leeroy.subtreeRevision "$source $target"; then
+                printf '    record the completed update: git -C %q config --local leeroy.subtreeRevision %q\n' \
+                    "$r" "$source $target" >&2
+                die "$name: checkout updated but subtree metadata could not be saved; repair it before the next update"
+            fi
+        fi
+        continue
+    fi
 
     upstream="$(git -C "$r" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
     if [ -z "$upstream" ]; then warn "$name: branch '$branch' has no upstream, skipping"; continue; fi
