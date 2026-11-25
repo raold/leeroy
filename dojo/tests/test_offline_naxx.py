@@ -2,6 +2,7 @@ import copy
 import unittest
 
 from leeroy_dojo.realm.offline import reached
+from leeroy_dojo.realm.offline_naxx import APPROACH_SPAWNS
 
 
 def sample(control=False):
@@ -16,6 +17,7 @@ def sample(control=False):
             patchwerk_engaged=not control, skip_ms=0 if control else 1000, engage_ms=0 if control else 300000,
             passes=16 if control else 1, setup_bosses=[3, 4, 5, 6, 7, 8, 10], setup_completed_mask=127,
             setup_boss_deaths=[15956,15953,15952,15954,15936,16011,16061], setup_add_deaths=2,
+            setup_trash_deaths=APPROACH_SPAWNS.copy(),
             strategies_restored=True))
 
 
@@ -30,6 +32,9 @@ class NaxxPassTest(unittest.TestCase):
             ("gate", "setup_bosses", [3, 4, 5, 6, 7, 8, 10, 11]),
             ("gate", "setup_completed_mask", 255), ("gate", "strategies_restored", False),
             ("gate", "setup_boss_deaths", []), ("gate", "setup_add_deaths", 0),
+            ("gate", "setup_trash_deaths", []),
+            ("gate", "setup_trash_deaths", APPROACH_SPAWNS[:-1]),
+            ("gate", "setup_trash_deaths", APPROACH_SPAWNS + [97736]),
             ("body", "map", 649), ("body", "instance", 456), ("body", "alive", False),
             ("body", "owned", False), ("body", "pinned", False),
             ("body", "bosses", [3] * 15), ("event", "wipes", 1),

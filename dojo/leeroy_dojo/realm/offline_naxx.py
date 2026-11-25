@@ -1,5 +1,13 @@
 """Naxx route proof: prepared prerequisites do not count as earned kills."""
 
+APPROACH_SPAWNS = [
+    127638, 127646, 127647, 127648, 127650, 127651, 127652, 127653, 127654,
+    127666, 127667, 127668, 127669, 127672, 127673, 127674, 127675, 127693,
+    127694, 127695, 127696, 127697, 127698, 127699, 127700, 127703, 127704,
+    127705, 127750, 127751, 127752, 127755, 127756, 127758, 127759, 127764,
+    127765, 127766, 127767, 127768, 127769, 127790, 127791, 127792, 127793,
+]
+
 
 def reached_naxx(observation, *, control):
     gate = observation.get("naxx_pass", {})
@@ -9,6 +17,7 @@ def reached_naxx(observation, *, control):
             or gate.get("strategies_restored") is not True
             or gate.get("setup_bosses") != [3, 4, 5, 6, 7, 8, 10]
             or gate.get("setup_boss_deaths") != [15956, 15953, 15952, 15954, 15936, 16011, 16061]
+            or gate.get("setup_trash_deaths") != APPROACH_SPAWNS
             or type(gate.get("setup_add_deaths")) is not int or gate["setup_add_deaths"] != 2
             or type(gate.get("setup_completed_mask")) is not int or gate["setup_completed_mask"] != 127
             or any(type(gate.get(k)) is not int or gate[k] < 0

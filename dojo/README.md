@@ -40,6 +40,11 @@ ordinary bot strategies before measurement. These seven are fixture
 prerequisites, excluded from earned kill accounting. Setup kills their real
 creatures and Razuvious' two summoned understudies without player credit;
 setting only instance states would leave a live boss on the return route.
+The 45 explicitly listed trash spawns on the upper Military Quarter approach
+and ramp before Razuvious are also prepared dead, with their spawn IDs recorded.
+Leaving them fresh would require reclearing the prerequisite wing on the return
+route. The lower Gothik corridor and Construct Quarter remain fresh. Missing,
+changed or respawned prerequisite spawns fail setup or observation.
 Any prerequisite reactivation fails the gate. The real offline job
 must skip Gothik once and engage the real Patchwerk within 600 seconds;
 Gothik must remain undefeated. No movement, healing, attack or skip command
