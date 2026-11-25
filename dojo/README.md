@@ -50,10 +50,15 @@ count, missing telemetry, setup failure, or a wipe cap is a failure. Gunship
 DONE is a scripted pass, not a boss kill. The Valithria target enables its
 switch only in the isolated configuration, then restores it to off.
 
-Use a fresh disposable character schema for each comparison: previous instance
-saves deliberately remain subject to the real admission fences. Fixtures and
-reports are private under the dojo runtime/data roots. These runs are 10-player
-normal checks; they do not certify other difficulties or enable live features.
+After preparation and shutdown, the runner checkpoints the synthetic auth,
+character and playerbots schemas under `secrets/offline-fixture`. Each later
+pull restores that same guild, equipment and unbound instance state while the
+owned world is stopped. Realm identity and every dump hash must match before
+any import. These dumps contain synthetic account credentials and must remain
+private. The report records the checkpoint hash for comparison. These runs are
+10-player normal checks; they do not certify other difficulties or enable live
+features. Automatic random population remains disabled; only `RNDBOTDOJO` gets
+the type-1 account assignment that ordinary guild pinning requires.
 
 The separate raid acceptance build exercises the real playerbots strategies,
 core encounter scripts and mod-leeroy hazard filter. It uses a dedicated dojo

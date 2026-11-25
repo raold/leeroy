@@ -11,6 +11,7 @@ from . import conf, mysql, provision, raids, world
 from .layout import LayoutError, read_conf
 from .ra import RaError
 from .mechanics import MechanicConnection
+from .offline_fixture import FixtureCheckpoint
 
 TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
            "icc-deathwhisper": ("icc", 631, 1), "icc-gunship": ("icc", 631, 2),
@@ -83,21 +84,26 @@ def run(layout, *, target, log=print):
                   token=token, target=target, out=str(out), reached=False, cleanup=False, stopped=False)
     feed = None
     try:
-        world.start(layout, log=log)
-        with world.ra(layout) as client:
-            if "dojo offline: started" not in client.command("dojo offline prepare"):
-                raise world.WorldError("synthetic guild preparation refused")
-            deadline = time.monotonic() + 360
-            while time.monotonic() < deadline:
-                prepared = parse_status(client.command("dojo offline status"))
-                if prepared.get("error"):
-                    raise world.WorldError(prepared["error"])
-                if prepared.get("state") == "prepared":
-                    break
-                time.sleep(0.5)
-            else:
-                raise world.WorldError("synthetic guild preparation timed out")
-        world.stop(layout, log=log)
+        checkpoint = FixtureCheckpoint(layout)
+        prepared = checkpoint.restore()
+        if prepared is None:
+            world.start(layout, log=log)
+            with world.ra(layout) as client:
+                if "dojo offline: started" not in client.command("dojo offline prepare"):
+                    raise world.WorldError("synthetic guild preparation refused")
+                deadline = time.monotonic() + 360
+                while time.monotonic() < deadline:
+                    prepared = parse_status(client.command("dojo offline status"))
+                    if prepared.get("error"):
+                        raise world.WorldError(prepared["error"])
+                    if prepared.get("state") == "prepared":
+                        break
+                    time.sleep(0.5)
+                else:
+                    raise world.WorldError("synthetic guild preparation timed out")
+            world.stop(layout, log=log)
+            checkpoint.save(prepared)
+        report["fixture_checkpoint_sha256"] = checkpoint.digest(checkpoint.receipt)
         if type(prepared.get("guild")) is not int or prepared["guild"] <= 0 or type(prepared.get("owner")) is not int or prepared["owner"] <= 0:
             raise world.WorldError("preparation did not identify the synthetic guild")
         report["fixture"] = prepared

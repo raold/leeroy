@@ -1,7 +1,14 @@
 """Offline milestones require the named boss, instance and real job, never a request ack."""
 import copy
 import unittest
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
 from leeroy_dojo.realm.offline import reached
+from leeroy_dojo.realm.offline_fixture import FixtureCheckpoint
+from leeroy_dojo.realm.world import WorldError
 
 
 class OfflineMilestoneTest(unittest.TestCase):
@@ -25,3 +32,36 @@ class OfflineMilestoneTest(unittest.TestCase):
             bad["ack"] = True
             with self.subTest(change=change):
                 self.assertFalse(reached(bad, target="toc-beasts", token="abc"))
+
+
+class OfflineCheckpointTest(unittest.TestCase):
+    def test_live_world_refuses_before_database_access(self):
+        with patch("leeroy_dojo.realm.offline_fixture.world.running", return_value=True), \
+                patch("leeroy_dojo.realm.offline_fixture.mysql.Client") as database:
+            checkpoint = FixtureCheckpoint(SimpleNamespace(secrets=Path("unused")))
+            with self.assertRaisesRegex(WorldError, "stopped"):
+                checkpoint.restore()
+            database.assert_not_called()
+
+    def test_changed_or_foreign_checkpoint_imports_nothing(self):
+        for changed in ("auth", "characters", "playerbots", "instance", "schema"):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as folder:
+                layout = SimpleNamespace(secrets=Path(folder), instance="test",
+                    schemas={kind: "dojo_" + kind for kind in FixtureCheckpoint.KINDS})
+                checkpoint = FixtureCheckpoint(layout)
+                checkpoint.root.mkdir()
+                files = {}
+                for kind in checkpoint.KINDS:
+                    path = checkpoint.root / f"{kind}.sql"
+                    path.write_text("SELECT 1;", encoding="utf-8")
+                    files[kind] = checkpoint.digest(path)
+                data = dict(format=1, instance="test", schemas=dict(layout.schemas), files=files, fixture={})
+                if changed == "instance": data["instance"] = "somewhere-else"
+                elif changed == "schema": data["schemas"]["characters"] = "foreign_characters"
+                else: (checkpoint.root / f"{changed}.sql").write_text("SELECT 2;", encoding="utf-8")
+                checkpoint.receipt.write_text(json.dumps(data), encoding="utf-8")
+                with patch.object(checkpoint, "_client"), \
+                        patch("leeroy_dojo.realm.offline_fixture.subprocess.run") as execute:
+                    with self.assertRaises(WorldError):
+                        checkpoint.restore()
+                    execute.assert_not_called()
