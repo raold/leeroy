@@ -27,4 +27,10 @@ def attach_photos(app):
         enable_borrow(app)
         sender.requests = RequestPhotos(app, sender, words=config.scene_from_words,
                                         priority=config.request_priority)
+        if config.unsolicited:
+            from .unsolicited import UnsolicitedPhotos
+            sender.unsolicited = UnsolicitedPhotos(app, sender, sender.requests,
+                                                   random.Random(app.rng.getrandbits(64)))
+    elif config.unsolicited:
+        log('photos_unsolicited_needs', key='photos.requests')
     return sender

@@ -42,9 +42,19 @@ class RenderOutcome:
     tries: int = 0
 
 
-def seed_for(request: int, guid: int, attempt: int) -> int:
+def seed_for(request: int | str, guid: int, attempt: int) -> int:
     digest = hashlib.sha256(f"request|{request}|{guid}|{attempt}".encode()).digest()
     return int.from_bytes(digest[:4], "big")
+
+
+def _key(snap):
+    """A request's seeds and worker ids follow its post; an unsolicited photo's (no post,
+    photos/unsolicited.py) its own snap."""
+    return snap.request if snap.request is not None else f"snap{snap.id}"
+
+
+def _tag(snap) -> str:
+    return f"request:{snap.request}" if snap.request is not None else f"unsolicited:{snap.id}"
 
 
 def _fresh(app, snap):
@@ -52,9 +62,9 @@ def _fresh(app, snap):
     latest = request_store.snap(app.store, snap.id)
     if latest is None or latest.status != "planned":
         return None, "not_planned"
-    if (latest.source != "request" or latest.kind != "situation" or latest.request is None
-            or (latest.guid, latest.request, latest.pick, latest.looks, latest.scene,
-                latest.audience) != (snap.guid, snap.request, snap.pick, snap.looks,
+    if (latest.kind != "situation" or (latest.source == "request") != (latest.request is not None)
+            or (latest.source, latest.guid, latest.request, latest.pick, latest.looks, latest.scene,
+                latest.audience) != (snap.source, snap.guid, snap.request, snap.pick, snap.looks,
                                       snap.scene, snap.audience)):
         return None, "plan_changed"
     if latest.expires <= app.clock.now():
@@ -108,7 +118,7 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
     """
     room.check()
     stored = request_store.snap(app.store, snap.id)
-    if stored is not None and stored.status == "ready" and stored.source == "request":
+    if stored is not None and stored.status == "ready" and stored.source == snap.source:
         return RenderOutcome("ready")
     p, code = _fresh(app, snap)
     if code:
@@ -147,7 +157,7 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
         nonlocal tries
         room.check()
         tries = attempt + 1
-        return RenderRequest(spec.phrases, spec.negative, seed_for(snap.request, snap.guid, attempt),
+        return RenderRequest(spec.phrases, spec.negative, seed_for(_key(snap), snap.guid, attempt),
             cfg.steps, cfg.guidance, SIZE, staged, small, THUMB_PX,
             identity=identity, shape="portrait",
             detail=detail_for(cfg, rear=from_behind(snap.scene)))
@@ -163,7 +173,7 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
         began = time.perf_counter()
         try:
             got, tries = await render_slot(worker, request,
-                rid=lambda attempt: f"request:{snap.request}:{attempt}", make_room=room.make_room)
+                rid=lambda attempt: f"{_tag(snap)}:{attempt}", make_room=room.make_room)
         finally:
             render_ms = (time.perf_counter() - began) * 1000
             room.timings["render_ms"] = render_ms
@@ -183,7 +193,7 @@ async def render_request(app, snap, room, *, worker_factory=None) -> RenderOutco
             request_store.remember_image(app.store, snap.id, identity=f'snap:{snap.id}',
                                          digest=hashlib.sha256(image).hexdigest())
             mark_rendered(app.store, snap.id, width=got.width, height=got.height,
-                seed=seed_for(snap.request, snap.guid, tries - 1), tries=tries, nsfw=got.nsfw,
+                seed=seed_for(_key(snap), snap.guid, tries - 1), tries=tries, nsfw=got.nsfw,
                 prompt=got.prompt, now=app.clock.now())
         # These were private staging links; the retained image and thumb stay in place.
         with suppress(OSError):
@@ -246,7 +256,7 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
         codes = (snap.scene["words"].get("framing"), snap.scene["words"].get("wearing"), "none")
     else:
         codes = critic.scene_codes(scene)
-    run = f"request:{snap.request}"
+    run = _tag(snap)
     critic.forget_pending(app.store, snap.id, run)
     worker = (worker_factory() if worker_factory is not None else
               SelfieWorker(worker_command(cfg, identity=True), env=worker_env(cfg)))
@@ -275,7 +285,7 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
                       choose(app.store, cfg, data, shape="portrait", framing=scene.framing,
                              control=control))
             identity = Identity(face[0], crop, params.scale)
-            key = seed_for(snap.request, snap.guid, k * TRIES)
+            key = seed_for(_key(snap), snap.guid, k * TRIES)
             cand = files.snap_candidate(data, snap.guid, snap.id, key).absolute()
             small = files.snap_candidate(data, snap.guid, snap.id, key, thumb=True).absolute()
             cand.parent.mkdir(parents=True, exist_ok=True)
@@ -285,14 +295,14 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
             def request(attempt, k=k, params=params, identity=identity, cand=cand, small=small):
                 room.check()
                 return RenderRequest(spec.phrases, spec.negative,
-                                     seed_for(snap.request, snap.guid, k * TRIES + attempt),
+                                     seed_for(_key(snap), snap.guid, k * TRIES + attempt),
                                      params.steps, cfg.guidance, SIZE, cand, small, THUMB_PX,
                                      identity=identity, shape="portrait",
                                      detail=detail_for(cfg, rear=from_behind(snap.scene)))
             began = time.perf_counter()
             try:
                 got, tries = await render_slot(
-                    worker, request, rid=lambda attempt, k=k: f"request:{snap.request}:{k}:{attempt}",
+                    worker, request, rid=lambda attempt, k=k: f"{_tag(snap)}:{k}:{attempt}",
                     make_room=room.make_room)
             except SetRefused:
                 state["tries"] += TRIES
@@ -307,9 +317,9 @@ async def _render_best(app, snap, room, p, scene, spec, face, out, thumb, *,
             if not cand.is_file() or not small.is_file():
                 raise WorkerError("unwritten")
             measured = await bestof.measure(worker, cand, identity)
-            seed = seed_for(snap.request, snap.guid, k * TRIES + tries - 1)
+            seed = seed_for(_key(snap), snap.guid, k * TRIES + tries - 1)
             row_id = critic.insert(
-                app.store, run=run, purpose="request", guid=snap.guid, snap_id=snap.id, seed=seed,
+                app.store, run=run, purpose="request" if snap.request is not None else "snap", guid=snap.guid, snap_id=snap.id, seed=seed,
                 file=critic.rel(data, cand), ref=critic.rel(data, face[0]), crop=crop,
                 critique=measured, framing=codes[0], outfit=codes[1], prop=codes[2],
                 scale=params.scale, steps=params.steps, arm=params.arm,

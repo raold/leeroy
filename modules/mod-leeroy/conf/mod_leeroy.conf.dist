@@ -11,6 +11,10 @@ Leeroy.Enable = 1
 
 # Optional persona play styles: outdoor quiet cast only; reloadable. RaidHabits win.
 Leeroy.PlayStyle.Enable = 0
+# The mind sends its whole play-style table once (playstyle_table) and native styles each member whenever she is free,
+# again after a battleground, instance or other owner took the style back. 0 refuses the table: the mind falls back to
+# one bot_do a member, and the styles the table added are taken back. Reloadable with .reload config.
+Leeroy.PlayStyle.Table = 1
 
 # The owner's .playerbots bot addN follows the raid lineup the guild posted (the mind's [decisions], guild_add_roster):
 # within each role its members first, its bench only when nobody else free fits. 0 picks exactly as without one.

@@ -14,6 +14,7 @@ class PhotosConfig:
     requests: bool = False
     scene_from_words: bool = False  # a requested photo read from his words (photos/README.md)
     request_priority: bool = False  # requested renders may borrow while he plays
+    unsolicited: bool = False  # romantic members DM him a fresh selfie while the GPU is idle
 
 
 def load_photos_config(path: Path) -> PhotosConfig:
@@ -27,7 +28,8 @@ def load_photos_config(path: Path) -> PhotosConfig:
         table, key = {}, 'file'
     if not isinstance(table, dict):
         key = 'photos'
-    elif set(table) - {'enabled', 'send', 'requests', 'request_priority', 'scene_from_words'}:
+    elif set(table) - {'enabled', 'send', 'requests', 'request_priority', 'scene_from_words',
+                       'unsolicited'}:
         key = 'unknown'
     else:
         key = key or next((k for k, v in table.items() if type(v) is not bool), None)

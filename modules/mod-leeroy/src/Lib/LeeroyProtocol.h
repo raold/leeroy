@@ -31,8 +31,12 @@ inline constexpr std::string_view kModuleVersion = "0.1.0";
 // The build adds more at hello time (EncodeHello's `extra`): dc_toc and dc_ulduar, the raids the dungeon-clear it was
 // built with can run for an offline raid (LeeroyOfflineRaidPolicy.h DcRaidFeatures); a mind plans those raids only
 // on a hello that lists them.
+// playstyle_table: playstyle_table, the mind's whole play-style table held for its connection, carried out by native
+// whenever a member is free (LeeroyPlayStyle.h, Leeroy.PlayStyle.Table); a mind sends it only to a hello that lists it
+// and keeps its one bot_do a member when it is refused playstyle_table_off.
 inline constexpr std::string_view kFeatures[] = {"item_links", "playstyle", "raidlead", "mechanics", "regear",
-    "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "mechanics_cast_radius", "combat_quiet"};
+    "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "mechanics_cast_radius", "combat_quiet",
+    "playstyle_table"};
 
 std::int64_t NowUnixMs();
 

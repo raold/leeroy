@@ -496,6 +496,29 @@ Apply them to a checkout of each module with
 ./verify/run.sh [--plan] [BASE]  # before a release: only the checks this branch's diff needs
 ```
 
+Modules converted with `--subdir` now record their prefix, upstream branch and
+source/split revisions in local Git configuration (`leeroy.subtreePrefix`,
+`leeroy.subtreeUpstream`, `leeroy.subtreeRevision`). `ac-update.sh` fetches the
+upstream, splits that folder in a temporary checkout and rebases only the local
+module edits. Local merge commits require manual updating: recreating a merge
+can discard edits made only in that merge. The upstream's client files never
+enter the module directory. After an interrupted metadata write, the updater
+recovers the applied split from the shared ancestry even if upstream has advanced
+again, so it does not replay upstream commits as local edits.
+`--dry-run` fetches and computes the split without changing the module HEAD or
+revision metadata. Conflicting local edits abort back to the original HEAD;
+rewritten upstream history, a removed source folder and incomplete metadata
+require manual review. Rollback needs both the HEADs in `scripts/.last-update`
+and the matching metadata commands in `scripts/.last-update.subtrees`; restore
+the HEADs, then run the latter with Bash before updating again. Both files are
+local, overwritten by the next real update, and absent from a dry run.
+
+The Slavery Valley conversion still belongs in a quiet native release: stop both
+servers, run the converter with `--subdir server-side/mod-bg-slaveryvalley` at the
+verified zip source commit, then run `ac-build.sh`. This change performs no live
+swap or release. An older conversion without metadata remains skipped; do not
+guess its split base or set its Git upstream to the unsplit repository.
+
 `verify/run.sh` reads `git diff BASE...HEAD` (default `origin/main`) and runs the
 matching checks, fastest first: `<windows.h>` macro names in added module code,
 mind migration numbering against the merge target, the patch series entries the

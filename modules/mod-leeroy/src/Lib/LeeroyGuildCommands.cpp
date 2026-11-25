@@ -348,6 +348,31 @@ std::optional<StockItemsCmd> ParseStockItems(json const& j, std::string& error)
     return f.Result(std::move(out));
 }
 
+std::optional<PlayStyleTableCmd> ParsePlayStyleTable(json const& j, std::string& error)
+{
+    Fields f(j, error);
+    auto const* styles = f.Find("styles");
+    f.Require(styles && styles->is_array() && styles->size() <= PlayStyle::kTableMax, "styles");
+    if (f.Failed())
+        return std::nullopt;
+    PlayStyleTableCmd out;
+    std::set<std::uint32_t> seen;
+    for (auto const& item : *styles)
+    {
+        auto const guid = item.is_object() ? item.find("guid") : item.end();
+        auto const param = item.is_object() ? item.find("param") : item.end();
+        std::optional<PlayStyle::Request> request;
+        if (param != item.end() && param->is_string())
+            request = PlayStyle::Parse(param->get_ref<std::string const&>());
+        f.Require(guid != item.end() && Unsigned(*guid, 1, kU32Max) && request
+            && seen.insert(guid->get<std::uint32_t>()).second, "styles");
+        if (f.Failed())
+            return std::nullopt;
+        out.styles.push_back({guid->get<std::uint32_t>(), *request});
+    }
+    return f.Result(std::move(out));
+}
+
 void RegisterGuildCommandTypes()
 {
     for (auto name : kCommandTypes)

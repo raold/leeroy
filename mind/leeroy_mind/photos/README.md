@@ -23,6 +23,12 @@ members who answer look at it first.
   the offline-only policy. Remove the key before rolling back to older code, which
   treats an unknown `[photos]` key as an invalid table.
   Ops lists it as **Priority selfie requests while playing**.
+  It also makes requests on demand (owner, 2026-11-25: "i could dm a bot, request a selfie, and
+  they do so immediately"; see "On demand" below).
+- `unsolicited = true` (with `requests`) lets a highly romantic member DM him a fresh selfie of
+  her own accord while the GPU is idle (below, "Unsolicited selfies"). Default false; restart the
+  mind after changing it. Without `requests` it logs `photos_unsolicited_needs` and stays off.
+  Older code reads the key as an invalid table, so remove it before rolling back.
 - `scene_from_words = true` (with `requests`) reads his words into the requested photo's scene
   (below, "His words as her scene"). Read at mind start; off keeps today's enum path byte for
   byte. Older code reads the key as an invalid table and turns all of `[photos]` off, so remove
@@ -98,6 +104,51 @@ A fresh photo renders as the night's situational photos do: the anatomy negative
 her face at 0.75 of `identity_scale` on a waist-up or three-quarter scene, and no hand or limb face
 details (`selfies/style_variety.md`, "Situational photos: anatomy and the face on wide shots").
 
+### On demand (`request_priority`)
+
+Her first answer never waits for a render:
+
+- A plain ask ("send me a pic", "selfie?", "DM me a selfie", "what are you wearing?") takes a
+  ready, unsent situational photo of hers (the night's stock, made for sending) with that first
+  answer, and nothing is rendered (`selfie_request_ready_made`). Her profile galleries, which he
+  browses in the console, are not used for this.
+- Any other ask (one that names a place, what she wears or does, or how he wants it: "sexy",
+  "from the beach") or a plain ask with no ready photo: she answers at once that she is taking it
+  ("it'll reach him in a minute or two"; she is told not to refuse or put it off), and the queue
+  renders it straight after her answer is stored (it wakes then rather than at its 15 s tick),
+  one borrow at a time, ahead of night, booth and bulk image work, swapping the live model out
+  and back. The photo follows as her follow-up line.
+- Her day plan does not put it off: asleep or commuting, she takes it now, as her day finds her.
+- A render that fails, a scene she cannot take, or a photo not rendered within 15 minutes
+  (`RENDER_WAIT_S`: a pause, an offline raid or voice holding the GPU) sends a photo she already
+  had instead (her stock first, then her gallery), her follow-up saying honestly that the new one
+  didn't come out (`selfie_request_substituted`); with nothing retained she says it didn't work out.
+- A follow-up in a channel all can read keeps the shared-channel interval after her first answer.
+
+Recognized asks also include "DM/text/message me a ...", "gimme a pic", "I want you to send me
+...", "I'd love a pic", "can you retry sending ...", "keep sending ...", a photo "of your <words>"
+unless the words name another subject of hers (her cat, her lunch, her setup), and a fresh ask
+after a pet name mid-sentence. His offers of his own photo ("want to see a pic?", "can I send
+you a pic?"), "stop sending" and her old photos ("that pic", "your last selfie") are not asks.
+
+### Unsolicited selfies (`unsolicited`)
+
+Once a minute, while nothing else wants the GPU (no Free GPU pause; no WoW login, offline raid,
+voice or Discord desk lease, only the server's pin; no night running or due; no booth, bulk or
+request render; no request waiting; he offline from WoW for ten minutes), a draw at 1 in 30 may
+pick one woman whose attitude to him is lust, or drawn and at least at late nights on their arc,
+who is up and on Discord and not away, with her own romance dial (or the world's) at 6 or more.
+One he has been heating up with in their DM over the last three days (`romance.his_heat` on his
+lines) counts twice. Her scene is the request's enum choice (no words of his), rendered through
+the request render (NSFW gate, age floor, clothing and name rules unchanged), and she sends it in
+her DM with a line of her own. His WoW login or Discord post stops a render in progress (the
+photo is closed, never sent). Caps: one a member a local day, three a local day across the
+guild, two hours apart, spent when the render is admitted; the selfies dial at 0 means none. A
+sent photo counts toward the weekly `him` ration and the romance "picture" stage like any DM
+photo; an unsent one stays her `him` stock for six hours. Logs `selfie_unsolicited` and
+`selfie_unsolicited_render` (guid, snap, timings, outcome code). Meta keys
+`photos:unsolicited:day:<date>`, `photos:unsolicited:last`, `photos:unsolicited:member:<guid>`.
+
 A dropped answer is retried for the asked member only; other members named in the same post
 answer it once. Her first answer, the fresh photo's follow-up and a failure notice each get
 their first try and at most two retries (about three minutes apart for the first answer, one
@@ -155,7 +206,7 @@ Her answer is composed with the scene in her prompt ("You just took this photo o
 ..."), and an answer before the photo is ready names the photo she is about to take, never in a
 public channel for a private photo.
 
-When `[life] availability` is above 0 and her day plan has her asleep or commuting, she says so
+Without `request_priority`, when `[life] availability` is above 0 and her day plan has her asleep or commuting, she says so
 (in bed for the night; on her way to work or home, or driving when her job or rhythm says she
 drives: the day plan does not know how she travels), the photo is not rendered and no retained
 photo is sent instead: it waits for the start of her next block (`life.presence.free_after`, before
