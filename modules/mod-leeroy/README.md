@@ -125,12 +125,16 @@ cannot do without the owner. Two rotation raids were such raids:
   there until the mind's 30-minute watchdog stopped it `stalled` with no kill.
 
 Every offline Running tick now reads dungeon-clear's leader run as a phase (`DcPhase`: off, on,
-paused, door; `dc_phase=<to> from=<from>` is logged on change, first 20 then every 50th). The
+paused, door, stalled; `dc_phase=<to> from=<from>` is logged on change, first 20 then every 50th). The
 heartbeat carries it as `dc_state`; entering Running (a start or a restart) resets the phase to
 `unknown` and the hold, so the first heartbeat never repeats a pre-restart `off`. A pause out of
 every boss fight (an encounter known to be disengaged) for `OfflineDcHoldStopMs` (5 minutes)
-stops the run under its own name, `dc_door_blocked` (paused at a door) or `dc_paused` (any other
-pause). Nobody types `dc pause` in an offline raid, so `paused` is dungeon-clear's null-door
+stops the run under its own name, `dc_door_blocked` (paused at a door), `dc_paused` (any other
+pause) or `dc_unreachable` (`stalled`: an unpaused run whose leader carries a stall reason that is not
+a door's, dungeon-clear's "Can't path to <boss>" / "Stuck near <boss>" waiting for a `dc skip`; it
+clears the reason itself as soon as it moves again). On 2026-11-23 a Naxx 10 run read `on` for 24
+minutes in front of Gothik until the mind's 30-minute watchdog stopped it. Nobody types `dc pause` in
+an offline raid, so `paused` is dungeon-clear's null-door
 fallback or, once the Training Ground acts (`[training] act` and 28 days of pulls), its boss hold:
 the training listener sets WaitAtBoss on every offline run's tank and releases each hold, native
 resuming it after 20 s, so `dc_phase=paused` then appears at every boss and only a stuck hold
@@ -140,11 +144,20 @@ the reachable clear and the phase are offline only; the roster check applies to 
 
 Naxxramas's Sapphiron and Kel'Thuzad (instance bosses 13 and 14) are reached only by the hub's
 teleporter after the four wings, which dungeon-clear does not use: its route stalls there with
-the run still enabled. When every other boss is done and one of those is not (and neither is
+the run still enabled. Gothik the Harvester (11) waits on his balcony (2642, -3387, z 285.5, 18
+yards above his room's floor), passive until struck; dungeon-clear finds no navmesh route up to him
+(2026-11-23: `path rebuilt -> Gothik the Harvester ... UNREACHABLE: no navigable route`) and stalls,
+and the Four Horsemen (12) are a spell-credit encounter its roster never lists, behind the two gates
+only Gothik's death opens. When every other boss is done and one of those is not (and none is
 engaged, failed or mid-event, as a manual `dc skip` could make it), native ends the run
 `cleared_reachable` (pure `DcUnreachableBosses`, `ClearedReachable`; logged
-`cleared_reachable kills= out_of_reach=13,14`) instead of idling into the mind's stall stop or
-the timeout.
+`cleared_reachable kills= out_of_reach=11,12,13,14`) instead of idling into the mind's stall stop or
+the timeout. Gothik sits in the middle of dungeon-clear's order (Military Quarter, before the
+Construct Quarter), so the job types the `dc skip` his stall asks for as soon as dungeon-clear heads
+for him (pure `OfflineDcPassEntries`, `OfflineDcPassDue`: creature 16060, run enabled and unpaused,
+no boss engaged, leader out of combat, checked once a second, at most `OfflineDcPassLimit` 16 times a
+job since a restart's `dc on` forgets the skip; logged `dc_passed entry= passes= kills= enabled=`):
+the run goes on to Patchwerk, Grobbulus, Gluth and Thaddius.
 
 The mind never plans `toc` or `ulduar` on a worldserver whose hello lacks `dc_toc` /
 `dc_ulduar` (`guild/offline.py` `UNSUPPORTED`, `RUNNABLE_WITH`; logged once per hello as
@@ -157,11 +170,11 @@ the day, any raid at a size he holds a permanent save for this lockout week (her
 reason=owner_saved`): an offline run would save its members to another copy and his add command
 would leave them out (`locked`) until the reset. `setup:starting:dc_no_bosses`, like
 `no_fresh_encounters`, voids the run and passes the raid over for the rest of the day; so does a
-native `dc_door_blocked` stop with no kill and no wipe, which also takes back the attendance and
+native `dc_door_blocked` or `dc_unreachable` stop with no kill and no wipe, which also takes back the attendance and
 its DKP recorded when the run reached running (`RaidSession.retract_attendance`; bench memories
 already written stay) and marks the run not raided. A stall the mind stops names its cause from
 the last fresh heartbeat: `offline_raid_stop raid_id= reason=stalled cause= idle_s= inside=
-members=`, with `cause` one of `dc_door_blocked`, `dc_paused`, `dc_off`, `members_out`,
+members=`, with `cause` one of `dc_door_blocked`, `dc_paused`, `dc_unreachable` (`dc_state=stalled`), `dc_off`, `members_out`,
 `no_boss_reached` (dungeon-clear on, no boss engaged) or `unknown` (an older worldserver sends
 no `dc_state`); an operator stop is `cause=operator`. The cause is kept in the owned stop
 receipt and the day receipt (`stall_cause`); the raid row keeps the stable outcome `stalled`.
