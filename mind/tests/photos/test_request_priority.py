@@ -8,6 +8,7 @@ from conftest import run
 from photos.test_request_service import ON, drive, offline
 from photos.test_request_recovery import make_app, workers, queued, initial_words, tick
 from leeroy_mind.photos import request_store as records
+from leeroy_mind.photos.requests import TAKING_NOW
 from leeroy_mind.selfies.scene import scene_from
 from leeroy_mind.selfies.scene_choices import compose_choices
 from selfies.test_scene_choices import PICKS
@@ -58,9 +59,18 @@ def test_online_ask_delivers_new_image_once_without_offline_grace(tmp_path, monk
                                               'text': f'@{name} send me a selfie'})
             assert posted['ok']
             message = posted['id']
-            await drive(app, lambda: bool((r := records.get(app.store, message)) and r.fresh_message))
+            # On demand: her answer comes at once, saying she's taking it, before any render.
+            # ... and its preparation has finished, as the queue's own wake waits for.
+            await drive(app, lambda: bool((r := records.get(app.store, message)) and r.initial_message
+                                          and message not in app.photos.requests._tasks))
             request = records.get(app.store, message)
-            assert request.fresh_message == request.initial_message
+            assert request.fresh_message is None and not made
+            instructions = '\n'.join(m['content'] for call in app.llm.calls for m in call.get('messages', ()))
+            assert TAKING_NOW in instructions
+            # The queue renders it right after (one borrow) and the photo follows.
+            await tick(app)
+            request = records.get(app.store, message)
+            assert request.fresh_message is not None and request.fresh_message == request.followup_message
             assert request.fallback_snap is None and request.failure is None
             assert records.snap(app.store, request.fresh_snap).status == 'sent'
             assert len(made) == 1 and len(made[0].calls) == 1 and made[0].stops == 1

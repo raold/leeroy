@@ -110,7 +110,7 @@ mv "$dist.keep" "$dist"; mv "$live.keep" "$live"
 # Exercise ac-update.sh itself without any real git or network operations.
 # An ahead/behind fixture must fetch but never merge/rebase in --dry-run.
 mkdir -p "$scratch/bin" "$scratch/scripts"
-cp "$scripts/ac-update.sh" "$scripts/common.sh" "$scripts/config-keys.sh" "$scratch/scripts/"
+cp "$scripts/ac-update.sh" "$scripts/common.sh" "$scripts/config-keys.sh" "$scripts/subtree-module.sh" "$scratch/scripts/"
 export GIT_TEST_LOG="$scratch/git.log" GIT_TEST_BEHIND=2
 cat > "$scratch/bin/git" <<'GIT'
 #!/usr/bin/env bash

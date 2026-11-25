@@ -10,11 +10,18 @@ trap 'rm -rf -- "$scratch"' EXIT
 export GIT_AUTHOR_NAME=tester GIT_AUTHOR_EMAIL=tester@example.invalid
 export GIT_COMMITTER_NAME=tester GIT_COMMITTER_EMAIL=tester@example.invalid
 export AC_ROOT="$scratch/install with spaces" TMPDIR="$scratch/tmp" AC_TASKLIST="$scratch/tasklist"
+export AC_PROCESSES="$scratch/servers"
 modules="$AC_ROOT/azerothcore-wotlk/modules"
 mkdir -p "$modules" "$TMPDIR"
 printf '#!/usr/bin/env bash\ncat "%s/procs"\n' "$scratch" > "$AC_TASKLIST"
-chmod +x "$AC_TASKLIST"
+printf '#!/usr/bin/env bash\ncat "%s/server-rows"\nprintf "end\\r\\n"\n' "$scratch" > "$AC_PROCESSES"
+chmod +x "$AC_TASKLIST" "$AC_PROCESSES"
 printf '"explorer.exe","100","Console","1","9,000 K"\r\n' > "$scratch/procs"
+# A dojo's worldserver runs throughout: only this install's servers may block the swap.
+live_bin="$AC_ROOT/build/bin/RelWithDebInfo"
+if command -v cygpath >/dev/null 2>&1; then live_bin=$(cygpath -w "$live_bin"); fi
+dojo_row=$'400\tworldserver.exe\tF:\\azerothcore\\dojo-runtime\\instances\\claude-raids\\bin\\worldserver.exe\r\n'
+printf '%s' "$dojo_row" > "$scratch/server-rows"
 
 checks=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -78,11 +85,18 @@ run --go mod-plain "$up" "$zip_commit"; expect 1; has 'native build lock is held
 run mod-plain "$up" "$zip_commit"; expect 1; has '--go would refuse'
 rmdir "$AC_ROOT/.superpowers/live-build.lock"
 printf '"worldserver.exe","200","Console","1","9,000 K"\r\n"cl.exe","300","Console","1","1 K"\r\n' >> "$scratch/procs"
-run --go mod-plain "$up" "$zip_commit"; expect 1; has 'still running: cl.exe worldserver.exe'
+run --go mod-plain "$up" "$zip_commit"; expect 1; has 'still running: cl.exe'
 printf '"explorer.exe","100","Console","1","9,000 K"\r\n' > "$scratch/procs"
+printf '200\tWORLDSERVER.EXE\t%s\\WorldServer.exe\r\n' "$live_bin" >> "$scratch/server-rows"
+run --go mod-plain "$up" "$zip_commit"; expect 1; has 'worldserver.exe still running (pid 200)'
+printf '%s300\tauthserver.exe\t\r\n' "$dojo_row" > "$scratch/server-rows"
+run --go mod-plain "$up" "$zip_commit"; expect 1; has '1 authserver.exe whose path cannot be read still running'
+printf '%s' "$dojo_row" > "$scratch/server-rows"
 AC_TASKLIST=false run --go mod-plain "$up" "$zip_commit"; expect 1; has 'cannot read the process list'
 printf '#!/usr/bin/env bash\n' > "$scratch/silent"; chmod +x "$scratch/silent"
 AC_TASKLIST="$scratch/silent" run --go mod-plain "$up" "$zip_commit"; expect 1; has 'cannot read the process list'
+AC_PROCESSES=false run --go mod-plain "$up" "$zip_commit"; expect 1; has 'cannot read the server processes'
+AC_PROCESSES="$scratch/silent" run --go mod-plain "$up" "$zip_commit"; expect 1; has 'cannot read the server processes'
 run --go mod-plain "$up" 0123456789abcdef; expect 1; has 'no commit 0123456789abcdef upstream'
 run --go mod-plain "$up" "$side_commit"; expect 1; has 'is not on origin/main'
 run --go --subdir ../x mod-plain "$up" "$zip_commit"; expect 1; has 'not a plain relative path'
@@ -141,18 +155,17 @@ wanted2=$(bytes "$zip2")
 run mod-sub "$up2" "$sub_commit"; expect 0; has 'added    2'; has 'missing  4'   # the whole repository
 run --go --subdir server-side/mod-sub/ mod-sub "$up2" "$sub_commit"
 expect 0
-has 'no upstream (ac-update.sh skips it)'
+has 'ac-update.sh follows origin/master with this prefix only'
 [ "$(bytes "$zip2")" = "$wanted2" ] || fail "the nested module's folder changed"; ok
 [ "$(g "$zip2" rev-parse 'HEAD^{tree}')" = "$(g "$up2" rev-parse "$sub_commit:server-side/mod-sub")" ] \
     || fail "the split is not the subfolder's tree"; ok
 [ ! -e "$zip2/client-side" ] && [ ! -e "$zip2/README.md" ] || fail "the rest of the repository leaked in"; ok
 if g "$zip2" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then fail "the split tracks an upstream"; fi; ok
 [ -z "$(g "$zip2" status --porcelain)" ] || fail "the nested checkout is not clean"; ok
-# The printed recipe updates it.
-printf 'void y();\n' > "$up2/server-side/mod-sub/src/y.cpp"
-g "$up2" add -A && g "$up2" commit --quiet -m y
-recipe=$(grep -F 'git fetch origin' <<< "$output" | sed 's/^ *//')
-(eval "$recipe") >/dev/null 2>&1 || fail "the update recipe failed: $recipe"
-[ -f "$zip2/src/y.cpp" ] || fail "the recipe did not bring upstream's change"; ok
+# The updater's metadata records both histories, without a misleading Git upstream.
+[ "$(g "$zip2" config --local leeroy.subtreePrefix)" = server-side/mod-sub ] || fail "missing prefix"; ok
+[ "$(g "$zip2" config --local leeroy.subtreeUpstream)" = origin/master ] || fail "missing upstream"; ok
+[ "$(g "$zip2" config --local leeroy.subtreeRevision)" = "$sub_commit $(g "$zip2" rev-parse HEAD)" ] \
+    || fail "missing source/split revision"; ok
 
 printf 'ac-module-to-git self-test: %d checks passed\n' "$checks"

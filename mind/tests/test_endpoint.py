@@ -1267,6 +1267,18 @@ def test_discord_is_an_op_and_its_args_are_checked():
             "action": "react", "message": 4, "emoji": "\U0001F44D\U0001F44D"}), KEY)
 
 
+def test_the_longest_discord_message_fits_one_line_however_escaped():
+    """Every character of a full Discord message astral: 12 bytes each on the line, as
+    endpoint.request sends it, and the line is still read."""
+    from leeroy_mind.discord.text import MAX_TEXT
+    big = 2**63 - 1
+    args = {"action": "post", "channel": "dm:4294967295", "text": "\U0001F600" * MAX_TEXT,
+            "reply_to": big, "thread": big}
+    sent = endpoint.request_line(KEY, "discord", args)
+    assert len(sent) > 12 * MAX_TEXT
+    assert parse_request(sent, KEY) == ("discord", args)
+
+
 def test_the_discord_op_runs_one_action_at_a_time(tmp_path, caplog):
     caplog.set_level(logging.INFO)
     post = {"action": "post", "channel": "general", "text": "hi"}

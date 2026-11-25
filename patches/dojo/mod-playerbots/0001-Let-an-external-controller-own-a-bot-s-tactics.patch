@@ -1,6 +1,6 @@
-From 39b1ef82711daf93e23121226163bffbeef6cdb0 Mon Sep 17 00:00:00 2001
+From fabdfb54d1fdb0bc2c2ce4108a12b7c9fbca8a7d Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
-Date: Sat, 21 Nov 2026 05:16:54 -0500
+Date: Wed, 4 Nov 2026 13:53:07 -0500
 Subject: [PATCH] Let an external controller own a bot's tactics
 
 AcquireExternalControl gives a caller (a training controller such as
@@ -23,18 +23,18 @@ PlayerbotHolder are untouched. Inert until a caller acquires a bot.
  2 files changed, 122 insertions(+), 6 deletions(-)
 
 diff --git a/src/Bot/PlayerbotAI.cpp b/src/Bot/PlayerbotAI.cpp
-index f5bbd064..5fce0fff 100644
+index 5bd3437f..0e1d74ec 100644
 --- a/src/Bot/PlayerbotAI.cpp
 +++ b/src/Bot/PlayerbotAI.cpp
-@@ -57,6 +57,7 @@
- #include "Vehicle.h"
- #include "WsgRouteState.h"
- #include <algorithm>
+@@ -62,6 +62,7 @@
+ #include <mutex>
+ #include <sstream>
+ #include <string>
 +#include <atomic>
- #include <cfloat>
- #include <cmath>
- #include <map>
-@@ -71,6 +72,9 @@ constexpr uint32 SPELL_DK_FROST_PRESENCE = 48263;
+ 
+ namespace
+ {
+@@ -70,6 +71,9 @@ constexpr uint32 SPELL_DK_FROST_PRESENCE = 48263;
  constexpr uint32 SPELL_GRAVITY_LAPSE_TK = 39432;
  constexpr uint32 SPELL_GRAVITY_LAPSE_MGT = 44226;
  constexpr uint32 VEHICLE_FLAG_FIXED_POSITION = 0x00200000;
@@ -44,7 +44,7 @@ index f5bbd064..5fce0fff 100644
  }
  
  std::vector<std::string> PlayerbotAI::dispel_whitelist = {
-@@ -272,6 +276,12 @@ void PlayerbotAI::UpdateAI(uint32 elapsed, bool minimal)
+@@ -268,6 +272,12 @@ void PlayerbotAI::UpdateAI(uint32 elapsed, bool minimal)
      if (!bot->Unit::IsFalling())
          bot->SetFallInformation(0, bot->GetPositionZ());
  
@@ -57,7 +57,7 @@ index f5bbd064..5fce0fff 100644
      // Handle cheat options (set bot health and power if cheats are enabled)
      if (bot->IsAlive() &&
          (static_cast<uint32>(GetCheat()) > 0 || static_cast<uint32>(sPlayerbotAIConfig.BotCheatMask) > 0))
-@@ -498,6 +508,54 @@ void PlayerbotAI::SetActionDuration(Action const* action)
+@@ -486,6 +496,54 @@ void PlayerbotAI::SetActionDuration(Action const* action)
          PlayerbotAIBase::SetActionDuration(action->GetDuration());
  }
  
@@ -112,7 +112,7 @@ index f5bbd064..5fce0fff 100644
  // Helper function for UpdateAI to check group membership and handle removal if necessary
  void PlayerbotAI::UpdateAIGroupMaster()
  {
-@@ -697,7 +755,7 @@ void PlayerbotAI::HandleCommands()
+@@ -685,7 +743,7 @@ void PlayerbotAI::HandleCommands()
  std::map<std::string, ChatMsg> chatMap;
  void PlayerbotAI::HandleCommand(uint32 type, std::string const& text, Player& fromPlayer, const uint32 lang)
  {
@@ -121,7 +121,7 @@ index f5bbd064..5fce0fff 100644
          return;
  
      std::string filtered = text;
-@@ -1056,6 +1114,9 @@ bool PlayerbotAI::IsAllowedCommand(std::string const text)
+@@ -1044,6 +1102,9 @@ bool PlayerbotAI::IsAllowedCommand(std::string const text)
  
  void PlayerbotAI::HandleCommand(uint32 type, std::string const text, Player* fromPlayer)
  {
@@ -131,7 +131,7 @@ index f5bbd064..5fce0fff 100644
      if (!GetSecurity()->CheckLevelFor(PLAYERBOT_SECURITY_INVITE, type != CHAT_MSG_WHISPER, fromPlayer))
          return;
  
-@@ -1237,7 +1298,17 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
+@@ -1225,7 +1286,17 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
      if (!bot || !bot->IsInWorld() || bot->IsDuringRemoveFromWorld())
          return;
  
@@ -150,7 +150,7 @@ index f5bbd064..5fce0fff 100644
      {
          case SMSG_SPELL_FAILURE:
          {
-@@ -1537,11 +1608,17 @@ int32 PlayerbotAI::CalculateGlobalCooldown(uint32 spellid)
+@@ -1525,11 +1596,17 @@ int32 PlayerbotAI::CalculateGlobalCooldown(uint32 spellid)
  
  void PlayerbotAI::HandleMasterIncomingPacket(WorldPacket const& packet)
  {
@@ -168,7 +168,7 @@ index f5bbd064..5fce0fff 100644
      masterOutgoingPacketHandlers.AddPacket(packet);
  }
  
-@@ -1597,6 +1674,9 @@ void PlayerbotAI::ChangeEngineOnNonCombat()
+@@ -1585,6 +1662,9 @@ void PlayerbotAI::ChangeEngineOnNonCombat()
  
  void PlayerbotAI::DoNextAction(bool min)
  {
@@ -178,7 +178,7 @@ index f5bbd064..5fce0fff 100644
      if (!bot->IsInWorld() || bot->IsBeingTeleported() || (GetMaster() && GetMaster()->IsBeingTeleported()))
      {
          SetNextCheckDelay(sPlayerbotAIConfig.GlobalCoolDown);
-@@ -1926,6 +2006,9 @@ bool PlayerbotAI::HasTargetExclusions() const
+@@ -1914,6 +1994,9 @@ bool PlayerbotAI::HasTargetExclusions() const
  
  bool PlayerbotAI::DoSpecificAction(std::string const name, Event event, bool silent, std::string const qualifier)
  {
@@ -188,7 +188,7 @@ index f5bbd064..5fce0fff 100644
      std::ostringstream out;
  
      for (uint8 i = 0; i < BOT_STATE_MAX; i++)
-@@ -3707,7 +3790,7 @@ bool PlayerbotAI::CastSpell(std::string const name, Unit* target, Item* itemTarg
+@@ -3695,7 +3778,7 @@ bool PlayerbotAI::CastSpell(std::string const name, Unit* target, Item* itemTarg
  
  bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget)
  {
@@ -197,7 +197,7 @@ index f5bbd064..5fce0fff 100644
          return false;
  
      if (!target)
-@@ -4009,7 +4092,7 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget)
+@@ -3997,7 +4080,7 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget)
  
  bool PlayerbotAI::CastSpell(uint32 spellId, float x, float y, float z, Item* itemTarget)
  {
@@ -206,7 +206,7 @@ index f5bbd064..5fce0fff 100644
          return false;
  
      Pet* pet = bot->GetPet();
-@@ -4247,7 +4330,7 @@ bool PlayerbotAI::CanCastVehicleSpell(uint32 spellId, Unit* target)
+@@ -4236,7 +4319,7 @@ bool PlayerbotAI::CanCastVehicleSpell(uint32 spellId, Unit* target)
  
  bool PlayerbotAI::CastVehicleSpell(uint32 spellId, Unit* target)
  {
@@ -215,7 +215,7 @@ index f5bbd064..5fce0fff 100644
          return false;
  
      if (IsSiegeShot(bot, aiObjectContext, spellId))
-@@ -4449,6 +4532,9 @@ void PlayerbotAI::RemoveAura(std::string const name)
+@@ -4438,6 +4521,9 @@ void PlayerbotAI::RemoveAura(std::string const name)
  
  void PlayerbotAI::RequestSpellInterrupt()
  {
@@ -225,7 +225,7 @@ index f5bbd064..5fce0fff 100644
      Spell* currentSpell = bot->GetCurrentSpell(CURRENT_GENERIC_SPELL);
      if (currentSpell && currentSpell->getState() == SPELL_STATE_PREPARING)
      {
-@@ -6304,7 +6390,13 @@ bool PlayerbotAI::IsInRealGuild()
+@@ -6293,7 +6379,13 @@ bool PlayerbotAI::IsInRealGuild()
      return PlayerbotGuildMgr::instance().IsRealGuild(bot->GetGuildId());
  }
  

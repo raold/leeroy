@@ -96,6 +96,7 @@ def test_default_rotation_holds_only_raids_the_runner_can_run():
 @pytest.mark.parametrize(("dc", "inside", "cause"), [
     ("door", 23, "dc_door_blocked"), ("paused", 23, "dc_paused"), ("off", 23, "dc_off"),
     ("door", 10, "dc_door_blocked"), ("on", 22, "members_out"), ("on", 23, "no_boss_reached"),
+    ("stalled", 23, "dc_unreachable"), ("stalled", 10, "dc_unreachable"),
     (None, 23, "unknown"), (None, 20, "members_out")])
 def test_stall_cause_reads_dungeon_clear_first(dc, inside, cause):
     assert stall_cause(dict(dc=dc, inside=inside), 23) == cause
@@ -153,7 +154,7 @@ async def heartbeat(setup, *, age=0, inside=25, engaged=False, **changes):
 
 @pytest.mark.parametrize(("dc", "inside", "cause"), [
     ("door", 25, "dc_door_blocked"), ("on", 25, "no_boss_reached"), ("on", 21, "members_out"),
-    (None, 25, "unknown"), ("garbage", 25, "unknown")])
+    ("stalled", 25, "dc_unreachable"), (None, 25, "unknown"), ("garbage", 25, "unknown")])
 @_run_async
 async def test_a_stall_names_its_cause_in_the_log_and_the_day_receipt(setup, caplog, dc, inside, cause):
     ports, _, controller = setup
@@ -271,6 +272,22 @@ async def test_a_door_block_before_any_fight_voids_the_run_and_takes_its_attenda
     assert len(ports.sent) == 2 and (ports.sent[-1].map_id, ports.sent[-1].size) == (631, 10)
 
 
+@pytest.mark.parametrize(("kills", "voided"), [(0, True), (7, False)])
+@_run_async
+async def test_a_dead_end_route_before_any_fight_is_voided_like_a_door(setup, kills, voided):
+    ports, _, controller = setup
+    await start(setup)
+    await heartbeat(setup, dc_state="stalled")
+    raid_id = controller.session.raid_id
+    await advance(ports, 600)
+    await controller.on_job(event(controller, state="done", stage="", reason="dc_unreachable", kills=kills))
+    await controller.tick()
+    assert not controller.active and not [c for c in ports.sent if isinstance(c, StopOfflineRaid)]
+    assert not_raided(ports, raid_id) is voided
+    assert bool(controller._day_state().get("skipped")) is voided
+    assert ports.conn.execute("SELECT outcome FROM guild_raid WHERE raid_id=?", (raid_id,)).fetchone()[0] == "dc_unreachable"
+
+
 @_run_async
 async def test_a_door_block_after_a_wipe_still_counts_as_raided(setup):
     ports, _, controller = setup
@@ -285,6 +302,7 @@ async def test_a_door_block_after_a_wipe_still_counts_as_raided(setup):
 
 def test_outcome_codes_reach_the_wrap_up_as_words_and_unknown_codes_read_neutrally():
     assert outcome_words("dc_door_blocked") == "got stuck at a door we couldn't open"
+    assert outcome_words("dc_unreachable") == "couldn't find a way to the next boss"
     assert outcome_words("cleared_reachable") == "cleared every boss we could reach"
     assert outcome_words("logout") == "the raid leader logged off"
     for code in ("terminal_lost", "encounters_changed", "event_overflow", "setup:starting:timeout", None):

@@ -5,6 +5,7 @@
 #include "DojoObservation.h"
 #include "DojoRuntime.h"
 #include "DojoSettings.h"
+#include "DojoRaid.h"
 
 #include "Config.h"
 #include "Log.h"
@@ -142,4 +143,5 @@ void AddSC_dojo_world()
 {
     new DojoWorldScript();
     AddSC_dojo_commands();
+    AddSC_dojo_raid();
 }

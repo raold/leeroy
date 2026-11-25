@@ -16,6 +16,8 @@ from leeroy_mind.protocol import Ack, Chat
 from leeroy_mind.talk.pipeline import Pipeline, TurnMeta
 from leeroy_mind.talk.timing import MAX_ACTIVE, MAX_AGE_S, TurnTiming, voice_token
 from leeroy_mind.talk.turns import Turn, TurnKind
+from leeroy_mind.testing.fake_llm import check_chat
+from leeroy_mind.testing.wire import bridge_send
 
 
 class Timer:
@@ -137,6 +139,7 @@ def test_scheduler_queue_readiness_and_client_call_use_independent_monotonic_clo
         busy_entered, ready_entered, call_entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
         async def chat(*args, **kwargs):
+            check_chat(*args, **kwargs)
             call_entered.set()
             await calling.wait()
             return SimpleNamespace(text="synthetic answer")
@@ -273,6 +276,7 @@ def test_retry_preserves_two_client_calls_and_old_llm_seconds(store, tmp_path):
         calls = []
 
         async def chat(*args, **kwargs):
+            check_chat(*args, **kwargs)
             calls.append(1)
             timer.advance(2)
             await rig.clock.advance(1)
@@ -309,6 +313,7 @@ def test_failed_generation_and_readiness_keep_observed_boundaries(store, tmp_pat
             await rig.clock.advance(11)
 
         async def chat(*args, **kwargs):
+            check_chat(*args, **kwargs)
             timer.advance(3)
             if failure == "call_failed":
                 raise RuntimeError("private model failure sentinel")
@@ -402,6 +407,7 @@ def test_real_pipeline_delay_compose_typing_lock_and_bridge_ack(store, tmp_path)
             await compose_gate.wait()
             return await original(*args, **kwargs)
 
+        @bridge_send
         async def send(cmd):
             sending.set()
             await send_gate.wait()
@@ -446,6 +452,7 @@ def test_ack_timeout_waits_for_existing_echo_settlement(store, tmp_path, echo):
         rig = make_rig(store, engine_clock(), tmp_path)
         timer, events = observed(rig.engine)
 
+        @bridge_send
         async def send(cmd):
             raise AckTimeout("private exception contents")
 
@@ -478,6 +485,7 @@ def test_cancel_during_shielded_ack_waits_and_records_once(store, tmp_path):
         timer, events = observed(rig.engine)
         entered, gate = asyncio.Event(), asyncio.Event()
 
+        @bridge_send
         async def send(cmd):
             entered.set()
             await gate.wait()
@@ -510,6 +518,7 @@ def test_main_owner_fence_and_transport_barrier_are_named_reasons(store, tmp_pat
         timer, events = observed(rig.engine)
         sent = []
 
+        @bridge_send
         async def send(cmd):
             sent.append(cmd)
             return Ack(ts=0, id=cmd.id, ok=True, error="")

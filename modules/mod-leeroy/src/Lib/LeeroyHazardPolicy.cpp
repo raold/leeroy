@@ -2,7 +2,9 @@
 #include "LeeroyHazardPolicy.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <tuple>
 #include <utility>
 
@@ -75,9 +77,62 @@ std::pair<float, float> Closest(HazardPoint a, HazardPoint b, HazardZone const& 
     return {t, std::hypot(a.x + t * dx - zone.x, a.y + t * dy - zone.y)};
 }
 
-bool Crosses(HazardPoint a, HazardPoint b, HazardZone const& zone, float reach)
+// How near a bot walking from a to b (then standing there) comes to a moving npc (HazardZone's motion fields).
+float Approach(HazardPoint a, HazardPoint b, HazardZone const& zone, float stand = kHazardStandAfter)
 {
-    return (SameFloor(a, zone) || SameFloor(b, zone)) && Closest(a, b, zone).second <= zone.radius + reach;
+    float const walk = Distance2d(a, b.x, b.y) / kHazardWalkSpeed;
+    float const moves = std::max(0.0f, zone.until - kHazardScanAge); // it moved for up to a pass already
+    float const lag = std::min(zone.until, kHazardScanAge);
+    float const nx = zone.px + zone.vx * lag;
+    float const ny = zone.py + zone.vy * lag;
+    // Both motions are straight between these moments: closest approach on each piece.
+    std::array<float, 4> cuts{0.0f, std::min(walk, moves), std::max(walk, moves), walk + stand};
+    std::sort(cuts.begin(), cuts.end());
+    auto botAt = [&](float t)
+    {
+        float const f = walk > 0.0001f ? std::min(t, walk) / walk : 1.0f;
+        return std::pair<float, float>{a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f};
+    };
+    auto npcAt = [&](float t)
+    {
+        float const m = std::min(t, moves);
+        return std::pair<float, float>{nx + zone.vx * m, ny + zone.vy * m};
+    };
+    float best = std::numeric_limits<float>::max();
+    for (std::size_t i = 0; i + 1 < cuts.size(); ++i)
+    {
+        float const t0 = cuts[i];
+        float const t1 = std::min(cuts[i + 1], walk + stand);
+        if (t1 < t0)
+            continue;
+        auto const [bx0, by0] = botAt(t0);
+        auto const [bx1, by1] = botAt(t1);
+        auto const [nx0, ny0] = npcAt(t0);
+        auto const [nx1, ny1] = npcAt(t1);
+        float const rx = bx0 - nx0;
+        float const ry = by0 - ny0;
+        float const dx = (bx1 - nx1) - rx;
+        float const dy = (by1 - ny1) - ry;
+        float const length2 = dx * dx + dy * dy;
+        float const s = length2 > 0.0000001f ? std::clamp(-(rx * dx + ry * dy) / length2, 0.0f, 1.0f) : 0.0f;
+        best = std::min(best, std::hypot(rx + dx * s, ry + dy * s));
+    }
+    return best;
+}
+
+bool Crosses(HazardPoint a, HazardPoint b, HazardZone const& zone, float reach, float stand = kHazardStandAfter)
+{
+    if (!SameFloor(a, zone) && !SameFloor(b, zone))
+        return false;
+    if (Closest(a, b, zone).second <= zone.radius + reach)
+        return true;
+    return zone.moving && Approach(a, b, zone, stand) <= zone.core + reach;
+}
+
+// The walk alone (no standing at its end) meets no zone.
+bool WalkClear(HazardPoint a, HazardPoint b, std::vector<HazardZone> const& zones, float reach)
+{
+    return std::none_of(zones.begin(), zones.end(), [&](HazardZone const& zone) { return Crosses(a, b, zone, reach, 0.0f); });
 }
 
 // Every clear spot near p with its shift, nearest first, then nearest `toward`.
@@ -213,6 +268,12 @@ HazardZone HazardLeadZone(HazardZone zone, std::optional<HazardPoint> next, floa
     float const travel = std::min(left, speed * kHazardLeadSeconds);
     if (!(travel > 0.01f))
         return zone;
+    zone.px = zone.x;
+    zone.py = zone.y;
+    zone.core = zone.radius;
+    zone.vx = dx / left * speed;
+    zone.vy = dy / left * speed;
+    zone.until = left / speed;
     zone.x += dx / left * travel / 2.0f;
     zone.y += dy / left * travel / 2.0f;
     zone.radius += travel / 2.0f;
@@ -391,6 +452,84 @@ bool HazardDetourAllowed(HazardDetourTrack& track, HazardPoint at, HazardPoint g
         return false;
     }
     return true;
+}
+
+bool HazardFirstCrossingMoves(HazardPoint from, HazardPoint goal, std::vector<HazardZone> const& zones, float reach)
+{
+    HazardZone const* first = nullptr;
+    float firstT = 2.0f;
+    for (HazardZone const& zone : zones)
+        if (Crosses(from, goal, zone, reach))
+            if (float const t = Closest(from, goal, zone).first; t < firstT)
+            {
+                firstT = t;
+                first = &zone;
+            }
+    return first && first->moving;
+}
+
+bool HazardStandClear(HazardPoint p, std::vector<HazardZone> const& zones, float reach)
+{
+    if (!HazardClear(p, zones, reach))
+        return false;
+    for (HazardZone const& zone : zones)
+        if (zone.moving && SameFloor(p, zone)
+            && Approach(p, p, zone, kHazardStandSeconds) < zone.core + reach + kHazardMarginYards)
+            return false;
+    return true;
+}
+
+std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std::optional<HazardPoint> waypoint,
+    std::vector<HazardZone> const& zones, float reach, float minLeg)
+{
+    if (std::none_of(zones.begin(), zones.end(), [&](HazardZone const& zone)
+            { return zone.moving && SameFloor(at, zone) && Distance2d(at, zone.x, zone.y) <= kHazardMovingNearYards; }))
+        return std::nullopt;
+    if (HazardAt(at, zones, reach))
+        return std::nullopt; // stepping out comes first (the exit)
+    HazardPoint const to = waypoint.value_or(goal);
+    if (!waypoint && !HazardSegmentClear(at, to, zones, reach) && !HazardFirstCrossingMoves(at, to, zones, reach))
+        return std::nullopt; // a zone that stays shuts the way: as before
+    // A leg, or farther to the first spot along the way where the bot may stand, so that it crosses a moving
+    // npc's path in one walk instead of stopping in it; only while the walk there meets nothing.
+    float const length = Distance2d(at, to.x, to.y);
+    for (float along = std::min(std::max(kHazardMovingLegYards, minLeg), length);; along += 1.0f)
+    {
+        along = std::min(along, length);
+        float const part = length > 0.001f ? along / length : 1.0f;
+        HazardPoint const end{at.x + (to.x - at.x) * part, at.y + (to.y - at.y) * part, at.z + (to.z - at.z) * part};
+        if (!WalkClear(at, end, zones, reach))
+            break;
+        if (HazardStandClear(end, zones, reach))
+            return end;
+        if (along >= length)
+            break;
+    }
+    // A moving npc shuts the way for now: wait for it to pass where the bot may stand that long, else step aside
+    // to the nearest such spot a clear walk reaches (ties toward the target).
+    if (HazardStandClear(at, zones, reach))
+        return at;
+    std::optional<HazardPoint> best;
+    float bestToward = 0.0f;
+    for (float ring = kHazardRingStepYards; ring <= kHazardAsideYards + 0.001f; ring += kHazardRingStepYards)
+    {
+        for (int k = 0; k < kHazardRingDirections; ++k)
+        {
+            float const angle = 2.0f * kPi * static_cast<float>(k) / static_cast<float>(kHazardRingDirections);
+            HazardPoint const spot{at.x + ring * std::cos(angle), at.y + ring * std::sin(angle), at.z};
+            if (!HazardStandClear(spot, zones, reach) || !WalkClear(at, spot, zones, reach))
+                continue;
+            float const toward = Distance2d(spot, to.x, to.y);
+            if (!best || toward < bestToward)
+            {
+                best = spot;
+                bestToward = toward;
+            }
+        }
+        if (best)
+            break; // the nearest ring that has one
+    }
+    return best;
 }
 
 bool HazardExitYielded(HazardExitGuard const& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now)

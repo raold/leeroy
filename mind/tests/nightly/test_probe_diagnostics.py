@@ -10,7 +10,7 @@ from leeroy_mind.eval.probe_diagnostics import diagnose_secret_probes
 from leeroy_mind.eval.probes import ProbeResult, SECRET_PROBES, probe_messages
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.llm.presets import LIVE
-from leeroy_mind.testing.fake_llm import FakeLLM
+from leeroy_mind.testing.fake_llm import FakeLLM, check_chat
 
 
 def test_diagnostic_keeps_entire_schedule_without_retrying_or_opening_gate(h):
@@ -45,6 +45,7 @@ def test_abstention_is_exact_cleaned_text_and_provider_metadata_cannot_leak(h):
         calls = 0
 
         async def chat(self, *args, **kwargs):
+            check_chat(*args, **kwargs)
             self.calls += 1
             values = [" (nothing) ", "(Nothing)", "nothing", None]
             return SimpleNamespace(text=values[(self.calls - 1) % len(values)],

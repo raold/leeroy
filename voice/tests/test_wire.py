@@ -28,6 +28,19 @@ def test_golden_covers_every_type():
     assert len(golden()) == len(MESSAGE_TYPES) == 20  # one case per type
 
 
+REFUSED = Path(__file__).parent / "fixtures" / "wire_refused.json"
+
+
+@pytest.mark.parametrize("case", json.loads(REFUSED.read_text(encoding="utf-8")),
+                         ids=lambda c: c["reply"])
+def test_the_refused_golden_lines_are_refused_with_their_reply(case):
+    """The mind's copy of this codec refuses the same lines with the same replies
+    (mind/tests/voice/test_voice_wire.py reads this file too)."""
+    with pytest.raises(WireError) as e:
+        parse(case["line"].encode())
+    assert e.value.reply == case["reply"]
+
+
 def test_the_protocol_table():
     assert PROTOCOL_VERSION == 1 and MAX_LINE_BYTES == 65536
     assert FROM_MIND == {"session", "channels", "moved", "invite", "refused", "voice", "speak",

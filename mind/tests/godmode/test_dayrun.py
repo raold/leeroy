@@ -8,6 +8,7 @@ from leeroy_mind.godmode import dayrun
 from leeroy_mind.guild.protocol import BotDo, ClearLockout, StringDo
 from leeroy_mind.realm.action_policy import classify
 from leeroy_mind.realm.protocol import RealmMove, RpgStatus, Duel
+from leeroy_mind.testing.wire import bridge_send
 
 PERMIT = "a" * 32
 
@@ -73,8 +74,10 @@ class Rehearsal:
         from conftest import seed_test_cast
         from leeroy_mind.memory.writer import MemoryWriter
         from leeroy_mind.realm.service import attach_realm
+        from leeroy_mind.guild.protocol import register
         from realm.fakes import RealmApp
 
+        register()  # guild life's install registers its types (bot_do, job) before the Realm attaches
         (root / "mind.toml").write_text(f"[realm]\nenabled={str(realm_on).lower()}\n[life]\nday_plans={str(enabled).lower()}\n")
         self.people = seed_test_cast(store)
         self.app = app = RealmApp(root, store, clock)
@@ -282,6 +285,7 @@ def test_real_string_handoff_validates_before_revoking_then_uses_original_job(tm
             assert (await service.pull(ident))["reason"] == intents.get(store.conn, ident)["reason"] == code
             assert "body details in diagnostic" not in caplog.text
             assert rig.day.permit(1)["state"] == "open"
+        @bridge_send
         async def send(cmd, *, preserve_id, expected_epoch=None):
             assert expected_epoch in (None, rig.day.epoch)
             assert preserve_id

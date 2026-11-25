@@ -460,6 +460,26 @@ def _jsonable(value):
     return value
 
 
+# A command carrying a day check goes out as day_check_<type>; the driver preparations have names of
+# their own (encode_command). Old native guild handlers would otherwise run them as the real thing.
+DAY_CHECK_TYPES = frozenset(
+    {"string_do", "clear_lockout", "form_raid", "summon", "start_offline_raid", "start_member_dungeon"})
+DRIVER_TYPES = {"start_offline_raid": ("day_prepare_offline_driver",),
+                "start_member_dungeon": ("member_dungeon_inspect", "member_dungeon_prepare_driver")}
+
+
+def wire_command_types(registered=None) -> frozenset[str]:
+    """Every type name encode_command can put on the wire for these registered command types
+    (default: all registered now)."""
+    registered = set(_commands if registered is None else registered)
+    names = set(registered)
+    for name in registered:
+        if name in DAY_CHECK_TYPES:
+            names.add("day_check_" + name)
+        names.update(DRIVER_TYPES.get(name, ()))
+    return frozenset(names)
+
+
 def encode_command(cmd, ts_ms: int) -> bytes:
     type_name = next((n for n, c in _commands.items() if type(cmd) is c), None)
     if type_name is None:
@@ -479,7 +499,7 @@ def encode_command(cmd, ts_ms: int) -> bytes:
         if not body.get("day_check") or body.get("day_prepared"):
             raise ValueError("driver preparation requires the bound heroic check")
         type_name = "member_dungeon_prepare_driver" if body.get("dungeon_driver_ticket") else "member_dungeon_inspect"
-    elif type_name in {"string_do", "clear_lockout", "form_raid", "summon", "start_offline_raid", "start_member_dungeon"} and body.get("day_check"):
+    elif type_name in DAY_CHECK_TYPES and body.get("day_check"):
         type_name = "day_check_" + type_name
     if isinstance(cmd, (Say, HumanSay)) and cmd.channel not in SAY_CHANNELS:
         raise ValueError(f"channel not allowed: {cmd.channel!r}")

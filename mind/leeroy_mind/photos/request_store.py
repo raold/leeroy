@@ -262,11 +262,12 @@ def attempt(store, message: int, part: str, *, now: float) -> bool:
         return False
 
 
-def promote_fallback(store, message: int, *, now: float) -> bool:
-    """The photo critic refused every seed of the fresh render: its planned snap ends `flagged`
-    and the reserved ready-made copy becomes the request's photo (fresh_snap), so it is sent as
-    the answer and the request completes. False (nothing changed) without a ready copy, or once
-    the request was answered or ended."""
+def promote_fallback(store, message: int, *, now: float, ended: str = 'flagged') -> bool:
+    """The photo critic refused every seed of the fresh render (or, on demand, the render failed
+    or a plain ask takes a ready photo): its planned snap ends `ended` and the reserved
+    ready-made copy becomes the request's photo (fresh_snap), so it is sent as the answer and the
+    request completes. False (nothing changed) without a ready copy, or once the request was
+    answered or ended."""
     with store.transaction():
         request = get(store, message)
         if (request is None or request.ended is not None or request.fresh_message is not None
@@ -277,7 +278,7 @@ def promote_fallback(store, message: int, *, now: float) -> bool:
             return False
         fresh = snap(store, request.fresh_snap)
         if fresh is not None and fresh.status == 'planned':
-            snaps.expire(store, fresh.id, 'flagged', now=now)
+            snaps.expire(store, fresh.id, ended, now=now)
         store.conn.execute('UPDATE selfie_request SET fresh_snap=?, fallback_snap=NULL '
                            'WHERE message=?', (request.fallback_snap, message))
     return True

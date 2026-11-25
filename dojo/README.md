@@ -2,8 +2,8 @@
 
 An isolated environment for training leeroy's combat policies with deep
 reinforcement learning. It runs against its own AzerothCore worldserver,
-databases and fixture characters, never the live realm, and steps the training
-world on a virtual clock so it can run faster than real time.
+databases and fixture characters, never the live realm. The current worker is
+realtime; virtual-clock acceleration remains a future gate.
 
 This is the foundation increment: an isolated layout and its preflight check;
 the environment protocol with its lifecycle state machine and loopback
@@ -22,6 +22,91 @@ client and the G1 evidence run (plan Task 8). The endpoint is the realtime
 diagnostic controller's of milestone M1: the world does not pause between
 steps, and nothing advertises a pauseable environment. There is no learner and
 no Torch or Gymnasium dependency, and no learned policy is claimed.
+
+## Running-world raid acceptance
+
+The separate raid acceptance build exercises the real playerbots strategies,
+core encounter scripts and mod-leeroy hazard filter. It uses a dedicated dojo
+layout, MySQL instance, synthetic `DOJORAID` account and two fixture characters.
+It cannot adopt an already running worldserver. It does not use the live guild,
+mind, GPU, training lab or raid scheduler. Keep the G1 arena layout separate.
+
+The layout's isolated core must have `mod-playerbots`, `mod-dojo`, and
+`mod-leeroy` linked to the isolated source checkouts. Record a current production
+baseline with preflight, then apply the dojo controller patch on top of the
+candidate playerbots series. No other modules are admitted to this variant.
+Older production revisions lack `Playerbots.EnablePeriodicOnlineOffline`.
+The config checks allow that option to be absent from both files; when present,
+both the build's `.dist` and the runtime config must keep its reviewed value `0`.
+
+```powershell
+pwsh -NoProfile -File scripts/dojo/preflight.ps1 -Layout <raid-layout.json> -WriteProvenance
+pwsh -NoProfile -File scripts/dojo/configure.ps1 -Layout <raid-layout.json> -Variant training -RaidAcceptance -ApplyPatches
+pwsh -NoProfile -File scripts/dojo/build.ps1 -Layout <raid-layout.json> -Jobs 4
+cd dojo
+python -m leeroy_dojo realm --layout <raid-layout.json> db-init
+python -m leeroy_dojo realm --layout <raid-layout.json> db-start
+python -m leeroy_dojo realm --layout <raid-layout.json> provision
+python -m leeroy_dojo realm --layout <raid-layout.json> schema-build
+python -m leeroy_dojo realm --layout <raid-layout.json> accounts --fixture-account DOJORAID
+python -m leeroy_dojo realm --layout <raid-layout.json> raid-acceptance
+```
+
+Commit the candidate before configuring/building. The gate verifies clean source,
+core and playerbots revisions against both configure and successful link receipts,
+and hashes the staged worldserver against the linked artifact. Configure and build
+check clean trees before and after their work. An old,
+unattested or interrupted build forces a clean rebuild before it can supply a
+receipt; reverting a dirty experiment cannot certify its existing binary.
+Provision without
+an arena manifest; it disables `Leeroy.Enable` so no guild bridge starts.
+`AC_DOJO_RAID_ACCEPTANCE` defaults off and requires `AC_ENABLE_DOJO=ON`.
+
+| Scenario | Actual runtime assertion | Negative control |
+|---|---|---|
+| Valithria | At least two effective heals on her GUID, with stock healer strategies and a distant injured raid member competing for heal reach | Remove the ICC strategy; no effective dragon heals |
+| Twin Val'kyr | Light Essence acquired from real gossip, then Dark Essence acquired in response to the core's Dark Touch spell | Disable Twin interactions; no essence acquired |
+| Living Poison | At least two completed hall crossings, real moving slimes present, no damage from them, sampled clearance above their 1.5-yard trigger radius | Disable the hazard group context; require a real poison hit |
+
+Every normal case and negative control must pass. A missing boss, stalled bot,
+absent slimes, insufficient samples, login failure or unproved cleanup fails the
+gate. Poison samples more than 200 ms apart cannot certify a crossing. Controls
+prove sensitivity to these disabled behaviours, not detection of every possible
+raid regression. The scripted leader's ordinary AI is fenced; the measured bot
+keeps its stock AI. Valithria uses a holy paladin assigned to the dragon and a
+restoration druid reserved for the raid, held at 65% health beyond heal range;
+this exercises the stock heal-reach competitor without changing its thresholds.
+Fixture health/mana reserves are refilled during observation
+(never Valithria's HP, and never the recorded damage counters); these are
+mechanic integration checks, not DPS, healing throughput, full raid-clear or
+difficulty-parity claims. The initial suite uses 10-player normal difficulty.
+
+The training-only hazard seam supplies the synthetic owner and same-account
+members in place of the live guild roster. The real scan, reconciliation,
+playerbots movement callbacks and navmesh execute unchanged. Guild roster
+discovery and production scheduler integration are outside this gate.
+The filter serves only bots whose master is the owner, a game client: their AI
+takes a turn every `Playerbots.ReactDelay` (0.1 s). Under a bot master
+playerbots waits 1-3 s between turns out of combat (`GetReactDelay`), which no
+member of his group meets, so between teleports the Living Poison case holds its
+leader as a self-bot (its own master), which playerbots counts as a game client
+master; a self-bot's teleport waits for a client's acknowledgement, so the
+leader is an ordinary bot while it moves. Under a game client master
+playerbots also gives the combat engine `avoid aoe` (`Playerbots.AutoAvoidAoe`),
+which runs the hazard exit; the fixture's engines are built under a bot master,
+so the case adds it. A Sludge Belcher patrol pulls the leader into combat
+about 55 s in, so the crossing under way then is made in the combat engine. The negative control keeps a bot master and neither.
+
+Reports and polled native observations go under `<data>/runs/*-raids-*/`.
+`report.json` includes candidate revisions, binary/layout hashes, all six case
+verdicts and shutdown confirmation. The native `OnHeal` hook counts the core's
+effective health gain; neither a requested heal nor an action success counts.
+`dojo raid status` reports the current token and observations; `dojo raid abort`
+requests fixture cleanup. A failed cleanup refuses further scenarios.
+
+CI tests the verdict contract and the ordinary disabled build. A green unit test
+job is **not** a running-world acceptance receipt: the private extracted game
+assets and dedicated realm are required to run this gate before a raid release.
 
 ## Layout
 

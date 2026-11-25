@@ -30,7 +30,8 @@ from leeroy_mind.logs import log
 from .job import ProcessTree, WorkerError
 
 __all__ = ["GRACE_S", "MAX_LINE", "RENDER_S", "START_S", "STOP_S", "Captioned", "Detail", "Gridded",
-           "Identity", "Ready", "RenderRequest", "Rendered", "SelfieWorker", "WorkerError", "detail_for",
+           "Identity", "Ready", "RenderRequest", "Rendered", "SelfieWorker", "WorkerError",
+           "caption_line", "critic_line", "detail_for", "embed_line", "grid_line", "render_line",
            "to_the_end"]
 
 START_S = 180.0  # loading the pipeline and the classifier
@@ -235,6 +236,76 @@ async def to_the_end(aw):
     return task.result()
 
 
+def _asked_detail(req: RenderRequest) -> Detail | None:
+    detail = req.detail
+    return detail if detail is not None and (detail.faces or detail.hands) else None
+
+
+def _rid(rid) -> str:
+    if type(rid) is not str or not 1 <= len(rid) <= 32:
+        raise ValueError("a request id is 1-32 characters")
+    return rid
+
+
+def _line(body: dict) -> bytes:
+    line = json.dumps(body).encode("utf-8") + b"\n"
+    if len(line) - 1 > MAX_LINE:
+        raise WorkerError("bad_request")  # what the worker would answer; it stays up
+    return line
+
+
+# The request lines. selfie/tests/fixtures/protocol_golden.json holds lines these build, which
+# the selfie suite parses with the worker's protocol.parse and the mind's suite rebuilds here.
+
+
+def render_line(req: RenderRequest, rid: str) -> bytes:
+    body = {
+        "id": _rid(rid), "op": "render", "phrases": [[t, p] for t, p in req.phrases],
+        "negative": [[t, p] for t, p in req.negative], "seed": req.seed,
+        "steps": req.steps, "cfg": req.cfg, "size": req.size, "out": str(req.out),
+        "thumb": str(req.thumb), "thumb_size": req.thumb_size}
+    if req.identity is not None:
+        body["identity"] = {"ref": str(req.identity.ref), "crop": list(req.identity.crop),
+                            "scale": req.identity.scale}
+    if req.shape != "square":
+        body["shape"] = req.shape
+    detail = _asked_detail(req)
+    if detail is not None:
+        if detail.faces:
+            body["detail_faces"] = True
+        if detail.hands:
+            body["detail_hands"] = True
+    return _line(body)
+
+
+def grid_line(rid: str, tiles: Sequence[Path], *, tile: int, gutter: int, out: Path,
+              thumb: Path, thumb_size: int) -> bytes:
+    return _line({"id": _rid(rid), "op": "grid", "tiles": [str(t) for t in tiles], "tile": tile,
+                  "gutter": gutter, "out": str(out), "thumb": str(thumb),
+                  "thumb_size": thumb_size})
+
+
+def caption_line(rid: str, base: Path, *, top: str, bottom: str, out: Path) -> bytes:
+    return _line({"id": _rid(rid), "op": "caption", "base_path": str(base), "top": top,
+                  "bottom": bottom, "out_path": str(out)})
+
+
+def critic_line(rid: str, path: Path, *, ref: Path | None = None,
+                crop: tuple[float, float, float, float] | None = None) -> bytes:
+    body = {"id": _rid(rid), "op": "critic", "path": str(path)}
+    if (ref is None) != (crop is None):
+        raise ValueError("ref and crop go together")
+    if ref is not None:
+        body.update(ref=str(ref), crop=list(crop))
+    return _line(body)
+
+
+def embed_line(rid: str, ref: Path) -> bytes:
+    if not ref.is_absolute() or ref.suffix.lower() != ".jpg":
+        raise ValueError("embedding_path_invalid")
+    return _line({"id": _rid(rid), "op": "embed", "ref": str(ref)})
+
+
 class SelfieWorker:
     """`command` starts the worker (selfies.config.worker_command); `env` is its environment
     (None: this process's). start() may be called again after a stop: a fresh tree."""
@@ -312,27 +383,8 @@ class SelfieWorker:
         """One image. `rid` is the request's id (1-32 characters; default r<n>)."""
         self._sequence += 1
         rid = f"r{self._sequence}" if rid is None else rid
-        if type(rid) is not str or not 1 <= len(rid) <= 32:
-            raise ValueError("a request id is 1-32 characters")
-        body = {
-            "id": rid, "op": "render", "phrases": [[t, p] for t, p in req.phrases],
-            "negative": [[t, p] for t, p in req.negative], "seed": req.seed,
-            "steps": req.steps, "cfg": req.cfg, "size": req.size, "out": str(req.out),
-            "thumb": str(req.thumb), "thumb_size": req.thumb_size}
-        if req.identity is not None:
-            body["identity"] = {"ref": str(req.identity.ref), "crop": list(req.identity.crop),
-                                "scale": req.identity.scale}
-        if req.shape != "square":
-            body["shape"] = req.shape
-        detail = req.detail if req.detail is not None and (req.detail.faces or req.detail.hands) else None
-        if detail is not None:
-            if detail.faces:
-                body["detail_faces"] = True
-            if detail.hands:
-                body["detail_hands"] = True
-        line = json.dumps(body).encode("utf-8") + b"\n"
-        if len(line) - 1 > MAX_LINE:
-            raise WorkerError("bad_request")  # what the worker would answer; it stays up
+        line = render_line(req, rid)
+        detail = _asked_detail(req)
         tree = self._tree
         if not self.running:
             if tree is not None and tree.process.returncode is not None:
@@ -359,14 +411,8 @@ class SelfieWorker:
         running."""
         self._sequence += 1
         rid = f"r{self._sequence}" if rid is None else rid
-        if type(rid) is not str or not 1 <= len(rid) <= 32:
-            raise ValueError("a request id is 1-32 characters")
-        line = json.dumps({
-            "id": rid, "op": "grid", "tiles": [str(t) for t in tiles], "tile": tile,
-            "gutter": gutter, "out": str(out), "thumb": str(thumb),
-            "thumb_size": thumb_size}).encode("utf-8") + b"\n"
-        if len(line) - 1 > MAX_LINE:
-            raise WorkerError("bad_request")
+        line = grid_line(rid, tiles, tile=tile, gutter=gutter, out=out, thumb=thumb,
+                         thumb_size=thumb_size)
         tree = self._tree
         if not self.running:
             if tree is not None and tree.process.returncode is not None:
@@ -395,13 +441,7 @@ class SelfieWorker:
         running. The caption is drawn, never sent as a prompt; it is never logged."""
         self._sequence += 1
         rid = f"c{self._sequence}" if rid is None else rid
-        if type(rid) is not str or not 1 <= len(rid) <= 32:
-            raise ValueError("a request id is 1-32 characters")
-        body = {"id": rid, "op": "caption", "base_path": str(base), "top": top,
-                "bottom": bottom, "out_path": str(out)}
-        line = json.dumps(body).encode("utf-8") + b"\n"
-        if len(line) - 1 > MAX_LINE:
-            raise WorkerError("bad_request")
+        line = caption_line(rid, base, top=top, bottom=bottom, out=out)
         tree = self._tree
         if not self.running:
             if tree is not None and tree.process.returncode is not None:
@@ -428,16 +468,7 @@ class SelfieWorker:
         from .critic import Malformed, from_answer
         self._sequence += 1
         rid = f"k{self._sequence}" if rid is None else rid
-        if type(rid) is not str or not 1 <= len(rid) <= 32:
-            raise ValueError("a request id is 1-32 characters")
-        if (ref is None) != (crop is None):
-            raise ValueError("ref and crop go together")
-        body = {"id": rid, "op": "critic", "path": str(path)}
-        if ref is not None:
-            body.update(ref=str(ref), crop=list(crop))
-        line = json.dumps(body).encode("utf-8") + b"\n"
-        if len(line) - 1 > MAX_LINE:
-            raise WorkerError("bad_request")
+        line = critic_line(rid, path, ref=ref, crop=crop)
         tree = self._tree
         if not self.running:
             if tree is not None and tree.process.returncode is not None:
@@ -457,11 +488,7 @@ class SelfieWorker:
         from .similarity import MODEL, checked
         self._sequence += 1
         rid = f"e{self._sequence}"
-        if not ref.is_absolute() or ref.suffix.lower() != ".jpg":
-            raise ValueError("embedding_path_invalid")
-        line = json.dumps({"id":rid,"op":"embed","ref":str(ref)}).encode("utf-8") + b"\n"
-        if len(line)-1 > MAX_LINE:
-            raise WorkerError("bad_request")
+        line = embed_line(rid, ref)
         tree = self._tree
         if not self.running:
             if tree is not None and tree.process.returncode is not None:

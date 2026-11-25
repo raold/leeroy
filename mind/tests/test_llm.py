@@ -262,7 +262,7 @@ def test_presets_and_models():
 def test_fake_llm_basics():
     async def go():
         llm = FakeLLM()
-        r = await llm.chat("m", MSGS, options={"x": 1}, think=False)
+        r = await llm.chat("m", MSGS, options={"seed": 1}, think=False)
         assert r.text == "(nothing)"
         assert list(llm.calls[0]) == ["model", "messages", "options", "think", "format", "keep_alive"]
         v = await llm.embed("e", ["a", "b"])
@@ -450,6 +450,112 @@ def test_ollama_omits_think_only_when_none(monkeypatch):
     run(c.chat("m", MSGS, options={}, think=None, format=SCHEMA, keep_alive=-1))
     body = tr.seen[0][4]
     assert "think" not in body and body["format"] == SCHEMA and body["keep_alive"] == -1
+
+
+IMAGE = "aGVsbG8="  # base64 of b"hello"
+BAD_CHATS = {
+    "empty model": dict(model=""),
+    "messages not a list": dict(messages={"role": "user", "content": "x"}),
+    "message not an object": dict(messages=["hello"]),
+    "unknown role": dict(messages=[{"role": "narrator", "content": "x"}]),
+    "content not a string": dict(messages=[{"role": "user", "content": ["x"]}]),
+    "content missing": dict(messages=[{"role": "user"}]),
+    "content None": dict(messages=[{"role": "user", "content": None}]),
+    "a field Ollama drops": dict(messages=[{"role": "user", "content": "x", "name": "Arkon"}]),
+    "images not a list": dict(messages=[{"role": "user", "content": "x", "images": IMAGE}]),
+    "image not base64": dict(messages=[{"role": "user", "content": "x", "images": ["not b64!"]}]),
+    "image bytes": dict(messages=[{"role": "user", "content": "x", "images": [b"hello"]}]),
+    "options not a mapping": dict(options=None),
+    "unknown option": dict(options={"num_predit": 80}),
+    "int option as text": dict(options={"num_ctx": "4096"}),
+    "int option as a float": dict(options={"num_predict": 80.5}),
+    "int option as a bool": dict(options={"seed": True}),
+    "float option as a bool": dict(options={"temperature": False}),
+    "float option NaN": dict(options={"temperature": math.nan}),
+    "stop not strings": dict(options={"stop": [1]}),
+    "stop a string": dict(options={"stop": "\n"}),
+    "think a word": dict(think="no"),
+    "format a word": dict(format="xml"),
+    "format a list": dict(format=["json"]),
+    "format not JSON": dict(format={"type": object}),
+    "keep_alive a bool": dict(keep_alive=True),
+    "keep_alive no unit": dict(keep_alive="5 minutes"),
+}
+
+
+def _chat_args(**over):
+    return {**dict(model="m", messages=MSGS, options=dict(LIVE.options), think=False), **over}
+
+
+@pytest.mark.parametrize("over", BAD_CHATS.values(), ids=BAD_CHATS.keys())
+def test_a_chat_ollama_would_refuse_is_never_sent(monkeypatch, over):
+    tr = _patch(monkeypatch)
+    args = _chat_args(**over)
+    with pytest.raises(client_mod.BadRequest):
+        client_mod.chat_body(args.pop("model"), args.pop("messages"), **args)
+    with pytest.raises(client_mod.BadRequest):
+        run(OllamaClient("http://x:1").chat(**_chat_args(**over)))
+    assert tr.seen == []
+    llm = FakeLLM()
+    with pytest.raises(client_mod.BadRequest):
+        run(llm.chat(**_chat_args(**over)))
+    assert llm.calls == [] and len(llm.refused) == 1
+
+
+GOOD_CHATS = {
+    "live": {},
+    "no messages (a load)": dict(messages=[]),
+    "every role": dict(messages=[{"role": r, "content": ""} for r in sorted(client_mod.ROLES)]),
+    "an image": dict(messages=[{"role": "user", "content": "x", "images": [IMAGE]}]),
+    "thinking kept": dict(messages=[{"role": "assistant", "content": "x", "thinking": "t"}]),
+    "every option": dict(options={"num_keep": 4, "seed": 1, "num_predict": -1, "top_k": 40,
+                                  "repeat_last_n": 64, "num_ctx": 4096, "num_batch": 512,
+                                  "num_gpu": 0, "main_gpu": 0, "num_thread": 8, "top_p": 1,
+                                  "min_p": 0.05, "typical_p": 1.0, "temperature": 0.9,
+                                  "repeat_penalty": 1.1, "presence_penalty": 0,
+                                  "frequency_penalty": 0.0, "use_mmap": True,
+                                  "stop": ("\n\n",)}),
+    "a preset's frozen options": dict(options=REASON.options, think=True),
+    "think left out": dict(think=None),
+    "a schema": dict(format=SCHEMA),
+    "json": dict(format="json"),
+    "keep_alive seconds": dict(keep_alive=-1),
+    "keep_alive a duration": dict(keep_alive="1h30m"),
+    "keep_alive zero": dict(keep_alive="0"),
+}
+
+
+@pytest.mark.parametrize("over", GOOD_CHATS.values(), ids=GOOD_CHATS.keys())
+def test_the_client_and_the_fake_send_the_same_good_chat(monkeypatch, over):
+    tr = _patch(monkeypatch)
+    run(OllamaClient("http://x:1").chat(**_chat_args(**over)))
+    llm = FakeLLM()
+    run(llm.chat(**_chat_args(**over)))
+    assert llm.refused == [] and llm.calls[0]["options"] == tr.seen[0][4]["options"]
+
+
+@pytest.mark.parametrize("model, inputs, dimensions", [
+    ("", ["a"], 512), ("e", "a", 512), ("e", ["a", 1], 512), ("e", [b"a"], 512),
+    ("e", ["a"], 0), ("e", ["a"], True), ("e", ["a"], 512.0)])
+def test_an_embed_ollama_would_refuse_is_never_sent(monkeypatch, model, inputs, dimensions):
+    tr = _patch(monkeypatch)
+    with pytest.raises(client_mod.BadRequest):
+        run(OllamaClient("http://x:1").embed(model, inputs, dimensions=dimensions))
+    assert tr.seen == []
+    llm = FakeLLM()
+    with pytest.raises(client_mod.BadRequest):
+        run(llm.embed(model, inputs, dimensions=dimensions))
+    assert llm.calls == [] and llm.refused
+
+
+def test_the_fake_checks_every_embed_batch_as_the_client_sends_it():
+    llm = FakeLLM()
+    inputs = ["ok"] * client_mod.EMBED_BATCH + [None]
+    with pytest.raises(client_mod.BadRequest):
+        run(llm.embed("e", inputs))
+    assert client_mod.embed_body("e", ("a", "b")) == {
+        "model": "e", "input": ["a", "b"], "dimensions": 512, "keep_alive": -1,
+        "options": {"num_ctx": 2048}}
 
 
 def test_ollama_truncates_long_vectors(monkeypatch):

@@ -1,19 +1,19 @@
 """In-process training ports. No bridge sockets, models or game data are opened."""
 
 import dataclasses
-import json
 from collections import defaultdict, deque
 from pathlib import Path
 
 from leeroy_mind.guild import protocol as guild
 from leeroy_mind.human import HumanIdentity
-from leeroy_mind.protocol import Ack, encode_command
+from leeroy_mind.protocol import Ack
 from dbtemplate import open_migrated
 from leeroy_mind.storage.rows import PersonaStateRow
 from leeroy_mind.talk.turns import TurnKind
 from leeroy_mind.training.config import TrainingConfig
 from leeroy_mind.training.ports import EventWaiter
 from leeroy_mind.training.protocol import register
+from leeroy_mind.testing.wire import WireContract
 
 
 class FakeTrainingPorts:
@@ -33,6 +33,7 @@ class FakeTrainingPorts:
         self.claims, self.released = [], []
         self.acks, self.jobs, self.events = defaultdict(deque), defaultdict(deque), defaultdict(deque)
         self._commands = {}
+        self.wire = WireContract()
         guild.register()
         register()
 
@@ -73,11 +74,16 @@ class FakeTrainingPorts:
         return set(self.away_set)
 
     async def send(self, cmd):
-        name = json.loads(encode_command(cmd, int(self.clock.now() * 1000)))["type"]
+        ts = int(self.clock.now() * 1000)
+        # The live ports send through guild life's, which keep every identity (preserve_id=True).
+        _, refusal = self.wire.send(cmd, preserve_id=True, ts_ms=ts)
+        name = self.wire.lines[-1]["type"]
         self.sent.append(cmd)
         self._commands[cmd.id] = (name, cmd)
+        if refusal:
+            return Ack(ts, cmd.id, False, refusal)
         ok, error = self.acks[name].popleft() if self.acks[name] else (True, "")
-        return Ack(int(self.clock.now() * 1000), cmd.id, ok, error)
+        return Ack(ts, cmd.id, ok, error)
 
     async def wait_job(self, cmd_id, timeout_s):
         if cmd_id not in self._commands:

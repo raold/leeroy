@@ -18,6 +18,7 @@ from leeroy_mind.guild.protocol import Job, StringDo
 from leeroy_mind.personas.io import save_persona
 from leeroy_mind.protocol import Ack
 from leeroy_mind.storage.rows import Relationship
+from leeroy_mind.testing.wire import WireContract
 
 GODMODE = "[godmode]\nenabled=true\n"
 
@@ -28,11 +29,17 @@ class Wire:
 
     def __init__(self, app, answers=None):
         self.app, self.answers, self.sent, self.connected = app, answers or {}, [], True
+        self.wire = WireContract()
 
     async def send(self, cmd, *, preserve_id=False):
         assert preserve_id and isinstance(cmd, StringDo)
-        self.sent.append(cmd)
         answer = self.answers.get(cmd.kind, (True, "", "done"))
+        if isinstance(answer, NotConnected):
+            raise answer  # BridgeClient refuses before it claims the identity
+        _, refusal = self.wire.send(cmd, preserve_id=preserve_id)
+        self.sent.append(cmd)
+        if refusal:
+            return Ack(0, cmd.id, False, refusal)
         if isinstance(answer, Exception):
             raise answer
         ok, error, reason = answer
