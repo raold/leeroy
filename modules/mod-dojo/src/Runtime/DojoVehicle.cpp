@@ -344,9 +344,11 @@ struct Trial
                 if (!boss || boss->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE)) { Fail("leviathan_not_ready"); return; }
                 for (std::size_t i = 0; i < actors.size(); ++i)
                     initial[i] = previous[i] = Actor(i)->GetVehicleBase()->GetPosition();
-                startingBossHealth = leastBossHealth = boss->GetHealth();
                 boss->AI()->AttackStart(tank->GetVehicleBase());
                 boss->AI()->DoZoneInCombat();
+                // Entering combat applies native Leviathan health scaling.
+                // Take the baseline on the first combat observation, not the idle template HP.
+                startingBossHealth = leastBossHealth = 0;
                 Phase("observe");
             }
             else if (phaseMs > 60000) Fail("ordinary_ai_did_not_board_driver_seats");
@@ -357,6 +359,7 @@ struct Trial
             auto* boss = Boss();
             if (!boss || !boss->IsAlive() || !boss->IsInCombat()) { Fail("leviathan_encounter_lost"); return; }
             ++samples; maxGap = std::max(maxGap, diff);
+            if (!startingBossHealth) startingBossHealth = leastBossHealth = boss->GetHealth();
             leastBossHealth = std::min(leastBossHealth, boss->GetHealth());
             for (std::size_t i = 0; i < actors.size(); ++i)
             {
