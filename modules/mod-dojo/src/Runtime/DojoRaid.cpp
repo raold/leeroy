@@ -330,6 +330,12 @@ struct RaidRun
             // Exercise the shipped ICC strategy with its ordinary follow/heal
             // competitors intact. Only the feature switch differs in the control.
             for (uint32 boss = 0; boss < 12; ++boss) script->SetBossState(boss, DONE);
+            // The core also requires the separately indexed Sindragosa
+            // gauntlet, not only her boss state. Otherwise JustEngagedWith
+            // evades and teleports the outside anchor to Light's Hammer.
+            script->SetBossState(13, DONE);
+            if (!script->CheckRequiredBosses(12, owner) || !lichKing->IsVisible())
+            { Fail("native_lich_king_prerequisites_missing"); return; }
             script->SetBossState(12, IN_PROGRESS);
             ai->ChangeStrategy("+icc", BOT_STATE_COMBAT);
             ai->ChangeStrategy("+icc", BOT_STATE_NON_COMBAT);
