@@ -906,6 +906,29 @@ printf 'new server start\\n' >> "$AC_ROOT/actions.log"
         self.assertEqual(self.git_at(repo, "rev-list", "--count", f"{already}..HEAD"), "1")
         self.assertEqual((repo / "payload.txt").read_text(), "second\n")
 
+    def test_installed_module_patch_exported_with_other_context_is_not_applied_again(self):
+        repo, _ = self.module("mod-playerbots")
+        lines = "".join(f"line {i}\n" for i in range(1, 16))
+        self.write(repo / "payload.txt", lines)
+        self.git_at(repo, "commit", "-qam", "Module lines")
+        source = self.root.parent / "playerbots-reexport"
+        shutil.copytree(repo, source)
+        self.write(source / "payload.txt", lines.replace("line 8\n", "line 8 changed\n"))
+        self.git_at(source, "commit", "-qam", "Change line eight")
+        patch = self.git_at(source, "format-patch", "-U1", "-1", "--stdout") + "\n"
+        self.write(repo / "payload.txt", lines.replace("line 8\n", "line 8 changed\n"))
+        self.git_at(repo, "commit", "-qam", "Change line eight")  # installed as a -U3 commit
+        installed = self.git_at(repo, "rev-parse", "HEAD")
+        ids = [subprocess.run(["git", "patch-id", "--stable"], input=text, capture_output=True, text=True,
+                              check=True).stdout.split()[0]
+               for text in (patch, self.git_at(repo, "show", "HEAD") + "\n")]
+        self.assertNotEqual(*ids)
+        selected = self.publish({"patches/mod-playerbots/0001-step.patch": patch}, parent=self.base)
+        self.assertIn("apply 0 missing module patch(es)", self.run_release("--native", "--dry-run", selected))
+        self.module_original(repo, installed)
+        self.run_release("--native", selected)
+        self.module_original(repo, installed)
+
     def test_already_live_root_commit_still_installs_missing_native_patch(self):
         repo, head = self.module("mod-playerbots")
         selected = self.publish(self.series(repo, [{"payload.txt": "patched\n"}]), parent=self.base)
