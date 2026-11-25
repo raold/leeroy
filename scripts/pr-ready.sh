@@ -31,13 +31,14 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# gh needs word splitting here so GH can carry arguments.
+# Not named gh: with the default GH the wrapper would call itself. Word splitting
+# is intended so GH can carry arguments.
 # shellcheck disable=SC2086
-gh() { $gh_cmd "$@"; }
+ghc() { command $gh_cmd "$@"; }
 
 fetch_pr() {
-    gh pr view "$pr" --repo "$repo" \
-        --json baseRefName,isDraft,mergeStateStatus,headRefOid,statusCheckRollup,comments,reviews \
+    ghc pr view "$pr" --repo "$repo" \
+        --json baseRefName,isDraft,mergeStateStatus,headRefOid,statusCheckRollup \
         >"$tmp/pr.json" || err "gh pr view $pr failed"
 }
 
@@ -51,10 +52,12 @@ while [ "$state" = UNKNOWN ] && [ "$tries" -lt 6 ]; do
     tries=$((tries + 1))
 done
 
-gh api "repos/$repo/rulesets/$ruleset" >"$tmp/ruleset.json" || err "reading ruleset $ruleset failed"
-gh api --paginate --slurp "repos/$repo/pulls/$pr/commits" >"$tmp/commits.json" || err "reading commits failed"
-gh api --paginate --slurp "repos/$repo/pulls/$pr/comments" >"$tmp/rcomments.json" || err "reading review comments failed"
-gh api graphql -F owner="${repo%%/*}" -F name="${repo##*/}" -F number="$pr" -f query='
+ghc api "repos/$repo/rulesets/$ruleset" >"$tmp/ruleset.json" || err "reading ruleset $ruleset failed"
+ghc api --paginate --slurp "repos/$repo/pulls/$pr/commits" >"$tmp/commits.json" || err "reading commits failed"
+ghc api --paginate --slurp "repos/$repo/pulls/$pr/comments" >"$tmp/rcomments.json" || err "reading review comments failed"
+ghc api --paginate --slurp "repos/$repo/pulls/$pr/reviews" >"$tmp/reviews.json" || err "reading reviews failed"
+ghc api --paginate --slurp "repos/$repo/issues/$pr/comments" >"$tmp/icomments.json" || err "reading PR comments failed"
+ghc api graphql -F owner="${repo%%/*}" -F name="${repo##*/}" -F number="$pr" -f query='
 query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){
     pullRequest(number:$number){
@@ -127,18 +130,35 @@ if not real:
     reasons.append("PR has no non-merge commit")
 else:
     last = real[-1]
-    sha, cdate = last["sha"], last["commit"]["committer"]["date"]
-    reviewed = any(login(r["author"]["login"]) == bot and r["submittedAt"] > cdate
-                   for r in pr["reviews"] if r.get("author") and r.get("submittedAt"))
-    reviewed = reviewed or any(login(c["user"]["login"]) == bot and c["created_at"] > cdate
-                               for c in rcomments)
-    if not reviewed:
-        for c in pr["comments"]:
-            for m in re.finditer(r"claude-local reviewed ([0-9a-f]{7,40})", c["body"]):
-                if sha.startswith(m.group(1)):
-                    reviewed = True
-    if not reviewed:
-        reasons.append(f"last non-merge commit {sha[:7]} has no review after it")
+    sha = last["sha"]
+    # Commits a review is bound to, by SHA: a review of an older revision proves nothing.
+    seen = []
+    for r in flatten(load("reviews")):
+        if login((r.get("user") or {}).get("login")) == bot and r.get("commit_id"):
+            seen.append(r["commit_id"])
+    for c in rcomments:
+        if login((c.get("user") or {}).get("login")) == bot:
+            seen += [c[k] for k in ("commit_id", "original_commit_id") if c.get(k)]
+    for c in flatten(load("icomments")):
+        body = c.get("body") or ""
+        if login((c.get("user") or {}).get("login")) == bot:
+            m = re.search(r"<!-- codex-review-state:v1 (.*?) -->", body)
+            if m:
+                try:
+                    st = json.loads(m[1])["code_review"]
+                except (ValueError, KeyError, TypeError):
+                    st = {}
+                if st.get("status") == "completed" and st.get("commit_sha"):
+                    seen.append(st["commit_sha"])
+            elif "<!-- codex-review-receipt:v1 -->" in body:
+                m = re.search(r"Reviewed commit:\*\* `([0-9a-f]{7,40})`", body)
+                if m:
+                    seen.append(m[1])
+        seen += re.findall(r"claude-local reviewed ([0-9a-f]{7,40})", body)
+    # The last real commit, or a merge of main made after it, counts as reviewed.
+    covered = [c["sha"] for c in commits[commits.index(last):]]
+    if not any(s and len(s) >= 7 and c.startswith(s) for s in seen for c in covered):
+        reasons.append(f"last non-merge commit {sha[:7]} has no review of that commit")
 
 ready = not reasons
 if as_json:
@@ -146,8 +166,9 @@ if as_json:
 else:
     for r in reasons:
         print(r)
-sys.exit(0 if ready else 1)
+sys.exit(0 if ready else 10)
 PY
 rc=$?
-if [ "$rc" -gt 1 ]; then err "evaluation failed"; fi
+[ "$rc" -eq 0 ] || [ "$rc" -eq 10 ] || err "evaluation failed"
+[ "$rc" -eq 0 ] || rc=1
 exit "$rc"
