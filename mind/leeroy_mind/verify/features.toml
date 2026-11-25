@@ -536,6 +536,52 @@ pattern = '^owner_aura_invalid (?:spell=\d+ reason=(?P<code>[a-z_]+)|entry=)'
 example = "2026-11-22 17:03:01 owner_aura_invalid spell=12345 reason=not_an_aura"
 
 [[feature]]
+id = "owner_pet_auras"
+name = "His pet's listed auras kept on it (Leeroy.OwnerPetAuras)"
+prs = [489]
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.evidence]]
+id = "reapplied"
+kind = "working"
+what = "an aura his pet or guardian lacked was put on it (owner_pet_aura_reapplied; code: how it last went)"
+log = "server"
+token = "owner_pet_aura_reapplied "
+pattern = '^owner_pet_aura_reapplied spell=\d+ pet_entry=\d+ why=(?P<code>[a-z_]+)'
+example = "2026-11-25 20:00:00 owner_pet_aura_reapplied spell=51040 pet_entry=37994 why=death"
+
+[[feature.evidence]]
+id = "refused"
+kind = "failed"
+what = "putting an aura on his pet failed or it did not stay on (owner_pet_aura_refused; code: how it last went)"
+log = "server"
+token = "owner_pet_aura_refused "
+pattern = '^owner_pet_aura_refused spell=\d+ pet_entry=\d+ why=(?P<code>[a-z_]+)'
+example = "2026-11-25 20:00:01 owner_pet_aura_refused spell=51040 pet_entry=37994 why=dispelled"
+
+[[feature.evidence]]
+id = "listed"
+kind = "observed"
+what = "the worldserver read his pet's aura list (owner_pet_auras spells=)"
+log = "server"
+token = "owner_pet_auras spells="
+pattern = '^owner_pet_auras spells='
+example = "2026-11-25 17:03:01 owner_pet_auras spells=6560,51040,31750"
+
+[[feature.evidence]]
+id = "invalid"
+kind = "failed"
+what = "an entry of his pet's list is not an aura spell (owner_pet_aura_invalid)"
+log = "server"
+token = "owner_pet_aura_invalid "
+pattern = '^owner_pet_aura_invalid (?:spell=\d+ reason=(?P<code>[a-z_]+)|entry=)'
+example = "2026-11-25 17:03:01 owner_pet_aura_invalid spell=12345 reason=not_an_aura"
+
+[[feature]]
 id = "offline_toc"
 name = "Offline raids in Trial of the Crusader"
 prs = [397, 410]

@@ -389,6 +389,20 @@ def test_a_later_aura_refusal_outranks_an_earlier_reapply(install):
     assert item["status"] == "failed" and evidence(item, "refused")["codes"] == [{"code": "dispelled", "count": 1}]
 
 
+def test_pet_aura_lines_count_for_his_pet_only(install):
+    data, folder = install
+    fs = tuple(f for f in L.load_features() if f.id in ("owner_auras", "owner_pet_auras"))
+    append(folder / "Server.log", native(NOW - 50, "owner_pet_auras spells=6560,51040,31750")
+           + native(NOW - 40, "owner_pet_aura_reapplied spell=51040 pet_entry=37994 why=death"))
+    result = run(install, fs)
+    pet = feature(result, "owner_pet_auras")
+    assert pet["status"] == "seen_working" and evidence(pet, "reapplied")["codes"] == [{"code": "death", "count": 1}]
+    assert feature(result, "owner_auras")["status"] == "unverified"
+    assert all(e["count"] == 0 for e in feature(result, "owner_auras")["evidence"])
+    append(folder / "Server.log", native(NOW - 10, "owner_pet_aura_refused spell=51040 pet_entry=37994 why=dispelled"))
+    assert feature(run(install, fs), "owner_pet_auras")["status"] == "failed"
+
+
 def test_a_spent_deadline_never_costs_a_switch_state(install, store):
     """Switches are read first and on their own short deadline: switched off still outranks evidence."""
     data, folder = install

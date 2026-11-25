@@ -73,6 +73,17 @@ Leeroy.GroupRez.ReleaseSeconds = 60
 # removing an id is the only way to keep its aura off. Example: Leeroy.OwnerAuras = "6560" (LeCraft Test Spell).
 Leeroy.OwnerAuras = ""
 
+# Auras the owner's pet keeps: a comma or space list of spell ids; empty is off. The same pass, checks and wake as
+# Leeroy.OwnerAuras, for the pet he controls (a permanent Water Elemental, a hunter's pet) and the guardians he
+# summons (Mirror Image, a ghoul, treants); never a totem, a companion, a unit he charms, someone else's pet or a
+# bot's. While he can take his own auras, each listed aura a living pet of his lacks is put back on it (cast by the
+# pet on itself): on summon, after it dies and is summoned again, after a teleport and after a dispel. Logs
+# owner_pet_auras spells=, owner_pet_aura_reapplied spell= pet_entry= why= (once a minute per spell for his pet,
+# and once for his guardians) and owner_pet_aura_invalid for an entry that is not an aura spell. Reloadable with
+# .reload config. A value takes no comment after it on the same line, so write it alone.
+# Example: Leeroy.OwnerPetAuras = "6560, 51040"
+Leeroy.OwnerPetAuras = ""
+
 # Ground hazards in the owner's group. Cast bots of his group with him as master get playerbots'
 # avoid aoe out of combat as well (stock adds it to the combat engine only); with the local playerbots
 # patch (PlayerbotHazardFilter) their follow spots also skip a hazard for the nearest safe spot, follow walks
