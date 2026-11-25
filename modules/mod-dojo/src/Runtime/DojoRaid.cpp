@@ -261,7 +261,7 @@ struct RaidRun
         Position const point = StartPoint();
         for (std::size_t i = 0; i < actors.size(); ++i)
         {
-            Position const destination = scenario == "lk-terenas" && i == 1
+            Position const destination = scenario == "lk-terenas"
                 ? Position(503.62f, -2124.65f, 840.857f, 0.f) : point;
             if (!Actor(i)->TeleportTo(map, destination.GetPositionX(), destination.GetPositionY() + float(i) * 2.f,
                     destination.GetPositionZ(), 0.f)) { Fail("fixture teleport refused"); return false; }
@@ -345,8 +345,14 @@ struct RaidRun
                 terenas->AI()->DoAction(-36823); // Core ACTION_FROSTMOURNE_INTRO sets initial half health.
                 terenas->AI()->AttackStart(warden);
                 warden->AI()->AttackStart(terenas);
-                // The ordinary follow target stays outside Frostmourne. Never
-                // relocate the measured actor, cast for it or write Terenas HP.
+                // Enter through the real Harvest Soul teleport only after the
+                // encounter and room exist. Early setup teleporting exposed the
+                // negative control to stock floor correction before observation.
+                bot->GetMap()->LoadGrid(495.708f, -2523.76f);
+                auto const cast = bot->CastSpell(bot, 72546, true);
+                if (cast != SPELL_CAST_OK) { Fail("native_frostmourne_entry_refused:" + std::to_string(uint32(cast))); return; }
+                // The ordinary follow target stays outside. No measured actor
+                // relocation or Terenas health writes occur during observation.
             }
             else
             {
