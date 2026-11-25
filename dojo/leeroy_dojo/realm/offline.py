@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import time
 import uuid
 
@@ -123,7 +124,9 @@ def run(layout, *, target, log=print):
                     if not feed.ready or feed.error:
                         client.command("dojo offline stop")
                         raise world.WorldError("candidate mechanic connection lost; comparison is invalid")
-                    trace.write(json.dumps(observed, sort_keys=True) + "\n"); trace.flush()
+                    observed["observed_at"] = time.time()
+                    trace.write(json.dumps(observed, sort_keys=True) + "\n")
+                    trace.flush()
                     native = observed.get("native", {})
                     if observed.get("token") != token or native.get("event", {}).get("id") != token:
                         raise world.WorldError("offline run token changed")
@@ -158,6 +161,11 @@ def run(layout, *, target, log=print):
         if report["stopped"]:
             _set(layout, "modules/mod_leeroy.conf", {"Leeroy.Enable": "0", "Leeroy.GuildId": "0", "Leeroy.HumanGuid": "0"})
             _set(layout, "modules/mod_dungeon_clear.conf", {"DungeonClear.OfflineValithria": "0"})
+            # Preserve the actual isolated native evidence before the next run rotates it.
+            for name in ("Server.log", "DungeonClear.log", "Playerbots.log"):
+                path = layout.logs / name
+                if path.is_file():
+                    shutil.copyfile(path, out / name)
         report["ok"] = report["ok"] and report["stopped"]
         (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report

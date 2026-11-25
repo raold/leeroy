@@ -205,13 +205,16 @@ struct OfflineFixture
         for (std::size_t i = 1; i < actors.size(); ++i)
             if (auto* p = Actor(i))
             {
-                json bosses = json::array();
+                json bosses = json::array(), auras = json::array();
+                for (uint32 spell : {66823u, 67618u, 67619u, 67620u, 66830u, 66869u})
+                    if (p->HasAura(spell)) auras.push_back(spell);
                 if (auto* script = p->GetInstanceScript())
                     for (uint32 b = 0; b < script->GetEncounterCount(); ++b) bosses.push_back(uint32(script->GetBossState(b)));
                 bodies.push_back({{"slot", i}, {"guid", actors[i].GetCounter()}, {"alive", p->IsAlive()},
                     {"map", p->GetMapId()}, {"instance", p->GetInstanceId()}, {"health", p->GetHealth()},
                     {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
-                    {"combat", p->IsInCombat()}, {"bosses", bosses}});
+                    {"combat", p->IsInCombat()}, {"bosses", bosses}, {"auras", auras},
+                    {"speed_run", p->GetSpeed(MOVE_RUN)}, {"tank", PlayerbotAI::IsTank(p)}});
             }
         for (auto const& [entry, value] : hits) damage.push_back({{"entry", entry}, {"hits", value.first}, {"requested", value.second}});
         return {{"kind", "dojo-offline-observation"}, {"format", 1}, {"state", state}, {"error", error},
