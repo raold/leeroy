@@ -23,6 +23,7 @@
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "PathGenerator.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotsDatabase.h"
@@ -115,6 +116,7 @@ struct RaidRun
     float minimumClearance = 1000.f;
     bool setup = false, active = false, cleanup = false, combatObserved = false, competition = false;
     ObjectGuid target;
+    json defilePaths = json::array();
     std::array<ObjectGuid, 2> actors{};
     std::recursive_mutex events;
 
@@ -183,6 +185,7 @@ struct RaidRun
         roomSamples = escapeMs = outsideSamples = hazardStartMs = 0; finalHazardClearance = 0.f;
         insideSamples = lateHits = encounterSamples = 0;
         setup = cleanup = combatObserved = competition = false; target.Clear();
+        defilePaths = json::array();
         map = name == "valithria" || name == "lk-terenas" || name == "lk-defile" ? 631 : name == "twins" ? 649 : 533;
         oldTwins = sPlayerbotAIConfig.TwinValkyrInteractions;
         sPlayerbotAIConfig.TwinValkyrInteractions = !negative;
@@ -354,6 +357,21 @@ struct RaidRun
                 // Cast the real core spell: its summon/aura/growth are the stimulus.
                 auto const cast = lichKing->CastSpell(bot, 72762, true);
                 if (cast != SPELL_CAST_OK) { Fail("native_defile_cast_refused:" + std::to_string(uint32(cast))); return; }
+                // Read-only path evidence: identify which core geometry check
+                // rejects escape without moving the measured actor for it.
+                for (auto const& offset : std::array<std::array<float, 2>, 4>{{{16.f, 0.f}, {-16.f, 0.f}, {0.f, 16.f}, {0.f, -16.f}}})
+                {
+                    float const x = bot->GetPositionX() + offset[0], y = bot->GetPositionY() + offset[1];
+                    float z = bot->GetPositionZ();
+                    bot->UpdateAllowedPositionZ(x, y, z);
+                    PathGenerator path(bot);
+                    path.SetPathLengthLimit(96.f);
+                    bool const built = path.CalculatePath(x, y, z);
+                    json vertices = json::array();
+                    for (auto const& point : path.GetPath()) vertices.push_back({point.x, point.y, point.z});
+                    defilePaths.push_back({{"destination", {x, y, z}}, {"los", bot->IsWithinLOS(x, y, z)},
+                        {"built", built}, {"type", uint32(path.GetPathType())}, {"vertices", vertices}});
+                }
             }
         }
         else
@@ -570,7 +588,8 @@ struct RaidRun
             {"final_hazard_clearance", finalHazardClearance},
             {"switch_ms", switchMs}, {"crossings", crossings}, {"hazard_samples", hazardsSeen},
             {"minimum_clearance", minimumClearance}, {"poison_hits", scenario == "poison" ? damageHits : 0},
-            {"defile_hits", scenario == "lk-defile" ? damageHits : 0}, {"fixtures", fixtures}, {"encounter", encounter}};
+            {"defile_hits", scenario == "lk-defile" ? damageHits : 0}, {"defile_paths", defilePaths},
+            {"fixtures", fixtures}, {"encounter", encounter}};
     }
 };
 RaidRun run;
