@@ -59,6 +59,7 @@ $env:GIT_OPTIONAL_LOCKS = '0'
 $DojoGenerator = 'Visual Studio 17 2022'
 $DojoModules = @('mod_dojo', 'mod_playerbots')
 if ($RaidAcceptance) { $DojoModules += 'mod_leeroy' }
+if ($OfflineAcceptance) { $DojoModules += 'mod_dungeon_clear' }
 
 function Stop-DojoConfigure([string] $Message) {
     Write-Output "configure: $Message"
