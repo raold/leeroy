@@ -255,6 +255,10 @@ struct RaidRun
         {
             Leeroy::Guild::InstallHazardFilter();
             Leeroy::Guild::DojoHazardOwner(control ? 0 : owner->GetGUID().GetCounter());
+            // Under a game client master playerbots builds the combat engine with avoid aoe as well
+            // (AutoAvoidAoe), the strategy that runs the hazard exit; these engines were built under a bot master.
+            if (!control && sPlayerbotAIConfig.AutoAvoidAoe)
+                ai->ChangeStrategy("+avoid aoe", BOT_STATE_COMBAT);
             owner->NearTeleportTo(3195.f, -3148.f, 293.34f, 3.14f);
         }
         setup = true;
