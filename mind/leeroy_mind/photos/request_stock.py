@@ -168,7 +168,7 @@ def _snap_tier(app, photo) -> int:
     return heat_photos.scene_tier(photo.scene) if kept is None else kept
 
 
-def _candidates(app, request, *, now, member):
+def _candidates(app, request, *, now, member, gallery=True):
     for photo in snaps.ready_for(app.store, request.guid, now=now, phase=None):
         if not _safe_snap(app, request, photo, now=now, member=member):
             continue
@@ -176,6 +176,8 @@ def _candidates(app, request, *, now, member):
         if images is not None:
             yield (f'snap:{photo.id}', *images, photo.scene, photo.seed, photo.tries,
                    photo.nsfw, photo.prompt, _snap_tier(app, photo))
+    if not gallery:
+        return
     p, cur = member
     with app.store.transaction():
         # A set rendered from an older persona than her cover's set may show looks she no longer has.
@@ -218,8 +220,9 @@ def _candidates(app, request, *, now, member):
                scene, row['seed'], row['tries'], row['nsfw'], row['prompt'], tier)
 
 
-def reserve_fallback(app, request, *, now=None):
-    """Copy the first usable retained photo. A failed/partial copy never replaces a file.
+def reserve_fallback(app, request, *, now=None, gallery=True):
+    """Copy the first usable retained photo (`gallery` False: only a ready situational photo, never
+    a profile candidate). A failed/partial copy never replaces a file.
 
     The metadata is bound before disk writes so an interrupted copy cannot reuse an id and
     overwrite its retained files. A ready copy remains bound for restart delivery recovery.
@@ -236,7 +239,7 @@ def reserve_fallback(app, request, *, now=None):
         return None
     sent_cache = {}
     for identity, image, thumb, scene, seed, tries, nsfw, prompt, tier in _candidates(
-            app, request, now=now, member=member):
+            app, request, now=now, member=member, gallery=gallery):
         if _sent(app, request, identity=identity, image=image, now=now, cache=sent_cache):
             continue
         p, cur = member
