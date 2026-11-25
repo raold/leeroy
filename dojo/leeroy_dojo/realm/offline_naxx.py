@@ -15,6 +15,7 @@ def reached_naxx(observation, *, control):
     event = native.get("event", {})
     if (gate.get("state") != "ready" or gate.get("control") is not control
             or gate.get("strategies_restored") is not True
+            or gate.get("setup_location") != "razuvious_room"
             or gate.get("setup_bosses") != [3, 4, 5, 6, 7, 8, 10]
             or gate.get("setup_boss_deaths") != [15956, 15953, 15952, 15954, 15936, 16011, 16061]
             or gate.get("setup_trash_deaths") != APPROACH_SPAWNS

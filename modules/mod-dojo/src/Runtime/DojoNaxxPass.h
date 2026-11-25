@@ -37,9 +37,10 @@ struct DojoNaxxPass
     std::array<bool, 10> held{};
     std::array<std::array<std::array<bool, 3>, 2>, 10> strategies{};
     static constexpr std::array<uint32, 7> Prerequisites{3, 4, 5, 6, 7, 8, 10};
-    // Between the Necro Knight pack to the north and Cavaliers to the south.
-    // The whole three-yard roster footprint is outside their aggro ranges.
-    static constexpr float SetupX = 2778.f, SetupY = -3312.f, SetupZ = 267.7f;
+    // Start at the defeated Razuvious, as specified by the release gate.
+    // The Gothik corridor is still fresh; starting there would place the raid
+    // beyond uncleared packs and add their return journey to the measured route.
+    static constexpr float SetupX = 2758.f, SetupY = -3107.f, SetupZ = 267.7f;
 
     bool PrepareApproach(Map* map, std::string& error)
     {
@@ -245,6 +246,7 @@ struct DojoNaxxPass
             {"engage_ms", engageMs}, {"passes", passes}, {"setup_completed_mask", setupMask},
             {"setup_boss_deaths", setupDeaths}, {"setup_add_deaths", setupAddDeaths},
             {"setup_trash_deaths", setupTrashDeaths},
+            {"setup_location", "razuvious_room"},
             {"setup_bosses", Prerequisites},
             {"strategies_restored", std::none_of(held.begin(), held.end(), [](bool value) { return value; })}};
     }
