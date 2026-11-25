@@ -283,7 +283,7 @@ class LootMaster:
                     inserted = self.ports.conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES (?,?)",
                                                        (key, json.dumps(record))).rowcount
                 if inserted:
-                    await self.ports.say(self.ctx.plan.loot_guid, "raid", template("loot_call", item=record["name"]))
+                    await self.ports.say(self.ctx.plan.loot_guid, "raid", template("loot_call", item=record["name"]), window_exempt=True)
 
     def on_human_chat(self, text):
         if not self._active() or not self.ctx.plan.human_in_raid or not is_claim(text):
@@ -306,7 +306,7 @@ class LootMaster:
         if result.close:
             facts.update(runner_up=member_name(self.ports, result.runner_up), runner_bid=result.runner_up_bid)
         line = "loot_award_council" if council else "loot_award_close" if result.close else "loot_award"
-        await self.ports.say(self.ctx.plan.loot_guid, "raid", template(line, **facts))
+        await self.ports.say(self.ctx.plan.loot_guid, "raid", template(line, **facts), window_exempt=True)
         if result.close and result.runner_up is not None:
             await self.ports.loot_lost(result.runner_up, record["name"])
         elif (record.get("mode") is not None and record.get("human_claimed") is True
@@ -410,7 +410,7 @@ class LootMaster:
                                            receipt_guild=_get(self.ports.conn, "guild_id"))
                     _put(self.ports.conn, key, current)
                 if result is None:
-                    await self.ports.say(self.ctx.plan.loot_guid, "raid", template("loot_unclaimed", item=record["name"]))
+                    await self.ports.say(self.ctx.plan.loot_guid, "raid", template("loot_unclaimed", item=record["name"]), window_exempt=True)
                     continue
                 if await self._give(key, current, result, 0):
                     return
@@ -473,7 +473,7 @@ class LootMaster:
                  record["item_id"], command.id, attempt, gone)
         line = (template("loot_give_gone", item=record["name"]) if gone
                 else template("loot_give_failed", item=record["name"], error=record["error"]))
-        await self.ports.say(self.ctx.plan.loot_guid, "raid", line)
+        await self.ports.say(self.ctx.plan.loot_guid, "raid", line, window_exempt=True)
         return False
 
     def _unknown(self, key, record, command, attempt, code):
@@ -490,7 +490,7 @@ class LootMaster:
             line = template("loot_give_unknown", item=record["name"])
         else:
             line = template("loot_give_lost", item=record["name"], winner=member_name(self.ports, result.guid))
-        await self.ports.say(self.ctx.plan.loot_guid, "raid", line)
+        await self.ports.say(self.ctx.plan.loot_guid, "raid", line, window_exempt=True)
 
     async def close(self):
         self._closed = True

@@ -113,7 +113,7 @@ class FakeTrainingPorts:
     def propose(self, guid, channel, instruction, *, kind=TurnKind.ASIDE):
         self.proposed.append((guid, channel, instruction, kind))
 
-    async def say(self, guid, channel, text, *, kind=TurnKind.CALLOUT, to_guid=0):
+    async def say(self, guid, channel, text, *, kind=TurnKind.CALLOUT, to_guid=0, window_exempt=False):
         self.said.append((guid, channel, text, kind, to_guid))
         return True
 
