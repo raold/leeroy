@@ -12,6 +12,7 @@ bool Owns(std::uint32_t, std::string_view name = "*");
 void Forget(std::uint32_t);
 void Tick();
 void Reload();
+void RegisterTableHandler(); // playstyle_table (LeeroyPlayStyle.h)
 std::uint64_t Epoch();
 }
 #endif
