@@ -5,6 +5,7 @@
 #if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
 #include "DojoRuntime.h"
 #include "AccountMgr.h"
+#include "AllMapScript.h"
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "CommandScript.h"
@@ -681,36 +682,23 @@ struct EncounterRun
         for (std::size_t i = 0; i < actors.size(); ++i)
             if (i != EncounterLeader && !group->AddMember(Actor(i)))
             { group->Disband(); Fail("fixture join failed"); return false; }
-        // Into the instance at its entrance first: an archmage that sees a raider in her room before the
-        // lower-spire states are set starts the encounter as a sequence break and ports everyone out.
+        // The lower-spire states are set as the instance is created (EncounterMaps), before any creature
+        // loads: an archmage that sees a raider before then starts the fight as a sequence break and ports
+        // everyone out, and a loaded lower-spire boss would refuse DONE.
         for (std::size_t i = 0; i < actors.size(); ++i)
-            if (!Actor(i)->TeleportTo(631, 76.8638f - float(i % 5) * 2.f, 2211.37f + float(i / 5) * 2.f, 30.f, 3.14965f))
+            if (!Actor(i)->TeleportTo(631, 4203.5f + float(i % 5) * 2.f, 2484.0f + float(i / 5) * 2.f, 364.96f, 0.f))
             { Fail("fixture teleport refused"); return false; }
         return true;
     }
 
-    // The raid is in at the entrance: establish the lower-spire prerequisite, then walk-free into her room.
-    bool Stage()
+    // Called as the raid's fresh instance is created, before any creature in it has loaded.
+    void SetSpire(Map* map)
     {
-        Player* leader = Actor(EncounterLeader);
-        InstanceScript* script = leader->GetInstanceScript();
-        if (!script) { Fail("no native instance script"); return false; }
+        if (!active || state != "arrive" || map->GetId() != 631 || !map->IsRaid()) return;
+        InstanceMap* created = map->ToInstanceMap();
+        InstanceScript* script = created ? created->GetInstanceScript() : nullptr;
+        if (!script) return;
         for (uint32 boss = 0; boss < 4; ++boss) script->SetBossState(boss, DONE);
-        for (std::size_t i = 0; i < actors.size(); ++i)
-            Actor(i)->NearTeleportTo(4203.5f + float(i % 5) * 2.f, 2484.0f + float(i / 5) * 2.f, 364.96f, 0.f);
-        return true;
-    }
-
-    bool InRoom() const
-    {
-        for (std::size_t i = 0; i < actors.size(); ++i)
-        {
-            Player* p = Actor(i);
-            if (!p || p->IsBeingTeleported() || p->GetInstanceId() != Actor(EncounterLeader)->GetInstanceId() ||
-                p->GetExactDist2d(4203.5f, 2484.0f) > 30.f)
-                return false;
-        }
-        return true;
     }
 
     bool Arrived() const
@@ -725,7 +713,6 @@ struct EncounterRun
         return true;
     }
 
-    // The native encounter refuses a sequence break; Stage() set only the lower-spire prerequisite.
     // The raid stands in her room out of combat for up to 15 s (buffs, as before any pull); then the real
     // combat trigger pulls the encounter, as engaging the archmages does. The first heal on her ends the
     // wait: healing her is how a raid starts this fight.
@@ -738,6 +725,8 @@ struct EncounterRun
         instance = leader->GetInstanceId();
         mapDifficulty = uint32(leader->GetMap()->GetDifficulty());
         if (leader->GetMap()->GetDifficulty() != Wanted()) { Fail("instance difficulty differs from the request"); return false; }
+        for (uint32 boss = 0; boss < 4; ++boss)
+            if (script->GetBossState(boss) != DONE) { Fail("the lower-spire prerequisite did not hold"); return false; }
         Creature* dragon = leader->GetMap()->GetCreature(script->GetGuidData(10));
         if (!dragon || !dragon->IsAlive() || !dragon->IsInWorld()) return false;
         valithria = dragon->GetGUID();
@@ -863,8 +852,7 @@ struct EncounterRun
         std::lock_guard<std::recursive_mutex> lock(events);
         if (!active) return;
         elapsed += diff; phaseMs += diff;
-        if ((state == "login" || state == "prepare" || state == "arrive" || state == "enter") &&
-            elapsed > EncounterSetupMs)
+        if ((state == "login" || state == "prepare" || state == "arrive") && elapsed > EncounterSetupMs)
             Fail("setup deadline");
         if (state == "login")
         {
@@ -885,14 +873,8 @@ struct EncounterRun
         }
         else if (state == "arrive")
         {
-            if (Arrived() && Stage()) Phase("enter");
-        }
-        else if (state == "enter")
-        {
-            if (InRoom() && !Assemble() && state == "enter" && phaseMs > 60000)
+            if (Arrived() && !Assemble() && state == "arrive" && phaseMs > 60000)
                 Fail("Valithria missing from the instance");
-            else if (state == "enter" && phaseMs > 90000)
-                Fail("the raid did not reach her room");
         }
         else if (state == "prepull")
         {
@@ -1066,6 +1048,17 @@ public:
     }
 };
 
+class EncounterMaps : public AllMapScript
+{
+public:
+    EncounterMaps() : AllMapScript("DojoEncounterMaps", {ALLMAPHOOK_ON_CREATE_MAP}) { }
+    void OnCreateMap(Map* map) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(encounter.events);
+        encounter.SetSpire(map);
+    }
+};
+
 class EncounterTicks : public WorldScript
 {
 public:
@@ -1167,6 +1160,7 @@ void AddSC_dojo_raid()
     new RaidEvents();
     new EncounterEvents();
     new EncounterCasts();
+    new EncounterMaps();
     new EncounterTicks();
 }
 #else
