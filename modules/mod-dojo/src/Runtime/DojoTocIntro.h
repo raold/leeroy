@@ -3,7 +3,8 @@
 #define MOD_DOJO_TOC_INTRO_H
 
 #include "Creature.h"
-#include "Event.h"
+#include "AccountMgr.h"
+#include "CharacterCache.h"
 #include "InstanceScript.h"
 #include "Map.h"
 #include "ObjectMgr.h"
@@ -12,7 +13,6 @@
 #include "Playerbots.h"
 #include "TemporarySummon.h"
 #include "Guild/OfflineRaidJob.h"
-#include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
 #include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
 #include <algorithm>
 #include <array>
@@ -27,6 +27,7 @@ struct DojoTocIntro
     bool initiallyBlocked = false, emerged = false, engaged = false, nativeSpawn = false;
     ObjectGuid bossGuid;
     std::array<bool, 10> held{};
+    std::array<uint64, 10> epochs{};
     std::array<std::array<std::array<bool, 3>, 2>, 10> strategies{};
 
     bool Release(std::array<Player*, 10> const& actors)
@@ -36,6 +37,8 @@ struct DojoTocIntro
             {
                 auto* ai = actors[i] ? GET_PLAYERBOT_AI(actors[i]) : nullptr;
                 bool restored = ai != nullptr;
+                if (ai && epochs[i] && ai->ReleaseExternalControl(epochs[i])) epochs[i] = 0;
+                restored = restored && !epochs[i];
                 if (ai)
                     for (std::size_t s = 0; s < 2; ++s)
                     {
@@ -57,8 +60,9 @@ struct DojoTocIntro
         std::string const& token, std::string& error, uint32 diff)
     {
         using namespace DcTrialOfTheCrusader;
-        if (state == "none" || !error.empty()) return;
-        if (!native.value("active", false)) { Release(actors); return; }
+        if (state == "none") return;
+        if (!error.empty() || !native.value("active", false) || native.value("stage", "") == "tearing_down")
+        { Release(actors); return; }
         if (native.value("stage", "") != "running") return;
         auto* leader = actors[0];
         auto* instance = leader ? leader->GetInstanceScript() : nullptr;
@@ -68,7 +72,6 @@ struct DojoTocIntro
             if (!p || !p->IsAlive() || !GET_PLAYERBOT_AI(p) || p->GetMap() != leader->GetMap()
                 || !Leeroy::Guild::OfflineRaidOwns(p->GetGUID().GetCounter()))
             { error = "toc_intro_actor_lost_or_dead"; return; }
-        auto* ai = GET_PLAYERBOT_AI(leader);
         if (state == "ready")
         {
             measuredMs += diff; ++samples; maxGap = std::max(maxGap, diff);
@@ -88,17 +91,17 @@ struct DojoTocIntro
         }
         setupMs += diff;
         if (setupMs > 180000) { error = "toc_intro_scene_timeout"; Release(actors); return; }
-        auto* driver = ai->GetMaster();
-        if (!driver) { error = "toc_intro_driver_missing"; return; }
         if (state == "pending")
         {
             if (native.value("stage_ms", 0u) > 2000 || instance->IsEncounterInProgress())
             { error = "toc_intro_not_fresh"; return; }
-            ai->DoSpecificAction("dc off", Event("dc", "", driver), true);
-            if (DcRun::Of(ai).enabled) { error = "toc_intro_driver_not_stopped"; return; }
             for (std::size_t i = 0; i < actors.size(); ++i)
             {
                 auto* memberAI = GET_PLAYERBOT_AI(actors[i]);
+                auto* driver = memberAI->GetMaster();
+                uint32 const account = AccountMgr::GetId("DOJODRIVER");
+                if (!driver || !account || sCharacterCache->GetCharacterAccountIdByGuid(driver->GetGUID()) != account)
+                { error = "toc_intro_driver_missing"; Release(actors); return; }
                 for (std::size_t s = 0; s < 2; ++s)
                 {
                     auto const engine = s ? BOT_STATE_NON_COMBAT : BOT_STATE_COMBAT;
@@ -107,7 +110,15 @@ struct DojoTocIntro
                         strategies[i][s][f] = memberAI->HasStrategy(names[f], engine);
                     memberAI->ChangeStrategy("+stay,+passive,-follow", engine);
                 }
-                held[i] = true; actors[i]->StopMoving();
+                held[i] = true;
+                // Keep the real job and DC run enabled during the native scene.
+                // dc off clears masters and triggers the ordinary restart path.
+                // This setup-only fence belongs solely to the synthetic actors.
+                memberAI->SetMaster(nullptr);
+                epochs[i] = memberAI->AcquireExternalControl("dojo-toc-intro");
+                memberAI->SetMaster(driver);
+                if (!epochs[i]) { error = "toc_intro_hold_refused"; Release(actors); return; }
+                actors[i]->StopMoving();
             }
             // Earlier encounters are prepared save state. Do not schedule their
             // old speeches, loot or kill credit alongside the real Twins outro.
@@ -130,8 +141,6 @@ struct DojoTocIntro
         nativeSpawn = true; bossGuid = boss->GetGUID();
         initiallyBlocked = !leader->IsValidAttackTarget(boss);
         if (!initiallyBlocked || !Release(actors)) { error = "toc_intro_setup_not_blocked_or_restored"; return; }
-        ai->DoSpecificAction("dc on", Event("dc", "", driver), true);
-        if (!DcRun::Of(ai).enabled) { error = "toc_intro_driver_not_resumed"; return; }
         state = "ready";
     }
 
