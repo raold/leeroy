@@ -266,8 +266,11 @@ LeeroyCommandResult HandleTable(nlohmann::json const& message)
     if (!module.Enabled()) return {false, "disabled"};
     if (!module.Config().playStyleEnable) return {false, "playstyle_off"};
     if (!module.Config().playStyleTable) return {false, "playstyle_table_off"};
-    // A table belongs to the mind connection that sent it; a new mind's replaces the last one's whole.
-    std::uint64_t const serial = module.Bridge().ConnectionSerial();
+    // A table belongs to the mind connection that sent it; a new mind's replaces the last one's whole. A command a
+    // mind queued before it went away is never bound to the connection that replaced it.
+    std::uint64_t const serial = LeeroyCommandSerial();
+    if (!serial || !module.Bridge().Connected() || module.Bridge().ConnectionSerial() != serial)
+        return {false, "not_connected"};
     table = ReplaceTable(tableHeld && serial == tableSerial ? table : Table{}, command->styles, SteadyMs());
     tableHeld = true;
     tableSerial = serial;

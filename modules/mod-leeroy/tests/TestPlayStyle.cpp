@@ -128,26 +128,26 @@ bool TableParses(json styles)
 LEEROY_TEST(PlayStyle_TableWireIsStrictAndBounded)
 {
     CHECK(TableParses(json::array()));
-    CHECK(TableParses(json::array({{{"guid", 1101}, {"param", "4:1"}}, {{"guid", 1102}, {"param", "0:0"}}})));
+    CHECK(TableParses(json::array({{{"guid", 1101u}, {"param", "4:1"}}, {{"guid", 1102u}, {"param", "0:0"}}})));
     json full = json::array();
     for (std::uint32_t guid = 1; guid <= kTableMax; ++guid) full.push_back({{"guid", guid}, {"param", "2:1"}});
     CHECK(TableParses(full));
-    full.push_back({{"guid", 9999}, {"param", "2:1"}});
+    full.push_back({{"guid", 9999u}, {"param", "2:1"}});
     CHECK(!TableParses(full));
-    for (auto bad : {json::array({{{"guid", 1101}, {"param", "7:1"}}}), json::array({{{"guid", 0}, {"param", "2:1"}}}),
-             json::array({{{"guid", 1101}, {"param", "2:1"}}, {{"guid", 1101}, {"param", "3:0"}}}),
-             json::array({{{"guid", 1101}}}), json::array({{{"param", "2:1"}}}),
+    for (auto bad : {json::array({{{"guid", 1101u}, {"param", "7:1"}}}), json::array({{{"guid", 0u}, {"param", "2:1"}}}),
+             json::array({{{"guid", 1101u}, {"param", "2:1"}}, {{"guid", 1101u}, {"param", "3:0"}}}),
+             json::array({{{"guid", 1101u}}}), json::array({{{"param", "2:1"}}}),
              json::array({{{"guid", -1}, {"param", "2:1"}}}), json::array({{{"guid", 4294967296ull}, {"param", "2:1"}}}),
-             json::array({{{"guid", "1101"}, {"param", "2:1"}}}), json::array({{{"guid", 1101}, {"param", 21}}}),
+             json::array({{{"guid", "1101"}, {"param", "2:1"}}}), json::array({{{"guid", 1101u}, {"param", 21}}}),
              json::array({json::array({1101, "2:1"})}), json::array({1101})})
         CHECK(!TableParses(bad));
     std::string error;
     CHECK(!Leeroy::Guild::ParsePlayStyleTable(json{{"v", 1}, {"type", "playstyle_table"}, {"id", "t"}}, error));
     CHECK(error == "bad field: styles");
-    CHECK(!Leeroy::Guild::ParsePlayStyleTable(TableMessage({{"guid", 1}}), error));
+    CHECK(!Leeroy::Guild::ParsePlayStyleTable(TableMessage({{"guid", 1u}}), error));
     std::string parsedError = "stale";
     auto parsed = Leeroy::Guild::ParsePlayStyleTable(
-        TableMessage(json::array({{{"guid", 1102}, {"param", "6:0"}}, {{"guid", 1101}, {"param", "0:1"}}})), parsedError);
+        TableMessage(json::array({{{"guid", 1102u}, {"param", "6:0"}}, {{"guid", 1101u}, {"param", "0:1"}}})), parsedError);
     CHECK(parsed && parsedError.empty() && parsed->styles.size() == 2);
     if (parsed)
     {
@@ -212,6 +212,26 @@ LEEROY_TEST(PlayStyle_TableTriesStayInBudgetAndReachEveryMember)
     CHECK(std::all_of(seen.begin(), seen.end(), [](auto const& kv) { return kv.second == 1; }));
     CHECK(TableTries(table, none, now).empty());                   // everyone waits out its retry
     CHECK(TableTries(table, none, kTableRetryMs).size() == kTableTriesPerPass); // the first ones are due again
+}
+
+// More entries stay due than a retry period's budget (members offline or in a battleground for a long time): the
+// oldest due go first, so the higher guids are reached as often as the lower ones.
+LEEROY_TEST(PlayStyle_TableTriesRotateWhenMoreStayDueThanTheBudget)
+{
+    std::vector<TableEntry> entries;
+    for (std::uint32_t guid = 1; guid <= kTableMax; ++guid) entries.push_back({guid, {4, false}});
+    Table table = ReplaceTable({}, entries, 0);
+    std::map<std::uint32_t, int> tried;
+    auto none = [](std::uint32_t) { return Held{}; };
+    for (std::int64_t now = 0; now < 64000; now += 1000)
+        for (auto guid : TableTries(table, none, now))
+        {
+            ++tried[guid];
+            TableTried(table.at(guid), now);
+        }
+    CHECK(tried.size() == kTableMax);
+    CHECK(std::all_of(tried.begin(), tried.end(), [](auto const& kv) { return kv.second == 2; }));
+    CHECK(tried.at(kTableMax) == tried.at(1));
 }
 
 // The scenario the table exists for, against the old request-at-his-login model. 150 cast members; at his login half

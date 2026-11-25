@@ -2,10 +2,12 @@
 #ifndef MOD_LEEROY_PLAY_STYLE_H
 #define MOD_LEEROY_PLAY_STYLE_H
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace Leeroy::PlayStyle
@@ -130,7 +132,7 @@ inline Table ReplaceTable(Table const& held, std::vector<TableEntry> const& entr
     for (auto const& entry : entries)
     {
         auto const old = held.find(entry.guid);
-        next[entry.guid] = old != held.end() && old->second.request == entry.request
+        next[entry.guid] = (old != held.end() && old->second.request == entry.request)
             ? old->second : Slot{entry.request, nowMs};
     }
     return next;
@@ -167,23 +169,25 @@ inline bool TableDue(Slot const& slot, Held const& held, std::int64_t nowMs)
     return nowMs >= slot.dueMs;
 }
 // A journal the table made is undone once the table no longer lists its member: a new table without it, or no table
-// at all (its mind disconnected, or Leeroy.PlayStyle.Table went 0).
+// at all (its mind disconnected, or a switch went 0).
 inline bool TableUndo(Holder holder, bool listed) { return holder == Holder::Table && !listed; }
 
-// This pass's tries in guid order, at most `budget`. Each tried entry then waits kTableRetryMs (TableTried), so the
-// entries past the budget come first in the next pass and none is starved.
+// This pass's tries, at most `budget`: the due entries that have waited longest first (then by guid). Each tried
+// entry then waits kTableRetryMs (TableTried), so however many entries stay due (members offline, in a battleground)
+// every one is reached in turn and none is starved by the lower guids.
 template <typename Lookup>
 std::vector<std::uint32_t> TableTries(Table const& table, Lookup const& heldOf, std::int64_t nowMs,
     std::size_t budget = kTableTriesPerPass)
 {
-    std::vector<std::uint32_t> tries;
+    std::vector<std::pair<std::int64_t, std::uint32_t>> due;
     for (auto const& [guid, slot] : table)
-    {
-        if (tries.size() >= budget)
-            break;
         if (TableDue(slot, heldOf(guid), nowMs))
-            tries.push_back(guid);
-    }
+            due.emplace_back(slot.dueMs, guid);
+    auto const take = std::min(budget, due.size());
+    std::partial_sort(due.begin(), due.begin() + static_cast<std::ptrdiff_t>(take), due.end());
+    std::vector<std::uint32_t> tries;
+    for (std::size_t i = 0; i < take; ++i)
+        tries.push_back(due[i].second);
     return tries;
 }
 inline void TableTried(Slot& slot, std::int64_t nowMs) { slot.dueMs = nowMs + kTableRetryMs; }

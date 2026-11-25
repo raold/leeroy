@@ -98,7 +98,8 @@ connection that sent the table.
 Fallback: refused `playstyle_table_off` (native `Leeroy.PlayStyle.Table = 0`, reloadable) or for
 any reason of its own, the connection keeps one `bot_do` a member exactly as before; refused as one
 `bot_do` would be (`playstyle_off`, `disabled`), it sends nothing until his next login or hello.
-His login always tries the table again. Logs: `playstyle_table_sent styles= on= owner=`,
+His login always tries the table again, first restoring the styles the one-`bot_do` path added
+(native leaves another writer's style alone, so the table could not take those members over). Logs: `playstyle_table_sent styles= on= owner=`,
 `playstyle_table_refused error= mode=` (`legacy` or `off`), `playstyle_table_failed error=` (an
 exception class); Server.log `mod-leeroy: playstyle_table held styles=`, `... dropped styles=
 why=` (`mind`, `off`) and, at most once a minute when a style was added or the styled count moved,

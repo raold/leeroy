@@ -167,10 +167,11 @@ def test_a_table_refused_for_itself_keeps_one_bot_do_a_member_until_his_next_log
         assert bot_dos(sent) == [('playstyle', (103,))] and not tables(sent)
         sent.clear()
         refusing['on'] = False
-        await service.event(Login(0, 1, True))                           # his login tries the table again
-        await drain(service)
-        assert len(tables(sent)) == 1 and service.mode == 'table'
-        assert not [a for a, _ in bot_dos(sent) if a == 'playstyle']
+        await service.event(Login(0, 1, True))                           # his login tries the table again,
+        await drain(service)                                             # after undoing the one-bot_do styles
+        assert [type(c).__name__ for c in sent] == ['BotDo'] * 5 + ['PlayStyleTable']
+        assert sorted(bot_dos(sent)) == [('restore', (g,)) for g in (101, 102, 103, 104, 105)]
+        assert service.mode == 'table' and service.owned == set()
     caplog.set_level(logging.INFO, 'leeroy_mind')
     run(scenario())
     assert 'playstyle_table_refused: error=playstyle_table_off mode=legacy' in caplog.text

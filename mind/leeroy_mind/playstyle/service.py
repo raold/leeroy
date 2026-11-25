@@ -189,8 +189,11 @@ class PlayStyles:
                 for guid in sorted(self.owned): self.queue(guid,True)
             if ev.human and self.table_supported:
                 # His login sends the table again whatever native was last sent: a native switch's
-                # off/on pair drops it, and a refused table is tried again.
-                if self.mode in ('off','legacy'): self.mode = None
+                # off/on pair drops it, and a refused table is tried again, after the styles the
+                # one-bot_do path added are restored (native leaves another writer's style alone).
+                if self.mode in ('off','legacy'):
+                    self.mode = None
+                    for guid in sorted(self.owned or ()): self.queue(guid,True)
                 self.sent = None
                 self.want_table()
             elif self.tabled(): self.want_table() # a member's persona or the switch may have changed

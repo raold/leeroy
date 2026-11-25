@@ -1079,8 +1079,8 @@ whole persona play-style table, at most 512 members, none twice, each `param` a 
 param. It replaces the last table whole and belongs to the bridge connection that sent it; a member
 it repeats unchanged keeps its retry time. With `Leeroy.PlayStyle.Enable` and `Leeroy.PlayStyle.Table`
 (default 1, `.reload config`) on, he online and his group no raid group, the play-style tick (once a
-second) tries at most 16 due members in guid order through the same admission and journal as `bot_do
-playstyle`, and checks each tried member again 15 seconds later whatever came of it. A member whose
+second) tries at most 16 due members, those waiting longest first, through the same admission and
+journal as `bot_do playstyle`, and checks each tried member again 15 seconds later whatever came of it. A member whose
 journal is the table's with the same request is not tried; one whose journal another writer made
 (an explicit `bot_do playstyle`) is left to that writer. The tick takes back a journal the table made
 once the table no longer lists its member: a smaller or empty table, the mind's disconnect (the
@@ -1090,7 +1090,8 @@ again at his next login or hello). The usual cleanup (PvP, instance, raid, role,
 applies, and the table then styles her again once she is free.
 
 The handler refuses `disabled`, `playstyle_off` and `playstyle_table_off` (the mind then keeps one
-`bot_do` a member). Server.log: `mod-leeroy: playstyle_table held styles=N`, `mod-leeroy:
+`bot_do` a member), and `not_connected` for a table its mind queued before that connection closed (a
+table is bound to the command's own connection serial, never to the one that replaced it). Server.log: `mod-leeroy: playstyle_table held styles=N`, `mod-leeroy:
 playstyle_table dropped styles=N why=mind|off`, and at most once a minute, when a style was added or
 the styled count moved, `mod-leeroy: playstyle_table styles= styled= tried= applied=
 refused=<code=n,...>`; counts and codes only. **Native rebuild required.**
