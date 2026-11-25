@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "OfflineRaidJob.h"
+#include "DcRouteStall.h"
 #include "MemberDungeonJob.h"
 #include "MemberDungeonReceipts.h"
 #include "LeeroyMemberDungeon.h"
@@ -56,7 +57,6 @@
 
 #include "Ai/Dungeon/DungeonClear/Action/DcActionShared.h"
 #include "Ai/Dungeon/DungeonClear/Data/DungeonBossInfo.h"
-#include "Ai/Dungeon/DungeonClear/DcApproachState.h"
 #include "Ai/Dungeon/DungeonClear/Settings/DcSettings.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcLeaderSignal.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
@@ -1254,16 +1254,6 @@ void RecallStrays(Job& job, Player* leader, uint32 diff)
     }
 }
 
-// Dungeon-clear gave up on its route and waits for a `dc skip` (its stall reason is set, and is not a door's
-// own: a door it cannot open pauses the run instead). It clears the reason itself as soon as it moves again.
-bool RouteStalled(Player* leader)
-{
-    auto* context = GET_PLAYERBOT_AI(leader)->GetAiObjectContext();
-    auto* reason = context->GetValue<std::string&>(DcKey::StallReason);
-    auto* approach = context->GetValue<DcApproachState&>(DcKey::ApproachState);
-    return reason && approach && !reason->Get().empty() && !approach->Get().doorOwnsStallReason;
-}
-
 // Type `dc skip` for a boss dungeon-clear cannot reach (OfflineDcPassDue), as its own stall message asks a
 // player to. Read once a second: dungeon-clear recomputes its target every two.
 void PassUnreachableTarget(Job& job, Player* leader, bool enabled, bool paused, std::optional<bool> engaged,
@@ -1335,7 +1325,7 @@ void Running(Job& job, uint32 diff)
     {
         DcRunState const* run = leaderPresent ? &DcRun::Of(GET_PLAYERBOT_AI(leader)) : nullptr;
         DcPhase const phase = ReadDcPhase(run != nullptr, enabled, run && run->paused,
-            run && !run->pausedDoor.IsEmpty(), run && enabled && !run->paused && RouteStalled(leader));
+            run && !run->pausedDoor.IsEmpty(), run && enabled && !run->paused && DcRouteStalled(leader));
         if (phase != job.dcPhase)
         {
             if (++job.dcPhaseChanges <= 20 || job.dcPhaseChanges % 50 == 0)
