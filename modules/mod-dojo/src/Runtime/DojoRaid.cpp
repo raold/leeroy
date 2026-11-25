@@ -544,6 +544,7 @@ struct EncounterRun
     ObjectGuid valithria;
     std::array<ObjectGuid, 10> actors{};
     std::array<EncounterMember, 10> members{};
+    std::array<bool, 10> forcedLogout{};
     std::vector<std::pair<uint32, float>> timeline;
     std::recursive_mutex events;
 
@@ -616,7 +617,7 @@ struct EncounterRun
         setup = cleanup = engaged = earlyPull = false;
         elapsed = phaseMs = pullMs = sampleMs = instance = mapDifficulty = samples = 0;
         prepared = 0; startHp = hp = peakHp = 0.f; damageToHer = 0; valithria.Clear();
-        members = {}; timeline.clear();
+        members = {}; forcedLogout = {}; timeline.clear();
         oldFocus = sPlayerbotAIConfig.ValithriaHealerFocus;
         active = true;
         Phase("login");
@@ -897,6 +898,13 @@ struct EncounterRun
                     Player* p = Actor(i);
                     if (p && !p->IsBeingTeleported() && p->GetMapId() == 0)
                         sRandomPlayerbotMgr.LogoutPlayerBot(actors[i]);
+                    // A worldport still unacknowledged after 20 s (a fixture that was the self-bot leader, or
+                    // a released ghost) logs out where it is, once; its next login starts it outside.
+                    else if (phaseMs > 20000 && !forcedLogout[i])
+                    {
+                        forcedLogout[i] = true;
+                        sRandomPlayerbotMgr.LogoutPlayerBot(actors[i]);
+                    }
                 }
             if (!online) { cleanup = true; active = false; Phase("done"); }
             else if (phaseMs > 60000) { failure += "; cleanup not proved"; active = false; Phase("cleanup_failed"); }
