@@ -116,6 +116,14 @@ struct Trial
         elapsed += diff; phaseMs += diff;
         if (elapsed > 270000 && state != "cleanup" && state != "logout") Fail("yogg_fixture_deadline");
         auto* human = Dojo::HumanFixture(token);
+        // Teleport acknowledgement and normal raid buffs recalculate the reserves
+        // assigned at login. This probe starts at a portal wave, so maintain its
+        // explicit setup reserves until that boundary; never heal or resurrect a
+        // measured actor after observation starts.
+        if (state == "phase1" || state == "portals")
+            for (std::size_t i = 0; i < actors.size(); ++i)
+                if (auto* p = Actor(i); p && p->IsAlive())
+                { p->SetMaxHealth(1000000); p->SetFullHealth(); }
         if (state == "login")
         {
             auto why = Dojo::HumanFixtureError(token);
