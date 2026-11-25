@@ -15,12 +15,19 @@ from .mechanics import MechanicConnection
 from .offline_fixture import FixtureCheckpoint
 
 TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
+           "toc-full": ("toc-full", 649, None), "ulduar-full": ("ulduar-full", 603, None),
+           "ulduar-route": ("ulduar-full", 603, None),
            "toc-slime-pools": ("toc", 649, None), "toc-slime-pools-control": ("toc", 649, None),
            "icc-deathwhisper": ("icc", 631, 1), "icc-gunship": ("icc", 631, 2),
            "icc-valithria": ("icc", 631, 10), "icc-valithria-frontier": ("icc-valithria-frontier", 631, 10),
            "offline-reserves": ("toc-reserves", 649, None),
            "ulduar-restart": ("ulduar", 603, None), "ulduar-tank-restart": ("ulduar", 603, None),
            "ulduar-forced-tank-restart": ("ulduar", 603, None)}
+
+# Ulduar's production offline route currently supports five encounters.
+# The omitted nine remain explicitly unverified, never counted as kills.
+FULL_ROUTES = {"toc-full": (5, tuple(range(5))), "ulduar-full": (14, tuple(range(14))),
+               "ulduar-route": (14, (1, 2, 3, 5, 6))}
 
 
 def parse_status(reply):
@@ -41,7 +48,21 @@ def reached(observation, *, target, token):
     native = observation.get("native", {})
     event = native.get("event", {})
     instance = event.get("instance_id", 0)
-    if event.get("id") != token or type(instance) is not int or instance <= 0 or native.get("stage") != "running":
+    if event.get("id") != token or type(instance) is not int or instance <= 0:
+        return False
+    if target in FULL_ROUTES:
+        count, required = FULL_ROUTES[target]
+        states = native.get("boss_states")
+        reason = "cleared_reachable" if target == "ulduar-route" else "cleared"
+        return (native.get("active") is False and native.get("cleanup") is True
+                and native.get("map") == map_id and event.get("state") == "done"
+                and event.get("reason") == reason and type(event.get("kills")) is int
+                and event["kills"] >= len(required) and isinstance(states, list) and len(states) == count
+                and all(type(s) is int and s in range(6) for s in states)
+                and all(states[i] == 3 for i in required)
+                and all(states[i] in (0, 3, 5) for i in range(count) if i not in required)
+                and observation.get("scripted_wipe") is False)
+    if native.get("stage") != "running":
         return False
     bodies = observation.get("bodies", [])
     if target == "icc-valithria-frontier":
@@ -150,7 +171,7 @@ def _fixture_accounts(layout, log):
 def run(layout, *, target, toc_worm_support=False, log=print):
     if target not in TARGETS:
         raise LayoutError("unsupported offline target")
-    if toc_worm_support and TARGETS[target][0] != "toc":
+    if toc_worm_support and TARGETS[target][0] not in {"toc", "toc-full"}:
         raise LayoutError("worm support requires a ToC encounter target")
     if world.running(layout):
         raise world.WorldError("offline acceptance requires a stopped dedicated dojo realm")
@@ -170,6 +191,10 @@ def run(layout, *, target, toc_worm_support=False, log=print):
     report = dict(kind="dojo-offline-acceptance", format=1, ok=False, source=source, preflight=preflight,
                   token=token, target=target, toc_worm_support=toc_worm_support,
                   out=str(out), reached=False, cleanup=False, stopped=False)
+    if target in FULL_ROUTES:
+        count, required = FULL_ROUTES[target]
+        report["route"] = dict(required_bosses=required, unverified_bosses=[i for i in range(count) if i not in required],
+                               scope="supported_offline_route" if target == "ulduar-route" else "all_encounters")
     feed = None
     try:
         checkpoint = FixtureCheckpoint(layout)
@@ -220,7 +245,7 @@ def run(layout, *, target, toc_worm_support=False, log=print):
         with world.ra(layout) as client:
             scenario = TARGETS[target][0]
             if toc_worm_support:
-                scenario = "toc-worms"
+                scenario = "toc-full-worms" if target == "toc-full" else "toc-worms"
             deadline = time.monotonic() + 120
             while time.monotonic() < deadline:
                 reply = client.command(f"dojo offline start {scenario} {token}")
@@ -232,7 +257,7 @@ def run(layout, *, target, toc_worm_support=False, log=print):
             else:
                 raise world.WorldError("offline admission timed out")
             log(f"offline {target}: observing {token}")
-            deadline = time.monotonic() + 3000
+            deadline = time.monotonic() + (11100 if target in FULL_ROUTES else 3000)
             last_stage = None
             with (out / "observations.jsonl").open("w", encoding="utf-8") as trace:
                 while time.monotonic() < deadline:
@@ -281,7 +306,8 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                             raise world.WorldError("requested worm support was not active during measurement")
                         report["reached"] = True
                         report["milestone"] = observed
-                        client.command("dojo offline stop")
+                        if target not in FULL_ROUTES:
+                            client.command("dojo offline stop")
                     if not native.get("active", True):
                         report["terminal"] = observed
                         report["cleanup"] = native.get("cleanup") is True
