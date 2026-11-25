@@ -163,6 +163,7 @@ public:
             if (module.Config().lootReceipts) features.emplace_back("loot_receipts_v1");
 #if LEEROY_HAS_DUNGEON_CLEAR
             features.emplace_back("offline_raid_reserves");
+            features.emplace_back("offline_raid_native_stall");
             if (Leeroy::Guild::MemberDungeonEnabled()) features.emplace_back("member_dungeon_v1");
 #endif
             if (module.Config().dayPlans && module.Config().realmEnable)

@@ -84,6 +84,20 @@ struct Decision { Verdict verdict; std::string reason; };
 inline constexpr std::uint32_t OfflineShortRosterStopMs = 10000;
 Decision Decide(OfflineRaidState const& state, OfflineRaidLimits const& limits);
 
+// Uses world elapsed time, not a wall clock or the mind's heartbeat. Progress
+// means the same native engagement/completion/wipe transition sent to the mind.
+struct OfflineProgressClock
+{
+    std::uint32_t idleMs = 0;
+    bool started = false;
+    void Progress() { started = true; idleMs = 0; }
+    void Tick(std::uint32_t diffMs);
+    bool Expired(std::uint32_t limitMs, std::optional<bool> bossEngaged) const
+    {
+        return started && limitMs && idleMs >= limitMs && bossEngaged.has_value() && !*bossEngaged;
+    }
+};
+
 // A member is inside the run's copy while its body is there: in the job's group, in the world, on the run's
 // map and copy. A near teleport moves it within that copy and keeps it inside: dungeon-clear's stranded
 // recovery (2026-11-14, Naxx 10: three members in one tick; 2026-11-16, ICC 25: sixteen), its raid-wipe

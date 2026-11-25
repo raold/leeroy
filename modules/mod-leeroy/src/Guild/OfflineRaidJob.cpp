@@ -181,6 +181,7 @@ struct Job
     FullWipeHold fullWipe{};
     uint32 progressElapsed = 0;
     std::int64_t lastProgressTs = 0;
+    OfflineProgressClock noProgress;
     DcPhase dcPhase = DcPhase::Unknown;
     DcHold dcHold{};
     uint32 dcPhaseChanges = 0;
@@ -1075,6 +1076,7 @@ bool ReadBosses(Job& job, Player* leader, bool baseline)
     if (baseline)
     {
         job.lastProgressTs = NowUnixMs();
+        job.noProgress.Progress();
         job.previousBossStates.clear();
         job.bossWipes.assign(count, 0);
         for (uint32 index = 0; index < count; ++index)
@@ -1091,7 +1093,11 @@ bool ReadBosses(Job& job, Player* leader, bool baseline)
     for (uint32 index = 0; index < count; ++index)
     {
         uint8 const current = static_cast<uint8>(instance->GetBossState(index));
-        if (BossProgress(job.previousBossStates[index], current)) job.lastProgressTs = NowUnixMs();
+        if (BossProgress(job.previousBossStates[index], current))
+        {
+            job.lastProgressTs = NowUnixMs();
+            job.noProgress.Progress();
+        }
         if (IsWipe(job.previousBossStates[index], current))
         {
             ++job.bossWipes[index];
@@ -1392,6 +1398,13 @@ void Running(Job& job, uint32 diff)
     }
     else if (!held.empty())
         Stop(job, held); // Only after every existing stop/restart rule chose to go on.
+    else if (job.mode == RaidJobMode::Offline && !waitingForReturn
+        && job.noProgress.Expired(job.command.stallTimeoutMin * 60000, engaged))
+    {
+        LOG_INFO("module.leeroy", "leeroy: raid {} no_progress idle_ms={} limit_ms={} kills={} wipes={}",
+            job.event.id, job.noProgress.idleMs, job.command.stallTimeoutMin * 60000, job.event.kills, job.event.wipes);
+        Stop(job, "stalled");
+    }
     else
     {
         if (!Benchmark(job) && leaderPresent)
@@ -2206,6 +2219,7 @@ void TickOfflineRaid([[maybe_unused]] uint32 diffMs)
     job.elapsed = AdvanceElapsed(job.elapsed, diffMs);
     job.stageElapsed = AdvanceElapsed(job.stageElapsed, diffMs);
     job.progressElapsed = AdvanceElapsed(job.progressElapsed, diffMs);
+    job.noProgress.Tick(diffMs);
     if (!Dungeon(job)) ReassertMasters(job);
     if (job.stage != Stage::TearingDown)
     {
