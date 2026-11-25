@@ -12,6 +12,7 @@
 #include "Creature.h"
 #include "Guild.h"
 #include "GuildMgr.h"
+#include "Group.h"
 #include "InstanceScript.h"
 #include "Map.h"
 #include "MotionMaster.h"
@@ -52,6 +53,14 @@ constexpr std::array<Fixture, 13> Fixtures{{
     {"Dojobench", CLASS_PALADIN, "holy pve"}, {"Dojobencha", CLASS_MAGE, "fire pve"}}};
 constexpr char const* GuildName = "Dojo Acceptance";
 
+uint32 MainTank(Player* player)
+{
+    if (auto* group = player ? player->GetGroup() : nullptr)
+        for (auto const& slot : group->GetMemberSlots())
+            if (slot.flags & MEMBER_FLAG_MAINTANK) return slot.guid.GetCounter();
+    return 0;
+}
+
 struct OfflineFixture
 {
     std::array<ObjectGuid, Fixtures.size()> actors{};
@@ -61,6 +70,7 @@ struct OfflineFixture
     uint32 map = 0;
     bool scriptedWipe = false, restartingSeen = false;
     uint32 restartsAtWipe = 0;
+    uint32 wipeBoss = 0, mainTankAtWipe = 0;
     std::map<uint32, std::pair<uint64, uint64>> hits;
     std::recursive_mutex mutex;
 
@@ -219,10 +229,10 @@ struct OfflineFixture
         if (!result.ok) return result.error;
         std::lock_guard<std::recursive_mutex> lock(mutex);
         token = id; state = "running"; error.clear(); samples = 0; hits.clear();
-        scriptedWipe = restartingSeen = false; restartsAtWipe = 0;
+        scriptedWipe = restartingSeen = false; restartsAtWipe = wipeBoss = mainTankAtWipe = 0;
         return "started";
     }
-    std::string Wipe(std::string const& id)
+    std::string Wipe(std::string const& id, bool swappedTank = false)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
         if (!Armed() || state != "running" || id != token || scriptedWipe || map != 603) return "wipe_not_admitted";
@@ -230,9 +240,12 @@ struct OfflineFixture
         if (!native.value("active", false) || native.value("stage", "") != "running") return "wipe_not_running";
         auto* leader = Actor(1);
         auto* instance = leader ? leader->GetInstanceScript() : nullptr;
-        auto* boss = instance ? instance->GetCreature(3) : nullptr; // Actual XT-002 encounter.
-        if (!instance || instance->GetBossState(3) != IN_PROGRESS || !boss || !boss->IsAlive() || !boss->IsInCombat())
+        uint32 const encounter = swappedTank ? 2 : 3; // Actual Razorscale or XT-002.
+        auto* boss = instance ? instance->GetCreature(encounter) : nullptr;
+        if (!instance || instance->GetBossState(encounter) != IN_PROGRESS || !boss || !boss->IsAlive() || !boss->IsInCombat())
             return "wipe_boss_not_engaged";
+        uint32 const tank = MainTank(leader);
+        if (swappedTank && (!tank || tank == actors[1].GetCounter())) return "wipe_tank_not_swapped";
         for (std::size_t i = 1; i <= 10; ++i)
         {
             auto* p = Actor(i);
@@ -240,6 +253,7 @@ struct OfflineFixture
                 !Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter())) return "wipe_actor_not_ready";
         }
         restartsAtWipe = native.value("restarts", 0u);
+        wipeBoss = encounter; mainTankAtWipe = tank;
         scriptedWipe = true;
         // A test stimulus, never an earned combat outcome. All recovery after
         // these real deaths belongs to the ordinary offline job and core.
@@ -271,7 +285,8 @@ struct OfflineFixture
         return {{"kind", "dojo-offline-observation"}, {"format", 1}, {"state", state}, {"error", error},
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
             {"native", Leeroy::Guild::DojoOfflineSnapshot()}, {"bodies", bodies}, {"damage", damage},
-            {"scripted_wipe", scriptedWipe}, {"restarting_seen", restartingSeen}, {"restarts_at_wipe", restartsAtWipe}};
+            {"scripted_wipe", scriptedWipe}, {"restarting_seen", restartingSeen}, {"restarts_at_wipe", restartsAtWipe},
+            {"main_tank", MainTank(Actor(1))}, {"wipe_boss", wipeBoss}, {"main_tank_at_wipe", mainTankAtWipe}};
     }
 };
 OfflineFixture fixture;
@@ -283,12 +298,15 @@ public:
     {
         static ChatCommandTable commands{{"prepare", Prepare, SEC_CONSOLE, Console::Yes},
             {"start", Start, SEC_CONSOLE, Console::Yes}, {"status", Status, SEC_CONSOLE, Console::Yes},
-            {"stop", Stop, SEC_CONSOLE, Console::Yes}, {"wipe", Wipe, SEC_CONSOLE, Console::Yes}};
+            {"stop", Stop, SEC_CONSOLE, Console::Yes}, {"wipe", Wipe, SEC_CONSOLE, Console::Yes},
+            {"wipe-tank-swap", WipeTankSwap, SEC_CONSOLE, Console::Yes}};
         static ChatCommandTable dojo{{"offline", commands}};
         return {{"dojo", dojo}};
     }
     static bool Prepare(ChatHandler* h) { h->SendSysMessage("dojo offline: " + fixture.Prepare()); return true; }
     static bool Wipe(ChatHandler* h, Tail args) { h->SendSysMessage("dojo offline: " + fixture.Wipe(std::string(args))); return true; }
+    static bool WipeTankSwap(ChatHandler* h, Tail args)
+    { h->SendSysMessage("dojo offline: " + fixture.Wipe(std::string(args), true)); return true; }
     static bool Start(ChatHandler* h, Tail args)
     {
         std::istringstream in{std::string(args)};

@@ -25,7 +25,7 @@ def add_parser(sub) -> None:
     raids.add_argument("--scenario", action="append", choices=("valithria", "twins", "poison", "lk-terenas", "lk-defile"),
                        help="repeat to select gates; defaults to Valithria, Twins and Living Poison")
     offline = cmds.add_parser("offline-acceptance", help="prepare a synthetic guild and observe a real offline raid job")
-    offline.add_argument("--target", required=True, choices=("toc-beasts", "ulduar-xt", "ulduar-restart", "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves"))
+    offline.add_argument("--target", required=True, choices=("toc-beasts", "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves"))
     cmds.add_parser("lead-acceptance", help="observe native open-world leading, following, waiting and restoration")
     vehicles = cmds.add_parser("vehicle-acceptance", help="observe real raid vehicle boarding, movement and combat")
     vehicles.add_argument("--scenario", action="append", choices=("leviathan", "malygos"))
