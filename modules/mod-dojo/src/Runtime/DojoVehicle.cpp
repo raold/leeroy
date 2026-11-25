@@ -6,6 +6,7 @@
 #include "DojoRaid.h"
 #include "DojoRuntime.h"
 #include "AccountMgr.h"
+#include "AllMapScript.h"
 #include "AllSpellScript.h"
 #include "CharacterCache.h"
 #include "Chat.h"
@@ -158,12 +159,33 @@ struct Trial
         Phase("login");
         return "started";
     }
-    void Update(uint32 diff)
+    bool Measuring() const { return state == "boarding" || state == "observe" || state == "drakes"; }
+    void WorldUpdate(uint32 diff)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
         if (!active) return;
-        elapsed += diff; phaseMs += diff;
+        elapsed += diff;
         if (elapsed > 300000 && state != "cleanup" && state != "logout") Fail("vehicle_fixture_deadline");
+        if (Measuring())
+        {
+            auto* human = Dojo::HumanFixture(token);
+            if (human && human->GetMap() && human->GetMapId() == (scenario == "malygos" ? 616u : 603u)) return;
+            Fail("vehicle_measurement_map_lost");
+        }
+        Update(diff);
+    }
+    void MapUpdate(Map* map, uint32 diff)
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
+        auto* human = active && Measuring() ? Dojo::HumanFixture(token) : nullptr;
+        // The playerbots core batches raid-map physics across world ticks.
+        // Observe after that map's actual update with the same elapsed time
+        // that advanced its splines, never a shorter unrelated world tick.
+        if (diff && human && human->GetMap() == map) Update(diff);
+    }
+    void Update(uint32 diff)
+    {
+        phaseMs += diff;
         auto* human = Dojo::HumanFixture(token);
         auto* tank = Actor(0);
         auto* ranged = Actor(1);
@@ -429,6 +451,7 @@ struct Trial
         if (active && state != "cleanup" && state != "logout") Capture();
         return {{"kind", "dojo-vehicle-observation"}, {"format", 1}, {"scenario", scenario},
             {"token", token}, {"state", state}, {"failure", failure}, {"failure_facts", failureFacts}, {"negative", negative},
+            {"observation_clock", "map_update"},
             {"ready", ready}, {"human_boarded", humanBoarded}, {"cleanup", cleanup}, {"samples", samples},
             {"max_gap_ms", maxGap}, {"human_death_ms", deathAt}, {"driver_entries", seats},
             {"distance", travelled}, {"damage_hits", hits}, {"moving_hits", movingHits}, {"after_death_hits", afterDeathHits},
@@ -468,7 +491,13 @@ class Ticks : public WorldScript
 {
 public:
     Ticks() : WorldScript("DojoVehicleTicks", {WORLDHOOK_ON_UPDATE}) { }
-    void OnUpdate(uint32 diff) override { trial.Update(diff); }
+    void OnUpdate(uint32 diff) override { trial.WorldUpdate(diff); }
+};
+class MapTicks : public AllMapScript
+{
+public:
+    MapTicks() : AllMapScript("DojoVehicleMapTicks", {ALLMAPHOOK_ON_MAP_UPDATE}) { }
+    void OnMapUpdate(Map* map, uint32 diff) override { trial.MapUpdate(map, diff); }
 };
 class Effects : public UnitScript
 {
@@ -527,7 +556,7 @@ public:
     }
 };
 }
-void AddSC_dojo_vehicle() { new Commands(); new Ticks(); new Effects(); new Casts(); }
+void AddSC_dojo_vehicle() { new Commands(); new Ticks(); new MapTicks(); new Effects(); new Casts(); }
 #else
 void AddSC_dojo_vehicle() { }
 #endif

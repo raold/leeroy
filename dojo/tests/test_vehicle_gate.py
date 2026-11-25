@@ -7,6 +7,7 @@ from leeroy_dojo.realm.vehicles import verdict
 def observed(negative=False):
     return dict(kind="dojo-vehicle-observation", format=1, scenario="leviathan", token="test", state="done",
                 failure="", negative=negative, ready=True, human_boarded=True, cleanup=True,
+                observation_clock="map_update",
                 samples=500 if negative else 800, max_gap_ms=60,
                 human_death_ms=0 if negative else 20000, boss_start_health=0 if negative else 1000000,
                 boss_least_health=0 if negative else 900000, driver_entries=[0, 0] if negative else [33060, 33109],
@@ -36,7 +37,8 @@ class VehicleGateTest(unittest.TestCase):
                 sample = copy.deepcopy(source); del sample[key]
                 self.assertFalse(verdict(sample, token="test")["ok"])
         for key, value in (("samples", True), ("distance", [float("nan"), 90]), ("damage_hits", [True, 5]),
-                           ("driver_entries", [33060]), ("failure", "fixture_deadline"), ("token", "different")):
+                           ("driver_entries", [33060]), ("failure", "fixture_deadline"), ("token", "different"),
+                           ("observation_clock", "world_update")):
             sample = observed(); sample[key] = value
             self.assertFalse(verdict(sample, token="test")["ok"])
 

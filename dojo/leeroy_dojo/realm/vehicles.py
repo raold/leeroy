@@ -14,7 +14,8 @@ from .ra import RaError
 def verdict(o, *, token, negative=False, scenario="leviathan"):
     problems = []
     expected = dict(kind="dojo-vehicle-observation", format=1, scenario=scenario, token=token,
-                    state="done", negative=negative, ready=True, human_boarded=True, cleanup=True)
+                    state="done", negative=negative, ready=True, human_boarded=True, cleanup=True,
+                    observation_clock="map_update")
     for key, value in expected.items():
         if type(o.get(key)) is not type(value) or o[key] != value:
             problems.append(f"invalid {key}")
