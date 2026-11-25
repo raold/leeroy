@@ -188,7 +188,10 @@ class PlayStyles:
             if not self.on and self.owned:
                 for guid in sorted(self.owned): self.queue(guid,True)
             if ev.human and self.table_supported:
-                if self.mode in ('off','legacy'): self.mode = None # his login tries the table again
+                # His login sends the table again whatever native was last sent: a native switch's
+                # off/on pair drops it, and a refused table is tried again.
+                if self.mode in ('off','legacy'): self.mode = None
+                self.sent = None
                 self.want_table()
             elif self.tabled(): self.want_table() # a member's persona or the switch may have changed
             elif not ev.human: self.queue(ev.guid)

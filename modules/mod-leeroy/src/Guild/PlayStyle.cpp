@@ -286,7 +286,9 @@ void Tick()
 {
     auto& module = LeeroyModule::Instance();
     auto& bridge = module.Bridge();
-    bool const tableOn = module.Enabled() && module.Config().playStyleTable;
+    // Either switch off drops the table, as a config load invalidates queued bot_do additions: its mind sends it
+    // again at his next login or hello.
+    bool const tableOn = module.Enabled() && module.Config().playStyleEnable && module.Config().playStyleTable;
     if (tableHeld && (!tableOn || !bridge.Connected() || bridge.ConnectionSerial() != tableSerial))
         DropTable(tableOn ? "mind" : "off");
     std::vector<uint32> guids;

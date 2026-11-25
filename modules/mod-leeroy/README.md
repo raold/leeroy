@@ -1084,8 +1084,10 @@ playstyle`, and checks each tried member again 15 seconds later whatever came of
 journal is the table's with the same request is not tried; one whose journal another writer made
 (an explicit `bot_do playstyle`) is left to that writer. The tick takes back a journal the table made
 once the table no longer lists its member: a smaller or empty table, the mind's disconnect (the
-table is dropped, `why=mind`) or either switch off (`why=off`); the usual cleanup (PvP, instance,
-raid, role, another owner) still applies, and the table then styles her again once she is free.
+table is dropped, `why=mind`) or `Leeroy.Enable`, `Leeroy.PlayStyle.Enable` or `Leeroy.PlayStyle.Table`
+at 0 (dropped, `why=off`, as a config load invalidates queued `bot_do` additions; the mind sends it
+again at his next login or hello). The usual cleanup (PvP, instance, raid, role, another owner) still
+applies, and the table then styles her again once she is free.
 
 The handler refuses `disabled`, `playstyle_off` and `playstyle_table_off` (the mind then keeps one
 `bot_do` a member). Server.log: `mod-leeroy: playstyle_table held styles=N`, `mod-leeroy:

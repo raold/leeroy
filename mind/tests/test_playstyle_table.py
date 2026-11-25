@@ -77,14 +77,16 @@ def test_a_hello_that_lists_the_table_gets_the_whole_cast_in_one_command(store, 
         assert styles == tuple(PlayStyleEntry(g, style(app.personas.get(g)).param) for g in (101, 102, 103, 104, 105))
         assert service.owned == set() and store.get_meta(KEY) == '[]'   # native keeps its own journals
         await service.event(Login(0, 103, False))                        # unchanged: nothing sent again
-        await service.event(Login(0, 1, True))
         await service.event(online_cast(app))
         await drain(service)
         assert len(sent) == 1
+        await service.event(Login(0, 1, True))                           # his login always resyncs it
+        await drain(service)
+        assert len(sent) == 2 and tables(sent)[1].styles == styles
     caplog.set_level(logging.INFO, 'leeroy_mind')
     run(scenario())
     lines = [r.getMessage() for r in caplog.records if 'playstyle' in r.getMessage()]
-    assert lines == ['playstyle_table_sent: styles=5 on=1 owner=1']
+    assert lines == ['playstyle_table_sent: styles=5 on=1 owner=1'] * 2
 
 
 def test_the_table_goes_while_he_is_away_and_waits_for_a_cast(store, tmp_path):

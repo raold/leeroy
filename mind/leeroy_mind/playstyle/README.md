@@ -84,11 +84,13 @@ then the mind tried each member once at his login and at a few other events, and
 63% of those attempts were refused for a passing state (busy:pvp 1,040, busy:body 322,
 realm_owner 173, dead 66) and never retried: his login passes styled 34% of the cast on average.
 
-The mind sends the table at hello (after restoring any receipts the one-`bot_do` path left), again
-at his login, and on a member login or cast when it differs from the one native holds; unchanged
-it sends nothing. `[playstyle] enabled = false` sends an empty table. Native takes back every
-style the table added once the table no longer lists that member: an empty or smaller table, the
-mind's disconnect, `Leeroy.PlayStyle.Table = 0` or `Leeroy.Enable = 0`. A style from an explicit
+The mind sends the table at hello (after restoring any receipts the one-`bot_do` path left), at
+every login of his whatever native was last sent, and on a member login or cast when it differs
+from the one native holds; unchanged it sends nothing. `[playstyle] enabled = false` sends an
+empty table. Native takes back every style the table added once the table no longer lists that
+member: an empty or smaller table, or the table dropped by the mind's disconnect or by
+`Leeroy.Enable`, `Leeroy.PlayStyle.Enable` or `Leeroy.PlayStyle.Table` at 0 (as a config load
+invalidates queued `bot_do` additions; the table comes back at his next login). A style from an explicit
 `bot_do playstyle` stays that writer's; the table never takes it over. The table records no
 receipt in `playstyle:owned`: native's journal is the only owner, and native restores it with the
 connection that sent the table.
