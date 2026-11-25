@@ -255,9 +255,13 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                     observed["observed_at"] = time.time()
                     trace.write(json.dumps(observed, sort_keys=True) + "\n")
                     trace.flush()
-                    if observed.get("error"):
+                    if observed.get("error") and not report.get("gate_failure"):
+                        report["error"] = observed["error"]
+                        report["gate_failure"] = "native_fixture_error"
+                        report["failure_observation"] = observed
                         client.command("dojo offline stop")
-                        raise world.WorldError(observed["error"])
+                        # Keep observing ordinary teardown so even a failed
+                        # fixture has a verified cleanup receipt.
                     native = observed.get("native", {})
                     if observed.get("token") != token or native.get("event", {}).get("id") != token:
                         raise world.WorldError("offline run token changed")
