@@ -108,23 +108,22 @@ def subjects(clone: Path) -> dict[str, list[str]]:
     return found
 
 
+def applied_tree(clone: Path, start: str, diff: bytes, index: dict[str, str], *flags: str) -> str | None:
+    # Apply to a committed tree in a private index of the rehearsal clone: never a
+    # working tree, its line-ending conversion or the real checkout. Compare whole
+    # trees, since git apply --check only warns about a mismatched file mode.
+    git(clone, "read-tree", start, env=index)
+    if git(clone, "apply", "--cached", *flags, data=diff, check=False, env=index).returncode:
+        return None
+    return value(clone, "write-tree", env=index)
+
+
 def same_change(clone: Path, sha: str, diff: bytes, index: dict[str, str]) -> bool:
     # The patch is this commit when it turns the commit's parent into exactly the
     # commit's tree, whatever context width or format it was exported with.
     parents = value(clone, "rev-list", "--parents", "-n", "1", sha).split()
-    if len(parents) != 2:
-        return False
-    git(clone, "read-tree", parents[1], env=index)
-    if git(clone, "apply", "--cached", data=diff, check=False, env=index).returncode:
-        return False
-    return value(clone, "write-tree", env=index) == value(clone, "rev-parse", f"{sha}^{{tree}}")
-
-
-def applies(clone: Path, diff: bytes, index: dict[str, str], *flags: str) -> bool:
-    # Check against the committed HEAD tree in a private index: never a working
-    # tree or its line-ending conversion, and nothing is applied.
-    git(clone, "read-tree", "HEAD", env=index)
-    return git(clone, "apply", "--cached", "--check", *flags, data=diff, check=False, env=index).returncode == 0
+    return (len(parents) == 2 and applied_tree(clone, parents[1], diff, index)
+            == value(clone, "rev-parse", f"{sha}^{{tree}}"))
 
 
 def label(patch: dict) -> str:
@@ -277,12 +276,15 @@ def prepare(modules_root: Path, series_root: Path, path: Path) -> dict:
                 subject, diff = mail(clone, patch_bytes(patch), work)
                 if any(same_change(clone, sha, diff, index) for sha in history.get(subject, ())):
                     continue  # the same change in history under another patch-id
-                # Checked in series order on the rehearsal tip, so a later entry that
-                # undoes a missing earlier one is not mistaken for already installed.
-                if applies(clone, diff, index, "--reverse"):
-                    if applies(clone, diff, index):
+                # Its whole change is already in the checkout when undoing it and
+                # redoing it gives back exactly the rehearsal tip. Checked in series
+                # order, so an entry that undoes a missing earlier one is not skipped.
+                tip = value(clone, "rev-parse", "HEAD^{tree}")
+                before = applied_tree(clone, tip, diff, index, "--reverse")
+                if before and applied_tree(clone, before, diff, index) == tip:
+                    if applied_tree(clone, tip, diff, index) not in (None, tip):
                         raise Refused(f"{module['name']}: {label(patch)}: ambiguous_installed_state")
-                    continue  # its whole change is already in the checkout
+                    continue
                 module["patches"].append(patch)
                 apply_entry(clone, module["name"], patch)
                 patch["tree"] = value(clone, "rev-parse", "HEAD^{tree}")

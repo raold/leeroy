@@ -342,14 +342,39 @@ class PatchTests(unittest.TestCase):
         self.assert_original()
         self.assertFalse(self.journal.exists())
 
-    def test_patch_that_both_reverses_and_applies_is_refused_as_ambiguous(self):
-        block = "one\ntwo\nthree\nfour\n"
-        repo, author = self.lined("head 1\nhead 2\nhead 3\none\ntwo\nX\nthree\nfour\nmid\n" + block + "tail 1\ntail 2\n")
+    BLOCK = "one\ntwo\nX\nthree\nfour\n"
+
+    def test_missing_deletion_whose_result_also_appears_elsewhere_is_applied(self):
+        repo, author = self.lined("head 1\nhead 2\nhead 3\n" + self.BLOCK + "mid\none\ntwo\nthree\nfour\ntail 1\ntail 2\n")
         self.entry(author, 1, "X\n", "", "Drop X", "-U2")
-        with self.assertRaisesRegex(release.Refused, r"mod-playerbots: 0001-Drop-X\.patch: ambiguous_installed_state"):
+        self.assertEqual(release.summary(self.prepare())["missing"], 1)
+        self.assert_original()
+        release.apply(self.journal)
+        self.assertEqual((repo / "lines.cpp").read_text(encoding="utf-8"), (author / "lines.cpp").read_text(encoding="utf-8"))
+
+    def test_installed_patch_that_would_also_apply_elsewhere_is_refused_as_ambiguous(self):
+        repo, author = self.lined("head 1\nhead 2\nhead 3\n" + self.BLOCK + "mid\n" + self.BLOCK + "tail 1\ntail 2\n")
+        self.entry(author, 1, "mid\none\ntwo\nX\n", "mid\none\ntwo\n", "Drop second X", "-U2")
+        self.commit_lines(repo, (author / "lines.cpp").read_text(encoding="utf-8"), "Installed by hand")
+        with self.assertRaisesRegex(release.Refused,
+                                    r"mod-playerbots: 0001-Drop-second-X\.patch: ambiguous_installed_state"):
             self.prepare()
         self.assert_original()
         self.assertFalse(self.journal.exists())
+
+    def test_missing_mode_only_patch_is_applied(self):
+        repo, author = self.lined()
+        self.git(author, "update-index", "--chmod=+x", "lines.cpp")
+        self.git(author, "commit", "-qm", "Make lines executable")
+        target = self.series / "mod-playerbots" / "0001-Make-lines-executable.patch"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(subprocess.check_output(["git", "-C", str(author), "format-patch", "-1", "--stdout"]))
+        self.assertEqual(release.summary(self.prepare())["missing"], 1)
+        self.assert_original()
+        release.apply(self.journal)
+        self.assertEqual(self.git(repo, "ls-files", "-s", "lines.cpp").split()[0], "100755")
+        release.rollback(self.journal)
+        self.assert_original()
 
     def test_incompatible_patch_reports_its_series_entry_without_real_changes(self):
         self.series_for("mod-playerbots", ("one\n",))
