@@ -125,12 +125,16 @@ cannot do without the owner. Two rotation raids were such raids:
   there until the mind's 30-minute watchdog stopped it `stalled` with no kill.
 
 Every offline Running tick now reads dungeon-clear's leader run as a phase (`DcPhase`: off, on,
-paused, door; `dc_phase=<to> from=<from>` is logged on change, first 20 then every 50th). The
+paused, door, stalled; `dc_phase=<to> from=<from>` is logged on change, first 20 then every 50th). The
 heartbeat carries it as `dc_state`; entering Running (a start or a restart) resets the phase to
 `unknown` and the hold, so the first heartbeat never repeats a pre-restart `off`. A pause out of
 every boss fight (an encounter known to be disengaged) for `OfflineDcHoldStopMs` (5 minutes)
-stops the run under its own name, `dc_door_blocked` (paused at a door) or `dc_paused` (any other
-pause). Nobody types `dc pause` in an offline raid, so `paused` is dungeon-clear's null-door
+stops the run under its own name, `dc_door_blocked` (paused at a door), `dc_paused` (any other
+pause) or `dc_unreachable` (`stalled`: an unpaused run whose leader carries a stall reason that is not
+a door's, dungeon-clear's "Can't path to <boss>" / "Stuck near <boss>" waiting for a `dc skip`; it
+clears the reason itself as soon as it moves again). On 2026-11-23 a Naxx 10 run read `on` for 24
+minutes in front of Gothik until the mind's 30-minute watchdog stopped it. Nobody types `dc pause` in
+an offline raid, so `paused` is dungeon-clear's null-door
 fallback or, once the Training Ground acts (`[training] act` and 28 days of pulls), its boss hold:
 the training listener sets WaitAtBoss on every offline run's tank and releases each hold, native
 resuming it after 20 s, so `dc_phase=paused` then appears at every boss and only a stuck hold
@@ -140,11 +144,20 @@ the reachable clear and the phase are offline only; the roster check applies to 
 
 Naxxramas's Sapphiron and Kel'Thuzad (instance bosses 13 and 14) are reached only by the hub's
 teleporter after the four wings, which dungeon-clear does not use: its route stalls there with
-the run still enabled. When every other boss is done and one of those is not (and neither is
+the run still enabled. Gothik the Harvester (11) waits on his balcony (2642, -3387, z 285.5, 18
+yards above his room's floor), passive until struck; dungeon-clear finds no navmesh route up to him
+(2026-11-23: `path rebuilt -> Gothik the Harvester ... UNREACHABLE: no navigable route`) and stalls,
+and the Four Horsemen (12) are a spell-credit encounter its roster never lists, behind the two gates
+only Gothik's death opens. When every other boss is done and one of those is not (and none is
 engaged, failed or mid-event, as a manual `dc skip` could make it), native ends the run
 `cleared_reachable` (pure `DcUnreachableBosses`, `ClearedReachable`; logged
-`cleared_reachable kills= out_of_reach=13,14`) instead of idling into the mind's stall stop or
-the timeout.
+`cleared_reachable kills= out_of_reach=11,12,13,14`) instead of idling into the mind's stall stop or
+the timeout. Gothik sits in the middle of dungeon-clear's order (Military Quarter, before the
+Construct Quarter), so the job types the `dc skip` his stall asks for as soon as dungeon-clear heads
+for him (pure `OfflineDcPassEntries`, `OfflineDcPassDue`: creature 16060, run enabled and unpaused,
+no boss engaged, leader out of combat, checked once a second, at most `OfflineDcPassLimit` 16 times a
+job since a restart's `dc on` forgets the skip; logged `dc_passed entry= passes= kills= enabled=`):
+the run goes on to Patchwerk, Grobbulus, Gluth and Thaddius.
 
 The mind never plans `toc` or `ulduar` on a worldserver whose hello lacks `dc_toc` /
 `dc_ulduar` (`guild/offline.py` `UNSUPPORTED`, `RUNNABLE_WITH`; logged once per hello as
@@ -157,11 +170,11 @@ the day, any raid at a size he holds a permanent save for this lockout week (her
 reason=owner_saved`): an offline run would save its members to another copy and his add command
 would leave them out (`locked`) until the reset. `setup:starting:dc_no_bosses`, like
 `no_fresh_encounters`, voids the run and passes the raid over for the rest of the day; so does a
-native `dc_door_blocked` stop with no kill and no wipe, which also takes back the attendance and
+native `dc_door_blocked` or `dc_unreachable` stop with no kill and no wipe, which also takes back the attendance and
 its DKP recorded when the run reached running (`RaidSession.retract_attendance`; bench memories
 already written stay) and marks the run not raided. A stall the mind stops names its cause from
 the last fresh heartbeat: `offline_raid_stop raid_id= reason=stalled cause= idle_s= inside=
-members=`, with `cause` one of `dc_door_blocked`, `dc_paused`, `dc_off`, `members_out`,
+members=`, with `cause` one of `dc_door_blocked`, `dc_paused`, `dc_unreachable` (`dc_state=stalled`), `dc_off`, `members_out`,
 `no_boss_reached` (dungeon-clear on, no boss engaged) or `unknown` (an older worldserver sends
 no `dc_state`); an operator stop is `cause=operator`. The cause is kept in the owned stop
 receipt and the day receipt (`stall_cause`); the raid row keeps the stable outcome `stalled`.
@@ -519,6 +532,23 @@ training state or pending bot command leaves the body to its owner (nothing adde
   that makes progress (a second hazard shutting both ways), or once six waypoints in a row gain less than a
   yard on the goal (a pocket between hazards, where greedy steps would circle), it walks straight as stock until
   his spot moves 3 yards.
+- **Moving npcs** (2026-11-24). A zone that moves is never a pocket: while the first zone across the straight way
+  moves (`HazardFirstCrossingMoves`) the detour never gives up, and with no way round it the bot waits for the way
+  to clear, but only where it may stand: no moving npc comes within its own radius, the bot's reach and 1.5 yards in
+  the next 2 s (`HazardStandClear`); else it steps aside, up to 10 yards, to the nearest such spot, rather than
+  leave a bot waiting in a slime's way to the exit. While a moving zone lies within 20 yards, follow walks short
+  legs (`HazardMovingLeg`): playerbots commits a bot to the leg it sets out on for that leg's walk time, up to
+  `Playerbots.MaxWaitForMove` (5 s, 35 yards at run speed), so a short leg makes it plan again from each fresh pass.
+  A leg is 4 yards, or longer to lie beyond where follow stops: the bot's own formation distance from its edge
+  (`FollowStop`; playerbots' default chaos formation widens `Playerbots.FollowDistance` by up to 3.5 yards every
+  3 s), and so is a detour step; a nearer spot made follow judge itself done, and the bot stood still beside the
+  lanes. Across a lane a leg runs on to the first spot where the bot may stand, so it crosses in one walk instead of
+  stopping in a slime's path. A walk (a leg, a detour step, a crossing) is judged as both move
+  (`HazardSegmentClear`): the bot at run speed to its end and standing there a second, the npc on its way from a
+  pass up to 500 ms old; it is not clear when they come within the npc's own radius plus the bot's reach, so
+  stepping into a slime's way is refused and passing behind it is not. Map threads take only the bots of the master
+  whose group the last pass made aware (before, `Leeroy.HumanGuid`'s, which left the dojo's synthetic leader's bot
+  without zones).
 - **Exits.** `avoid aoe` (after its three stock cases, in combat as well) walks a bot standing in a zone to the
   nearest clear spot and keeps that exit while it stays clear. Out of combat the exit ranks by the follow goal:
   one from which the goal is in plain view (his side) beats a nearer one unless the nearer saves more than 4
@@ -571,9 +601,24 @@ A replay of the hall from `LivingPoisonDataList` (`Hazard_AFollowerCrossesTheLiv
 a follower at run speed across all three lanes, 120 starts over every phase of the waves, the zones 500 ms old)
 reaches the far side every time and never comes within 3 yards of a slime; walking straight sets one off in 57.
 Its first run counted each re-planned exit as an entry (the job counted whenever its exit memo was not reusable),
-so a slime walking onto a bot yielded the bot to follow within a second; hence the per-hazard entry rule above. A slime that appears on a bot standing at its pipe (a lane's start)
-is not foreseen. While such an npc is within the scan the zones change every pass, so follow spots and detours are
-worked out again every 500 ms (as when an area appears or ends).
+so a slime walking onto a bot yielded the bot to follow within a second; hence the per-hazard entry rule above.
+`Hazard_TheDojoHallCrossingSetsNoSlimeOff` replays the dojo's crossing (below) with legs committed as playerbots
+commits them, a turn of the bot's AI every 0.1 s and both formations, over 200 phases of the waves: no slime goes
+off and no crossing stalls; #424's rules alone set off 5, stock 954. A slime that appears on a bot standing at its
+pipe (a lane's start) is not foreseen. While such an npc is within the scan the zones change every pass, so follow
+spots and detours are worked out again every 500 ms (as when an area appears or ends).
+
+**The dojo's crossing (#452, 2026-11-24).** The isolated raid dojo walks a stock bot after a held leader across the
+hall for 70 s. As first measured it set off 3-6 slimes a run: the filter took only `Leeroy.HumanGuid`'s bots
+(the dojo leaves it 0), so the bot walked straight. Given its zones (#424 as released) it still set off 2-5 a run:
+long legs walked blind and crossings given up as pockets. With the rules above every crossing out of combat was
+clean, but 7 of 24 runs still set off 2-4: a Sludge Belcher patrol pulls the leader into combat about 55 s in, and
+the bot's combat engine, built under a bot master, had no `avoid aoe`, so no exit ran while it stood on lane 1.
+Given it, as playerbots gives it under a game client master: 0 in 14 runs (43 crossings, two full gate runs among
+them), nearest 1.7 yards; the stock control set off one in 9 of 10. The filter serves bots whose master is the
+owner, a game client, whose AI takes a turn every 0.1 s; under a bot master playerbots waits 1-3 s between turns
+out of combat (`GetReactDelay`), which no bot of his group meets, so the dojo holds its leader as a self-bot (its
+own master) between teleports to measure that cadence.
 
 Looked at and left out: Fallout Slime (16290, Grobbulus) and Sewage Slime (16375, Construct Quarter trash) carry
 Disease Cloud (28156 -> 28153, 15 yards) and Embalming Slime (16024) casts Embalming Cloud in combat, but each is

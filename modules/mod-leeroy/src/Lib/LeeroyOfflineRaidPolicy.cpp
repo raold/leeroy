@@ -23,12 +23,12 @@ std::string DcRosterRefusal(std::size_t bosses)
     return bosses ? std::string{} : std::string(OfflineNoDcBosses);
 }
 
-DcPhase ReadDcPhase(bool leaderPresent, bool enabled, bool paused, bool pausedAtDoor)
+DcPhase ReadDcPhase(bool leaderPresent, bool enabled, bool paused, bool pausedAtDoor, bool routeStalled)
 {
     if (!leaderPresent) return DcPhase::Unknown;
     if (!enabled) return DcPhase::Off;
-    if (!paused) return DcPhase::On;
-    return pausedAtDoor ? DcPhase::Door : DcPhase::Paused;
+    if (paused) return pausedAtDoor ? DcPhase::Door : DcPhase::Paused;
+    return routeStalled ? DcPhase::Stalled : DcPhase::On;
 }
 
 char const* DcPhaseCode(DcPhase phase)
@@ -39,6 +39,7 @@ char const* DcPhaseCode(DcPhase phase)
         case DcPhase::On: return "on";
         case DcPhase::Paused: return "paused";
         case DcPhase::Door: return "door";
+        case DcPhase::Stalled: return "stalled";
         case DcPhase::Unknown: break;
     }
     return "unknown";
@@ -46,17 +47,33 @@ char const* DcPhaseCode(DcPhase phase)
 
 std::string DcHold::Observe(DcPhase phase, std::optional<bool> bossEngaged, std::uint32_t diffMs)
 {
-    bool const held = (phase == DcPhase::Door || phase == DcPhase::Paused) && bossEngaged == false;
+    bool const held = (phase == DcPhase::Door || phase == DcPhase::Paused || phase == DcPhase::Stalled)
+        && bossEngaged == false;
     heldMs = held ? AdvanceElapsed(heldMs, diffMs) : 0;
     if (heldMs < OfflineDcHoldStopMs) return {};
-    return phase == DcPhase::Door ? "dc_door_blocked" : "dc_paused";
+    if (phase == DcPhase::Door) return "dc_door_blocked";
+    return phase == DcPhase::Stalled ? OfflineDcUnreachable : "dc_paused";
 }
 
 std::vector<std::uint32_t> DcUnreachableBosses(std::uint32_t mapId)
 {
-    if (mapId == 533) return {13, 14};
+    if (mapId == 533) return {11, 12, 13, 14};
     if (mapId == 603) return {0, 4, 7, 8, 9, 10, 11, 12, 13};
     return {};
+}
+
+std::vector<std::uint32_t> OfflineDcPassEntries(std::uint32_t mapId)
+{
+    if (mapId == 533) return {16060}; // Gothik the Harvester.
+    return {};
+}
+
+bool OfflineDcPassDue(OfflineDcPassFacts const& facts)
+{
+    auto const entries = OfflineDcPassEntries(facts.mapId);
+    bool const listed = facts.targetEntry && std::find(entries.begin(), entries.end(), facts.targetEntry) != entries.end();
+    return listed && facts.enabled && !facts.paused && !facts.leaderCombat && facts.bossEngaged == false
+        && facts.passes < OfflineDcPassLimit;
 }
 
 std::vector<std::string> DcRaidFeatures(bool trialOfTheCrusader, bool ulduar)

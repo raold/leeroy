@@ -1,6 +1,7 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 
 #include "OfflineRaidJob.h"
+#include "DcRouteStall.h"
 #include "MemberDungeonJob.h"
 #include "MemberDungeonReceipts.h"
 #include "LeeroyMemberDungeon.h"
@@ -55,6 +56,7 @@
 #include "WorldSession.h"
 
 #include "Ai/Dungeon/DungeonClear/Action/DcActionShared.h"
+#include "Ai/Dungeon/DungeonClear/Data/DungeonBossInfo.h"
 #include "Ai/Dungeon/DungeonClear/Settings/DcSettings.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcLeaderSignal.h"
 #include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
@@ -173,6 +175,7 @@ struct Job
     std::vector<Member> members;
     std::vector<uint8> previousBossStates;
     std::vector<uint32> bossWipes;
+    uint32 dcPasses = 0, dcPassCheckMs = 0;
     uint32 elapsed = 0, stageElapsed = 0, dcOff = 0, restarts = 0;
     uint32 shortMs = 0, shortEvents = 0;
     FullWipeHold fullWipe{};
@@ -1264,6 +1267,34 @@ void RecallStrays(Job& job, Player* leader, uint32 diff)
     }
 }
 
+// Type `dc skip` for a boss dungeon-clear cannot reach (OfflineDcPassDue), as its own stall message asks a
+// player to. Read once a second: dungeon-clear recomputes its target every two.
+void PassUnreachableTarget(Job& job, Player* leader, bool enabled, bool paused, std::optional<bool> engaged,
+    uint32 diff)
+{
+    job.dcPassCheckMs = AdvanceElapsed(job.dcPassCheckMs, diff);
+    Player* driver = Driver(job);
+    if (job.dcPassCheckMs < 1000 || !driver || job.dcPasses >= OfflineDcPassLimit
+        || OfflineDcPassEntries(job.command.mapId).empty()) return;
+    job.dcPassCheckMs = 0;
+    PlayerbotAI* ai = GET_PLAYERBOT_AI(leader);
+    auto* value = ai->GetAiObjectContext()->GetValue<std::optional<DungeonBossInfo>>(DcKey::NextDungeonBoss);
+    std::optional<DungeonBossInfo> const target = value ? value->Get() : std::nullopt;
+    OfflineDcPassFacts facts;
+    facts.mapId = job.command.mapId;
+    facts.targetEntry = target ? target->entry : 0;
+    facts.passes = job.dcPasses;
+    facts.enabled = enabled;
+    facts.paused = paused;
+    facts.leaderCombat = leader->IsInCombat();
+    facts.bossEngaged = engaged;
+    if (!OfflineDcPassDue(facts)) return;
+    ++job.dcPasses;
+    ai->DoSpecificAction("dc skip", Event("dc", "", driver), true);
+    LOG_INFO("module.leeroy", "leeroy: raid {} dc_passed entry={} passes={} kills={} enabled={}",
+        job.event.id, facts.targetEntry, job.dcPasses, job.event.kills, DcRun::Of(ai).enabled);
+}
+
 void Running(Job& job, uint32 diff)
 {
     Player* leader = FindOnline(job.command.leaderGuid);
@@ -1302,11 +1333,12 @@ void Running(Job& job, uint32 diff)
     bool const enabled = leaderPresent && DcRun::Of(GET_PLAYERBOT_AI(leader)).enabled;
     job.dcOff = enabled ? 0 : AdvanceElapsed(job.dcOff, diff);
     std::string held;
+    std::optional<bool> engaged;
     if (!Benchmark(job))
     {
         DcRunState const* run = leaderPresent ? &DcRun::Of(GET_PLAYERBOT_AI(leader)) : nullptr;
         DcPhase const phase = ReadDcPhase(run != nullptr, enabled, run && run->paused,
-            run && !run->pausedDoor.IsEmpty());
+            run && !run->pausedDoor.IsEmpty(), run && enabled && !run->paused && DcRouteStalled(leader));
         if (phase != job.dcPhase)
         {
             if (++job.dcPhaseChanges <= 20 || job.dcPhaseChanges % 50 == 0)
@@ -1314,7 +1346,7 @@ void Running(Job& job, uint32 diff)
                     job.event.id, DcPhaseCode(phase), DcPhaseCode(job.dcPhase), job.dcPhaseChanges, job.event.kills);
             job.dcPhase = phase;
         }
-        auto const engaged = BossEngaged(job);
+        engaged = BossEngaged(job);
         held = job.dcHold.Observe(phase, engaged, diff);
         // Nobody inside is alive to run dungeon-clear's rez recovery or wipe regroup: switch it off, and the
         // dc_stopped restart below revives the raid at the entrance.
@@ -1363,7 +1395,15 @@ void Running(Job& job, uint32 diff)
     }
     else if (!held.empty())
         Stop(job, held); // Only after every existing stop/restart rule chose to go on.
-    else RecallStrays(job, leader, diff); // Existing stop/restart priorities always win.
+    else
+    {
+        if (!Benchmark(job) && leaderPresent)
+        {
+            DcRunState const& run = DcRun::Of(GET_PLAYERBOT_AI(leader));
+            PassUnreachableTarget(job, leader, enabled, run.paused, engaged, diff);
+        }
+        RecallStrays(job, leader, diff); // Existing stop/restart priorities always win.
+    }
 }
 
 void Revive(Player* player)
