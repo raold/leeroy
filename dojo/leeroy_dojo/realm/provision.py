@@ -130,6 +130,17 @@ def write_configs(layout: Layout, manifest: tuple[Path, str] | None = None, only
         written.append(norm(target))
     for d in (layout.logs, layout.tmp, layout.run_dir, layout.secrets):
         d.mkdir(parents=True, exist_ok=True)
+    configure = Path(layout.roots["build"]) / "dojo-configure.json"
+    if configure.is_file() and json.loads(configure.read_text(encoding="utf-8")).get("raid_acceptance"):
+        name = "modules/mod_leeroy.conf"
+        if only is None or name in only:
+            dist = dist_dir / (name + ".dist")
+            text = conf.render(dist.read_text(encoding="utf-8"),
+                               {"Leeroy.Enable": "0", "Leeroy.HumanGuid": "0", "Leeroy.GuildId": "0"})
+            target = layout.configs / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+            written.append(norm(target))
     mysql.restrict_to_owner(layout.secrets)
     mysql.restrict_to_owner(layout.tmp)
     note = mysql.restrict_to_owner(layout.configs)

@@ -44,6 +44,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $env:GIT_OPTIONAL_LOCKS = '0'
+. (Join-Path $PSScriptRoot 'source-state.ps1')
 
 $DojoSymbols = [ordered]@{
     Addmod_dojoScripts       = '?Addmod_dojoScripts@@YAXXZ'
@@ -141,6 +142,11 @@ try { $configured = Get-Content -LiteralPath "$build/dojo-configure.json" -Raw |
 if ($null -eq $configured -or $configured.kind -ne 'leeroy-dojo-configure') {
     Stop-DojoBuild "$build/dojo-configure.json is missing; run configure.ps1 first"
 }
+try {
+    $cleanRevisions = Get-DojoCleanRevisions $DojoLayout.roots
+    if (-not $configured.Contains('clean_revisions')) { throw 'configure receipt has no clean-source evidence' }
+    Assert-DojoSameRevisions $configured.clean_revisions $cleanRevisions
+} catch { Stop-DojoBuild $_.Exception.Message }
 $variant = [string] $configured.variant
 $flag = Get-DojoCacheValue $cache 'AC_ENABLE_DOJO'
 if (-not $DojoVariantTags.ContainsKey($variant) -or $flag -ne $(if ($variant -eq 'training') { 'ON' } else { 'OFF' })) {
@@ -169,7 +175,13 @@ New-Item -ItemType Directory -Force -Path $logs | Out-Null
 $stamp = [DateTime]::Now.ToString('yyyyMMdd_HHmmss')
 $log = "$logs/build-$stamp-$variant.log"
 $errLog = "$logs/build-$stamp-$variant.stderr.log"
-$buildArgs = "--build `"$build`" --config RelWithDebInfo -- -m:$Jobs -nodeReuse:false " +
+$pending = "$build/dojo-build.pending.json"
+# Old/unproved/interrupted builds may contain objects from dirty sources. Do not
+# certify them through an incremental link after the source changes were reverted.
+$cleanFirst = -not (Test-DojoTrustedBuild $build)
+@{ clean_revisions = $cleanRevisions; state = 'building' } | ConvertTo-Json | Set-Content -LiteralPath $pending -Encoding utf8NoBOM
+$cleanArg = if ($cleanFirst) { ' --clean-first' } else { '' }
+$buildArgs = "--build `"$build`" --config RelWithDebInfo$cleanArg -- -m:$Jobs -nodeReuse:false " +
     "-p:UseMultiToolTask=true -p:EnforceProcessCountAcrossBuilds=true -p:CL_MPCount=$Jobs -v:minimal"
 Write-Output "build: $variant variant, $Jobs jobs -> $log"
 $started = [DateTime]::UtcNow
@@ -224,6 +236,8 @@ Write-Output ("build: exit $code after {0:N0} s, {1} compiler errors; peak {2} c
 
 $bin = "$build/bin/RelWithDebInfo"
 $problems = [System.Collections.Generic.List[string]]::new()
+try { Assert-DojoSameRevisions $cleanRevisions (Get-DojoCleanRevisions $DojoLayout.roots) }
+catch { $problems.Add($_.Exception.Message) }
 $artifacts = [ordered]@{}
 foreach ($name in 'worldserver.exe', 'authserver.exe', 'worldserver.pdb') {
     $path = "$bin/$name"
@@ -299,6 +313,8 @@ $receipt = [ordered]@{
     playerbots      = Get-DojoHead $DojoLayout.roots.playerbots
     patches         = @($patches.series)
     source          = Get-DojoHead $DojoLayout.roots.source
+    clean_revisions = $cleanRevisions
+    clean_rebuild   = $cleanFirst
     artifacts       = $artifacts
     verified        = $symbols
     problems        = $problems
@@ -320,5 +336,6 @@ if ($problems.Count -gt 0) {
     Stop-DojoBuild "not verified; receipt $build/dojo-build.json"
 }
 foreach ($key in $symbols.Keys) { Write-Output "ok   $key`: $($symbols[$key])" }
+Remove-Item -LiteralPath $pending
 Write-Output "build: ok ($variant variant linked and verified); receipt $data/builds/build-$stamp-$variant.json"
 exit 0

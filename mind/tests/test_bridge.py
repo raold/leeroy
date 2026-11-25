@@ -12,6 +12,7 @@ from leeroy_mind.bridge import (AckTimeout, Backoff, BridgeClient, ConnectionLos
                                 NotConnected)
 from leeroy_mind.protocol import (Ack, Chat, Error, GetCast, Hello, Ping, Say,
                                   register_command)
+from leeroy_mind.testing import wire
 from leeroy_mind.testing.fake_bridge import CORE_COMMAND_TYPES, FakeBridge, load_fixture
 
 FIXTURE = Path(__file__).parent / "fixtures" / "session_basic.jsonl"
@@ -900,8 +901,9 @@ def test_delayed_native_origin_keeps_reader_epoch_after_actual_writer_replacemen
 def test_owner_admission_check_cannot_execute_on_old_peer_or_follow_a_new_writer():
     from leeroy_mind.guild.protocol import DayOwnerCheck, StringDo, register
     register()
+    older = wire.native_command_types() - {"day_check_string_do"}  # a server from before day checks
     async def go():
-        async with session() as s:
+        async with session(bridge_kw=dict(known_types=older)) as s:
             epoch = s.client.transport_state.epoch
             original = StringDo("owner-request", 101, "come_to_me", target_guid=1)
             check = dataclasses.replace(original, id="check", day_check=DayOwnerCheck(original.id, ("begin",), 30000))

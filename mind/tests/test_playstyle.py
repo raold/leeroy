@@ -9,9 +9,10 @@ import pytest
 from conftest import make_persona, run, seed_test_cast
 from leeroy_mind.playstyle import style
 from leeroy_mind.playstyle.service import KEY, PlayStyles, attach, enabled
-from leeroy_mind.protocol import Boss, Group, Hello, Login
+from leeroy_mind.protocol import Ack, Boss, Group, Hello, Login
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.talk.world import WorldView
+from leeroy_mind.testing.wire import bridge_send
 
 
 @pytest.mark.parametrize('guid',[101,102,103,104,105])
@@ -129,10 +130,11 @@ def test_only_exact_successful_cleanup_receipt_releases_ownership(store,tmp_path
         store.set_meta(KEY,'[101]')
         service = PlayStyles(app)
         service.connected = service.supported = True
+        @bridge_send
         async def send(cmd,**kwargs):
             row = dict(id=cmd.id,kind='bot_do',state='done',reason='',skipped=(),guids=(101,))
             service.jobs.feed(SimpleNamespace(**(row|change)))
-            return SimpleNamespace(ok=True)
+            return Ack(0,cmd.id,True,'')
         app.bridge = SimpleNamespace(send=send)
         assert not await service.command([101],True)
         assert json.loads(store.get_meta(KEY))==[101]
@@ -150,10 +152,11 @@ def test_a_result_logs_its_reason_code(store,tmp_path,caplog,change,reason):
         store.set_meta(KEY,'[101]')
         service = PlayStyles(app)
         service.connected = service.supported = True
+        @bridge_send
         async def send(cmd,**kwargs):
             row = dict(id=cmd.id,kind='bot_do',state='done',reason='',skipped=(),guids=(101,))
             service.jobs.feed(SimpleNamespace(**(row|change)))
-            return SimpleNamespace(ok=True)
+            return Ack(0,cmd.id,True,'')
         app.bridge = SimpleNamespace(send=send)
         assert await service.command([101],True) is (reason=='ok')
     caplog.set_level(logging.DEBUG,'leeroy_mind')
@@ -169,8 +172,9 @@ def test_an_ack_refusal_logs_its_code_and_count(store,tmp_path,caplog,error,code
         store.set_meta(KEY,'[101,102]')
         service = PlayStyles(app)
         service.connected = service.supported = True
+        @bridge_send
         async def send(cmd,**kwargs):
-            return SimpleNamespace(ok=False,error=error)
+            return Ack(0,cmd.id,False,error)
         app.bridge = SimpleNamespace(send=send)
         assert not await service.command([101,102],True)
         assert service.owned=={101,102}
@@ -189,10 +193,11 @@ def test_mind_switch_off_enqueues_undo_without_new_additions(store,tmp_path):
         (tmp_path/'mind.toml').write_text('[playstyle]\nenabled=false')
         await service.event(Login(0,101,False))
         assert service.pending=={101:True} and not service.safe(101)
+        @bridge_send
         async def send(cmd,**kwargs):
             assert cmd.action=='restore' and cmd.param=='playstyle'
             service.jobs.feed(SimpleNamespace(id=cmd.id,kind='bot_do',state='done',reason='',skipped=(),guids=(101,)))
-            return SimpleNamespace(ok=True)
+            return Ack(0,cmd.id,True,'')
         app.bridge = SimpleNamespace(send=send)
         assert await service.command([101],True)
         assert store.get_meta(KEY) is None
@@ -261,14 +266,15 @@ def summary_rig(store,tmp_path,owned,*,outcome=lambda cmd:{}):
     store.set_meta(KEY,json.dumps(owned))
     service = PlayStyles(app)
     sent = []
+    @bridge_send
     async def send(cmd,**kwargs):
         sent.append((cmd.action,cmd.guids))
         change = outcome(cmd)
         if change.get('refuse'):
-            return SimpleNamespace(ok=False,error=change['refuse'])
+            return Ack(0,cmd.id,False,change['refuse'])
         row = dict(id=cmd.id,kind='bot_do',state='done',reason='',skipped=(),guids=cmd.guids)
         service.jobs.feed(SimpleNamespace(**(row|change)))
-        return SimpleNamespace(ok=True)
+        return Ack(0,cmd.id,True,'')
     app.bridge = SimpleNamespace(send=send)
     return app,service,sent
 

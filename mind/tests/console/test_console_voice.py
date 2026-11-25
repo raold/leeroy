@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 
@@ -23,12 +24,15 @@ STATE = {"type": "state", "tree": [{"id": "hall", "name": "Guild Hall", "parent"
 
 class FakeVoice:
     """A page socket: checks the handshake as the voice service does, sends a state, records
-    what it is sent, answers a join with what `on_join` says."""
+    what it is sent, answers a join with what `on_join` says. A message the service's socket
+    would ignore (the cases of voice/tests/fixtures/page_golden.json, which page_message is held
+    to) goes to `ignored`, not `received`."""
 
     def __init__(self, *, state=STATE, refuse_origin=False):
         self.state = state
         self.refuse_origin = refuse_origin
         self.received: list[dict] = []
+        self.ignored: list = []
         self.heads: list[str] = []
         self.peers: list[asyncio.StreamWriter] = []
         self.on_join = lambda channel: {"type": "moved", "guid": 900, "channel": channel}
@@ -78,7 +82,13 @@ class FakeVoice:
                 elif op == ws.CLOSE:
                     break
                 elif op == ws.TEXT:
-                    msg = json.loads(payload)
+                    try:
+                        msg = json.loads(payload)
+                    except ValueError:
+                        msg = None
+                    if not isinstance(msg, dict) or page_message(msg) is None:
+                        self.ignored.append(msg)
+                        continue
                     self.received.append(msg)
                     if msg.get("type") == "join":
                         reply = self.on_join(msg["channel"])
@@ -181,6 +191,16 @@ def test_page_messages_are_checked_as_the_voice_service_checks_them():
                 {"type": "volume", "guid": True, "db": 1}, {"type": "mute", "guid": 1, "on": 1},
                 {"type": "speak", "text": "x"}, {}):
         assert page_message(bad) is None
+
+
+PAGE_GOLDEN = Path(__file__).resolve().parents[3] / "voice" / "tests" / "fixtures" / "page_golden.json"
+
+
+@pytest.mark.parametrize("case", json.loads(PAGE_GOLDEN.read_text(encoding="utf-8")),
+                         ids=lambda c: json.dumps(c["message"])[:60])
+def test_page_messages_follow_the_voice_services_golden_cases(case):
+    """voice/tests/test_ui.py holds the voice service's page socket to the same file."""
+    assert page_message(case["message"]) == case["relayed"]
 
 
 def test_self_is_relayed_and_mirrored():

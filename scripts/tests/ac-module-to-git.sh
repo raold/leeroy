@@ -10,11 +10,18 @@ trap 'rm -rf -- "$scratch"' EXIT
 export GIT_AUTHOR_NAME=tester GIT_AUTHOR_EMAIL=tester@example.invalid
 export GIT_COMMITTER_NAME=tester GIT_COMMITTER_EMAIL=tester@example.invalid
 export AC_ROOT="$scratch/install with spaces" TMPDIR="$scratch/tmp" AC_TASKLIST="$scratch/tasklist"
+export AC_PROCESSES="$scratch/servers"
 modules="$AC_ROOT/azerothcore-wotlk/modules"
 mkdir -p "$modules" "$TMPDIR"
 printf '#!/usr/bin/env bash\ncat "%s/procs"\n' "$scratch" > "$AC_TASKLIST"
-chmod +x "$AC_TASKLIST"
+printf '#!/usr/bin/env bash\ncat "%s/server-rows"\nprintf "end\\r\\n"\n' "$scratch" > "$AC_PROCESSES"
+chmod +x "$AC_TASKLIST" "$AC_PROCESSES"
 printf '"explorer.exe","100","Console","1","9,000 K"\r\n' > "$scratch/procs"
+# A dojo's worldserver runs throughout: only this install's servers may block the swap.
+live_bin="$AC_ROOT/build/bin/RelWithDebInfo"
+if command -v cygpath >/dev/null 2>&1; then live_bin=$(cygpath -w "$live_bin"); fi
+dojo_row=$'400\tworldserver.exe\tF:\\azerothcore\\dojo-runtime\\instances\\claude-raids\\bin\\worldserver.exe\r\n'
+printf '%s' "$dojo_row" > "$scratch/server-rows"
 
 checks=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -78,11 +85,18 @@ run --go mod-plain "$up" "$zip_commit"; expect 1; has 'native build lock is held
 run mod-plain "$up" "$zip_commit"; expect 1; has '--go would refuse'
 rmdir "$AC_ROOT/.superpowers/live-build.lock"
 printf '"worldserver.exe","200","Console","1","9,000 K"\r\n"cl.exe","300","Console","1","1 K"\r\n' >> "$scratch/procs"
-run --go mod-plain "$up" "$zip_commit"; expect 1; has 'still running: cl.exe worldserver.exe'
+run --go mod-plain "$up" "$zip_commit"; expect 1; has 'still running: cl.exe'
 printf '"explorer.exe","100","Console","1","9,000 K"\r\n' > "$scratch/procs"
+printf '200\tWORLDSERVER.EXE\t%s\\WorldServer.exe\r\n' "$live_bin" >> "$scratch/server-rows"
+run --go mod-plain "$up" "$zip_commit"; expect 1; has 'worldserver.exe still running (pid 200)'
+printf '%s300\tauthserver.exe\t\r\n' "$dojo_row" > "$scratch/server-rows"
+run --go mod-plain "$up" "$zip_commit"; expect 1; has '1 authserver.exe whose path cannot be read still running'
+printf '%s' "$dojo_row" > "$scratch/server-rows"
 AC_TASKLIST=false run --go mod-plain "$up" "$zip_commit"; expect 1; has 'cannot read the process list'
 printf '#!/usr/bin/env bash\n' > "$scratch/silent"; chmod +x "$scratch/silent"
 AC_TASKLIST="$scratch/silent" run --go mod-plain "$up" "$zip_commit"; expect 1; has 'cannot read the process list'
+AC_PROCESSES=false run --go mod-plain "$up" "$zip_commit"; expect 1; has 'cannot read the server processes'
+AC_PROCESSES="$scratch/silent" run --go mod-plain "$up" "$zip_commit"; expect 1; has 'cannot read the server processes'
 run --go mod-plain "$up" 0123456789abcdef; expect 1; has 'no commit 0123456789abcdef upstream'
 run --go mod-plain "$up" "$side_commit"; expect 1; has 'is not on origin/main'
 run --go --subdir ../x mod-plain "$up" "$zip_commit"; expect 1; has 'not a plain relative path'

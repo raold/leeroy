@@ -20,6 +20,7 @@ from .ws import WsClient, WsError
 HOST = "127.0.0.1"
 PATH = "/ws"
 RETRY_S = 2.0
+RETRY_MAX_S = 5.0  # the longest wait between two tries while the service is away
 TRANSCRIPT = 200  # what a voice state keeps
 PEOPLE = 512
 INVITES = 32
@@ -200,7 +201,7 @@ class VoiceRelay:
                     except Exception as e:
                         log.error("console_voice_link_failed: error=%s", type(e).__name__)
             if not self._closing:
-                delay = min(5.0, self._retry_s * 2 ** min(20, self._attempt))
+                delay = min(RETRY_MAX_S, self._retry_s * 2 ** min(20, self._attempt))
                 self._attempt += 1
                 try:
                     await asyncio.wait_for(self._wake.wait(), delay * (0.5 + 0.5 * self._jitter()))

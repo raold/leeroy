@@ -26,10 +26,12 @@ from leeroy_mind.protocol import Ack, Boss
 from leeroy_mind.realm.ports import (LivePorts, RealmDisabled, RealmEvidenceUnavailable,
                                       TITLE_WORDS, title_holders)
 from leeroy_mind.testing.fake_clock import FakeClock
+from leeroy_mind.testing.fake_llm import check_chat
 from leeroy_mind.training import protocol as training_protocol
 from leeroy_mind.training.benchmark import BenchmarkSchedule, Benchmarks
 from leeroy_mind.training.config import TrainingConfig
 from leeroy_mind.training.ledger import Ledger
+from leeroy_mind.testing.wire import port_method
 
 
 def run(coro):
@@ -408,6 +410,7 @@ class BenchmarkProducer:
             "", "running" if state == "progress" else "teardown", tuple(owned["members"]), (),
             0, 0, 77, 0, 0, 0, "tr_native_7")
 
+    @port_method
     async def send(self, cmd):
         await self.runner.on_job(self.job())  # Exact native scope before Ack.
         return Ack(int(self.clock.now() * 1000), cmd.id, True, "")
@@ -684,7 +687,7 @@ def test_send_enrolls_before_early_job_and_settles_ack_after_disable_and_caller_
         def on_send(cmd):
             enrolled.add(cmd.id)
             receipts.append("send")
-        async def send(cmd, *, preserve_id):
+        async def send(cmd, *, preserve_id):  # a bare NS stands in for any command: no wire here
             assert preserve_id and cmd.id in enrolled
             receipts.append("job")  # Serial job callback can precede the Ack.
             entered.set()
@@ -709,7 +712,7 @@ def test_send_enrolls_before_early_job_and_settles_ack_after_disable_and_caller_
 def test_transport_queued_before_disable_never_enters_bridge_and_ack_callback_is_not_transport_error(app):
     async def scenario():
         calls = []
-        async def send(cmd, *, preserve_id):
+        async def send(cmd, *, preserve_id):  # a bare NS stands in for any command: no wire here
             calls.append("bridge")
             return Ack(1, cmd.id, True, "")
         def on_send(cmd):
@@ -741,6 +744,8 @@ class FakeLLM:
         self.text, self.calls, self.error = text, [], None
 
     async def chat(self, model, messages, *, options, think=None, format=None, keep_alive=None, timeout=None):
+        check_chat(model, messages, options=options, think=think, format=format,
+                   keep_alive=keep_alive)
         self.calls.append(dict(model=model, messages=messages, options=options, think=think,
                                format=format, timeout=timeout))
         if self.error is not None:

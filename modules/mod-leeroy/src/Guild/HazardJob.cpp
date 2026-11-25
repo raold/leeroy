@@ -59,6 +59,36 @@ constexpr float kScanYards = 70.0f;              // zones that can reach a spot 
 constexpr float kAnchorYards = 15.0f;            // a member this far from every scan centre gets its own
 
 std::atomic<bool> enabled{false};
+#if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
+std::uint32_t dojoOwner = 0;
+bool dojoWasEnabled = false;
+#endif
+
+bool ContextEnabled()
+{
+#if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
+    if (dojoOwner) return true;
+#endif
+    return enabled.load(std::memory_order_relaxed) && GuildEnabled();
+}
+
+std::uint32_t ContextOwner()
+{
+#if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
+    if (dojoOwner) return dojoOwner;
+#endif
+    return HumanGuid();
+}
+
+bool ContextMember(Player* bot, Player* owner)
+{
+#if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
+    if (dojoOwner && owner && bot->GetSession() && owner->GetSession())
+        return bot != owner && bot->GetSession()->GetAccountId() == owner->GetSession()->GetAccountId();
+#endif
+    (void)owner;
+    return bot->GetGUID().GetCounter() != HumanGuid() && IsCast(bot->GetGUID().GetCounter());
+}
 // The master whose bots the last pass made aware (0: none), so map threads turn every other bot away at once.
 std::atomic<std::uint32_t> awareMaster{0};
 std::uint32_t untilPass = 0;
@@ -122,7 +152,7 @@ HazardMemberFacts ReadFacts(Player* bot, PlayerbotAI* ai, Player* owner, Group* 
     std::uint32_t const guid = bot->GetGUID().GetCounter();
     HazardMemberFacts facts;
     facts.enabled = on;
-    facts.cast = guid != HumanGuid() && IsCast(guid);
+    facts.cast = ContextMember(bot, owner);
     facts.bot = ai && !IsSelfBot(bot);
     facts.ownerGroup = group && bot->GetGroup() == group;
     facts.ownerMaster = ai && owner && ai->GetMaster() == owner;
@@ -747,6 +777,23 @@ void ReloadHazards()
     untilPass = 0;
 }
 
+#if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
+void DojoHazardOwner(std::uint32_t guid)
+{
+    // The map-thread movement callbacks also consult the master enable flag.
+    // Preserve it across the synthetic group; no other group enters its snapshot.
+    if (guid && !dojoOwner)
+    {
+        dojoWasEnabled = enabled.load(std::memory_order_relaxed);
+        enabled.store(true, std::memory_order_relaxed);
+    }
+    else if (!guid && dojoOwner)
+        enabled.store(dojoWasEnabled, std::memory_order_relaxed);
+    dojoOwner = guid;
+    untilPass = 0;
+}
+#endif
+
 void InstallHazardFilter()
 {
 #if LEEROY_HAS_HAZARD_FILTER
@@ -767,8 +814,8 @@ void TickHazards(std::uint32_t diffMs)
     }
     untilPass = kPassMs;
 
-    bool const on = enabled.load(std::memory_order_relaxed) && GuildEnabled();
-    std::uint32_t const human = HumanGuid();
+    bool const on = ContextEnabled();
+    std::uint32_t const human = ContextOwner();
     Player* owner = on && human ? FindOnline(human) : nullptr;
     Group* group = owner ? owner->GetGroup() : nullptr;
     if (group && (group->isBGGroup() || group->isBFGroup()))
@@ -808,8 +855,8 @@ void TickHazards(std::uint32_t diffMs)
 
 void ApplyHazards(Player* bot)
 {
-    bool const on = enabled.load(std::memory_order_relaxed) && GuildEnabled();
-    Player* owner = on ? FindOnline(HumanGuid()) : nullptr;
+    bool const on = ContextEnabled();
+    Player* owner = on ? FindOnline(ContextOwner()) : nullptr;
     Group* group = owner ? owner->GetGroup() : nullptr;
     if (!bot || !group || group->isBGGroup() || group->isBFGroup())
         return;

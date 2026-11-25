@@ -24,6 +24,7 @@ from leeroy_mind.protocol import (MAX_TEXT_BYTES, Ack, Group, Member, clean_say_
 from leeroy_mind.talk.world import WorldView
 from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_llm import FakeLLM
+from leeroy_mind.testing.wire import bridge_method
 from test_app_lifecycle import CAST, LIVE, App, fake_clock, hello, presence, reply, seed_db, toml
 
 FIXTURES = Path(__file__).resolve().parents[2] / "modules/mod-leeroy/tests/fixtures"
@@ -47,6 +48,7 @@ class StubBridge:
     def __init__(self):
         self.sent, self.error, self.raises, self.greeted = [], "", None, True
 
+    @bridge_method
     async def send(self, cmd):
         self.sent.append(cmd)
         if self.raises is not None:

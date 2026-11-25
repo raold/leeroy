@@ -27,6 +27,18 @@ def test_golden_covers_every_type():
     assert ANOTHER_MIND == "another mind is connected"
 
 
+REFUSED = GOLDEN.with_name("wire_refused.json")
+
+
+@pytest.mark.parametrize("case", json.loads(REFUSED.read_text(encoding="utf-8")),
+                         ids=lambda c: c["reply"])
+def test_the_refused_golden_lines_are_refused_with_their_reply(case):
+    """leeroy-voice's copy refuses the same lines with the same replies."""
+    with pytest.raises(WireError) as e:
+        parse(case["line"].encode())
+    assert e.value.reply == case["reply"]
+
+
 def test_speak_template_defaults_false():
     s = Speak("s1", 101, "hi", "guild_hall", False, "p4", "banter", "none", "sober", 1, "")
     assert s.template is False and as_fields(s)["template"] is False

@@ -613,7 +613,8 @@ def _voice(p: Probes, data: Path) -> Check:
     from .console.netinfo import LISTEN
     from .voice.config import load_voice_config
     try:
-        if not load_voice_config(data / "mind.toml").enabled:
+        cfg = load_voice_config(data / "mind.toml")
+        if not cfg.enabled:
             return Check("voice", NOTE, "voice service: disabled in mind.toml")
     except (ConfigError, TypeError) as e:
         return Check("voice", NOTE, f"voice service: not checked ({type(e).__name__})")
@@ -636,6 +637,12 @@ def _voice(p: Probes, data: Path) -> Check:
     if not any(owners.values()):
         left = (f"; voice.pid names pid {pid} (starting, or left by a crash)"
                 if pid is not None else "")
+        hold = lifecycle.voice_hold(where.data_dir)
+        if hold is not None:
+            who = {"console": "from the console", "script": "by ac-voice.sh"}.get(
+                hold["by"], "on purpose")
+            left += f"; stopped {who}" + (", so the mind starts it again at his next login"
+                                          if cfg.autostart else "")
         return Check("voice", NOTE, f"voice service: stopped (ports {ports[0]} and {ports[1]} "
                                     f"closed){left}")
     if pid is None:

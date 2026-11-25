@@ -8,6 +8,7 @@
 {"name":"leave_pvp_bad_owner","kind":"command","valid":false,"error":"bad field: pvp_owner","msg":{"v":1,"type":"leave_pvp","id":"cleanup-one","ts":0,"guids":[101,102],"pvp_owner":"queue-one"}}
 {"name":"get_realm_pvp_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"get_realm_pvp","id":"query-one","ts":0,"pvp_owner":"0123456789abcdef0123456789abcdef-0000000000000001"}}
 {"name":"get_realm_pvp_origin","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"get_realm_pvp","id":"query-one","ts":0,"origin_id":"queue-one"}}
+{"name":"get_realm_pvp_origin_as_sent","kind":"command","valid":true,"error":"","msg":{"v":1,"type":"get_realm_pvp","id":"query-one","ts":0,"pvp_owner":"","origin_id":"queue-one"}}
 {"name":"get_realm_pvp_missing_selector","kind":"command","valid":false,"error":"bad field: owner_selector","msg":{"v":1,"type":"get_realm_pvp","id":"query-one","ts":0}}
 {"name":"realm_pvp_event","kind":"event","msg":{"v":1,"ts":0,"type":"realm_pvp","id":"query-one","pvp_owner":"0123456789abcdef0123456789abcdef-0000000000000001","origin_id":"queue-one","kind":"rated_arena","origin_epoch":7,"revision":3,"guild":30,"human":1,"members":[101,102],"stage":"cleaning","application_fenced":true,"reason":"","cleanup_id":"cleanup-one"}}
 {"name":"rearm_ok","kind":"command","valid":true,"error":"","full":true,"msg":{"v":1,"type":"rearm","id":"realm-test","ts":0,"guids":[11001,11002]}}

@@ -17,6 +17,7 @@ from leeroy_mind.console.mindlink import LinkError
 from leeroy_mind.library.chunks import KINDS, ChunkDraft
 from leeroy_mind.library.core import Library
 from leeroy_mind.library.serverref import ServerRefSource
+from leeroy_mind.testing import control
 from library_snapshot_helpers import command, server_snapshot, teleport
 from test_library_core import ListSource
 
@@ -61,7 +62,7 @@ class FakeLink:
         self.timeouts.append(timeout)
         if self.error:
             raise LinkError(self.error)
-        return self.reply
+        return control.answer(op, args, self.reply)
 
 
 async def get(data, path, **kw):

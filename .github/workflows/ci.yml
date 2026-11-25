@@ -30,8 +30,12 @@ jobs:
         run: pwsh -NoProfile -File scripts/tests/ac-guild-backup-schedule.ps1
       - name: release self-test (temporary repositories and stub services)
         run: bash scripts/tests/ac-release.sh
+      - name: server wrapper self-test (scratch install, stub process list)
+        run: bash scripts/tests/ac-server.sh
       - name: release module patch self-test (temporary repositories only)
         run: python3 scripts/tests/test_ac_release_patches.py
+      - name: reviewer outcome accounting (synthetic records, no GitHub writes)
+        run: python3 -m unittest discover -s scripts/tests -p test_review_quality.py
       - name: SOAP client self-test (fake server on loopback)
         run: bash scripts/tests/ac-soap.sh
       - name: native log pruning self-test (temporary files only)
@@ -40,6 +44,8 @@ jobs:
         run: bash scripts/tests/ac-module-to-git.sh
       - name: verify runner self-test (temporary repositories and a stub mind)
         run: bash scripts/tests/verify-run.sh
+      - name: flaky report self-test (invented runs only)
+        run: python3 scripts/tests/test_flaky_report.py
 
   secrets:
     runs-on: ubuntu-latest

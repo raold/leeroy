@@ -12,7 +12,7 @@ from leeroy_mind.library.core import DEFAULT_EMBED_MODEL, Library
 from leeroy_mind.llm.client import LLMError
 from leeroy_mind.storage.db import EmbeddingMismatch
 from leeroy_mind.storage.rows import pack_vec
-from leeroy_mind.testing.fake_llm import FakeLLM
+from leeroy_mind.testing.fake_llm import FakeLLM, check_embed
 
 
 @pytest.fixture
@@ -35,6 +35,7 @@ class ScriptedEmbedder:
         self.calls = []
 
     async def embed(self, model, inputs, *, dimensions):
+        check_embed(model, inputs, dimensions=dimensions)
         self.calls.append({"model": model, "input": list(inputs), "dimensions": dimensions})
         await asyncio.sleep(0)
         return self.reply(len(self.calls), inputs)
@@ -264,6 +265,7 @@ def test_cancellation_keeps_completed_batch_and_resumes_after_inflight_request(l
             calls = 0
 
             async def embed(self, model, inputs, *, dimensions):
+                check_embed(model, inputs, dimensions=dimensions)
                 self.calls += 1
                 if self.calls == 2:
                     waiting.set()

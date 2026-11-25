@@ -68,8 +68,10 @@
         "Playerbots.Enabled": "1",
         "Playerbots.RandomBotAccountCount": "0",
         "Playerbots.DeleteRandomBotAccounts": "0",
-        "Playerbots.EnablePeriodicOnlineOffline": "0",
         "Playerbots.AutoGearScoreLimit": "0"
+      },
+      "ordinary_if_present": {
+        "Playerbots.EnablePeriodicOnlineOffline": "0"
       }
     },
     "modules/mod_dojo.conf": {

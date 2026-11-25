@@ -4,8 +4,9 @@ Each source has one daemon worker at most, a response deadline and a cache. A bl
 share or process cannot serialize the other panels or create more workers on each poll.
 SQLite reads also have a VM deadline. Only explicit scalar projections leave this module.
 
-Budgets: health 6 s, Git and Task Scheduler 3 s each, other sources 1 s each, concurrently.
-Health is cached for 60 s; others for 15 s. A timed-out worker remains single-flight until
+Budgets: health 6 s, Git and Task Scheduler 3 s each, the verification ledger 8 s, other sources
+1 s each, concurrently. Health and the debrief are cached for 60 s, the ledger for 5 minutes,
+others for 15 s. A timed-out worker remains single-flight until
 it returns (Python cannot interrupt a blocked filesystem call); its late result can be read
 on a later poll. Git/PowerShell children are killed on their own deadline. SQLite has a
 50 ms busy timeout, query_only and a progress deadline. Lists and files have separate caps.
@@ -35,9 +36,13 @@ from ..nightly.settings import NightlySettings
 from ..realm.action_store import released_members
 from . import mindlog, views
 
-PANELS = ("health", "night", "realm", "raids", "debrief", "selfies", "backups", "drift", "schedules", "switches")
-BUDGETS = {"health": 6.0, "night": 1.0, "realm": 1.0, "raids": 1.0, "debrief": 4.0,
+PANELS = ("health", "night", "realm", "raids", "debrief", "verify", "selfies", "backups", "drift", "schedules",
+          "switches")
+BUDGETS = {"health": 6.0, "night": 1.0, "realm": 1.0, "raids": 1.0, "debrief": 4.0, "verify": 8.0,
            "selfies": 1.0, "backups": 1.0, "drift": 10.0, "schedules": 3.0, "switches": 1.0}
+# How long a panel's answer is reused; the rest refresh every 15 s. The ledger reads up to a few
+# hundred MB of logs, and what it reports moves with raids, not by the minute.
+TTL = {"health": 60, "debrief": 60, "verify": 300}
 ROWS = 128
 FILE_BYTES = 2 * 1024 * 1024
 _CODE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,63}\Z")
@@ -677,6 +682,9 @@ class OpsView:
             return self.sources[name]()
         if name == "health":
             return health_view(self.root, self.data)
+        if name == "verify":
+            from ..verify.ledger import ledger
+            return panel(**ledger(self.data, health.bin_dir(self.root), now=self.clock(), deadline=deadline - .1))
         if name == "debrief":
             from ..training.debrief import raid_debrief
             with database(self.data, deadline) as conn:
@@ -737,7 +745,7 @@ class OpsView:
     async def _one(self, name, runtime):
         start = self.monotonic()
         with self._lock:
-            ttl = 60 if name in {"health", "debrief"} else 15
+            ttl = TTL.get(name, 15)
             if name in self._cache and start - self._started[name] < ttl:
                 return self._cache[name]
             if name not in self._workers:

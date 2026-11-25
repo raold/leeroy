@@ -1,8 +1,12 @@
 """MindServer on real sockets: each test binds port 0 and talks to it with FakeMind."""
 import asyncio
 import importlib.metadata
+import json
 import logging
 import socket
+from pathlib import Path
+
+import pytest
 
 import leeroy_voice
 from conftest import eventually, run
@@ -10,7 +14,7 @@ from fakes import FakeMind
 from leeroy_voice import server as server_module
 from leeroy_voice.server import MindServer
 from leeroy_voice.wire import (ANOTHER_MIND, SERVER_NAME, Error, Heard, Hello, Join, Played,
-                               Speak, Status, encode)
+                               Speak, Status, encode, type_name)
 
 SPEAK = Speak("s1", 102, "adds on the left", "guild_hall", True, "p1", "urgent", "none",
               "sober", 1793404809000)
@@ -166,6 +170,35 @@ def test_reconnect():
             await eventually(lambda: rig.got == [SPEAK])
             await second.close()
             await eventually(lambda: rig.disconnects == 2)
+    run(go())
+
+
+PORT_GOLDEN = Path(__file__).parent / "fixtures" / "mind_port_golden.json"
+
+
+def port_line(item) -> bytes:
+    if isinstance(item, dict):
+        return item["repeat"].encode() * item["times"] + b"\n"
+    return item.encode() + b"\n"
+
+
+@pytest.mark.parametrize("case", json.loads(PORT_GOLDEN.read_text(encoding="utf-8")),
+                         ids=lambda c: c["name"])
+def test_the_port_golden_cases(case):
+    """How the port answers what a mind sends; the mind's FakeVoice is held to the same file
+    (mind/tests/voice/test_voice_client.py)."""
+    async def go():
+        async with Rig() as rig:
+            mind = await rig.mind()
+            await mind.send_raw(b"".join(port_line(x) for x in case["send"]))
+            if case["closed"]:
+                await mind.wait_eof()
+            else:
+                await eventually(lambda: len(rig.got) == len(case["handled"]))
+                await eventually(lambda: len(mind.received) == 1 + len(case["replies"]))
+            assert mind.received[1:] == [Error(r) for r in case["replies"]]
+            assert [type_name(m) for m in rig.got] == case["handled"]
+            await mind.close()
     run(go())
 
 
