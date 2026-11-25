@@ -42,6 +42,7 @@
 #include <mutex>
 #include <sstream>
 #include "DojoNaxxPass.h"
+#include "DojoTocIntro.h"
 
 // Older production baselines can run this harness. A worm-support trial
 // refuses unless the candidate includes that feature's policy.
@@ -100,6 +101,7 @@ struct OfflineFixture
     bool wormRequested = false, wormOverride = false, wormPrevious = false, wormRestored = true;
     uint32 wormSamples = 0;
     DojoNaxxPass naxxPass;
+    DojoTocIntro tocIntro;
     std::recursive_mutex mutex;
 
     std::array<Player*, 10> RaidActors() const
@@ -233,6 +235,7 @@ struct OfflineFixture
             clockMs += diff;
             auto const native = Leeroy::Guild::DojoOfflineSnapshot();
             naxxPass.Tick(RaidActors(), native, token, error, diff);
+            tocIntro.Tick(RaidActors(), native, token, error, diff);
             if (!native.value("active", false)) RestoreWormSupport();
 #if DOJO_HAS_TOC_WORM_SUPPORT
             if (wormRequested && native.value("stage", "") == "running" && sPlayerbotAIConfig.TocWormSupport)
@@ -290,8 +293,9 @@ struct OfflineFixture
         bool const fullRun = scenario == "toc-full" || scenario == "toc-full-worms" || scenario == "ulduar-full";
         bool const wormTrial = scenario == "toc-worms" || scenario == "toc-full-worms";
         bool const naxxTrial = scenario == "naxx-gothik-pass" || scenario == "naxx-gothik-pass-control";
+        bool const tocIntroTrial = scenario == "toc-anub-intro";
         if (wormTrial && !DOJO_HAS_TOC_WORM_SUPPORT) return "toc_worm_feature_missing_from_candidate";
-        map = scenario == "toc" || scenario == "toc-full" || reserveTrial || wormTrial ? 649
+        map = scenario == "toc" || scenario == "toc-full" || reserveTrial || wormTrial || tocIntroTrial ? 649
             : scenario == "ulduar" || scenario == "ulduar-full" ? 603 : scenario == "icc" ? 631 : naxxTrial ? 533 : 0;
         if (!map) return "unknown offline scenario";
         std::vector<std::size_t> requested{1, 2, 3, 4, 5, 6, 7, 8, 9};
@@ -321,6 +325,8 @@ struct OfflineFixture
         naxxPass = {};
         naxxPass.state = naxxTrial ? "pending" : "none";
         naxxPass.control = scenario == "naxx-gothik-pass-control";
+        tocIntro = {};
+        tocIntro.state = tocIntroTrial ? "pending" : "none";
         scriptedWipe = restartingSeen = false; restartsAtWipe = wipeBoss = mainTankAtWipe = 0;
         tankSwapForced = false;
         selfResSuppressed = 0;
@@ -394,6 +400,7 @@ struct OfflineFixture
         auto const native = Leeroy::Guild::DojoOfflineSnapshot();
         if (!native.value("active", false)) RestoreWormSupport();
         if (!native.value("active", false)) naxxPass.Release(RaidActors());
+        if (!native.value("active", false)) tocIntro.Release(RaidActors());
         json bodies = json::array(), damage = json::array(), pools = json::array();
         for (std::size_t i = 1; i < actors.size(); ++i)
             if (auto* p = Actor(i))
@@ -421,6 +428,7 @@ struct OfflineFixture
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
             {"native", native}, {"bodies", bodies}, {"damage", damage},
             {"naxx_pass", naxxPass.Snapshot()},
+            {"toc_intro", tocIntro.Snapshot()},
             {"toc_worm_support", {{"requested", wormRequested}, {"active_samples", wormSamples}, {"restored", wormRestored}}},
             {"scripted_wipe", scriptedWipe}, {"restarting_seen", restartingSeen}, {"restarts_at_wipe", restartsAtWipe},
             {"main_tank", MainTank(Actor(1))}, {"wipe_boss", wipeBoss}, {"main_tank_at_wipe", mainTankAtWipe},

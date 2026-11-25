@@ -26,7 +26,7 @@ def add_parser(sub) -> None:
     offline.add_argument("--target", required=True, choices=("toc-beasts", "toc-full", "ulduar-full", "ulduar-route", "toc-slime-pools", "toc-slime-pools-control",
         "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "ulduar-forced-tank-restart",
         "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves",
-        "naxx-gothik-pass", "naxx-gothik-pass-control"))
+        "naxx-gothik-pass", "naxx-gothik-pass-control", "toc-anub-intro"))
     offline.add_argument("--toc-worm-support", action="store_true", help="measure the candidate worm support in this isolated run")
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)

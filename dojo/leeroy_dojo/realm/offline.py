@@ -15,6 +15,7 @@ from .mechanics import MechanicConnection
 from .offline_fixture import FixtureCheckpoint
 
 TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
+           "toc-anub-intro": ("toc-anub-intro", 649, None),
            "naxx-gothik-pass": ("naxx-gothik-pass", 533, None),
            "naxx-gothik-pass-control": ("naxx-gothik-pass-control", 533, None),
            "toc-full": ("toc-full", 649, None), "ulduar-full": ("ulduar-full", 603, None),
@@ -54,6 +55,9 @@ def reached(observation, *, target, token):
     if target in {"naxx-gothik-pass", "naxx-gothik-pass-control"}:
         from .offline_naxx import reached_naxx
         return reached_naxx(observation, control=target.endswith("-control"))
+    if target == "toc-anub-intro":
+        from .offline_toc import reached_intro
+        return reached_intro(observation)
     if target in FULL_ROUTES:
         count, required = FULL_ROUTES[target]
         states = native.get("boss_states")
@@ -310,6 +314,8 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                         report["cleanup"] = native.get("cleanup") is True
                         if target.startswith("naxx-gothik-pass"):
                             report["cleanup"] = report["cleanup"] and observed.get("naxx_pass", {}).get("strategies_restored") is True
+                        if target == "toc-anub-intro":
+                            report["cleanup"] = report["cleanup"] and observed.get("toc_intro", {}).get("strategies_restored") is True
                         if toc_worm_support:
                             report["cleanup"] = report["cleanup"] and observed.get("toc_worm_support", {}).get("restored") is True
                         if target == "offline-reserves":
