@@ -528,6 +528,9 @@ struct EncounterMember
     uint64 healing = 0;
     float minMana = 100.f;
     bool alive = true, dreaming = false;
+    // The raid as pulled, kept for the report after the fixtures log out.
+    uint32 level = 0, itemLevel = 0, maxHealth = 0, maxMana = 0;
+    bool isHeal = false;
 };
 
 struct EncounterRun
@@ -746,6 +749,16 @@ struct EncounterRun
         // run starts there, and her own health records what that heal gave.
         if (startHp < 49.f || startHp > 60.f) { Fail("Valithria did not start near 50%"); return; }
         timeline.emplace_back(0, startHp);
+        for (std::size_t i = 0; i < actors.size(); ++i)
+            if (Player* p = Actor(i))
+            {
+                EncounterMember& m = members[i];
+                m.level = p->GetLevel();
+                m.itemLevel = uint32(p->GetAverageItemLevel());
+                m.maxHealth = p->GetMaxHealth();
+                m.maxMana = p->getPowerType() == POWER_MANA ? p->GetMaxPower(POWER_MANA) : 0;
+                m.isHeal = PlayerbotAI::IsHeal(p);
+            }
         // A member close to an archmage may already have started it; then the core is pulling it.
         earlyPull = script->GetBossState(10) == IN_PROGRESS;
         if (!earlyPull) trigger->AI()->DoZoneInCombat();
@@ -898,7 +911,8 @@ struct EncounterRun
         {
             EncounterMember const& m = members[i];
             json row = {{"slot", i}, {"name", Roster[i].name}, {"spec", Roster[i].spec}, {"healer", Healer(i)},
-                {"deaths", m.deaths}, {"alive_ms", m.aliveMs}};
+                {"deaths", m.deaths}, {"alive_ms", m.aliveMs}, {"level", m.level}, {"item_level", m.itemLevel},
+                {"max_health", m.maxHealth}, {"max_mana", m.maxMana}, {"is_heal", m.isHeal}};
             if (Healer(i))
             {
                 row["dream_entries"] = m.dreamEntries;
@@ -932,12 +946,7 @@ struct EncounterRun
                         row["distance_to_her"] = p->GetDistance(dragon);
                 if (Engine* engine = ai->GetCurrentEngine())
                     row["last_action"] = std::string(engine->GetLastAction()).substr(0, 160);
-                row["level"] = p->GetLevel();
-                row["item_level"] = uint32(p->GetAverageItemLevel());
-                row["max_health"] = p->GetMaxHealth();
-                if (p->getPowerType() == POWER_MANA) row["max_mana"] = p->GetMaxPower(POWER_MANA);
-                row["is_heal"] = PlayerbotAI::IsHeal(p);
-                row["icc"] = GET_PLAYERBOT_AI(p)->HasStrategy("icc", BOT_STATE_COMBAT);
+                row["icc"] = ai->HasStrategy("icc", BOT_STATE_COMBAT);
             }
             roster.push_back(row);
         }
