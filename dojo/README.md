@@ -69,6 +69,23 @@ Recovery must restore the designated job tank and satisfy the same restart gate.
 The report marks the forced assignment; it cannot pass either natural-role or
 XT target. This avoids depending on a role change that correct initial grouping
 can prevent. It does not claim Razorscale was defeated.
+The forced stimulus also declines pending self-resurrection offers after the
+real deaths. Otherwise automatic Ankh/Soulstone use turns the intended full wipe
+into a partial wipe. It records the number suppressed; Spirit of Redemption
+expires normally, and the offline job alone performs the restart and revival.
+
+`--target toc-full` and `--target ulduar-full` wait for the production job to
+finish naturally. They require every encounter DONE, the earned kill count,
+the `cleared` terminal, cleanup and shutdown; reaching the first boss or a
+scripted restart cannot pass. These longer runs use a three-hour job limit with
+the same three-wipe caps. The terminal retains the actual encounter-state vector
+after actors return home. `--toc-worm-support` also works with `toc-full`.
+
+Ulduar's current offline route only covers Ignis, Razorscale, XT-002, Kologarn and
+Auriaya. `--target ulduar-route` checks completion of that entire supported route
+with the native `cleared_reachable` terminal. Its receipt explicitly lists the
+nine unverified encounters. A route pass cannot pass `ulduar-full` or establish
+that all Ulduar bosses work.
 
 Run both `--target toc-slime-pools-control` and `--target toc-slime-pools` to check
 Slime Pool avoidance during the actual Northrend Beasts pull. The control disables

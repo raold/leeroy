@@ -23,7 +23,7 @@ def add_parser(sub) -> None:
     cmds.add_parser("db-check", help="check the instance's identity, schema set and the restricted user's grants")
     cmds.add_parser("raid-acceptance", help="run Valithria, Twins and Living Poison in a dedicated stopped dojo realm")
     offline = cmds.add_parser("offline-acceptance", help="prepare a synthetic guild and observe a real offline raid job")
-    offline.add_argument("--target", required=True, choices=("toc-beasts", "toc-slime-pools", "toc-slime-pools-control",
+    offline.add_argument("--target", required=True, choices=("toc-beasts", "toc-full", "ulduar-full", "ulduar-route", "toc-slime-pools", "toc-slime-pools-control",
         "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "ulduar-forced-tank-restart",
         "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves"))
     offline.add_argument("--toc-worm-support", action="store_true", help="measure the candidate worm support in this isolated run")
