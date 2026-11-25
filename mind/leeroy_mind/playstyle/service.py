@@ -271,6 +271,9 @@ class PlayStyles:
             ack = await self.app.bridge.send(PlayStyleTable(uuid.uuid4().hex,styles), preserve_id=True)
         except Exception as exc:
             log('playstyle_table_failed',error=type(exc).__name__) # the next hello, login or cast sends it
+            # Native may hold it all the same (an ack lost after it was accepted): whatever it holds,
+            # the next send replaces it, an empty table included.
+            self.mode,self.sent = 'table',None
             return
         if ack.ok:
             self.mode,self.sent = 'table',styles

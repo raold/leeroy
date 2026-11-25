@@ -214,6 +214,26 @@ LEEROY_TEST(PlayStyle_TableTriesStayInBudgetAndReachEveryMember)
     CHECK(TableTries(table, none, kTableRetryMs).size() == kTableTriesPerPass); // the first ones are due again
 }
 
+// His relog makes playerbots reset the strategies of his group's bots without a new body or AI: the journal stays while
+// the style is gone. Drifted sees it, the restore puts back only what is still the table's, and the table styles anew.
+LEEROY_TEST(PlayStyle_TableSeesAStrategyResetTakeTheStyleAway)
+{
+    Values baseline{false, 10, false};
+    Values applied = Plan(baseline, {4, true}, true);
+    Journal journal;
+    journal.Note(baseline, applied);
+    CHECK(!journal.Drifted(applied));
+    Values reset{false, 4, false}; // ResetStrategies drops both strategies; the delay value stays
+    CHECK(journal.Drifted(reset));
+    CHECK(journal.Restore(reset, "*") == baseline);
+    Journal potionsOnly;            // a hold already there belongs to its caller
+    Values held{true, 4, false};
+    potionsOnly.Note(held, Plan(held, {4, true}, true));
+    CHECK(potionsOnly.Owns("potions") && !potionsOnly.OwnsOpeningHold());
+    CHECK(!potionsOnly.Drifted({true, 6, true}));  // another writer's delay is not the table's to watch
+    CHECK(potionsOnly.Drifted({true, 4, false}));
+}
+
 // More entries stay due than a retry period's budget (members offline or in a battleground for a long time): the
 // oldest due go first, so the higher guids are reached as often as the lower ones.
 LEEROY_TEST(PlayStyle_TableTriesRotateWhenMoreStayDueThanTheBudget)

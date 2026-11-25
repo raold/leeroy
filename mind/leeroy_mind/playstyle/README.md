@@ -101,6 +101,7 @@ any reason of its own, the connection keeps one `bot_do` a member exactly as bef
 His login always tries the table again, first restoring the styles the one-`bot_do` path added
 (native leaves another writer's style alone, so the table could not take those members over). Logs: `playstyle_table_sent styles= on= owner=`,
 `playstyle_table_refused error= mode=` (`legacy` or `off`), `playstyle_table_failed error=` (an
-exception class); Server.log `mod-leeroy: playstyle_table held styles=`, `... dropped styles=
+exception class; native may hold the table all the same, so the mind's next send replaces it, an
+empty one included); Server.log `mod-leeroy: playstyle_table held styles=`, `... dropped styles=
 why=` (`mind`, `off`) and, at most once a minute when a style was added or the styled count moved,
 `mod-leeroy: playstyle_table styles= styled= tried= applied= refused=<code=n,...>`.

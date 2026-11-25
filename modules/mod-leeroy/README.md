@@ -1087,7 +1087,10 @@ once the table no longer lists its member: a smaller or empty table, the mind's 
 table is dropped, `why=mind`) or `Leeroy.Enable`, `Leeroy.PlayStyle.Enable` or `Leeroy.PlayStyle.Table`
 at 0 (dropped, `why=off`, as a config load invalidates queued `bot_do` additions; the mind sends it
 again at his next login or hello). The usual cleanup (PvP, instance, raid, role, another owner) still
-applies, and the table then styles her again once she is free.
+applies, and the table then styles her again once she is free. So does a table journal whose fields no
+longer hold what it wrote (`Journal::Drifted`): playerbots' `OnPlayerLogin` resets the strategies of his
+group's bots at his relog without a new body or AI, so the tick restores what is still the table's and
+styles her anew.
 
 The handler refuses `disabled`, `playstyle_off` and `playstyle_table_off` (the mind then keeps one
 `bot_do` a member), and `not_connected` for a table its mind queued before that connection closed (a

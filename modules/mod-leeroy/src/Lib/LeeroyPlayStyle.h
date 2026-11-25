@@ -88,6 +88,14 @@ public:
     }
     bool Owns(std::string_view name = "*") const { return (owned & Mask(name)) != 0; }
     bool OwnsOpeningHold() const { return (owned & 3u) != 0; }
+    // A field this journal owns no longer holds what it wrote: playerbots reset the bot's strategies (as its
+    // OnPlayerLogin does for his group's bots at his relog) or another writer replaced it. The table then restores what
+    // is still its own and carries the style out again on the bot as it is now.
+    bool Drifted(Values current) const
+    {
+        return ((owned & 1u) && current.wait != applied.wait) || ((owned & 2u) && current.seconds != applied.seconds)
+            || ((owned & 4u) && current.potions != applied.potions);
+    }
     Values Restore(Values current, std::string_view name) const
     {
         unsigned mask = owned & Mask(name);

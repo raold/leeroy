@@ -222,12 +222,40 @@ def test_a_lost_send_or_a_disconnect_leaves_the_table_to_the_next_connection(sto
         await service.connection(True)
         await service.event(Hello(0, 'fake', '1', 21, 1, TABLE_HELLO))
         await drain(service)
-        assert service.mode is None and service.sent is None
+        assert service.mode == 'table' and service.sent is None         # native may hold it: unknown
         await service.connection(False)
         assert not service.table_supported and service.mode is None
     caplog.set_level(logging.INFO, 'leeroy_mind')
     run(scenario())
     assert 'playstyle_table_failed: error=ConnectionError' in caplog.text and 'private' not in caplog.text
+
+
+def test_a_table_whose_ack_was_lost_is_still_cleared_when_the_switch_goes_off(store, tmp_path):
+    """Native accepted the table but its ack never came: switching [playstyle] off must still send
+    the empty table that makes native take the styles back."""
+    from leeroy_mind.bridge import AckTimeout
+
+    async def scenario():
+        app, service, sent = table_rig(store, tmp_path)
+        delivered = app.bridge.send
+        lose = {'next': True}
+
+        async def flaky(cmd, **kwargs):
+            if lose['next']:
+                lose['next'] = False
+                sent.append(cmd)                                         # it reached native
+                raise AckTimeout()
+            return await delivered(cmd, **kwargs)
+        app.bridge = SimpleNamespace(send=flaky)
+        await service.connection(True)
+        await service.event(Hello(0, 'fake', '1', 21, 1, TABLE_HELLO))
+        await drain(service)
+        assert len(tables(sent)) == 1 and tables(sent)[0].styles
+        (tmp_path/'mind.toml').write_text('[playstyle]\nenabled=false')
+        await service.event(Login(0, 102, False))
+        await drain(service)
+        assert len(tables(sent)) == 2 and tables(sent)[1].styles == ()
+    run(scenario())
 
 
 def test_malformed_receipts_send_no_table(store, tmp_path):

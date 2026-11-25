@@ -311,7 +311,10 @@ void Tick()
             && (PlayerbotAI::IsTank(bot, true) || PlayerbotAI::IsHeal(bot, true))
             && saved.journal.OwnsOpeningHold();
         bool const undo = TableUndo(saved.holder, table.contains(guid));
-        if (CleanupDue(facts, changed, roleChanged) || undo)
+        // A table style a strategy reset took away is restored where still ours and carried out again (CarryTable).
+        auto const current = (changed || saved.holder != Holder::Table) ? std::nullopt : Read(bot);
+        bool const drifted = current && saved.journal.Drifted(*current);
+        if (CleanupDue(facts, changed, roleChanged) || undo || drifted)
             Restore(bot);
     }
     CarryTable();
