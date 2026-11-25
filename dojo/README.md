@@ -233,6 +233,11 @@ actor facing and targets are recorded to diagnose failed illusion clears.
 Sampling follows the actual map-update clock. Native Charge uses its spell's
 speed only while the core reports charge state and a matching active spline;
 ordinary movement retains the original speed bound and distance margin.
+A constrictor grab requires its native boarding callback, summon and spell
+witnesses, and arrival at a witnessed seat transform. The observer retains the
+boarding destination because the base can turn before the next sample without
+relocating its passenger. The existing arrival tolerance and single-use limit
+remain unchanged.
 
 The negative control disables the raid strategy while leaving the same real
 encounter stimulus. Both cases require cleanup and shutdown. Actor health

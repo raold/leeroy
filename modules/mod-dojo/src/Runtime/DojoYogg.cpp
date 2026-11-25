@@ -32,6 +32,7 @@
 #include "TemporarySummon.h"
 #include "UnitScript.h"
 #include "Vehicle.h"
+#include "VehicleScript.h"
 #include "WorldScript.h"
 #include <algorithm>
 #include <array>
@@ -67,6 +68,13 @@ struct Trial
     std::array<ObjectGuid, Names.size()> observedConstrictors{};
     std::array<Position, Names.size()> constrictorOrigins{};
     std::array<uint32, Names.size()> constrictorCastMs{};
+    struct SeatArrival
+    {
+        ObjectGuid base;
+        Position destination;
+        uint32 boardedMs = 0;
+    };
+    std::array<SeatArrival, Names.size()> constrictorSeats{};
     uint32 constrictorAttachments = 0;
     std::array<bool, Names.size()> previousMoving{};
     // A native grab emits spawn, lunge, squeeze and duplicate ride effects in
@@ -122,6 +130,10 @@ struct Trial
             {"spawn_distance", base->GetExactDist(previous[i])},
             {"spawn_distance_2d", base->GetExactDist2d(previous[i])},
             {"seat_error", p->GetExactDist(x, y, z)},
+            {"boarding_witness", constrictorSeats[i].base == base->GetGUID()},
+            {"boarding_seat_error", p->GetExactDist(constrictorSeats[i].destination)},
+            {"base_orientation", base->GetOrientation()},
+            {"seat_offset", {p->GetTransOffsetX(), p->GetTransOffsetY(), p->GetTransOffsetZ()}},
             {"base_position", {base->GetPositionX(), base->GetPositionY(), base->GetPositionZ()}}};
     }
     bool NativeConstrictorAttachment(Player* p, std::size_t i, uint32 diff, float speed)
@@ -148,13 +160,17 @@ struct Trial
             || base->GetExactDist2d(constrictorOrigins[i]) >
                 std::max(spell->Effects[EFFECT_0].CalcRadius(p), p->GetCombatReach()) + 0.1f)
             return false;
-        // The actual seat transform must account for the displacement. This
-        // proves one native grab, not an exemption for jumping while mounted.
+        // Require the actual native boarding callback as well as the summon,
+        // lunge and squeeze. SetInFront can rotate the base without relocating
+        // its passenger, so retain the seat destination witnessed when boarding
+        // instead of assuming the later base orientation was used for arrival.
+        auto const& seat = constrictorSeats[i];
+        if (seat.base != base->GetGUID() || elapsed - seat.boardedMs > 250) return false;
         float const angle = base->GetOrientation();
         float const x = base->GetPositionX() + p->GetTransOffsetX() * std::cos(angle) - p->GetTransOffsetY() * std::sin(angle);
         float const y = base->GetPositionY() + p->GetTransOffsetY() * std::cos(angle) + p->GetTransOffsetX() * std::sin(angle);
         float const z = base->GetPositionZ() + p->GetTransOffsetZ();
-        if (p->GetExactDist(x, y, z) > 0.1f) return false;
+        if (p->GetExactDist(x, y, z) > 0.1f && p->GetExactDist(seat.destination) > 0.1f) return false;
         observedConstrictors[i] = base->GetGUID();
         ++constrictorAttachments;
         return true;
@@ -209,7 +225,7 @@ struct Trial
         previousVehicle = {}; previousMotion = {}; previousMoving = {}; recentSpells = {}; recentSpellMs = {};
         previousSpeed = {}; chargeSpeed = {}; chargeMs = {}; nativeChargeSamples = 0;
         observedConstrictors = {}; constrictorAttachments = 0;
-        constrictorOrigins = {}; constrictorCastMs = {};
+        constrictorOrigins = {}; constrictorCastMs = {}; constrictorSeats = {};
         spellTeleports = {}; nativeSpellTeleports = 0;
         portalCasts = {}; exitCasts = {}; minimumSanity.fill(100); influenceDeaths.clear();
         failureFacts = json::object();
@@ -495,6 +511,28 @@ struct Trial
     { return negative ? "-stay,-passive,-follow,-ulduar" : "-stay,-passive,-follow,+ulduar"; }
 };
 Trial trial;
+class Seats : public VehicleScript
+{
+public:
+    Seats() : VehicleScript("DojoYoggSeats") { }
+    void OnAddPassenger(Vehicle* vehicle, Unit* passenger, int8 seatId) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(trial.mutex);
+        if ((trial.state != "observe" && trial.state != "portals") || !vehicle || !passenger
+            || !passenger->IsPlayer() || vehicle->GetPassenger(seatId) != passenger) return;
+        auto* base = vehicle->GetBase();
+        auto* creature = base ? base->ToCreature() : nullptr;
+        auto* summon = creature ? creature->ToTempSummon() : nullptr;
+        if (!summon || base->GetEntry() != 33983 || base->GetMap() != passenger->GetMap()
+            || summon->GetSummonerGUID() != passenger->GetGUID()) return;
+        auto found = std::find(trial.actors.begin(), trial.actors.end(), passenger->GetGUID());
+        if (found == trial.actors.end()) return;
+        float x = passenger->GetTransOffsetX(), y = passenger->GetTransOffsetY(), z = passenger->GetTransOffsetZ();
+        static_cast<TransportBase*>(vehicle)->CalculatePassengerPosition(x, y, z, nullptr);
+        trial.constrictorSeats[std::size_t(found - trial.actors.begin())] =
+            {base->GetGUID(), Position(x, y, z), trial.elapsed};
+    }
+};
 class Commands : public CommandScript
 {
 public:
@@ -616,7 +654,7 @@ public:
     }
 };
 }
-void AddSC_dojo_yogg() { new Commands(); new Ticks(); new MapTicks(); new Effects(); new Casts(); }
+void AddSC_dojo_yogg() { new Commands(); new Ticks(); new MapTicks(); new Effects(); new Casts(); new Seats(); }
 #else
 void AddSC_dojo_yogg() { }
 #endif
