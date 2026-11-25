@@ -737,8 +737,8 @@ LEEROY_TEST(Hazard_AWalkIsJudgedAgainstWhereAMovingNpcGoes)
     CHECK(HazardSegmentClear({-10, -8, 0}, {0, -8, 0}, {parked}, reach));
 }
 
-// The dojo's runs 5 and 6 of #469: the bot waited for a gap 1.5 yards from lane 1, and every slime set off on it.
-// A bot waits only where no slime comes within 2 s; beside a lane with one coming it steps aside instead.
+// A bot waits for a gap only where no slime comes within 2 s; beside a lane with one coming it steps aside
+// instead of leaving itself to the exit.
 LEEROY_TEST(Hazard_ABotWaitsOnlyWhereNoSlimeComes)
 {
     float const reach = 1.5f;
