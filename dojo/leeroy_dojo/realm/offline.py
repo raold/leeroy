@@ -67,7 +67,8 @@ def reached(observation, *, target, token):
     bodies = observation.get("bodies", [])
     if target == "icc-valithria-frontier":
         frontier = observation.get("valithria_frontier", {})
-        if (frontier.get("state") != "ready" or frontier.get("setup_strategies_restored") is not True
+        if (type(event.get("wipes")) is not int or event["wipes"] != 0
+                or frontier.get("state") != "ready" or frontier.get("setup_strategies_restored") is not True
                 or any(type(frontier.get(k)) is not int or frontier[k] < 0
                        for k in ("measured_ms", "heals", "healing", "start_health", "peak_health", "setup_completed_mask"))
                 or frontier["setup_completed_mask"] != 0 or frontier["heals"] < 2 or frontier["healing"] == 0
@@ -280,6 +281,13 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                     if observed.get("token") != token or native.get("event", {}).get("id") != token:
                         raise world.WorldError("offline run token changed")
                     stage = native.get("stage")
+                    if (target == "icc-valithria-frontier" and not report.get("gate_failure")
+                            and native.get("event", {}).get("wipes", 0) > 0):
+                        # A restart returns to a fresh ICC instance at Marrowgar.
+                        # That unrelated full route cannot certify this prepared frontier.
+                        report["gate_failure"] = "valithria_frontier_wipe"
+                        report["failure_observation"] = observed
+                        client.command("dojo offline stop")
                     if target == "toc-slime-pools" and not report.get("gate_failure"):
                         slime = observed.get("slime", {})
                         if slime.get("late_hits", 0) > 0 or slime.get("unknown_hits", 0) > 0:
