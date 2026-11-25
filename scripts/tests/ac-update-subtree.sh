@@ -9,10 +9,15 @@ trap 'rm -rf -- "$scratch"' EXIT
 export GIT_AUTHOR_NAME=tester GIT_AUTHOR_EMAIL=tester@example.invalid
 export GIT_COMMITTER_NAME=tester GIT_COMMITTER_EMAIL=tester@example.invalid
 export AC_ROOT="$scratch/install with spaces" TMPDIR="$scratch/tmp" AC_TASKLIST="$scratch/tasklist"
+export AC_PROCESSES="$scratch/servers"
 mkdir -p "$AC_ROOT/scripts" "$TMPDIR"
 cp "$scripts/"{ac-update,common,config-keys,subtree-module}.sh "$AC_ROOT/scripts/"
 printf '#!/usr/bin/env bash\nprintf '\''"explorer.exe","100","Console","1","900 K"\\n'\''\n' > "$AC_TASKLIST"
 chmod +x "$AC_TASKLIST"
+printf '#!/usr/bin/env bash
+printf "end\r\n"
+' > "$AC_PROCESSES"
+chmod +x "$AC_PROCESSES"
 checks=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 ok() { checks=$((checks + 1)); }
