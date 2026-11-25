@@ -144,9 +144,11 @@ def run(layout, *, target, log=print):
         if target == "icc-valithria":
             _set(layout, "modules/mod_dungeon_clear.conf", {"DungeonClear.OfflineValithria": "1"})
         report["run_source"] = raids.provenance(layout)
-        world.start(layout, log=log)
         feed = MechanicConnection(layout, guild=prepared["guild"], map_id=TARGETS[target][1])
         feed.__enter__()
+        # The adapter's free-port preflight must finish before the world binds
+        # those ports. Its real bridge client waits for the listener to open.
+        world.start(layout, log=log)
         deadline = time.monotonic() + 30
         while not feed.ready and not feed.error and time.monotonic() < deadline:
             time.sleep(0.2)
