@@ -5,7 +5,9 @@
 #include "DojoHuman.h"
 #include "DojoRaid.h"
 #include "DojoRuntime.h"
+#include "DojoMotion.h"
 #include "AccountMgr.h"
+#include "AllMapScript.h"
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "CommandScript.h"
@@ -17,6 +19,7 @@
 #include "InstanceScript.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
@@ -58,7 +61,12 @@ struct Trial
     std::array<bool, Names.size()> positioned{}, wasBelow{};
     std::array<Position, Names.size()> previous{};
     std::array<uint32, Names.size()> previousVehicle{}, previousMotion{};
+    std::array<float, Names.size()> previousSpeed{}, chargeSpeed{};
+    std::array<uint32, Names.size()> chargeMs{};
+    uint32 nativeChargeSamples = 0;
     std::array<ObjectGuid, Names.size()> observedConstrictors{};
+    std::array<Position, Names.size()> constrictorOrigins{};
+    std::array<uint32, Names.size()> constrictorCastMs{};
     uint32 constrictorAttachments = 0;
     std::array<bool, Names.size()> previousMoving{};
     // A native grab emits spawn, lunge, squeeze and duplicate ride effects in
@@ -116,7 +124,7 @@ struct Trial
             {"seat_error", p->GetExactDist(x, y, z)},
             {"base_position", {base->GetPositionX(), base->GetPositionY(), base->GetPositionZ()}}};
     }
-    bool NativeConstrictorAttachment(Player* p, std::size_t i)
+    bool NativeConstrictorAttachment(Player* p, std::size_t i, uint32 diff, float speed)
     {
         auto* base = p->GetVehicleBase();
         auto* creature = base ? base->ToCreature() : nullptr;
@@ -133,7 +141,12 @@ struct Trial
                 spawn = spawn || recentSpells[i][n] == 64133;
             }
         auto const* spell = sSpellMgr->GetSpellInfo(64133);
-        if (!lunge || !spawn || !spell || base->GetExactDist(previous[i]) > spell->Effects[EFFECT_0].CalcRadius(p) + 0.1f)
+        // TARGET_DEST_CASTER_RADIUS offsets X/Y, then collision adjusts Z.
+        // Use the witnessed cast origin, not a previous tick's walking position.
+        if (!lunge || !spawn || !spell || elapsed - constrictorCastMs[i] > 250
+            || !Dojo::ContinuousMovement(constrictorOrigins[i].GetExactDist(previous[i]), previousSpeed[i], speed, diff)
+            || base->GetExactDist2d(constrictorOrigins[i]) >
+                std::max(spell->Effects[EFFECT_0].CalcRadius(p), p->GetCombatReach()) + 0.1f)
             return false;
         // The actual seat transform must account for the displacement. This
         // proves one native grab, not an exemption for jumping while mounted.
@@ -157,6 +170,21 @@ struct Trial
         ++nativeSpellTeleports;
         return true;
     }
+    float MotionSpeed(Player* p, std::size_t i)
+    {
+        float const running = p->GetSpeed(MOVE_RUN);
+        // Only the core's actual charge state and spline may use the speed
+        // recorded from its real spell. A recent spell ID alone is insufficient.
+        if (chargeSpeed[i] > 0 && elapsed - chargeMs[i] <= 2000 && p->HasUnitState(UNIT_STATE_CHARGING)
+            && p->GetMotionMaster()->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE
+            && p->movespline && !p->movespline->Finalized()
+            && std::abs(p->movespline->Velocity() - chargeSpeed[i]) <= 0.1f)
+        {
+            ++nativeChargeSamples;
+            return std::max(running, chargeSpeed[i]);
+        }
+        return running;
+    }
     std::string Start(std::string const& id, bool control)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -179,7 +207,9 @@ struct Trial
         maxBelow = maxHealersBelow = tanksBelow = 0; minHealersAbove = 100;
         entered = {}; exited = {}; healerEntrants = {}; positioned = {}; wasBelow = {};
         previousVehicle = {}; previousMotion = {}; previousMoving = {}; recentSpells = {}; recentSpellMs = {};
+        previousSpeed = {}; chargeSpeed = {}; chargeMs = {}; nativeChargeSamples = 0;
         observedConstrictors = {}; constrictorAttachments = 0;
+        constrictorOrigins = {}; constrictorCastMs = {};
         spellTeleports = {}; nativeSpellTeleports = 0;
         portalCasts = {}; exitCasts = {}; minimumSanity.fill(100); influenceDeaths.clear();
         failureFacts = json::object();
@@ -190,12 +220,28 @@ struct Trial
         Phase("login");
         return "started";
     }
-    void Update(uint32 diff)
+    void WorldUpdate(uint32 diff)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
         if (!active) return;
-        elapsed += diff; phaseMs += diff;
+        elapsed += diff;
         if (elapsed > 270000 && state != "cleanup" && state != "logout") Fail("yogg_fixture_deadline");
+        if (state == "observe")
+        {
+            if (auto* p = Actor(0); p && p->GetMapId() == 603) return;
+            Fail("yogg_measurement_map_lost");
+        }
+        Update(diff);
+    }
+    void MapUpdate(Map* map, uint32 diff)
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
+        auto* p = active && state == "observe" ? Actor(0) : nullptr;
+        if (diff && p && p->GetMap() == map) Update(diff);
+    }
+    void Update(uint32 diff)
+    {
+        phaseMs += diff;
         auto* human = Dojo::HumanFixture(token);
         // Teleport acknowledgement and normal raid buffs recalculate the reserves
         // assigned at login. This probe starts at a portal wave, so maintain its
@@ -333,14 +379,18 @@ struct Trial
                 bool const downstairs = Below(p);
                 if (!p->IsBeingTeleported())
                 {
+                    float const speed = MotionSpeed(p, i);
                     bool const portalTransition = downstairs != wasBelow[i] &&
                         (downstairs ? portalCasts[i] > 0 : exitCasts[i] > 0);
                     if (positioned[i] && !portalTransition &&
-                        p->GetExactDist(previous[i]) > 1.f + p->GetSpeed(MOVE_RUN) * float(diff) * 0.0015f
-                        && !NativeConstrictorAttachment(p, i) && !NativeSpellTeleport(p, i, diff))
+                        !Dojo::ContinuousMovement(p->GetExactDist(previous[i]), previousSpeed[i], speed, diff)
+                        && !NativeConstrictorAttachment(p, i, diff, speed) && !NativeSpellTeleport(p, i, diff))
                     {
                         failureFacts = {{"slot", i}, {"distance", p->GetExactDist(previous[i])},
                             {"delta_ms", diff}, {"run_speed", p->GetSpeed(MOVE_RUN)},
+                            {"motion_speed", speed}, {"previous_speed", previousSpeed[i]},
+                            {"spline_speed", p->movespline ? p->movespline->Velocity() : 0.f},
+                            {"charging", p->HasUnitState(UNIT_STATE_CHARGING)},
                             {"motion", uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType())},
                             {"previous_motion", previousMotion[i]}, {"moving", p->isMoving()},
                             {"previous_moving", previousMoving[i]}, {"previous_vehicle_entry", previousVehicle[i]},
@@ -353,6 +403,7 @@ struct Trial
                         Fail("measured_yogg_actor_jumped"); return;
                     }
                     previous[i] = p->GetPosition(); positioned[i] = true; wasBelow[i] = downstairs;
+                    previousSpeed[i] = speed;
                     previousVehicle[i] = p->GetVehicleBase() ? p->GetVehicleBase()->GetEntry() : 0u;
                     previousMotion[i] = uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType());
                     previousMoving[i] = p->isMoving();
@@ -428,6 +479,7 @@ struct Trial
                             {"alive", creature->IsAlive()}, {"health", creature->GetHealth()}, {"gaze", creature->HasAura(64167)}});
             }
         return {{"kind", "dojo-yogg-observation"}, {"format", 1}, {"token", token}, {"state", state}, {"failure", failure},
+            {"observation_clock", "map_update"}, {"native_charge_samples", nativeChargeSamples},
             {"negative", negative}, {"ready", ready}, {"cleanup", cleanup}, {"samples", samples}, {"max_gap_ms", maxGap},
             {"illusion", illusion}, {"portals", portals}, {"initial_sanity_members", initialSanity},
             {"entered", entered}, {"exited", exited}, {"portal_casts", portalCasts}, {"exit_casts", exitCasts},
@@ -469,7 +521,13 @@ class Ticks : public WorldScript
 {
 public:
     Ticks() : WorldScript("DojoYoggTicks", {WORLDHOOK_ON_UPDATE}) { }
-    void OnUpdate(uint32 diff) override { trial.Update(diff); }
+    void OnUpdate(uint32 diff) override { trial.WorldUpdate(diff); }
+};
+class MapTicks : public AllMapScript
+{
+public:
+    MapTicks() : AllMapScript("DojoYoggMapTicks", {ALLMAPHOOK_ON_MAP_UPDATE}) { }
+    void OnMapUpdate(Map* map, uint32 diff) override { trial.MapUpdate(map, diff); }
 };
 class Effects : public UnitScript
 {
@@ -510,6 +568,21 @@ public:
         trial.recentSpells[i][0] = id; trial.recentSpellMs[i][0] = trial.elapsed;
         if (id == 63997 || id == 63998 || id == 63989) ++trial.portalCasts[i];
         if (id == 63992) ++trial.exitCasts[i];
+        if (id == 64133)
+        {
+            trial.constrictorOrigins[i] = player->GetPosition();
+            trial.constrictorCastMs[i] = trial.elapsed;
+        }
+        if (spell->GetSpellInfo()->HasEffect(SPELL_EFFECT_CHARGE))
+        {
+            auto* target = spell->m_targets.GetUnitTarget();
+            if (target && target->GetMap() == player->GetMap() && player->IsValidAttackTarget(target))
+            {
+                float const speed = spell->GetSpellInfo()->Speed;
+                trial.chargeSpeed[i] = speed > 0.f ? speed : SPEED_CHARGE;
+                trial.chargeMs[i] = trial.elapsed;
+            }
+        }
         if (id == 57840 && player->HasAura(51690))
         {
             auto* target = spell->m_targets.GetUnitTarget();
@@ -543,7 +616,7 @@ public:
     }
 };
 }
-void AddSC_dojo_yogg() { new Commands(); new Ticks(); new Effects(); new Casts(); }
+void AddSC_dojo_yogg() { new Commands(); new Ticks(); new MapTicks(); new Effects(); new Casts(); }
 #else
 void AddSC_dojo_yogg() { }
 #endif

@@ -58,6 +58,41 @@ def drakes(negative=False):
     return sample
 
 
+def reset_probe(negative=False):
+    sample = observed(False)
+    sample.update(scenario="leviathan-reset", negative=negative, reset_requested=not negative,
+                  reset_ready=not negative, reset_reengaged=not negative, reset_old_accessories=12,
+                  human_death_ms=0 if negative else 20000,
+                  reset_removed_accessories=0 if negative else 12, reset_fresh_accessories=0 if negative else 12)
+    return sample
+
+
+class ResetGateTest(unittest.TestCase):
+    def test_reset_and_no_evade_control_require_native_exposure(self):
+        for negative in (False, True):
+            self.assertTrue(verdict(reset_probe(negative), token="test", scenario="leviathan-reset",
+                                    negative=negative)["ok"])
+
+    def test_old_accessories_partial_reset_and_no_second_pull_fail(self):
+        for key, value in (("reset_requested", False), ("reset_ready", False), ("reset_reengaged", False),
+                           ("reset_old_accessories", 0), ("reset_removed_accessories", 11),
+                           ("reset_fresh_accessories", 13), ("reset_fresh_accessories", True),
+                           ("damage_hits", [0, 3]), ("after_death_hits", [0, 3])):
+            with self.subTest(key=key):
+                sample = reset_probe(); sample[key] = value
+                self.assertFalse(verdict(sample, token="test", scenario="leviathan-reset")["ok"])
+        for key in reset_probe():
+            sample = reset_probe(); del sample[key]
+            self.assertFalse(verdict(sample, token="test", scenario="leviathan-reset")["ok"], key)
+
+    def test_control_must_not_report_reset(self):
+        for key, value in (("reset_requested", True), ("reset_ready", True), ("reset_reengaged", True),
+                           ("reset_old_accessories", 0), ("reset_removed_accessories", 1),
+                           ("reset_fresh_accessories", 1), ("driver_entries", [0, 0]), ("human_death_ms", 20000)):
+            sample = reset_probe(True); sample[key] = value
+            self.assertFalse(verdict(sample, token="test", scenario="leviathan-reset", negative=True)["ok"], key)
+
+
 class DrakeGateTest(unittest.TestCase):
     def test_effects_are_required_and_disabled_strategy_is_sensitive(self):
         for negative in (True, False):

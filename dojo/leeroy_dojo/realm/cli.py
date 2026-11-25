@@ -32,7 +32,7 @@ def add_parser(sub) -> None:
     offline.add_argument("--toc-worm-support", action="store_true", help="measure the candidate worm support in this isolated run")
     cmds.add_parser("lead-acceptance", help="observe native open-world leading, following, waiting and restoration")
     vehicles = cmds.add_parser("vehicle-acceptance", help="observe real raid vehicle boarding, movement and combat")
-    vehicles.add_argument("--scenario", action="append", choices=("leviathan", "malygos"))
+    vehicles.add_argument("--scenario", action="append", choices=("leviathan", "leviathan-reset", "malygos"))
     cmds.add_parser("yogg-acceptance", help="observe one real Yogg brain-team wave and its actual illusion")
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)

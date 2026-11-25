@@ -13,13 +13,14 @@ from .ra import RaError
 def verdict(o, *, token, negative=False):
     problems = []
     expected = dict(kind="dojo-yogg-observation", format=1, token=token, state="done", failure="",
-                    negative=negative, ready=True, cleanup=True, portals=4, initial_sanity_members=9)
+                    negative=negative, ready=True, cleanup=True, portals=4, initial_sanity_members=9,
+                    observation_clock="map_update")
     for key, value in expected.items():
         if type(o.get(key)) is not type(value) or o[key] != value:
             problems.append(f"invalid {key}")
     counts = ("samples", "max_gap_ms", "illusion", "max_below", "max_healers_below", "healer_entrants", "min_healers_above",
               "tank_below_samples", "influence_deaths", "brain_hits", "brain_start_health", "brain_least_health",
-              "exit_remaining_ms", "native_spell_teleports")
+              "exit_remaining_ms", "native_spell_teleports", "native_charge_samples")
     for key in counts:
         if type(o.get(key)) is not int or o[key] < 0:
             problems.append(f"invalid {key}")

@@ -24,7 +24,7 @@ def verdict(o, *, token, negative=False, scenario="leviathan"):
         allowed_failures |= {"drake_driver_or_mount_lost", "drake_encounter_lost"}
     if not isinstance(o.get("failure"), str) or o["failure"] not in allowed_failures:
         problems.append("invalid failure")
-    if scenario not in {"malygos", "leviathan"}:
+    if scenario not in {"malygos", "leviathan", "leviathan-reset"}:
         problems.append("unsupported scenario")
     for key in ("samples", "max_gap_ms", "human_death_ms", "boss_start_health", "boss_least_health"):
         if type(o.get(key)) is not int or o[key] < 0:
@@ -64,10 +64,10 @@ def verdict(o, *, token, negative=False, scenario="leviathan"):
                 problems.append("drake movement and native boss health loss missing")
             if sum(o["field_escapes"]) < 1 or any(n > 4000 for n in o["longest_field_ms"]):
                 problems.append("an actual static field must be escaped within four seconds")
-    elif negative:
+    elif negative and scenario != "leviathan-reset":
         if any(o[key] != [0, 0] for key in ("driver_entries", "damage_hits", "moving_hits", "after_death_hits", "distance")):
             problems.append("strategy-disabled control had vehicle effects")
-    else:
+    elif not negative:
         if o["driver_entries"] != [33060, 33109]:
             problems.append("melee siege driver and ranged demolisher driver were not observed")
         if o["samples"] < 20 or o["max_gap_ms"] > 200 or o["human_death_ms"] < 20000:
@@ -77,6 +77,22 @@ def verdict(o, *, token, negative=False, scenario="leviathan"):
         for key, minimum in (("distance", 20), ("damage_hits", 2), ("moving_hits", 1), ("after_death_hits", 2)):
             if any(value < minimum for value in o[key]):
                 problems.append(f"both actual vehicles require {key}")
+    if scenario == "leviathan-reset":
+        for key in ("reset_requested", "reset_ready", "reset_reengaged"):
+            if type(o.get(key)) is not bool or o[key] is negative:
+                problems.append(f"invalid {key}")
+        for key in ("reset_old_accessories", "reset_removed_accessories", "reset_fresh_accessories"):
+            if type(o.get(key)) is not int or not 0 <= o[key] <= 64:
+                problems.append(f"invalid {key}")
+        if problems:
+            return dict(ok=False, problems=problems)
+        if o["driver_entries"] != [33060, 33109] or o["reset_old_accessories"] < 1:
+            problems.append("initial native vehicle and accessory exposure missing")
+        if negative and o["human_death_ms"]:
+            problems.append("no-evade control reached the second-pull death stimulus")
+        expected_count = 0 if negative else o["reset_old_accessories"]
+        if o["reset_removed_accessories"] != expected_count or o["reset_fresh_accessories"] != expected_count:
+            problems.append("native nested accessory replacement was not proved")
     return dict(ok=not problems, problems=problems)
 
 
@@ -88,7 +104,7 @@ def parse_status(reply):
 
 
 def run(layout, *, scenarios=("leviathan", "malygos"), log=print):
-    if not scenarios or len(set(scenarios)) != len(scenarios) or any(s not in {"leviathan", "malygos"} for s in scenarios):
+    if not scenarios or len(set(scenarios)) != len(scenarios) or any(s not in {"leviathan", "leviathan-reset", "malygos"} for s in scenarios):
         raise LayoutError("choose distinct supported vehicle scenarios")
     if world.running(layout):
         raise world.WorldError("vehicle acceptance requires a stopped dedicated dojo realm")

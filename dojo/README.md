@@ -206,6 +206,15 @@ These are mechanic probes, not full boss kills. They do not certify Leviathan's
 opening gauntlet, nested gunners, pyrite supply, hard modes or 25-player coverage.
 Adding them or passing their verdict tests does not authorize live enablement.
 
+The optional `vehicle-acceptance --scenario leviathan-reset` probe explicitly
+tests a native evade and second pull. Both controls first board and engage with
+ordinary bot strategies. The positive requests the boss's native evade, observes
+all original nested accessories disappear and an equally sized fresh set return,
+then stages a second pull. Its damage, moving-hit and human-death checks count
+only that second pull. The negative omits the evade and must show no replacement.
+This exposes the core hard-reset behavior directly; installing its commit alone
+is not a passing receipt. Reset staging is outside measured combat.
+
 ### Yogg brain teams
 
 `realm --layout <layout> yogg-acceptance` observes one native portal wave with
@@ -221,6 +230,9 @@ The observer recognizes Killing Spree movement only with both its native spell
 and teleport callbacks, the active aura, a valid hostile target and arrival at
 the witnessed destination. A recent cast alone is insufficient. Room geometry,
 actor facing and targets are recorded to diagnose failed illusion clears.
+Sampling follows the actual map-update clock. Native Charge uses its spell's
+speed only while the core reports charge state and a matching active spline;
+ordinary movement retains the original speed bound and distance margin.
 
 The negative control disables the raid strategy while leaving the same real
 encounter stimulus. Both cases require cleanup and shutdown. Actor health

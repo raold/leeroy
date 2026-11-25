@@ -36,6 +36,7 @@
 #include <list>
 #include <mutex>
 #include <sstream>
+#include <vector>
 
 using nlohmann::json;
 using namespace Acore::ChatCommands;
@@ -43,6 +44,24 @@ namespace
 {
 constexpr std::array<char const*, 2> Names{"Dojotank", "Dojodpsa"};
 Position const StartPoint(119.8f, 38.37f, 409.803f, 0.f);
+std::vector<ObjectGuid> Accessories(Creature* boss)
+{
+    std::vector<ObjectGuid> result;
+    std::vector<Creature*> pending{boss};
+    while (!pending.empty())
+    {
+        auto* unit = pending.back(); pending.pop_back();
+        if (auto* kit = unit ? unit->GetVehicleKit() : nullptr)
+            for (auto const& seat : kit->Seats)
+                if (auto* accessory = ObjectAccessor::GetCreature(*unit, seat.second.Passenger.Guid))
+                {
+                    if (result.size() >= 64 || std::find(result.begin(), result.end(), accessory->GetGUID()) != result.end())
+                        return {}; // Reject an incomplete or cyclic census.
+                    result.push_back(accessory->GetGUID()); pending.push_back(accessory);
+                }
+    }
+    return result;
+}
 struct Trial
 {
     std::recursive_mutex mutex;
@@ -64,6 +83,9 @@ struct Trial
     json failureFacts = json::object();
     bool active = false, negative = false, ready = false, humanBoarded = false, cleanup = false, humanGone = false;
     bool oldSupport = false;
+    std::vector<ObjectGuid> oldAccessories;
+    uint32 removedAccessories = 0, freshAccessories = 0;
+    bool resetRequested = false, resetReady = false, resetReengaged = false;
 
     Player* Actor(std::size_t i) const
     {
@@ -134,7 +156,7 @@ struct Trial
         std::lock_guard<std::recursive_mutex> lock(mutex);
         if (active || state == "cleanup_failed") return "fixture_busy";
         if (Dojo::State().plan.state != Dojo::RuntimeState::Armed || Dojo::State().manifest) return "fixture_not_armed";
-        if (encounter != "leviathan" && encounter != "malygos") return "unknown_vehicle_scenario";
+        if (encounter != "leviathan" && encounter != "leviathan-reset" && encounter != "malygos") return "unknown_vehicle_scenario";
         if (id.empty() || id.size() > 64 || id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != std::string::npos)
             return "invalid_token";
         uint32 const account = AccountMgr::GetId("RNDBOTDOJO");
@@ -155,6 +177,8 @@ struct Trial
         surgeSamples = {}; shieldSamples = {}; ringSamples = {};
         fieldMs = {}; longestFieldMs = {}; fieldEscapes = {};
         setupKills = healEvents = dotSamples = fieldSamples = 0; effectiveHealing = 0;
+        oldAccessories.clear(); removedAccessories = freshAccessories = 0;
+        resetRequested = resetReady = resetReengaged = false;
         ready = humanBoarded = cleanup = humanGone = false; active = true;
         oldSupport = sPlayerbotAIConfig.RaidVehicleSupport;
         sPlayerbotAIConfig.RaidVehicleSupport = true;
@@ -162,7 +186,7 @@ struct Trial
         Phase("login");
         return "started";
     }
-    bool Measuring() const { return state == "boarding" || state == "observe" || state == "drakes"; }
+    bool Measuring() const { return state == "boarding" || state == "observe" || state == "drakes" || state == "reset"; }
     void WorldUpdate(uint32 diff)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -254,8 +278,9 @@ struct Trial
             {
                 auto* ai = GET_PLAYERBOT_AI(p);
                 ai->SetMaster(human);
-                ai->ChangeStrategy(negative ? "-ulduar" : "+ulduar", BOT_STATE_COMBAT);
-                ai->ChangeStrategy(negative ? "-ulduar" : "+ulduar", BOT_STATE_NON_COMBAT);
+                bool const disabled = negative && scenario != "leviathan-reset";
+                ai->ChangeStrategy(disabled ? "-ulduar" : "+ulduar", BOT_STATE_COMBAT);
+                ai->ChangeStrategy(disabled ? "-ulduar" : "+ulduar", BOT_STATE_NON_COMBAT);
             }
             Phase("human_board");
         }
@@ -382,7 +407,7 @@ struct Trial
                 if (base && p->GetVehicle() && p->GetVehicle()->GetPassenger(0) == p)
                 { seats[i] = base->GetEntry(); mounts[i] = base->GetGUID(); }
             }
-            if (negative)
+            if (negative && scenario != "leviathan-reset")
             {
                 if (tank->GetVehicle() || ranged->GetVehicle()) { Fail("control_boarded_without_strategy"); return; }
                 if (phaseMs >= 30000) Phase("cleanup");
@@ -398,6 +423,7 @@ struct Trial
                 }
                 boss->AI()->AttackStart(tank->GetVehicleBase());
                 boss->AI()->DoZoneInCombat();
+                resetReengaged = resetReady;
                 // Entering combat applies native Leviathan health scaling.
                 // Take the baseline on the first combat observation, not the idle template HP.
                 startingBossHealth = leastBossHealth = 0;
@@ -427,12 +453,74 @@ struct Trial
                 previousSpeed[i] = base->GetSpeed(MOVE_RUN);
                 travelled[i] = std::max(travelled[i], base->GetExactDist2d(initial[i]));
             }
+            if (scenario == "leviathan-reset" && !resetRequested && phaseMs >= 10000)
+            {
+                oldAccessories = Accessories(boss);
+                if (oldAccessories.empty()) { Fail("reset_accessory_stimulus_missing"); return; }
+                // The paired control has identical driving but no evade stimulus.
+                if (negative) { Phase("cleanup"); return; }
+                for (auto* p : {tank, ranged})
+                {
+                    GET_PLAYERBOT_AI(p)->ChangeStrategy("+stay,+passive", BOT_STATE_COMBAT);
+                    GET_PLAYERBOT_AI(p)->ChangeStrategy("+stay", BOT_STATE_NON_COMBAT);
+                }
+                resetRequested = true;
+                boss->AI()->EnterEvadeMode();
+                Phase("reset");
+                return;
+            }
             // Real raid stimulus: the human dies after both bots are driving.
             // The shipped feature promises drivers continue in the active fight.
             if (!deathAt && phaseMs >= 20000)
             { Unit::Kill(boss, human); deathAt = phaseMs; }
             if (deathAt && human->IsAlive()) { Fail("human_death_stimulus_lost"); return; }
             if (phaseMs >= 50000) Phase("cleanup");
+        }
+        else if (state == "reset")
+        {
+            ++samples; maxGap = std::max(maxGap, diff);
+            if (!human || !human->IsAlive() || !tank || !ranged || !tank->IsAlive() || !ranged->IsAlive())
+            { Fail("reset_actor_lost"); return; }
+            removedAccessories = 0;
+            for (auto guid : oldAccessories)
+                if (!human->GetMap()->GetCreature(guid)) ++removedAccessories;
+            auto* instance = human->GetInstanceScript();
+            auto* boss = instance ? instance->GetCreature(0) : nullptr;
+            auto const fresh = Accessories(boss);
+            freshAccessories = uint32(fresh.size());
+            bool const replaced = removedAccessories == oldAccessories.size() && fresh.size() == oldAccessories.size()
+                && std::none_of(fresh.begin(), fresh.end(), [&](ObjectGuid guid)
+                { return std::find(oldAccessories.begin(), oldAccessories.end(), guid) != oldAccessories.end(); });
+            if (boss && boss->IsAlive() && !boss->IsInCombat() && !boss->IsEngaged()
+                && !boss->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE) && replaced)
+            {
+                bossGuid = boss->GetGUID(); resetReady = true;
+                // The second pull has a new setup boundary. Do not count effects
+                // from the first pull as evidence of successful re-entry.
+                hits = {}; movingHits = {}; afterDeathHits = {}; travelled = {}; seats = {}; mounts = {};
+                startingBossHealth = leastBossHealth = deathAt = 0;
+                for (auto* p : {human, tank, ranged})
+                {
+                    p->ExitVehicle(); p->CombatStop(true);
+                    if (!p->TeleportTo(603, StartPoint.GetPositionX(), StartPoint.GetPositionY(), StartPoint.GetPositionZ(), 0.f))
+                    { Fail("reset_setup_teleport_refused"); return; }
+                }
+                Phase("reset_arrive");
+            }
+            else if (phaseMs >= 60000) Fail("native_hard_reset_not_observed");
+        }
+        else if (state == "reset_arrive")
+        {
+            if (!human || !tank || !ranged) { Fail("reset_actor_lost"); return; }
+            if (human->IsBeingTeleported() || tank->IsBeingTeleported() || ranged->IsBeingTeleported()) return;
+            if (human->GetMapId() != 603 || tank->GetMap() != human->GetMap() || ranged->GetMap() != human->GetMap())
+            { Fail("reset_destination_mismatch"); return; }
+            for (auto* p : {tank, ranged})
+            {
+                GET_PLAYERBOT_AI(p)->ChangeStrategy("-stay,-passive,+ulduar", BOT_STATE_COMBAT);
+                GET_PLAYERBOT_AI(p)->ChangeStrategy("-stay,-passive,+follow,+ulduar", BOT_STATE_NON_COMBAT);
+            }
+            Phase("human_board");
         }
         else if (state == "cleanup")
         {
@@ -464,6 +552,9 @@ struct Trial
         return {{"kind", "dojo-vehicle-observation"}, {"format", 1}, {"scenario", scenario},
             {"token", token}, {"state", state}, {"failure", failure}, {"failure_facts", failureFacts}, {"negative", negative},
             {"observation_clock", "map_update"},
+            {"reset_requested", resetRequested}, {"reset_ready", resetReady}, {"reset_reengaged", resetReengaged},
+            {"reset_old_accessories", oldAccessories.size()}, {"reset_removed_accessories", removedAccessories},
+            {"reset_fresh_accessories", freshAccessories},
             {"ready", ready}, {"human_boarded", humanBoarded}, {"cleanup", cleanup}, {"samples", samples},
             {"max_gap_ms", maxGap}, {"human_death_ms", deathAt}, {"driver_entries", seats},
             {"distance", travelled}, {"damage_hits", hits}, {"moving_hits", movingHits}, {"after_death_hits", afterDeathHits},
