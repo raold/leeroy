@@ -21,6 +21,7 @@
 #include "PlayerbotAI.h"
 #include "PlayerbotFactory.h"
 #include "Playerbots.h"
+#include "RandomPlayerbotMgr.h"
 #include "UnitScript.h"
 #include "World.h"
 #include "WorldScript.h"
@@ -172,9 +173,13 @@ struct OfflineFixture
         else if (state == "running")
         {
             ++samples;
+            auto const native = Leeroy::Guild::DojoOfflineSnapshot();
+            if (native.value("active", false) && native.value("stage", "") != "tearing_down")
+                for (auto const& body : native.value("bodies", json::array()))
+                    if (!sRandomPlayerbotMgr.IsPinned(body.value("guid", uint32(0))))
+                        error = "offline fixture lost its ordinary cast pin";
             if (scriptedWipe)
             {
-                auto const native = Leeroy::Guild::DojoOfflineSnapshot();
                 if (native.value("active", false) && native.value("stage", "") == "restarting") restartingSeen = true;
             }
         }
@@ -201,6 +206,7 @@ struct OfflineFixture
         {
             if (!Actor(i)) { Dojo::LoginRaidFixture(actors[i]); return "actors_pending"; }
             if (Actor(i)->GetGuildId() != guildId) return "actor guild mismatch";
+            if (!sRandomPlayerbotMgr.IsPinned(actors[i].GetCounter())) return "fixture actor is not pinned";
         }
         Leeroy::Guild::OfflineRaidCmd cmd;
         cmd.mapId = map; cmd.size = 10; cmd.leaderGuid = actors[1].GetCounter();
@@ -258,6 +264,7 @@ struct OfflineFixture
                     {"combat", p->IsInCombat()}, {"bosses", bosses}, {"auras", auras},
                     {"speed_run", p->GetSpeed(MOVE_RUN)}, {"tank", PlayerbotAI::IsTank(p)},
                     {"grouped", p->GetGroup() != nullptr}, {"owned", Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter())},
+                    {"pinned", sRandomPlayerbotMgr.IsPinned(actors[i].GetCounter())},
                     {"master", GET_PLAYERBOT_AI(p)->GetMaster() ? GET_PLAYERBOT_AI(p)->GetMaster()->GetGUID().GetCounter() : 0}});
             }
         for (auto const& [entry, value] : hits) damage.push_back({{"entry", entry}, {"hits", value.first}, {"requested", value.second}});
