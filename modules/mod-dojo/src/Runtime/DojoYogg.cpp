@@ -23,11 +23,15 @@
 #include "Playerbots.h"
 #include "PlayerScript.h"
 #include "Spell.h"
+#include "SpellMgr.h"
 #include "SpellAuraEffects.h"
+#include "TemporarySummon.h"
 #include "UnitScript.h"
+#include "Vehicle.h"
 #include "WorldScript.h"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <list>
 #include <mutex>
 #include <set>
@@ -53,6 +57,8 @@ struct Trial
     std::array<bool, Names.size()> positioned{}, wasBelow{};
     std::array<Position, Names.size()> previous{};
     std::array<uint32, Names.size()> previousVehicle{}, previousMotion{};
+    std::array<ObjectGuid, Names.size()> observedConstrictors{};
+    uint32 constrictorAttachments = 0;
     std::array<bool, Names.size()> previousMoving{};
     std::array<std::array<uint32, 4>, Names.size()> recentSpells{}, recentSpellMs{};
     json failureFacts = json::object();
@@ -78,6 +84,36 @@ struct Trial
             if (recentSpells[i][n]) facts.push_back({{"spell", recentSpells[i][n]}, {"age_ms", elapsed - recentSpellMs[i][n]}});
         return facts;
     }
+    bool NativeConstrictorAttachment(Player* p, std::size_t i)
+    {
+        auto* base = p->GetVehicleBase();
+        auto* creature = base ? base->ToCreature() : nullptr;
+        auto* summon = creature ? creature->ToTempSummon() : nullptr;
+        auto* kit = p->GetVehicle();
+        if (!kit || !summon || base->GetEntry() != 33983 || base->GetMap() != p->GetMap()
+            || summon->GetSummonerGUID() != p->GetGUID() || observedConstrictors[i] == base->GetGUID()
+            || !base->HasAura(64123, p->GetGUID()) || !p->HasAura(64125) || Below(p)) return false;
+        bool lunge = false, spawn = false;
+        for (std::size_t n = 0; n < recentSpells[i].size(); ++n)
+            if (elapsed - recentSpellMs[i][n] <= 250)
+            {
+                lunge = lunge || recentSpells[i][n] == 64123;
+                spawn = spawn || recentSpells[i][n] == 64133;
+            }
+        auto const* spell = sSpellMgr->GetSpellInfo(64133);
+        if (!lunge || !spawn || !spell || base->GetExactDist(previous[i]) > spell->Effects[EFFECT_0].CalcRadius(p) + 0.1f)
+            return false;
+        // The actual seat transform must account for the displacement. This
+        // proves one native grab, not an exemption for jumping while mounted.
+        float const angle = base->GetOrientation();
+        float const x = base->GetPositionX() + p->GetTransOffsetX() * std::cos(angle) - p->GetTransOffsetY() * std::sin(angle);
+        float const y = base->GetPositionY() + p->GetTransOffsetY() * std::cos(angle) + p->GetTransOffsetX() * std::sin(angle);
+        float const z = base->GetPositionZ() + p->GetTransOffsetZ();
+        if (p->GetExactDist(x, y, z) > 0.1f) return false;
+        observedConstrictors[i] = base->GetGUID();
+        ++constrictorAttachments;
+        return true;
+    }
     std::string Start(std::string const& id, bool control)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -100,6 +136,7 @@ struct Trial
         maxBelow = maxHealersBelow = tanksBelow = 0; minHealersAbove = 100;
         entered = {}; exited = {}; healerEntrants = {}; positioned = {}; wasBelow = {};
         previousVehicle = {}; previousMotion = {}; previousMoving = {}; recentSpells = {}; recentSpellMs = {};
+        observedConstrictors = {}; constrictorAttachments = 0;
         portalCasts = {}; exitCasts = {}; minimumSanity.fill(100); influenceDeaths.clear();
         failureFacts = json::object();
         ready = cleanup = humanGone = false; active = true;
@@ -255,7 +292,8 @@ struct Trial
                     bool const portalTransition = downstairs != wasBelow[i] &&
                         (downstairs ? portalCasts[i] > 0 : exitCasts[i] > 0);
                     if (positioned[i] && !portalTransition &&
-                        p->GetExactDist(previous[i]) > 1.f + p->GetSpeed(MOVE_RUN) * float(diff) * 0.0015f)
+                        p->GetExactDist(previous[i]) > 1.f + p->GetSpeed(MOVE_RUN) * float(diff) * 0.0015f
+                        && !NativeConstrictorAttachment(p, i))
                     {
                         failureFacts = {{"slot", i}, {"distance", p->GetExactDist(previous[i])},
                             {"delta_ms", diff}, {"run_speed", p->GetSpeed(MOVE_RUN)},
@@ -328,7 +366,7 @@ struct Trial
             {"min_healers_above", minHealersAbove}, {"tank_below_samples", tanksBelow},
             {"influence_deaths", influenceDeaths.size()}, {"brain_hits", brainHits},
             {"brain_start_health", brainStart}, {"brain_least_health", brainLeast}, {"exit_remaining_ms", exitRemaining},
-            {"failure_facts", failureFacts}};
+            {"failure_facts", failureFacts}, {"native_constrictor_attachments", constrictorAttachments}};
     }
     char const* controlStrategy() const
     { return negative ? "-stay,-passive,-follow,-ulduar" : "-stay,-passive,-follow,+ulduar"; }
