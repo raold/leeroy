@@ -1,7 +1,7 @@
-From 395d131dfa4825a35d246d188c150d2c8724d686 Mon Sep 17 00:00:00 2001
+From 8c252867a9b41b2d51d40ddbfb720e55575b3878 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sun, 22 Nov 2026 15:03:27 -0500
-Subject: [PATCH] Observe raid vehicle seats and successful core casts
+Subject: [PATCH 20/21] Observe raid vehicle seats and successful core casts
 
 ---
  conf/playerbots.conf.dist            |   4 +
@@ -17,20 +17,16 @@ Subject: [PATCH] Observe raid vehicle seats and successful core casts
  create mode 100644 tests/raid_vehicle_trace_test.cpp
 
 diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
-index 41196a64..577d4620 100644
+index dc6ccd3c..12609d05 100644
 --- a/conf/playerbots.conf.dist
 +++ b/conf/playerbots.conf.dist
-@@ -2622,6 +2622,10 @@ Playerbots.CommandServerPort = 8888
- Playerbots.SpellDump = 0
- Playerbots.LogInGroupOnly = 1
+@@ -2633,2 +2633,6 @@ Playerbots.LogInGroupOnly = 1
  Playerbots.LogValuesPerTick = 0
 +
 +# Bounded vehicle seat/cast observations for a supervised raid; also requires RaidVehicleSupport.
 +# No behavior change. Successful core casts are counted, not helper return values or damage.
 +Playerbots.RaidVehicleDiagnostics = 0
  Playerbots.RandomChangeMultiplier = 1
- 
- # Tell which spell is avoiding (experimental)
 diff --git a/src/Ai/Raid/RaidVehicleTrace.cpp b/src/Ai/Raid/RaidVehicleTrace.cpp
 new file mode 100644
 index 00000000..409a074f
@@ -362,44 +358,30 @@ index 00000000..d4d7bddc
 +} // namespace RaidVehicleTrace
 +#endif
 diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
-index 91aa89ec..e08f3089 100644
+index dfd016be..ca223417 100644
 --- a/src/PlayerbotAIConfig.cpp
 +++ b/src/PlayerbotAIConfig.cpp
-@@ -434,6 +434,7 @@ bool PlayerbotAIConfig::Initialize()
-         sConfigMgr->GetOption<int32>("Playerbots.RandomBotAutoJoinBGRatedArena5v5Count", 0);
-     LogInGroupOnly = sConfigMgr->GetOption<bool>("Playerbots.LogInGroupOnly", true);
+@@ -438,2 +438,3 @@ bool PlayerbotAIConfig::Initialize()
      LogValuesPerTick = sConfigMgr->GetOption<bool>("Playerbots.LogValuesPerTick", false);
 +    RaidVehicleDiagnostics = sConfigMgr->GetOption<bool>("Playerbots.RaidVehicleDiagnostics", false);
      SummonAtInnkeepersEnabled = sConfigMgr->GetOption<bool>("Playerbots.SummonAtInnkeepersEnabled", true);
-     RandomBotMinLevel = sConfigMgr->GetOption<int32>("Playerbots.RandomBotMinLevel", 1);
-     RandomBotMaxLevel = sConfigMgr->GetOption<int32>("Playerbots.RandomBotMaxLevel", 80);
 diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
-index 0ca1ae02..34a528ac 100644
+index 5256993e..6a133676 100644
 --- a/src/PlayerbotAIConfig.h
 +++ b/src/PlayerbotAIConfig.h
-@@ -282,6 +282,7 @@ public:
-     uint32 RandomBotTeleLowerLevel, RandomBotTeleHigherLevel;
-     std::map<uint32, std::pair<uint32, uint32>> ZoneBrackets;
+@@ -286,2 +286,3 @@ public:
      bool LogInGroupOnly, LogValuesPerTick;
 +    bool RaidVehicleDiagnostics;
      bool SummonAtInnkeepersEnabled;
-     std::string CombatStrategies, NonCombatStrategies;
-     std::string RandomBotCombatStrategies, RandomBotNonCombatStrategies;
 diff --git a/src/Script/Playerbots.cpp b/src/Script/Playerbots.cpp
-index 8a656232..256667fa 100644
+index fed4e7cd..024f255b 100644
 --- a/src/Script/Playerbots.cpp
 +++ b/src/Script/Playerbots.cpp
-@@ -620,6 +620,7 @@ void AddSC_RubySanctumBotScripts();
- void AddSC_SerpentshrineCavernBotScripts();
- void AddSC_TempestKeepBotScripts();
+@@ -620,2 +620,3 @@ void AddSC_RubySanctumBotScripts();
  void AddSC_randombot_level_mgr();
 +void AddSC_RaidVehicleTraceScripts();
  
- void AddPlayerbotsScripts()
- {
-@@ -646,4 +647,5 @@ void AddPlayerbotsScripts()
-     AddSC_SerpentshrineCavernBotScripts();
-     AddSC_TempestKeepBotScripts();
+@@ -644,2 +645,3 @@ void AddPlayerbotsScripts()
      AddSC_randombot_level_mgr();
 +    AddSC_RaidVehicleTraceScripts();
  }
@@ -519,6 +501,3 @@ index 00000000..3a38aa9e
 +    std::cout << checks << " checks, " << failures << " failures\n";
 +    return failures ? 1 : 0;
 +}
--- 
-2.56.0.windows.2
-
