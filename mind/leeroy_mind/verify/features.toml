@@ -538,7 +538,7 @@ example = "2026-11-22 17:03:01 owner_aura_invalid spell=12345 reason=not_an_aura
 [[feature]]
 id = "owner_pet_auras"
 name = "His pet's listed auras kept on it (Leeroy.OwnerPetAuras)"
-prs = []
+prs = [489]
 
 [[feature.switch]]
 source = "native"
