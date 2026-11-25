@@ -26,6 +26,7 @@ def add_parser(sub) -> None:
                        help="repeat to select gates; defaults to Valithria, Twins and Living Poison")
     offline = cmds.add_parser("offline-acceptance", help="prepare a synthetic guild and observe a real offline raid job")
     offline.add_argument("--target", required=True, choices=("toc-beasts", "ulduar-xt", "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves"))
+    cmds.add_parser("lead-acceptance", help="observe native open-world leading, following, waiting and restoration")
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)
     acc_run.add_argument("--keep-running", action="store_true", help="leave a worldserver this command started")
@@ -146,6 +147,11 @@ def run(args: argparse.Namespace) -> int:
             from .offline import run as run_offline
             report = run_offline(layout, target=args.target)
             print(f"Offline acceptance: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
+            return 0 if report["ok"] else 1
+        elif command == "lead-acceptance":
+            from .lead import run as run_lead
+            report = run_lead(layout)
+            print(f"Lead acceptance: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "provision":
             manifest = None

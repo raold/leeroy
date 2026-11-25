@@ -1,6 +1,8 @@
 // This file is part of leeroy (mod-dojo), released under the GNU GPL v2. See LICENSE.
 #include "DojoRaid.h"
 #include "DojoOffline.h"
+#include "DojoHuman.h"
+#include "DojoLead.h"
 
 #if DOJO_TRAINING_BUILD
 #if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
@@ -601,7 +603,11 @@ public:
 };
 }
 
-void AddSC_dojo_raid() { new RaidCommands(); new RaidTicks(); new RaidEvents(); AddSC_dojo_offline(); }
+void AddSC_dojo_raid()
+{
+    new RaidCommands(); new RaidTicks(); new RaidEvents();
+    AddSC_dojo_offline(); AddSC_dojo_human(); AddSC_dojo_lead();
+}
 #else
 void AddSC_dojo_raid() { }
 #endif
