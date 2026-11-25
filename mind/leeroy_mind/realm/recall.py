@@ -430,6 +430,11 @@ class Recall:
         until = self.clock.now() + KEEP_S
         for guid in guids:
             self._kept[guid] = until
+            # A later leave supersedes an earlier rearm's proved skip. This
+            # member may still be in PvP/LFG even though that leave released it.
+            if self._rearm_retries.pop(guid, None) is not None:
+                if self._desired.get(guid) == "defaults":
+                    del self._desired[guid]
 
     def _leave_out(self, chain, skipped):
         """Native took the others out and left these as they were (one leading its battleground

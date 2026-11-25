@@ -692,7 +692,7 @@ async def complete_skipped_rearm(h, members, skipped):
     h.realm.recall.restore_defaults()
     await h.cycle()
     rearm, = h.app.sent
-    await h.app.event(p.RealmJob(0, rearm.id, "rearm", "done", "", 0,
+    await h.app.event(p.RealmJob(0, rearm.id, "rearm", "done", "", members[0] if len(members) == 1 else 0,
                                 len(members) - len(skipped), "", None, skipped))
     await h.cycle(1.01)
     defaults = h.app.sent[-1]
@@ -762,6 +762,41 @@ def test_rearm_retry_yields_to_a_new_native_holder(pipeline):
             h.realm.recall.tick(h.clock.now())
             await h.cycle()
             assert type(h.app.sent[-1]) is p.Rearm and h.app.sent[-1].guids == (102,)
+    run(scenario())
+
+
+@pytest.mark.parametrize("leave_result", ["skipped", "refused", "released_failure"])
+def test_later_excluded_leave_cancels_a_retained_rearm_retry(pipeline, leave_result):
+    async def scenario():
+        async with pipeline as h:
+            first = await complete_skipped_rearm(h, (102,), (102,))
+            send = h.app.send
+
+            async def answer(cmd, *, preserve_id=False):
+                ack = await send(cmd, preserve_id=preserve_id)
+                if type(cmd) is p.LeavePvp and leave_result == "refused":
+                    return Ack(0, cmd.id, False, "shared_group_leader:102")
+                return ack
+
+            h.app.send = answer
+            h.realm.recall.on_login(h.clock.now())
+            await h.cycle(1.01)
+            leave = h.app.sent[-1]
+            assert type(leave) is p.LeavePvp and leave.guids == (102,)
+            if leave_result == "skipped":
+                await h.app.event(p.RealmJob(0, leave.id, "leave_pvp", "done", "", 102, 0,
+                                            "", None, (102,)))
+            elif leave_result == "released_failure":
+                await h.app.event(p.RealmJob(0, leave.id, "leave_pvp", "failed",
+                                            "operation_transition_unknown", 102, 0,
+                                            changed=False, released=(102,)))
+            for seconds in (20, 60):
+                await h.clock.advance(seconds, step=seconds)
+                h.realm.bodies.poll()
+                h.realm.recall.tick(h.clock.now())
+                await h.cycle()
+            assert [c for c in h.app.sent if type(c) is p.Rearm] == [first]
+            assert len([c for c in h.app.sent if type(c) is BotDo]) == 1
     run(scenario())
 
 

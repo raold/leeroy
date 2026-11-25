@@ -22,6 +22,8 @@ connection and queue admission checks still apply. A successful later rearm remo
 The cache holds at most 512 members and clears when the connection identity is invalidated;
 the ordinary periodic defaults pass remains the fallback after a restart or cache overflow.
 
+If a later PvP leave skips or refuses a member, it cancels that member's earlier rearm
+retry; a released leave reservation is not proof that the member left PvP or LFG.
 Each retry uses a fresh command ID after a proved terminal result. Unknown outcomes keep
 their existing holds and reconciliation, and PvP leave skips retain their existing backoff.
 No native release or migration is needed.
