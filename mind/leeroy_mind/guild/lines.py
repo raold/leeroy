@@ -67,6 +67,7 @@ OUTCOME_WORDS = {
     "dc_stalled": "kept getting stuck",
     "dc_door_blocked": "got stuck at a door we couldn't open",
     "dc_paused": "got stuck and couldn't go on",
+    "dc_unreachable": "couldn't find a way to the next boss",
     "stalled": "got stuck before the next boss",
     "stopped": "called it early",
     "operator_stopped": "called it early",
