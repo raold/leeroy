@@ -1,7 +1,7 @@
-From 6b342ac92e441bfde371fdd00f8235265054bfc7 Mon Sep 17 00:00:00 2001
+From 298eeeb71a2a338a9ec682693ab001e600ca5b21 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Wed, 25 Nov 2026 09:06:58 -0500
-Subject: [PATCH 25/26] fix(Raid/EoE): Clear the actual thirty-yard Static
+Subject: [PATCH 26/27] fix(Raid/EoE): Clear the actual thirty-yard Static
  Field
 
 ---
