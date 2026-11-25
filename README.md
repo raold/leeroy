@@ -470,6 +470,7 @@ Apply them to a checkout of each module with
 | `patches/mod-playerbots/` | Local playerbots commits, as `git format-patch` output |
 | `patches/mod-ollama-chat/` | Local mod-ollama-chat commits, same format |
 | `patches/mod-dungeon-clear/` | Local mod-dungeon-clear commits, same format |
+| `patches/mod-individual-progression/` | Local mod-individual-progression commit (level 80 and above enter WotLK Onyxia), same format |
 | `patches/dojo/mod-playerbots/` | The dojo's own playerbots commit (an external-controller hook), applied on top of the local commits in the dojo's isolated checkout only |
 | `modules/mod-leeroy/` | The guild module and its bridge, with unit tests and a smoke test in `tools/` |
 | `modules/mod-dojo/` | The dojo's native module, built only into the dojo's isolated core (the CI build compiles its disabled variant) |
@@ -551,8 +552,8 @@ a separate native build.
 Commits already in the live branch and confirmed empty cherry-picks are skipped,
 including merge commits whose constituent changes were already released.
 
-For a native release, numbered `.patch` files in `patches/mod-playerbots/` and
-`patches/mod-dungeon-clear/` are checked against each module's Git history.
+For a native release, numbered `.patch` files in `patches/mod-playerbots/`,
+`patches/mod-dungeon-clear/` and `patches/mod-individual-progression/` are checked against each module's Git history.
 Missing patches are rehearsed, then applied with `git am` in filename order
 before the build. Original commit ancestry or an equivalent stable patch ID
 counts as installed, preserving later local edits and intentional reverts.
@@ -562,6 +563,10 @@ patch ID. Otherwise, in series order on the rehearsed tip, a patch is already
 installed when undoing and redoing it gives back exactly that tree; one that
 would also still change the tree when applied is ambiguous and refuses the
 release.
+The release runner freezes the installed helpers before cherry-picking, so the first
+release that adds a module to the planner's list (mod-individual-progression, this
+change) must first copy the updated `scripts/ac-release-patches.py` onto the live
+branch by hand (`scripts/` is not releasable); otherwise the old list skips the new series.
 Reapplying a reverted change requires a new patch entry. The playerbot pin guard
 is checked before services stop and again before building. Dirty module repos,
 unfinished Git operations and failed rehearsal refuse the release. Even if all
