@@ -527,8 +527,11 @@ training state or pending bot command leaves the body to its owner (nothing adde
   pass. A leg is 4 yards, or longer to lie beyond where follow stops: the bot's own formation distance from its
   edge (`FollowStop`; playerbots' default chaos formation widens `Playerbots.FollowDistance` by up to 3.5 yards
   every 3 s), and so is a detour step; a nearer spot made follow judge itself done, and the bot stood still
-  beside the lanes. Map threads take only the bots of the master whose group the last pass made aware (before,
-  `Leeroy.HumanGuid`'s, which left the dojo's synthetic leader's bot without zones).
+  beside the lanes. A walk (a leg, a detour step, a crossing) is judged as both move (`HazardSegmentClear`): the
+  bot at run speed to its end and standing there a second, the npc on its way from a pass up to 500 ms old; it is
+  not clear when they come within the npc's own radius plus the bot's reach, so stepping into a slime's way is
+  refused and passing behind it is not. Map threads take only the bots of the master whose group the last pass
+  made aware (before, `Leeroy.HumanGuid`'s, which left the dojo's synthetic leader's bot without zones).
 - **Exits.** `avoid aoe` (after its three stock cases, in combat as well) walks a bot standing in a zone to the
   nearest clear spot and keeps that exit while it stays clear. Out of combat the exit ranks by the follow goal:
   one from which the goal is in plain view (his side) beats a nearer one unless the nearer saves more than 4
