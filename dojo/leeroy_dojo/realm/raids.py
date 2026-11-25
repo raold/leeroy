@@ -208,8 +208,8 @@ def encounter_verdict(observation, *, token, difficulty, mode):
     if type(o.get("samples")) is not int or o["samples"] < 20:
         problems.append("insufficient runtime observations")
     start = o.get("start_hp")
-    if type(start) not in (int, float) or not 49.0 <= start <= 51.0:
-        problems.append("she did not start at 50%")
+    if type(start) not in (int, float) or not 49.0 <= start <= 60.0:
+        problems.append("she did not start near 50%")
     killed = (not problems and o["outcome"] == "done" and type(o.get("peak_hp")) in (int, float)
               and o["peak_hp"] >= 99.5)
     healers = [m for m in members if m.get("healer")]

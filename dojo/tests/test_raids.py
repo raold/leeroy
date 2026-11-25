@@ -104,7 +104,8 @@ class EncounterVerdictTest(unittest.TestCase):
     def test_setup_and_harness_failures_are_never_a_kill(self):
         for field, value in (("token", "old"), ("state", "cleanup_failed"), ("cleanup", False), ("setup", False),
                              ("failure", "setup deadline"), ("instance", 0), ("map_difficulty", 0),
-                             ("engaged", False), ("samples", 3), ("start_hp", 80.0), ("outcome", ""),
+                             ("engaged", False), ("samples", 3), ("start_hp", 80.0), ("start_hp", 40.0),
+                             ("outcome", ""),
                              ("focus", False), ("kind", "dojo-raid-observation")):
             with self.subTest(field=field):
                 result = self.check(encounter_observation() | {field: value})

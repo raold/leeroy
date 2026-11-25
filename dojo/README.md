@@ -117,9 +117,10 @@ gears each with playerbots' own factory (its premade spec and glyphs, epic gear
 capped at item level 245) and later runs keep that gear; every run refills
 potions and reagents, clears the fixtures' Icecrown binds and fills the
 10-heroic door's achievement prerequisite. The mage leads as a self-bot, so the
-others have a game-client master as in his raids. After 15 s out of combat in
-her room with the lower-spire boss states set, the real combat trigger pulls
-the encounter. Nothing then heals, damages, moves, casts or writes health for
+others have a game-client master as in his raids. After up to 15 s out of
+combat in her room with the lower-spire boss states set (the first heal on her
+ends the wait, as it starts the fight in a real raid), the real combat trigger
+pulls the encounter. Nothing then heals, damages, moves, casts or writes health for
 anyone: the run ends at her own `DONE` (healed to full), a reset or wipe, or a
 15-minute cap. `before` pulls with `Playerbots.ValithriaHealerFocus` off,
 `after` with it on; the switch is restored at cleanup. The default runs all

@@ -695,8 +695,9 @@ struct EncounterRun
         return true;
     }
 
-    // The raid stands in her room out of combat for 15 s (buffs, as before any pull); then the real
-    // combat trigger pulls the encounter, as engaging the archmages does.
+    // The raid stands in her room out of combat for up to 15 s (buffs, as before any pull); then the real
+    // combat trigger pulls the encounter, as engaging the archmages does. The first heal on her ends the
+    // wait: healing her is how a raid starts this fight.
     void Assemble()
     {
         Player* leader = Actor(EncounterLeader);
@@ -739,7 +740,9 @@ struct EncounterRun
         Creature* trigger = script ? map->GetCreature(script->GetGuidData(35)) : nullptr;
         if (!dragon || !trigger) { Fail("Valithria or her combat trigger missing"); return; }
         startHp = hp = peakHp = dragon->GetHealthPct();
-        if (startHp < 49.f || startHp > 51.f) { Fail("Valithria did not start at 50%"); return; }
+        // She resets to 50%. A healer topping her up before the pull is the pull, as in a real raid; the
+        // run starts there, and her own health records what that heal gave.
+        if (startHp < 49.f || startHp > 60.f) { Fail("Valithria did not start near 50%"); return; }
         timeline.emplace_back(0, startHp);
         // A member close to an archmage may already have started it; then the core is pulling it.
         earlyPull = script->GetBossState(10) == IN_PROGRESS;
@@ -847,7 +850,10 @@ struct EncounterRun
                 if (!Actor(i)) { Fail("fixture disconnected"); return; }
             InstanceMap* map = Instance();
             if (!map || !map->GetInstanceScript()) { Fail("the measured instance unloaded"); return; }
-            if (phaseMs >= EncounterPrePullMs || map->GetInstanceScript()->GetBossState(10) == IN_PROGRESS) Pull();
+            Creature* dragon = map->GetCreature(valithria);
+            if (phaseMs >= EncounterPrePullMs || map->GetInstanceScript()->GetBossState(10) == IN_PROGRESS ||
+                (dragon && dragon->GetHealthPct() > 50.5f))
+                Pull();
         }
         else if (state == "observe") Observe(diff);
         else if (state == "cleanup")
