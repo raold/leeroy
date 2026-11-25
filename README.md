@@ -556,6 +556,12 @@ For a native release, numbered `.patch` files in `patches/mod-playerbots/` and
 Missing patches are rehearsed, then applied with `git am` in filename order
 before the build. Original commit ancestry or an equivalent stable patch ID
 counts as installed, preserving later local edits and intentional reverts.
+So does a history commit with the patch's subject that the patch reproduces
+exactly from its parent, since a re-export with other context changes the
+patch ID. Otherwise, in series order on the rehearsed tip, a patch is already
+installed when undoing and redoing it gives back exactly that tree; one that
+would also still change the tree when applied is ambiguous and refuses the
+release.
 Reapplying a reverted change requires a new patch entry. The playerbot pin guard
 is checked before services stop and again before building. Dirty module repos,
 unfinished Git operations and failed rehearsal refuse the release. Even if all
