@@ -4,6 +4,7 @@
 #include "DojoHuman.h"
 #include "DojoLead.h"
 #include "DojoVehicle.h"
+#include "DojoYogg.h"
 
 #if DOJO_TRAINING_BUILD
 #if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
@@ -607,7 +608,7 @@ public:
 void AddSC_dojo_raid()
 {
     new RaidCommands(); new RaidTicks(); new RaidEvents();
-    AddSC_dojo_offline(); AddSC_dojo_human(); AddSC_dojo_lead(); AddSC_dojo_vehicle();
+    AddSC_dojo_offline(); AddSC_dojo_human(); AddSC_dojo_lead(); AddSC_dojo_vehicle(); AddSC_dojo_yogg();
 }
 #else
 void AddSC_dojo_raid() { }

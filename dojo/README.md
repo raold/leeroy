@@ -99,6 +99,25 @@ These are mechanic probes, not full boss kills. They do not certify Leviathan's
 opening gauntlet, nested gunners, pyrite supply, hard modes or 25-player coverage.
 Adding them or passing their verdict tests does not authorize live enablement.
 
+### Yogg brain teams
+
+`realm --layout <layout> yogg-acceptance` observes one native portal wave with
+nine synthetic bots and a scripted player outside portal-selection range. Setup
+selects Sara's phase boundary and kills a real guardian whose native death nova
+triggers the transformation. The core supplies sanity, the brain, illusion adds,
+four portals and the Induce Madness deadline. The ordinary raid strategy must
+send exactly four bots, including one healer and no tank, retain a healer above,
+kill actual influence tentacles, damage the brain and use real exit portals
+before the cast finishes. All actors must remain alive and retain sanity.
+
+The negative control disables the raid strategy while leaving the same real
+encounter stimulus. Both cases require cleanup and shutdown. Actor health
+reserves are setup-only; the harness never heals, attacks or teleports on their
+behalf during the measured wave. The report names the randomly selected native
+illusion. One successful wave does not certify the other two illusions, later
+waves, a complete kill, keeper variants or 25-player teams. Live support remains
+off until the required coverage has actual passing receipts.
+
 ### Open-world leading
 
 `realm --layout <layout> lead-acceptance` uses the same synthetic guild checkpoint
