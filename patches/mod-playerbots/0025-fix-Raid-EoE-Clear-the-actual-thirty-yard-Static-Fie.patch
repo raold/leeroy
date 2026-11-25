@@ -1,0 +1,51 @@
+From cbc8777c31517428a3dd72ab090951a65c3f68dd Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 09:06:58 -0500
+Subject: [PATCH 25/25] fix(Raid/EoE): Clear the actual thirty-yard Static
+ Field
+
+---
+ src/Ai/Raid/RaidVehiclePolicy.h | 7 ++++++-
+ tests/raid_vehicles_test.cpp    | 4 ++++
+ 2 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/src/Ai/Raid/RaidVehiclePolicy.h b/src/Ai/Raid/RaidVehiclePolicy.h
+index 1ce15bab..2c4db056 100644
+--- a/src/Ai/Raid/RaidVehiclePolicy.h
++++ b/src/Ai/Raid/RaidVehiclePolicy.h
+@@ -116,6 +116,10 @@ inline bool LeviathanPresence(bool boarding, bool humanPresent, bool humanRiding
+ 
+ struct Point { float x, y, z; };
+ 
++// Native Static Field damage (57429) uses SpellRadius.dbc radius 10: 30 yards.
++// Leave two additional yards for movement and the next periodic damage tick.
++inline constexpr float StaticFieldClearance = 32.0f;
++
+ inline bool SafeDrakePoint(Point const& point, Point const& boss, std::vector<Point> const& fields)
+ {
+     float const distance = std::hypot(point.x - boss.x, point.y - boss.y);
+@@ -124,7 +128,8 @@ inline bool SafeDrakePoint(Point const& point, Point const& boss, std::vector<Po
+         return false;
+     return std::none_of(fields.begin(), fields.end(), [&point](Point const& field)
+     {
+-        return std::abs(point.z - field.z) < 20.0f && std::hypot(point.x - field.x, point.y - field.y) < 16.0f;
++        float const distance = std::hypot(point.x - field.x, point.y - field.y, point.z - field.z);
++        return !std::isfinite(distance) || distance < StaticFieldClearance;
+     });
+ }
+ 
+diff --git a/tests/raid_vehicles_test.cpp b/tests/raid_vehicles_test.cpp
+index 8f2b4829..0887fee2 100644
+--- a/tests/raid_vehicles_test.cpp
++++ b/tests/raid_vehicles_test.cpp
+@@ -158,6 +158,10 @@ int main()
+     CHECK(SafeDrakePoint({0, 45, 10}, boss, {{40, 0, 10}}));
+     CHECK(!SafeDrakePoint({std::numeric_limits<float>::quiet_NaN(), 0, 10}, boss, {}));
+     CHECK(!SafeDrakePoint({45, 0, 10}, {0, 0, std::numeric_limits<float>::quiet_NaN()}, {}));
++    CHECK(!SafeDrakePoint({45, 0, 10}, boss, {{20, 0, 10}})); // 25 yards still takes native damage.
++    CHECK(!SafeDrakePoint({45, 0, 10}, boss, {{45, 0, 35}})); // Damage is a 30-yard sphere.
++    CHECK(SafeDrakePoint({45, 0, 10}, boss, {{13, 0, 10}}));
++    CHECK(!SafeDrakePoint({45, 0, 10}, boss, {{std::numeric_limits<float>::quiet_NaN(), 0, 10}}));
+     CHECK(BoardingPriority(33060, true, false, false, true) == 0);
+     CHECK(BoardingPriority(33109, true, false, false, false) == 0);
+     CHECK(BoardingPriority(33109, true, false, false, true) < BoardingPriority(33060, false, true, true, true));
