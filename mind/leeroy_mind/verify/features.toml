@@ -994,3 +994,55 @@ id = "wiped"
 kind = "failed"
 what = "a Malygos or Flame Leviathan pull ended in a wipe (tg_pull 616:0, 603:0; code: the boss)"
 db = { from = "tg_pull", where = "((map = 616 AND boss_id = 0) OR (map = 603 AND boss_id = 0)) AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "CASE map WHEN 616 THEN 'malygos' ELSE 'flame_leviathan' END" }
+
+[[feature]]
+id = "playstyle_table"
+name = "Persona play styles from one table: native styles each member whenever she is free"
+prs = [483]
+note = "A member in a battleground, an instance, combat, dead or held by another owner is an expected refusal, tried again 15 s later."
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.Enable"
+default = true
+
+[[feature.switch]]
+source = "mind"
+key = "playstyle.enabled"
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.PlayStyle.Enable"
+default = false
+
+[[feature.switch]]
+source = "native"
+key = "Leeroy.PlayStyle.Table"
+default = true
+
+[[feature.evidence]]
+id = "styled"
+kind = "working"
+what = "the table styled members once they were free (playstyle_table applied=)"
+log = "server"
+token = "playstyle_table styles="
+pattern = '^mod-leeroy: playstyle_table styles=\d+ styled=\d+ tried=\d+ applied=[1-9]\d*'
+example = "2026-11-25 20:05:00 mod-leeroy: playstyle_table styles=145 styled=97 tried=160 applied=12 refused=busy:pvp=40,offline=3"
+
+[[feature.evidence]]
+id = "sent"
+kind = "observed"
+what = "the mind sent its whole table (playstyle_table_sent)"
+log = "mind"
+token = "playstyle_table_sent"
+pattern = '^playstyle_table_sent styles=\d+'
+example = '{"ts": "2026-11-25T20:01:02.123-05:00", "level": "INFO", "event": "playstyle_table_sent", "styles": 145, "on": 1, "owner": 1}'
+
+[[feature.evidence]]
+id = "fallback"
+kind = "failed"
+what = "native refused the table and the mind fell back to one bot_do a member (playstyle_table_refused mode=legacy; code: the refusal)"
+log = "mind"
+token = "playstyle_table_refused"
+pattern = '^playstyle_table_refused error=(?P<code>[A-Za-z0-9_:.,-]+) mode=legacy'
+example = '{"ts": "2026-11-25T20:01:02.123-05:00", "level": "INFO", "event": "playstyle_table_refused", "error": "playstyle_table_off", "mode": "legacy"}'
