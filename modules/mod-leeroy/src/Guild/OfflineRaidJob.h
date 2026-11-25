@@ -48,6 +48,7 @@ bool DojoStopOffline(std::string const& id);
 // then exclude explicitly prepared prerequisites from earned kill accounting.
 bool DojoConfigureNaxxPass(std::string const& id, bool suppress);
 bool DojoPrimeNaxxStates(std::string const& id);
+bool DojoPrimeTocStates(std::string const& id);
 #endif
 }
 

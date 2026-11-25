@@ -2320,6 +2320,25 @@ bool DojoPrimeNaxxStates(std::string const& id)
     return true;
 }
 
+bool DojoPrimeTocStates(std::string const& id)
+{
+    if (!active || active->event.id != id || active->command.mapId != 649
+        || active->stage != Stage::Running || active->stageElapsed > 10000) return false;
+    auto* leader = FindOnline(active->command.leaderGuid);
+    auto* instance = leader ? leader->GetInstanceScript() : nullptr;
+    if (!instance || instance->GetEncounterCount() != 5) return false;
+    std::vector<uint8> states;
+    for (uint32 i = 0; i < 5; ++i)
+    {
+        auto const state = instance->GetBossState(i);
+        if (state != (i < 4 ? DONE : NOT_STARTED)) return false;
+        states.push_back(static_cast<uint8>(state));
+    }
+    active->previousBossStates = states;
+    active->dojoPreparedBossStates = states;
+    return true;
+}
+
 bool DojoStopOffline(std::string const& id)
 {
     if (!active || active->event.id != id) return false;

@@ -102,6 +102,15 @@ scripted restart cannot pass. These longer runs use a three-hour job limit with
 the same three-wipe caps. The terminal retains the actual encounter-state vector
 after actors return home. `--toc-worm-support` also works with `toc-full`.
 
+`--target toc-anub-intro` prepares the first four ToC encounters complete,
+without earned kill credit, and lets the native Twins outro break the arena
+floor and summon Anub'arak. After setup, ordinary strategies and dungeon-clear
+alone must descend, enter the actual 5475 trigger volume, surface the same
+native boss and engage him within two minutes. The receipt requires trigger
+exposure, attackability and combat state, zero wipes, restored strategies,
+cleanup and shutdown. This checks the chamber transition on either core
+version; it does not certify an Anub'arak kill or a full ToC clear.
+
 Ulduar's current offline route only covers Ignis, Razorscale, XT-002, Kologarn and
 Auriaya. `--target ulduar-route` checks completion of that entire supported route
 with the native `cleared_reachable` terminal. Its receipt explicitly lists the
