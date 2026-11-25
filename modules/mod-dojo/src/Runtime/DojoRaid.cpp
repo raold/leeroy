@@ -844,6 +844,7 @@ struct EncounterRun
             Sample(sampleMs, dragon);
             sampleMs = 0;
         }
+        if (!engaged && pullMs > 60000) { Fail("the encounter never engaged"); return; }
         if (outcome.empty())
         {
             if (boss == DONE) outcome = "done";
