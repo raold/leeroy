@@ -232,8 +232,12 @@ struct RaidRun
         if (!group->AddMember(bot)) { group->Disband(); Fail("fixture join failed"); return false; }
         Position const point = StartPoint();
         for (std::size_t i = 0; i < actors.size(); ++i)
-            if (!Actor(i)->TeleportTo(map, point.GetPositionX(), point.GetPositionY() + float(i) * 2.f,
-                    point.GetPositionZ(), 0.f)) { Fail("fixture teleport refused"); return false; }
+        {
+            Position const destination = scenario == "lk-terenas" && i == 1
+                ? Position(503.62f, -2124.65f, 840.857f, 0.f) : point;
+            if (!Actor(i)->TeleportTo(map, destination.GetPositionX(), destination.GetPositionY() + float(i) * 2.f,
+                    destination.GetPositionZ(), 0.f)) { Fail("fixture teleport refused"); return false; }
+        }
         return true;
     }
 
@@ -292,6 +296,9 @@ struct RaidRun
         }
         else if (scenario == "lk-terenas" || scenario == "lk-defile")
         {
+            bot->GetMap()->LoadGrid(503.62f, -2124.65f);
+            Creature* lichKing = bot->GetMap()->GetCreature(script->GetGuidData(12));
+            if (!lichKing) { Fail("native Lich King missing"); return; }
             // Exercise the shipped ICC strategy with its ordinary follow/heal
             // competitors intact. Only the feature switch differs in the control.
             for (uint32 boss = 0; boss < 12; ++boss) script->SetBossState(boss, DONE);
@@ -312,14 +319,12 @@ struct RaidRun
                 warden->AI()->AttackStart(terenas);
                 // The ordinary follow target stays outside Frostmourne. Never
                 // relocate the measured actor, cast for it or write Terenas HP.
-                owner->NearTeleportTo(503.62f, -2124.65f, 840.857f, 0.f);
             }
             else
             {
-                Creature* lichKing = bot->FindNearestCreature(36597, 150.f);
-                if (!lichKing) { Fail("native Lich King missing"); return; }
                 // Cast the real core spell: its summon/aura/growth are the stimulus.
-                lichKing->CastSpell(bot, 72762, true);
+                auto const cast = lichKing->CastSpell(bot, 72762, true);
+                if (cast != SPELL_CAST_OK) { Fail("native_defile_cast_refused:" + std::to_string(uint32(cast))); return; }
             }
         }
         else
@@ -442,6 +447,9 @@ struct RaidRun
         }
         else if (state == "arrive")
         {
+            // Let the native throne grid and its boss finish loading before
+            // selecting the encounter phase; a deferred Reset clears it.
+            if ((scenario == "lk-terenas" || scenario == "lk-defile") && phaseMs < 2000) return;
             Player* bot = Actor(0); Player* owner = Actor(1);
             if (bot && owner && !bot->IsBeingTeleported() && !owner->IsBeingTeleported() &&
                 bot->GetMapId() == map && owner->GetMap() == bot->GetMap()) Pull();
