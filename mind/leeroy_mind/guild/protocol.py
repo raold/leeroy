@@ -109,6 +109,7 @@ class StartOfflineRaid:
     day_prepared: str = field(default="", kw_only=True, metadata={"omit_default": True})
     day_driver_ticket: str = field(default="", kw_only=True, metadata={"omit_default": True})
     reserves: tuple[int, ...] = field(default=(), kw_only=True, metadata={"omit_default": True})
+    stall_timeout_min: int | None = field(default=None, kw_only=True, metadata={"omit_none": True})
 
     def __post_init__(self) -> None:
         # Omitted and explicitly invalid values stay distinct: the server must

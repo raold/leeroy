@@ -107,6 +107,11 @@ bool BossProgress(std::uint8_t before, std::uint8_t after)
     return before != after && (after == 1 || after == 3 || IsWipe(before, after));
 }
 
+void OfflineProgressClock::Tick(std::uint32_t diffMs)
+{
+    if (started) idleMs = AdvanceElapsed(idleMs, diffMs);
+}
+
 RecallAction OfflineRecall::Observe(bool inside, bool safe, std::uint32_t diffMs)
 {
     sinceAttemptMs = AdvanceElapsed(sinceAttemptMs, diffMs);
