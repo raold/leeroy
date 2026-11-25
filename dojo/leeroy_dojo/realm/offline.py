@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import shutil
 import time
@@ -14,6 +15,7 @@ from .mechanics import MechanicConnection
 from .offline_fixture import FixtureCheckpoint
 
 TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
+           "toc-slime-pools": ("toc", 649, None), "toc-slime-pools-control": ("toc", 649, None),
            "icc-deathwhisper": ("icc", 631, 1), "icc-gunship": ("icc", 631, 2),
            "icc-valithria": ("icc", 631, 10), "offline-reserves": ("toc-reserves", 649, None),
            "ulduar-restart": ("ulduar", 603, None), "ulduar-tank-restart": ("ulduar", 603, None)}
@@ -40,6 +42,39 @@ def reached(observation, *, target, token):
     if event.get("id") != token or type(instance) is not int or instance <= 0 or native.get("stage") != "running":
         return False
     bodies = observation.get("bodies", [])
+    if target in {"toc-slime-pools", "toc-slime-pools-control"}:
+        slime = observation.get("slime", {})
+        negative = target == "toc-slime-pools-control"
+        counts = ("max_gap_ms", "inside_samples", "escapes", "outside_ms", "hits", "late_hits", "unknown_hits")
+        if (any(type(slime.get(k)) is not int or slime[k] < 0 for k in counts)
+                or slime.get("mechanics_enabled") is not (not negative)
+                or not 0 < slime["max_gap_ms"] <= 200 or slime["unknown_hits"] != 0):
+            return False
+        actors = [b for b in bodies if b.get("slot") in range(1, 11)]
+        if (len(actors) != 10 or len({b.get("guid") for b in actors}) != 10
+                or any(type(b.get("guid")) is not int or b["guid"] <= 0 or b.get("alive") is not True
+                       or b.get("owned") is not True or b.get("pinned") is not True
+                       or b.get("map") != 649 or b.get("instance") != instance for b in actors)):
+            return False
+        pools = slime.get("pools")
+        if not isinstance(pools, list) or not pools:
+            return False
+        grew = False
+        for pool in pools:
+            if (not isinstance(pool, dict)
+                    or any(type(pool.get(k)) is not int or pool[k] < 0 for k in ("guid", "casts", "age_ms", "last_ms"))
+                    or pool["guid"] <= 0 or pool["casts"] == 0
+                    or any(type(pool.get(k)) not in (int, float) or not math.isfinite(pool[k]) or pool[k] <= 0
+                           for k in ("minimum_radius", "maximum_radius"))):
+                return False
+            if pool["maximum_radius"] < pool["minimum_radius"]:
+                return False
+            if pool["casts"] >= 15 and pool["age_ms"] >= 20000 and pool["last_ms"] <= 1500:
+                grew = grew or pool["maximum_radius"] - pool["minimum_radius"] >= 4
+        if negative:
+            return slime["hits"] > 0
+        return (grew and slime["inside_samples"] > 0 and slime["escapes"] > 0
+                and slime["outside_ms"] >= 3000 and slime["late_hits"] == 0)
     if target in {"ulduar-restart", "ulduar-tank-restart"}:
         if target == "ulduar-tank-restart" and not (
                 observation.get("wipe_boss") == 2 and type(observation.get("main_tank_at_wipe")) is int
@@ -146,7 +181,8 @@ def run(layout, *, target, log=print):
         provision.ensure_accounts(layout, "DOJODRIVER", log=log)
         _set(layout, "modules/mod_leeroy.conf", {"Leeroy.Enable": "1", "Leeroy.GuildId": str(prepared["guild"]),
                                                 "Leeroy.HumanGuid": str(prepared["owner"]),
-                                                "Leeroy.Mechanics.Enable": "1", "Leeroy.Hazards.Enable": "1"})
+                                                "Leeroy.Mechanics.Enable": "0" if target == "toc-slime-pools-control" else "1",
+                                                "Leeroy.Hazards.Enable": "1"})
         if target == "icc-valithria":
             _set(layout, "modules/mod_dungeon_clear.conf", {"DungeonClear.OfflineValithria": "1"})
         report["run_source"] = raids.provenance(layout)
@@ -192,6 +228,12 @@ def run(layout, *, target, log=print):
                     if observed.get("token") != token or native.get("event", {}).get("id") != token:
                         raise world.WorldError("offline run token changed")
                     stage = native.get("stage")
+                    if target == "toc-slime-pools" and not report.get("gate_failure"):
+                        slime = observed.get("slime", {})
+                        if slime.get("late_hits", 0) > 0 or slime.get("unknown_hits", 0) > 0:
+                            report["gate_failure"] = "slime_damage_after_reaction_window_or_missing_cast"
+                            report["failure_observation"] = observed
+                            client.command("dojo offline stop")
                     if stage != last_stage:
                         log(f"offline {target}: {stage or native.get('event', {}).get('state', 'unknown')}")
                         last_stage = stage
@@ -208,7 +250,7 @@ def run(layout, *, target, log=print):
                             reply = client.command(f"dojo offline {command} {token}")
                             if "dojo offline: wiped" in reply:
                                 log(f"offline {target}: applied scripted full-wipe stimulus")
-                    if reached(observed, target=target, token=token) and not report["reached"]:
+                    if not report.get("gate_failure") and reached(observed, target=target, token=token) and not report["reached"]:
                         report["reached"] = True
                         report["milestone"] = observed
                         client.command("dojo offline stop")

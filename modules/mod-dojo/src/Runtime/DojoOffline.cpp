@@ -23,6 +23,9 @@
 #include "PlayerbotFactory.h"
 #include "Playerbots.h"
 #include "RandomPlayerbotMgr.h"
+#include "ScriptMgr.h"
+#include "Spell.h"
+#include "SpellInfo.h"
 #include "UnitScript.h"
 #include "World.h"
 #include "WorldScript.h"
@@ -33,6 +36,7 @@
 #include "Util/DcProvisionBudget.h"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -63,6 +67,12 @@ uint32 MainTank(Player* player)
 
 struct OfflineFixture
 {
+    struct SlimePool
+    {
+        uint32 firstMs = 0, lastMs = 0, casts = 0;
+        float radius = 0.f, minimum = 1000.f, maximum = 0.f;
+        std::array<bool, 10> inside{};
+    };
     std::array<ObjectGuid, Fixtures.size()> actors{};
     std::string state = "idle", error, token;
     uint32 elapsed = 0, guildId = 0, samples = 0;
@@ -72,6 +82,9 @@ struct OfflineFixture
     uint32 restartsAtWipe = 0;
     uint32 wipeBoss = 0, mainTankAtWipe = 0;
     std::map<uint32, std::pair<uint64, uint64>> hits;
+    std::map<ObjectGuid, SlimePool> slimePools;
+    uint32 clockMs = 0, slimeGap = 0, slimeInside = 0, slimeEscapes = 0, slimeOutsideMs = 0;
+    uint32 slimeHits = 0, slimeLateHits = 0, slimeUnknownHits = 0;
     std::recursive_mutex mutex;
 
     bool Armed() const { return Dojo::State().plan.state == Dojo::RuntimeState::Armed && !Dojo::State().manifest; }
@@ -183,6 +196,7 @@ struct OfflineFixture
         else if (state == "running")
         {
             ++samples;
+            clockMs += diff;
             auto const native = Leeroy::Guild::DojoOfflineSnapshot();
             if (native.value("active", false) && native.value("stage", "") != "tearing_down")
                 for (auto const& body : native.value("bodies", json::array()))
@@ -191,6 +205,31 @@ struct OfflineFixture
             if (scriptedWipe)
             {
                 if (native.value("active", false) && native.value("stage", "") == "restarting") restartingSeen = true;
+            }
+            if (!slimePools.empty() && map == 649 && native.value("stage", "") == "running")
+            {
+                slimeGap = std::max(slimeGap, diff);
+                auto* leader = Actor(1);
+                bool present = leader != nullptr, anyPool = false, allOutside = true;
+                for (auto& [guid, pool] : slimePools)
+                {
+                    auto* creature = leader ? leader->GetMap()->GetCreature(guid) : nullptr;
+                    if (!creature || !creature->IsAlive() || clockMs - pool.lastMs > 1500) continue;
+                    anyPool = true;
+                    for (std::size_t i = 1; i <= 10; ++i)
+                    {
+                        auto* p = Actor(i);
+                        if (!p || !p->IsAlive() || p->IsBeingTeleported() || p->GetMap() != creature->GetMap()
+                            || !Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter()))
+                        { present = false; continue; }
+                        bool const inside = p->GetExactDist2d(creature) <= pool.radius + 0.5f;
+                        if (inside) ++slimeInside;
+                        if (pool.inside[i - 1] && !inside) ++slimeEscapes;
+                        pool.inside[i - 1] = inside;
+                        allOutside = allOutside && !inside;
+                    }
+                }
+                slimeOutsideMs = anyPool && present && allOutside ? slimeOutsideMs + diff : 0;
             }
         }
     }
@@ -230,6 +269,8 @@ struct OfflineFixture
         std::lock_guard<std::recursive_mutex> lock(mutex);
         token = id; state = "running"; error.clear(); samples = 0; hits.clear();
         scriptedWipe = restartingSeen = false; restartsAtWipe = wipeBoss = mainTankAtWipe = 0;
+        slimePools.clear(); clockMs = slimeGap = slimeInside = slimeEscapes = slimeOutsideMs = 0;
+        slimeHits = slimeLateHits = slimeUnknownHits = 0;
         return "started";
     }
     std::string Wipe(std::string const& id, bool swappedTank = false)
@@ -263,7 +304,7 @@ struct OfflineFixture
     json Status()
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
-        json bodies = json::array(), damage = json::array();
+        json bodies = json::array(), damage = json::array(), pools = json::array();
         for (std::size_t i = 1; i < actors.size(); ++i)
             if (auto* p = Actor(i))
             {
@@ -282,11 +323,19 @@ struct OfflineFixture
                     {"master", GET_PLAYERBOT_AI(p)->GetMaster() ? GET_PLAYERBOT_AI(p)->GetMaster()->GetGUID().GetCounter() : 0}});
             }
         for (auto const& [entry, value] : hits) damage.push_back({{"entry", entry}, {"hits", value.first}, {"requested", value.second}});
+        for (auto const& [guid, pool] : slimePools)
+            pools.push_back({{"guid", guid.GetCounter()}, {"casts", pool.casts},
+                {"age_ms", clockMs - pool.firstMs}, {"last_ms", clockMs - pool.lastMs},
+                {"minimum_radius", pool.minimum}, {"maximum_radius", pool.maximum}});
         return {{"kind", "dojo-offline-observation"}, {"format", 1}, {"state", state}, {"error", error},
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
             {"native", Leeroy::Guild::DojoOfflineSnapshot()}, {"bodies", bodies}, {"damage", damage},
             {"scripted_wipe", scriptedWipe}, {"restarting_seen", restartingSeen}, {"restarts_at_wipe", restartsAtWipe},
-            {"main_tank", MainTank(Actor(1))}, {"wipe_boss", wipeBoss}, {"main_tank_at_wipe", mainTankAtWipe}};
+            {"main_tank", MainTank(Actor(1))}, {"wipe_boss", wipeBoss}, {"main_tank_at_wipe", mainTankAtWipe},
+            {"slime", {{"pools", pools}, {"max_gap_ms", slimeGap}, {"inside_samples", slimeInside},
+                {"escapes", slimeEscapes}, {"outside_ms", slimeOutsideMs}, {"hits", slimeHits},
+                {"late_hits", slimeLateHits}, {"unknown_hits", slimeUnknownHits},
+                {"mechanics_enabled", sConfigMgr->GetOption<bool>("Leeroy.Mechanics.Enable", false)}}}};
     }
 };
 OfflineFixture fixture;
@@ -336,10 +385,49 @@ public:
         if (std::find(fixture.actors.begin() + 1, fixture.actors.end(), victim->GetGUID()) == fixture.actors.end()) return;
         auto& counter = fixture.hits[attacker->GetEntry()];
         ++counter.first; counter.second += amount;
+        if (attacker->GetEntry() == 35176 && attacker->GetMapId() == 649)
+        {
+            ++fixture.slimeHits;
+            auto const found = fixture.slimePools.find(attacker->GetGUID());
+            if (found == fixture.slimePools.end()) ++fixture.slimeUnknownHits;
+            else if (fixture.clockMs - found->second.firstMs > 2000) ++fixture.slimeLateHits;
+        }
+    }
+};
+class SlimeCasts : public AllSpellScript
+{
+public:
+    SlimeCasts() : AllSpellScript("DojoOfflineSlimeCasts", {ALLSPELLHOOK_ON_PREPARE, ALLSPELLHOOK_ON_CAST}) { }
+    void OnSpellPrepare(Spell* spell, Unit* caster, SpellInfo const* info) override
+    { Record(spell, caster, info, false); }
+    void OnSpellCast(Spell* spell, Unit* caster, SpellInfo const* info, bool /*skipCheck*/) override
+    { Record(spell, caster, info, true); }
+    void Record(Spell* spell, Unit* caster, SpellInfo const* info, bool completed)
+    {
+        std::lock_guard<std::recursive_mutex> lock(fixture.mutex);
+        auto* leader = fixture.Actor(1);
+        if (fixture.state != "running" || fixture.map != 649 || !leader || !spell || !caster || !info
+            || caster->GetEntry() != 35176 || caster->GetMap() != leader->GetMap() || info->Id != 66881
+            || !Leeroy::Guild::OfflineRaidOwns(leader->GetGUID().GetCounter())) return;
+        float radius = 0.f;
+        for (SpellEffectInfo const& effect : info->Effects)
+            if (effect.IsTargetingArea())
+                radius = std::max(radius, effect.CalcRadius(caster) * spell->GetSpellValue()->RadiusMod);
+        if (!std::isfinite(radius) || radius <= 0.f) { fixture.error = "invalid_native_slime_radius"; return; }
+        auto [where, inserted] = fixture.slimePools.try_emplace(caster->GetGUID());
+        auto& pool = where->second;
+        if (inserted) pool.firstMs = fixture.clockMs;
+        // Immediate damage happens before AllSpellScript::OnSpellCast. Prepare
+        // establishes identity; only the successful cast counts as stimulus.
+        if (completed)
+        {
+            ++pool.casts; pool.lastMs = fixture.clockMs; pool.radius = radius;
+            pool.minimum = std::min(pool.minimum, radius); pool.maximum = std::max(pool.maximum, radius);
+        }
     }
 };
 }
-void AddSC_dojo_offline() { new Commands(); new Ticks(); new Damage(); }
+void AddSC_dojo_offline() { new Commands(); new Ticks(); new Damage(); new SlimeCasts(); }
 #else
 void AddSC_dojo_offline() { }
 #endif
