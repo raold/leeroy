@@ -16,6 +16,8 @@
 #include "GroupMgr.h"
 #include "InstanceScript.h"
 #include "Map.h"
+#include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
@@ -56,6 +58,7 @@ struct Trial
     uint32 startingBossHealth = 0, leastBossHealth = 0;
     json lastBodies = json::array(), lastBoss = json::object(), recentEffects = json::array();
     json recentCasts = json::array();
+    json failureFacts = json::object();
     bool active = false, negative = false, ready = false, humanBoarded = false, cleanup = false, humanGone = false;
     bool oldSupport = false;
 
@@ -141,6 +144,7 @@ struct Trial
         auto why = Dojo::BeginHumanFixture(id);
         if (!why.empty()) return why;
         token = id; scenario = encounter; negative = control; failure.clear(); group.Clear(); bossGuid.Clear(); mounts = {};
+        failureFacts = json::object();
         lastBodies = json::array(); lastBoss = json::object(); recentEffects = json::array(); recentCasts = json::array();
         elapsed = samples = maxGap = deathAt = startingBossHealth = leastBossHealth = 0;
         travelled = {}; hits = {}; movingHits = {}; afterDeathHits = {}; seats = {};
@@ -292,7 +296,17 @@ struct Trial
                     !p->GetVehicle() || p->GetVehicle()->GetPassenger(0) != p || base->GetMap() != boss->GetMap())
                 { Fail("drake_driver_or_mount_lost"); return; }
                 if (base->GetExactDist(previous[i]) > 1.f + base->GetSpeed(MOVE_FLIGHT) * float(diff) * 0.0015f)
-                { Fail("measured_drake_jumped"); return; }
+                {
+                    failureFacts = {{"slot", i}, {"diff_ms", diff}, {"phase_ms", phaseMs},
+                        {"previous", {previous[i].GetPositionX(), previous[i].GetPositionY(), previous[i].GetPositionZ()}},
+                        {"current", {base->GetPositionX(), base->GetPositionY(), base->GetPositionZ()}},
+                        {"distance", base->GetExactDist(previous[i])}, {"flight_speed", base->GetSpeed(MOVE_FLIGHT)},
+                        {"run_speed", base->GetSpeed(MOVE_RUN)}, {"moving", base->isMoving()},
+                        {"motion", uint32(base->GetMotionMaster()->GetCurrentMovementGeneratorType())},
+                        {"spline_velocity", base->movespline->Velocity()},
+                        {"spline_time_ms", base->movespline->timePassed()}, {"spline_duration_ms", base->movespline->Duration()}};
+                    Fail("measured_drake_jumped"); return;
+                }
                 previous[i] = base->GetPosition();
                 travelled[i] = std::max(travelled[i], base->GetExactDist(initial[i]));
                 bool const surge = base->HasAura(57407) || base->HasAura(60936);
@@ -414,7 +428,7 @@ struct Trial
         std::lock_guard<std::recursive_mutex> lock(mutex);
         if (active && state != "cleanup" && state != "logout") Capture();
         return {{"kind", "dojo-vehicle-observation"}, {"format", 1}, {"scenario", scenario},
-            {"token", token}, {"state", state}, {"failure", failure}, {"negative", negative},
+            {"token", token}, {"state", state}, {"failure", failure}, {"failure_facts", failureFacts}, {"negative", negative},
             {"ready", ready}, {"human_boarded", humanBoarded}, {"cleanup", cleanup}, {"samples", samples},
             {"max_gap_ms", maxGap}, {"human_death_ms", deathAt}, {"driver_entries", seats},
             {"distance", travelled}, {"damage_hits", hits}, {"moving_hits", movingHits}, {"after_death_hits", afterDeathHits},
