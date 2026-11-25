@@ -180,7 +180,7 @@ struct OfflineFixture
                 Actor(i)->StopMoving();
             }
             leader->GetMap()->LoadGrid(4203.5f, 2484.f);
-            auto* dragon = instance->GetCreature(10);
+            auto* dragon = leader->GetMap()->GetCreature(instance->GetGuidData(10));
             if (!dragon || dragon->GetEntry() != 36789 || !dragon->IsAlive())
             { error = "valithria_frontier_dragon_missing"; ReleaseFrontier(); return; }
             frontierDragon = dragon->GetGUID();
