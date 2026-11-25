@@ -67,6 +67,38 @@ private. The report records the checkpoint hash for comparison. These runs are
 features. Automatic random population remains disabled; only `RNDBOTDOJO` gets
 the type-1 account assignment that ordinary guild pinning requires.
 
+### Vehicle mechanics
+
+`realm --layout <layout> vehicle-acceptance` runs the Flame Leviathan and Malygos
+probes against the same synthetic checkpoint and OfflineAcceptance build.
+`--scenario leviathan` or `--scenario malygos` selects one encounter. Each runs
+with the ordinary raid strategy enabled and disabled. `RaidVehicleSupport` is
+enabled only within this isolated native fixture and restored at cleanup.
+
+Flame Leviathan starts from the core's post-gauntlet reset. Its real vehicle
+summons, accessories and spell-clicks supply the seats. A fixed player without
+bot AI boards first; the measured melee and ranged bots must board siege and
+demolisher driver seats themselves. Both must move, damage the actual boss while
+moving, and keep damaging it after the scripted player dies. The disabled
+strategy must leave both bots unboarded despite that same valid boarding cue.
+
+Malygos uses the core's focusing-iris event and phase transitions. Setup selects
+the phase-two health boundary and kills its six adds; the core destroys the
+platform and summons the actual drakes. Player health reserves during setup
+keep the three-player fixture alive. Observation begins only once the native
+phase-three mounts and boss are ready. It requires real drake healing, damage,
+Engulf in Flames, shielding during actual Surge of Power, an observed static
+field escape within four seconds and movement into the safe ring. The disabled strategy must show surge/field
+exposure without drake healing, damage or shielding; a resulting drake death
+is an expected control outcome, never a positive pass.
+
+The harness never moves the measured vehicles, casts their abilities or changes
+health during observation. It records native effects and positional samples,
+rejects observation gaps above 200 ms, and requires cleanup and world shutdown.
+These are mechanic probes, not full boss kills. They do not certify Leviathan's
+opening gauntlet, nested gunners, pyrite supply, hard modes or 25-player coverage.
+Adding them or passing their verdict tests does not authorize live enablement.
+
 ### Open-world leading
 
 `realm --layout <layout> lead-acceptance` uses the same synthetic guild checkpoint
