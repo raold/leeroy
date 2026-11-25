@@ -310,24 +310,22 @@ struct RaidRun
             ai->ChangeStrategy("+icc", BOT_STATE_NON_COMBAT);
             if (scenario == "lk-terenas")
             {
-                Creature* terenas = bot->SummonCreature(36823, 496.f, -2512.f, 1049.95f, 0.f,
-                    TEMPSUMMON_TIMED_DESPAWN, 45000);
-                Creature* warden = bot->SummonCreature(36824, 505.f, -2512.f, 1049.95f, 3.14f,
-                    TEMPSUMMON_TIMED_DESPAWN, 45000);
-                if (!terenas || !warden || !PlayerbotAI::IsHeal(bot))
-                { Fail("Frostmourne actors or healer role missing"); return; }
-                target = terenas->GetGUID();
-                terenas->AI()->DoAction(-36823); // Core ACTION_FROSTMOURNE_INTRO sets initial half health.
-                terenas->AI()->AttackStart(warden);
-                warden->AI()->AttackStart(terenas);
-                // Enter through the real Harvest Soul teleport only after the
-                // encounter and room exist. Early setup teleporting exposed the
-                // negative control to stock floor correction before observation.
+                if (!PlayerbotAI::IsHeal(bot)) { Fail("Frostmourne healer role missing"); return; }
+                // Hold a real active encounter outside while the healer is inside.
+                // The stock control may leave the room; that must not reset the
+                // encounter and invalidate the comparison before it is measured.
+                lichKing->SetImmuneToPC(false);
+                lichKing->AI()->AttackStart(owner);
                 bot->GetMap()->LoadGrid(495.708f, -2523.76f);
                 auto const cast = bot->CastSpell(bot, 72546, true);
                 if (cast != SPELL_CAST_OK) { Fail("native_frostmourne_entry_refused:" + std::to_string(uint32(cast))); return; }
-                // The ordinary follow target stays outside. No measured actor
-                // relocation or Terenas health writes occur during observation.
+                // The real spell sends instance event 23617, which creates Terenas
+                // and his Warden and starts their fight. Never create duplicate
+                // room actors or count heals on an unrelated manual summon.
+                auto* terenas = bot->GetMap()->GetCreature(script->GetGuidData(39));
+                if (!terenas || terenas->GetEntry() != 36823 || !terenas->IsAlive())
+                { Fail("native_frostmourne_terenas_missing"); return; }
+                target = terenas->GetGUID();
             }
             else
             {
