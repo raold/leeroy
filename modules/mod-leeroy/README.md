@@ -318,6 +318,49 @@ he dies like any aura. `Leeroy.OwnerAuras` (a comma list of spell ids, default e
 - **Limits.** Nobody else is ever touched, and his bots still cleanse it: the aura is put back after
   each cleanse rather than shielded from it. `Leeroy.Enable = 0` stops it. Removing an id (then
   `.reload config`) is the only way to keep its aura off: `.unaura` or a cancel is undone.
+- **Bots.** A character a playerbot plays (`GET_PLAYERBOT_AI`, his own self-bot excepted) takes
+  nothing (`bot`), should `Leeroy.HumanGuid` ever name one.
+
+**Native rebuild required.**
+
+## His pet's auras (`Leeroy.OwnerPetAuras`)
+
+The same for his pet: `Leeroy.OwnerPetAuras` (a comma or space list of spell ids, default empty =
+off, `.reload config`) keeps the listed auras on the pet the owner controls (`Player::GetPet()`:
+the permanent Water Elemental that Glyph of Eternal Water, aura 70937 in his `Leeroy.OwnerAuras`,
+makes `spell_mage_summon_water_elemental` summon as 70908 / `NPC_WATER_ELEMENTAL_PERM`, or a
+hunter's pet) and on the guardians he summons (units of his `m_Controlled` that are guardians:
+Mirror Image, a ghoul, treants). Totems, companions and puppets are not guardians, and a unit he
+charms belongs to someone else, so none of them is touched. It shares the parse, the spell-store
+check, the pass timer, the wake and the log gate with `Leeroy.OwnerAuras` (`Guild/OwnerAuras`
+holds both lists in one `Keeper` each; pure policy `Lib/LeeroyOwnerAuras`).
+
+- **When.** On the same world tick (about every 2 s, its own timer), while he can take his own
+  auras (`OwnerAuraBlock`: online, not a bot, alive, not teleporting, on a taxi, in a vehicle or in
+  a battleground or arena), each pet of his that is in the world, alive, summoned by him
+  (`GetOwnerGUID()` is his character) and not under someone else's control (`OwnerPetAuraBlock`:
+  `no_pet`, `not_his`, `pet_dead`, `charmed`) gets each listed aura it lacks, cast by the pet on
+  itself (`AddAura(spell, pet)`, as the core puts the ICC buff on pets). His controlled pet goes
+  first, then each guardian once (`OwnerPetTargets`); each is looked up again by guid before its
+  turn. An offline owner has no pet in the world, and nobody else's pet is ever visited.
+- **At once.** The aura-remove hook also notes how a listed aura came off one of his pets or
+  guardians (dispel, death, expiry, cancel) and wakes the next tick; a `PetScript` wakes it when one
+  of his pets or guardians is summoned (`OnInitStatsForLevel`) or added to the world
+  (`OnPetAddToWorld`: a resummon after a death, or the pet coming back after a teleport or a
+  zone change). Passes stay at least 500 ms apart; a dead pet waits until it is alive or summoned
+  again.
+- **Checks.** As for his own list: `owner_pet_aura_invalid spell= reason=unknown_spell|not_an_aura`
+  once per load, `owner_pet_aura_invalid entry= reason=not_a_spell_id` for an entry that is not a
+  positive number (so a comment written after the value shows up here: config values take no inline
+  comments), and `owner_pet_auras spells=6560,51040,31750` for the ids in force (`owner_pet_auras
+  off` when emptied).
+- **Logs.** `owner_pet_aura_reapplied spell= pet_entry= why=` and `owner_pet_aura_refused spell=
+  pet_entry= why=`, at most once a minute per spell and outcome for his pet, and apart from that
+  once for his guardians (a Mirror Image cast does not hide the elemental's line). `why` is the last
+  way the spell came off one of his pets (`unknown` for a fresh summon).
+- **Limits.** Removing an id (then `.reload config`) stops putting it back; an aura already on a
+  pet stays (the core saves it with the pet like any aura) until it comes off: a dispel, the pet's
+  death, or `.unaura` with the pet targeted. `Leeroy.Enable = 0` stops it.
 
 **Native rebuild required.**
 
