@@ -25,6 +25,7 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
+#include "PlayerbotsDatabase.h"
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
 #include "RandomPlayerbotMgr.h"
@@ -33,6 +34,7 @@
 #include "WorldScript.h"
 #include "WorldSession.h"
 #include "Guild/HazardJob.h"
+#include "LeeroyIntegrations.h"
 #include <algorithm>
 #include <array>
 #include <mutex>
@@ -58,6 +60,25 @@ bool FixtureAccount(ObjectGuid guid)
 bool LoginRaidFixture(ObjectGuid guid)
 {
     if (!FixtureAccount(guid)) return false;
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+    uint32 const account = sCharacterCache->GetCharacterAccountIdByGuid(guid);
+    if (account == AccountMgr::GetId("RNDBOTDOJO") && !sPlayerbotAIConfig.IsInRandomAccountList(account))
+    {
+        // MaxRandomBots=0 deliberately creates no population and clears the
+        // factory's type-1 assignments at startup. Register only our fixed
+        // synthetic account after startup, through the ordinary account-type
+        // loader and pin composer. Never exempt actors from ownership checks.
+        if (State().plan.state != RuntimeState::Armed || State().manifest ||
+            sPlayerbotAIConfig.RandomBotAutologin || sPlayerbotAIConfig.MinRandomBots ||
+            sPlayerbotAIConfig.MaxRandomBots) return false;
+        PlayerbotsDatabase.DirectExecute("INSERT INTO playerbots_account_type (account_id, account_type) "
+            "VALUES ({}, 1) ON DUPLICATE KEY UPDATE account_type=1", account);
+        sRandomPlayerbotMgr.AssignAccountTypes();
+        if (!sRandomPlayerbotMgr.IsAccountType(account, 1)) return false;
+        sPlayerbotAIConfig.RandomBotAccounts.push_back(account);
+        LeeroyApplyPins();
+    }
+#endif
     sRandomPlayerbotMgr.AddPlayerBot(guid, 0);
     return true;
 }

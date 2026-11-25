@@ -80,12 +80,8 @@ def _fixture_accounts(layout, log):
     account = accounts["RNDBOTDOJO"]
     if type(account) is not int or account <= 0:
         raise LayoutError("synthetic random-bot account was not identified")
-    root = mysql.Client(layout, layout.server.root_cnf)
-    mysql.verify_identity(layout, root)
-    # MaxRandomBots stays zero: no population is created. The fixed synthetic
-    # account still needs the ordinary type-1 assignment used by cast pinning.
-    root.query(f"INSERT INTO playerbots_account_type (account_id, account_type) VALUES ({account}, 1) "
-               "ON DUPLICATE KEY UPDATE account_type=1;", database=layout.schemas["playerbots"])
+    # Startup clears type-1 assignments when MaxRandomBots=0. The native fixture
+    # registers this one fixed account after startup, before ordinary pinning.
 
 
 def prepare_fixture(layout, log=print):
@@ -138,6 +134,10 @@ def run(layout, *, target, log=print):
     try:
         prepared, report["fixture_checkpoint_sha256"] = prepare_fixture(layout, log)
         report["fixture"] = prepared
+        # The native driver creates its character, but account creation queues
+        # an async write and its immediate lookup can fail. Provision the fixed
+        # account while stopped, after restoring any older fixture checkpoint.
+        provision.ensure_accounts(layout, "DOJODRIVER", log=log)
         _set(layout, "modules/mod_leeroy.conf", {"Leeroy.Enable": "1", "Leeroy.GuildId": str(prepared["guild"]),
                                                 "Leeroy.HumanGuid": str(prepared["owner"]),
                                                 "Leeroy.Mechanics.Enable": "1", "Leeroy.Hazards.Enable": "1"})
@@ -179,6 +179,9 @@ def run(layout, *, target, log=print):
                     observed["observed_at"] = time.time()
                     trace.write(json.dumps(observed, sort_keys=True) + "\n")
                     trace.flush()
+                    if observed.get("error"):
+                        client.command("dojo offline stop")
+                        raise world.WorldError(observed["error"])
                     native = observed.get("native", {})
                     if observed.get("token") != token or native.get("event", {}).get("id") != token:
                         raise world.WorldError("offline run token changed")
