@@ -46,15 +46,21 @@ recovery=''
 control_root="$AC_ROOT"
 build_lock="$AC_ROOT/.superpowers/live-build.lock"
 # ac-server.sh's forced taskkill is best effort. Prove absence independently before
-# touching binaries or restoring data; unreadable/malformed/empty task lists fail closed.
-# Keep this stdlib check inline so the printed rollback survives an older checkout.
-native_check='import csv,sys
+# touching binaries or restoring data; unreadable/malformed/unterminated listings
+# (common.sh, ac_server_processes) fail closed, and so does a server whose path cannot be
+# read. Only this install's servers (argv[1] is its bin folder) count: a dojo's run from
+# elsewhere. Keep this stdlib check inline so the printed rollback survives an older checkout.
+native_check='import sys
+def key(p):
+    p=p.replace("/","\\").casefold()
+    return p[4:] if p.startswith("\\\\?\\") else p
+live={key(sys.argv[1].rstrip("/\\")+"\\"+n) for n in ("authserver.exe","worldserver.exe")}
 try:
-    rows=[r for r in csv.reader(sys.stdin,strict=True) if r]
-except (csv.Error,UnicodeError):
+    rows=[r.rstrip("\r").split("\t") for r in sys.stdin.read().split("\n") if r.rstrip("\r")]
+except UnicodeError:
     rows=[]
-valid=bool(rows) and all(len(r)==5 and r[0].strip() and r[1].isdigit() for r in rows)
-held=any(r and r[0].strip().casefold() in ("authserver.exe","worldserver.exe") for r in rows)
+valid=bool(rows) and rows[-1]==["end"] and all(len(r)==3 and r[0].isdigit() and r[1].strip() for r in rows[:-1])
+held=any(len(r)==3 and (key(r[2]) in live or not r[2] and r[1].strip().casefold() in ("authserver.exe","worldserver.exe")) for r in rows[:-1])
 if not valid or held:
     print("FAIL: native stop not confirmed",file=sys.stderr)
     sys.exit(1)'
@@ -71,10 +77,10 @@ mind() {
 }
 native_stopped() {
     local listing
-    if ! listing=$(tasklist //FO CSV //NH 2>/dev/null); then
+    if ! listing=$(ac_server_processes 2>/dev/null); then
         printf 'FAIL: native stop status unavailable\n' >&2; return 1
     fi
-    printf '%s\n' "$listing" | "$python" -c "$native_check"
+    printf '%s\n' "$listing" | "$python" -c "$native_check" "$(native_path "$AC_BIN")"
 }
 stop_services() {
     if ((native)); then
@@ -99,9 +105,9 @@ rollback_note() {
             "$(quote "$build_lock")" "$(quote 'rmdir -- "$release_recovery_build_lock"; rmdir -- "$release_recovery_lock"')"
     fi
     if ((native)); then
-        printf 'AC_ROOT=%s LEEROY_MIND_DATA=%s bash %s stop && (set -o pipefail; tasklist //FO CSV //NH | %s -c %s)' \
+        printf 'AC_ROOT=%s LEEROY_MIND_DATA=%s bash %s stop && (set -o pipefail; powershell -NoProfile -NonInteractive -Command %s </dev/null | %s -c %s %s)' \
             "$(quote "$AC_ROOT")" "$(quote "$data")" "$(quote "$control_root/scripts/ac-server.sh")" \
-            "$(quote "$python")" "$(quote "$native_check")"
+            "$(quote "$AC_SERVERS_PS")" "$(quote "$python")" "$(quote "$native_check")" "$(quote "$(native_path "$AC_BIN")")"
     else
         printf '%s %s stop --root %s --data-dir %s' "$(quote "$python")" "$(quote "$(native_path "$control_root/scripts/ac-mind.py")")" "$(quote "$(native_path "$AC_ROOT")")" "$(quote "$(native_path "$data")")"
     fi

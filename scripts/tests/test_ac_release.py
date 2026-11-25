@@ -151,10 +151,11 @@ fi
 printf '%s\\n' "${OWNER_ONLINE-0}"
 exit "${MYSQL_FAIL:-0}"
 ''')
-        self.write(stub / "tasklist", '''#!/usr/bin/env bash
-if [[ ${TASKLIST_OUTPUT+x} ]]; then printf '%s\\n' "$TASKLIST_OUTPUT";
-else printf '%s\\n' '"System","4","Services","0","8 K"'; fi
-exit "${TASKLIST_FAIL:-0}"
+        # common.sh's server listing (ac_server_processes); by default no server runs.
+        self.write(stub / "powershell", '''#!/usr/bin/env bash
+if [[ ${PROCESSES_OUTPUT+x} ]]; then printf '%s\\n' "$PROCESSES_OUTPUT";
+else printf 'end\\r\\n'; fi
+exit "${PROCESSES_FAIL:-0}"
 ''')
         self.write(stub / "schtasks", '''#!/usr/bin/env bash
 if [[ $1 == //Query ]]; then exit "${TASK_MISSING:-0}"; fi
@@ -462,11 +463,22 @@ exit "${FAIL_CONSOLE:-0}"
         self.assertNotIn("migrate", self.actions())
         self.assertNotIn("mind start", self.actions())
 
+    DOJO = r"F:\azerothcore\dojo-runtime\instances\claude-raids\bin"
+
+    def processes(self, *rows):
+        """common.sh's server listing: (pid, image, path) rows, then its end line. PIDs
+        are odd: real Windows PIDs are multiples of 4."""
+        return "\r\n".join([*("\t".join(row) for row in rows), "end"])
+
     def test_native_stop_requires_readable_process_absence(self):
-        for env in ({"TASKLIST_OUTPUT": '"worldserver.exe","12","Console","1","100 K"'},
-                    {"TASKLIST_OUTPUT": '"AUTHSERVER.EXE","13","Console","1","100 K"'},
-                    {"TASKLIST_OUTPUT": ""}, {"TASKLIST_OUTPUT": "unavailable"},
-                    {"TASKLIST_FAIL": "1"}):
+        live = str(self.bin / "authserver.exe").upper()
+        for env in ({"PROCESSES_OUTPUT": self.processes(("1001", "worldserver.exe", str(self.bin / "worldserver.exe")))},
+                    {"PROCESSES_OUTPUT": self.processes(("1003", "AUTHSERVER.EXE", live.replace("\\", "/")))},
+                    {"PROCESSES_OUTPUT": self.processes(("1005", "worldserver.exe", ""))},
+                    {"PROCESSES_OUTPUT": self.processes(("x", "worldserver.exe", self.DOJO + r"\worldserver.exe"))},
+                    {"PROCESSES_OUTPUT": ""}, {"PROCESSES_OUTPUT": "unavailable"},
+                    {"PROCESSES_OUTPUT": "\t".join(("2001", "worldserver.exe", self.DOJO + r"\worldserver.exe"))},
+                    {"PROCESSES_FAIL": "1"}):
             with self.subTest(env=env):
                 self.git("reset", "--hard", self.base)
                 output = self.run_release("--native", self.native, rc=2, **env)
@@ -486,11 +498,8 @@ exit "${FAIL_CONSOLE:-0}"
         self.git("add", "scripts/ac-server.sh")
         self.git("commit", "-qm", "Install real stop wrapper in synthetic fixture")
         for name, body in {
-            "tasklist": '''#!/usr/bin/env bash
-printf '%s\\n' '"worldserver.exe","12","Console","1","100 K"' '"authserver.exe","13","Console","1","100 K"'
-''',
             "taskkill": '''#!/usr/bin/env bash
-printf 'failed taskkill\\n' >> "$AC_ROOT/actions.log"
+printf 'failed taskkill %s\\n' "$*" >> "$AC_ROOT/actions.log"
 exit 1
 ''',
             "sleep": "#!/usr/bin/env bash\nexit 0\n",
@@ -498,27 +507,47 @@ exit 1
             path = self.root / "stubs" / name
             self.write(path, body)
             path.chmod(0o755)
-        output = self.run_release("--native", self.native, rc=2)
+        listing = self.processes(("1001", "worldserver.exe", str(self.bin / "worldserver.exe")),
+                                 ("1003", "authserver.exe", str(self.bin / "authserver.exe")),
+                                 ("2001", "worldserver.exe", self.DOJO + r"\worldserver.exe"))
+        output = self.run_release("--native", self.native, rc=2, PROCESSES_OUTPUT=listing)
         self.assertGreaterEqual(self.actions().count("failed taskkill"), 4)
+        self.assertIn("failed taskkill //F //PID 1001", self.actions())
+        self.assertIn("failed taskkill //F //PID 1003", self.actions())
+        self.assertNotIn("2001", self.actions())
+        self.assertNotIn("//IM", self.actions())
         self.assertNotIn("build jobs=", self.actions())
         self.assertNotIn("migrate", self.actions())
         self.assertNotIn("release complete", output)
         self.assertIn("stop failed", output)
 
+    def test_native_release_proceeds_while_a_dojo_server_runs(self):
+        # 2026-11-24: any worldserver.exe or authserver.exe failed the stop check, a dojo's too.
+        dojo = self.processes(("2001", "worldserver.exe", self.DOJO + r"\worldserver.exe"),
+                              ("2003", "authserver.exe", self.DOJO + r"\authserver.exe"))
+        output = self.run_release("--native", self.native, PROCESSES_OUTPUT=dojo)
+        self.assertEqual([line for line in output.splitlines() if line.startswith("FAIL")], [])
+        self.assertIn("release complete", output)
+        self.assertIn("started binary: new binary", self.actions())
+
     def test_printed_native_rollback_refuses_surviving_or_unknown_processes(self):
         output = self.run_release("--native", self.native)
         command, = (line.strip() for line in output.splitlines() if line.startswith("  cd "))
         released = self.git("rev-parse", "HEAD")
-        for env in ({"TASKLIST_OUTPUT": '"worldserver.exe","12","Console","1","100 K"'},
-                    {"TASKLIST_FAIL": "1"}):
+        for env in ({"PROCESSES_OUTPUT": self.processes(("1001", "worldserver.exe", str(self.bin / "worldserver.exe")))},
+                    {"PROCESSES_OUTPUT": self.processes(("1005", "authserver.exe", ""))},
+                    {"PROCESSES_OUTPUT": ""}, {"PROCESSES_FAIL": "1"}):
             result = subprocess.run([BASH, "-s"], input=command + "\n", cwd=self.root,
                 env=dict(self.env, **env), text=True, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, timeout=30)
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertEqual(self.git("rev-parse", "HEAD"), released)
             self.assertEqual(self.actions().count("build jobs=4"), 1)
+        # A dojo's servers do not hold the rollback back.
+        dojo = self.processes(("2001", "worldserver.exe", self.DOJO + r"\worldserver.exe"))
         result = subprocess.run([BASH, "-s"], input=command + "\n", cwd=self.root,
-            env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+            env=dict(self.env, PROCESSES_OUTPUT=dojo), text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.original()
 
