@@ -116,6 +116,14 @@ def write_configs(layout: Layout, manifest: tuple[Path, str] | None = None, only
         if not dist_path.is_file():
             raise LayoutError(f"no {dist_path}; build the dojo core first")
         dist_text = dist_path.read_text(encoding="utf-8")
+        if name == "worldserver.conf":
+            # Module loggers are valid core logging registrations, but do not
+            # appear in the core .dist. Add only these two reviewed slots;
+            # conf.render still refuses every other missing override.
+            present = conf.parse(dist_text)
+            for key in ("Appender.DungeonClear", "Logger.playerbots.dungeonclear"):
+                if key not in present:
+                    dist_text = dist_text.rstrip() + f'\n{key} = ""\n'
         overrides = dict(file_rules.training)
         overrides.update(values[name])
         text = conf.render(dist_text, overrides)
@@ -146,10 +154,6 @@ def write_configs(layout: Layout, manifest: tuple[Path, str] | None = None, only
         if not port:
             raise LayoutError("offline acceptance requires a separate ports.leeroy endpoint")
         extras = {
-            # Log initializes before module configs are loaded. Register the
-            # timestamped appender in the core config for the very first pull.
-            "worldserver.conf": {"Appender.DungeonClear": "2,4,1,DungeonClear.log",
-                                 "Logger.playerbots.dungeonclear": "4,DungeonClear"},
             "modules/mod_dungeon_clear.conf": {
                 "DungeonClear.TestRun.DriverCharacter": "Dojodriver",
                 "DungeonClear.TestRun.DriverAccount": "DOJODRIVER",
