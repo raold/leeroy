@@ -470,6 +470,7 @@ Apply them to a checkout of each module with
 | `patches/mod-playerbots/` | Local playerbots commits, as `git format-patch` output |
 | `patches/mod-ollama-chat/` | Local mod-ollama-chat commits, same format |
 | `patches/mod-dungeon-clear/` | Local mod-dungeon-clear commits, same format |
+| `patches/mod-individual-progression/` | Local mod-individual-progression commit (level 80 and above enter WotLK Onyxia), same format |
 | `patches/dojo/mod-playerbots/` | The dojo's own playerbots commit (an external-controller hook), applied on top of the local commits in the dojo's isolated checkout only |
 | `modules/mod-leeroy/` | The guild module and its bridge, with unit tests and a smoke test in `tools/` |
 | `modules/mod-dojo/` | The dojo's native module, built only into the dojo's isolated core (the CI build compiles its disabled variant) |
@@ -551,8 +552,8 @@ a separate native build.
 Commits already in the live branch and confirmed empty cherry-picks are skipped,
 including merge commits whose constituent changes were already released.
 
-For a native release, numbered `.patch` files in `patches/mod-playerbots/` and
-`patches/mod-dungeon-clear/` are checked against each module's Git history.
+For a native release, numbered `.patch` files in `patches/mod-playerbots/`,
+`patches/mod-dungeon-clear/` and `patches/mod-individual-progression/` are checked against each module's Git history.
 Missing patches are rehearsed, then applied with `git am` in filename order
 before the build. Original commit ancestry or an equivalent stable patch ID
 counts as installed, preserving later local edits and intentional reverts.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copy the live configs and the local commits of mod-playerbots,
-# mod-ollama-chat and mod-dungeon-clear into this repo so they are versioned. The live files stay the
+# mod-ollama-chat, mod-dungeon-clear and mod-individual-progression into this repo so they are versioned. The live files stay the
 # source of truth: this only snapshots them. Secrets are masked on the way in, and the copies are then
 # checked against the real values before anything can be committed.
 #
@@ -54,6 +54,9 @@ export_patches mod-ollama-chat
 # mod-dungeon-clear's local commits (Trial of the Crusader, the Ulduar Leviathan pass). A live checkout
 # without them exports none and clears patches/mod-dungeon-clear: apply the series (git am) first.
 export_patches mod-dungeon-clear
+# mod-individual-progression's local commit (level 80 and above may enter WotLK Onyxia). Same rule: a live
+# checkout without it exports none and clears patches/mod-individual-progression.
+export_patches mod-individual-progression
 
 # --- leak check ----------------------------------------------------------
 # Every secret value in the live configs must be absent from the copies: the
