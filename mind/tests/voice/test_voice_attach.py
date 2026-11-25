@@ -161,6 +161,8 @@ def supervised(tmp_path, clock, fake_repo, monkeypatch, *, answers=False):
     """An extension with autostart on, a voice venv, a fake launch and a port that never
     answers (or always does)."""
     calls = spawner(monkeypatch)
+    monkeypatch.setattr(subprocess, "DETACHED_PROCESS", 1, raising=False)  # absent on Linux
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 2, raising=False)
     pythonw = fake_repo / "voice" / ".venv" / "Scripts" / "pythonw.exe"
     pythonw.parent.mkdir(parents=True)
     pythonw.write_bytes(b"")
