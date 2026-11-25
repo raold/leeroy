@@ -1,0 +1,55 @@
+From 21225cc4af3e664e4bb54772a7d2b11200450094 Mon Sep 17 00:00:00 2001
+From: raold <oldham@hey.com>
+Date: Tue, 24 Nov 2026 19:22:46 -0500
+Subject: [PATCH 6/6] Clear Deathspeaker room packs before pulling Deathwhisper
+
+---
+ .../DungeonClear/Data/RoomAggroRegistry.cpp   |  5 +++++
+ t/TestIcecrownRoom.cpp                        | 22 +++++++++++++++++++
+ 2 files changed, 27 insertions(+)
+ create mode 100644 t/TestIcecrownRoom.cpp
+
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/RoomAggroRegistry.cpp b/src/Ai/Dungeon/DungeonClear/Data/RoomAggroRegistry.cpp
+index 6161968..0a70fe4 100644
+--- a/src/Ai/Dungeon/DungeonClear/Data/RoomAggroRegistry.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Data/RoomAggroRegistry.cpp
+@@ -72,6 +72,11 @@ namespace
+         // flickering on 18309/18311/18313, far=108+, never 0).
+         { 557, 18341, 70.0f, { 18309, 18311, 18313 }, true, -145.0f, -50.0f },
+         { 601, 28684,  40.0f, {} }, // Azjol-Nerub — Krik'thir the Gatewatcher
++        // Icecrown — Deathwhisper. Deathspeaker packs stand 34.2-67.7yd from
++        // her; the two High Priests at 46.4/47.3yd otherwise join the boss pull
++        // with Aura of Darkness. Clear these room spawns before engaging her.
++        // Cult Fanatics/Adherents summoned during the encounter are not room trash.
++        { 631, 36855, 70.0f, { 36805, 36807, 36808, 36811, 36829 } },
+         // Blackrock Depths — Emperor Dagran Thaurissan. CallForHelp(VISIBLE_RANGE)
+         // wakes the whole throne room, the two balconies included, so their packs
+         // count however long the ramp walk is (see RoomAggroBoss::detourReachable).
+diff --git a/t/TestIcecrownRoom.cpp b/t/TestIcecrownRoom.cpp
+new file mode 100644
+index 0000000..97baefb
+--- /dev/null
++++ b/t/TestIcecrownRoom.cpp
+@@ -0,0 +1,22 @@
++/*
++ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
++ * and/or modify it under version 3 of the License, or (at your option), any later version.
++ */
++#include "gtest/gtest.h"
++#include "Ai/Dungeon/DungeonClear/Data/RoomAggroRegistry.h"
++
++TEST(RoomAggroRegistryTest, DeathwhisperClearsDeathspeakersBeforeTheBoss)
++{
++    RoomAggroBoss const* room = RoomAggroRegistry::Find(631, 36855);
++    ASSERT_NE(room, nullptr);
++    // Recorded room geometry: nearest disciple, both high priests, far attendant.
++    EXPECT_TRUE(RoomAggroRegistry::IsRoomTrash(*room, 36807, 34.21f, 28.0f));
++    EXPECT_TRUE(RoomAggroRegistry::IsRoomTrash(*room, 36829, 46.37f, 28.0f));
++    EXPECT_TRUE(RoomAggroRegistry::IsRoomTrash(*room, 36829, 47.28f, 28.0f));
++    EXPECT_TRUE(RoomAggroRegistry::IsRoomTrash(*room, 36811, 67.65f, 28.0f));
++    // Boss summons are handled by combat AI, never by the pre-pull room gate.
++    EXPECT_FALSE(RoomAggroRegistry::IsRoomTrash(*room, 37890, 40.0f, 28.0f));
++    EXPECT_FALSE(RoomAggroRegistry::IsRoomTrash(*room, 37949, 40.0f, 28.0f));
++    EXPECT_FALSE(RoomAggroRegistry::IsRoomTrash(*room, 36829, 80.0f, 28.0f));
++    EXPECT_EQ(RoomAggroRegistry::Find(631, 36829), nullptr);
++}
