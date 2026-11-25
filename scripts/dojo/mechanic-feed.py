@@ -73,6 +73,9 @@ def main():
         raise ValueError("candidate source or guild mismatch")
     preflight(layout)
     layout.check_port(layout.ports["leeroy"], "leeroy")
+    # This check includes free ports: acknowledge it before the parent starts
+    # the world. BridgeClient can then wait for the isolated listener to open.
+    status(preflight=True)
     asyncio.run(run(layout, args.guild, args.map))
 
 

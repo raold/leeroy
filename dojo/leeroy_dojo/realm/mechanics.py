@@ -14,6 +14,9 @@ class MechanicConnection:
         self.error = ""
         self.features = []
         self.rules = 0
+        self.checked = False
+        self.checked_event = threading.Event()
+        self.closing = False
         self.process = None
         self.thread = None
         self.command = [sys.executable, str(Path(layout.roots["source"]) / "scripts/dojo/mechanic-feed.py"),
@@ -25,11 +28,15 @@ class MechanicConnection:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self.thread = threading.Thread(target=self._read, daemon=True, name="dojo-mechanic-feed")
         self.thread.start()
+        if not self.checked_event.wait(30) or not self.checked or self.error:
+            self.__exit__()
+            raise world.WorldError(self.error or "mechanic-feed preflight did not finish")
         return self
 
     def __exit__(self, *args):
         if self.process is None:
             return
+        self.closing = True
         try:
             self.process.stdin.close()
         except OSError:
@@ -50,6 +57,13 @@ class MechanicConnection:
                 state = json.loads(line)
                 if state.get("kind") != "dojo-mechanic-feed" or type(state.get("ready")) is not bool:
                     raise ValueError("invalid feed observation")
+                if state.get("preflight") is True:
+                    if state["ready"] or state.get("error"):
+                        raise ValueError("invalid preflight acknowledgement")
+                    self.checked = True
+                    self.checked_event.set()
+                if state["ready"] and not self.checked:
+                    raise ValueError("feed became ready without its preflight")
                 self.ready = state["ready"]
                 self.error = state.get("error", "")
                 self.features = state.get("features", [])
@@ -58,3 +72,6 @@ class MechanicConnection:
             self.error = "invalid mechanic-feed process output"
         finally:
             self.ready = False
+            if not self.closing and not self.error:
+                self.error = "mechanic-feed process exited"
+            self.checked_event.set()

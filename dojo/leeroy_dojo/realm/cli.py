@@ -25,10 +25,11 @@ def add_parser(sub) -> None:
     raids.add_argument("--scenario", action="append", choices=("valithria", "twins", "poison", "lk-terenas", "lk-defile"),
                        help="repeat to select gates; defaults to Valithria, Twins and Living Poison")
     offline = cmds.add_parser("offline-acceptance", help="prepare a synthetic guild and observe a real offline raid job")
-    offline.add_argument("--target", required=True, choices=("toc-beasts", "ulduar-xt", "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves"))
+    offline.add_argument("--target", required=True, choices=("toc-beasts", "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves"))
     cmds.add_parser("lead-acceptance", help="observe native open-world leading, following, waiting and restoration")
     vehicles = cmds.add_parser("vehicle-acceptance", help="observe real raid vehicle boarding, movement and combat")
     vehicles.add_argument("--scenario", action="append", choices=("leviathan", "malygos"))
+    cmds.add_parser("yogg-acceptance", help="observe one real Yogg brain-team wave and its actual illusion")
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)
     acc_run.add_argument("--keep-running", action="store_true", help="leave a worldserver this command started")
@@ -159,6 +160,11 @@ def run(args: argparse.Namespace) -> int:
             from .vehicles import run as run_vehicles
             report = run_vehicles(layout, scenarios=tuple(args.scenario) if args.scenario else ("leviathan", "malygos"))
             print(f"Vehicle acceptance: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
+            return 0 if report["ok"] else 1
+        elif command == "yogg-acceptance":
+            from .yogg import run as run_yogg
+            report = run_yogg(layout)
+            print(f"Yogg wave: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "provision":
             manifest = None

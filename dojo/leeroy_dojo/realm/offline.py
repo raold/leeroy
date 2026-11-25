@@ -15,7 +15,8 @@ from .offline_fixture import FixtureCheckpoint
 
 TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
            "icc-deathwhisper": ("icc", 631, 1), "icc-gunship": ("icc", 631, 2),
-           "icc-valithria": ("icc", 631, 10), "offline-reserves": ("toc-reserves", 649, None)}
+           "icc-valithria": ("icc", 631, 10), "offline-reserves": ("toc-reserves", 649, None),
+           "ulduar-restart": ("ulduar", 603, None), "ulduar-tank-restart": ("ulduar", 603, None)}
 
 
 def parse_status(reply):
@@ -39,6 +40,25 @@ def reached(observation, *, target, token):
     if event.get("id") != token or type(instance) is not int or instance <= 0 or native.get("stage") != "running":
         return False
     bodies = observation.get("bodies", [])
+    if target in {"ulduar-restart", "ulduar-tank-restart"}:
+        if target == "ulduar-tank-restart" and not (
+                observation.get("wipe_boss") == 2 and type(observation.get("main_tank_at_wipe")) is int
+                and observation["main_tank_at_wipe"] > 0
+                and observation["main_tank_at_wipe"] != native.get("leader")
+                and observation.get("main_tank") == native.get("leader")):
+            return False
+        members = native.get("bodies", [])
+        before = observation.get("restarts_at_wipe")
+        expected = {b.get("guid") for b in bodies if b.get("slot") in range(1, 11)}
+        return (observation.get("scripted_wipe") is True and observation.get("restarting_seen") is True
+                and type(before) is int and before >= 0 and type(native.get("restarts")) is int and native["restarts"] == before + 1
+                and type(native.get("stage_ms")) is int and native["stage_ms"] >= 5000
+                and type(native.get("leader")) is int and native["leader"] > 0
+                and native.get("driver") is True and native.get("elected") == native.get("leader")
+                and len(expected) == 10 and None not in expected and len(members) == 10
+                and {b.get("guid") for b in members} == expected
+                and all(b.get("present") is True and b.get("alive") is True and b.get("map") == map_id
+                        and b.get("instance") == instance for b in members))
     if target == "offline-reserves":
         reserve = next((b for b in bodies if b.get("slot") == 11), {})
         members = native.get("bodies", [])
@@ -66,12 +86,8 @@ def _fixture_accounts(layout, log):
     account = accounts["RNDBOTDOJO"]
     if type(account) is not int or account <= 0:
         raise LayoutError("synthetic random-bot account was not identified")
-    root = mysql.Client(layout, layout.server.root_cnf)
-    mysql.verify_identity(layout, root)
-    # MaxRandomBots stays zero: no population is created. The fixed synthetic
-    # account still needs the ordinary type-1 assignment used by cast pinning.
-    root.query(f"INSERT INTO playerbots_account_type (account_id, account_type) VALUES ({account}, 1) "
-               "ON DUPLICATE KEY UPDATE account_type=1;", database=layout.schemas["playerbots"])
+    # Startup clears type-1 assignments when MaxRandomBots=0. The native fixture
+    # registers this one fixed account after startup, before ordinary pinning.
 
 
 def prepare_fixture(layout, log=print):
@@ -124,15 +140,21 @@ def run(layout, *, target, log=print):
     try:
         prepared, report["fixture_checkpoint_sha256"] = prepare_fixture(layout, log)
         report["fixture"] = prepared
+        # The native driver creates its character, but account creation queues
+        # an async write and its immediate lookup can fail. Provision the fixed
+        # account while stopped, after restoring any older fixture checkpoint.
+        provision.ensure_accounts(layout, "DOJODRIVER", log=log)
         _set(layout, "modules/mod_leeroy.conf", {"Leeroy.Enable": "1", "Leeroy.GuildId": str(prepared["guild"]),
                                                 "Leeroy.HumanGuid": str(prepared["owner"]),
                                                 "Leeroy.Mechanics.Enable": "1", "Leeroy.Hazards.Enable": "1"})
         if target == "icc-valithria":
             _set(layout, "modules/mod_dungeon_clear.conf", {"DungeonClear.OfflineValithria": "1"})
         report["run_source"] = raids.provenance(layout)
-        world.start(layout, log=log)
         feed = MechanicConnection(layout, guild=prepared["guild"], map_id=TARGETS[target][1])
         feed.__enter__()
+        # The adapter's free-port preflight must finish before the world binds
+        # those ports. Its real bridge client waits for the listener to open.
+        world.start(layout, log=log)
         deadline = time.monotonic() + 30
         while not feed.ready and not feed.error and time.monotonic() < deadline:
             time.sleep(0.2)
@@ -163,6 +185,9 @@ def run(layout, *, target, log=print):
                     observed["observed_at"] = time.time()
                     trace.write(json.dumps(observed, sort_keys=True) + "\n")
                     trace.flush()
+                    if observed.get("error"):
+                        client.command("dojo offline stop")
+                        raise world.WorldError(observed["error"])
                     native = observed.get("native", {})
                     if observed.get("token") != token or native.get("event", {}).get("id") != token:
                         raise world.WorldError("offline run token changed")
@@ -170,6 +195,19 @@ def run(layout, *, target, log=print):
                     if stage != last_stage:
                         log(f"offline {target}: {stage or native.get('event', {}).get('state', 'unknown')}")
                         last_stage = stage
+                    if target in {"ulduar-restart", "ulduar-tank-restart"} and not observed.get("scripted_wipe") and stage == "running":
+                        leader = next((b for b in observed.get("bodies", []) if b.get("slot") == 1), {})
+                        states = leader.get("bosses", [])
+                        boss = 2 if target == "ulduar-tank-restart" else 3
+                        swapped = (type(observed.get("main_tank")) is int and observed["main_tank"] > 0
+                                   and observed["main_tank"] != native.get("leader"))
+                        if len(states) > boss and states[boss] == 1 and (target == "ulduar-restart" or swapped):
+                            # Admission rechecks live ownership, the exact engaged
+                            # boss and every actor before the native test stimulus.
+                            command = "wipe-tank-swap" if target == "ulduar-tank-restart" else "wipe"
+                            reply = client.command(f"dojo offline {command} {token}")
+                            if "dojo offline: wiped" in reply:
+                                log(f"offline {target}: applied scripted full-wipe stimulus")
                     if reached(observed, target=target, token=token) and not report["reached"]:
                         report["reached"] = True
                         report["milestone"] = observed

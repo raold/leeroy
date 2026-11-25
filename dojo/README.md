@@ -50,6 +50,14 @@ count, missing telemetry, setup failure, or a wipe cap is a failure. Gunship
 DONE is a scripted pass, not a boss kill. The Valithria target enables its
 switch only in the isolated configuration, then restores it to off.
 
+`--target ulduar-restart` waits for the actual XT-002 encounter to engage, then
+uses a token-scoped native command to kill the ten owned synthetic raid actors.
+This is a recorded test stimulus, not an earned combat outcome. The ordinary
+offline job must enter `restarting`, revive and return the complete roster, then
+remain `running` for five seconds with the actual driver and elected tank intact.
+It exercises the recovery path behind `setup:restarting:timeout` without waiting
+for an accidental wipe. The existing setup timeout and cleanup requirements apply.
+
 `--target offline-reserves` starts with nine primary members and offers the
 fixed benched healer through the production reserve field. Its gate requires
 ten distinct owned members, including that reserve, alive in the same running
@@ -98,6 +106,25 @@ rejects observation gaps above 200 ms, and requires cleanup and world shutdown.
 These are mechanic probes, not full boss kills. They do not certify Leviathan's
 opening gauntlet, nested gunners, pyrite supply, hard modes or 25-player coverage.
 Adding them or passing their verdict tests does not authorize live enablement.
+
+### Yogg brain teams
+
+`realm --layout <layout> yogg-acceptance` observes one native portal wave with
+nine synthetic bots and a scripted player outside portal-selection range. Setup
+selects Sara's phase boundary and kills a real guardian whose native death nova
+triggers the transformation. The core supplies sanity, the brain, illusion adds,
+four portals and the Induce Madness deadline. The ordinary raid strategy must
+send exactly four bots, including one healer and no tank, retain a healer above,
+kill actual influence tentacles, damage the brain and use real exit portals
+before the cast finishes. All actors must remain alive and retain sanity.
+
+The negative control disables the raid strategy while leaving the same real
+encounter stimulus. Both cases require cleanup and shutdown. Actor health
+reserves are setup-only; the harness never heals, attacks or teleports on their
+behalf during the measured wave. The report names the randomly selected native
+illusion. One successful wave does not certify the other two illusions, later
+waves, a complete kill, keeper variants or 25-player teams. Live support remains
+off until the required coverage has actual passing receipts.
 
 ### Open-world leading
 
