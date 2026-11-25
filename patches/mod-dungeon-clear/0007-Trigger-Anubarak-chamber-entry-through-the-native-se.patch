@@ -1,0 +1,149 @@
+From 707f1021f3d2df52e5b915c9e34e03782a42b7ea Mon Sep 17 00:00:00 2001
+From: raold <oldham@hey.com>
+Date: Wed, 25 Nov 2026 13:19:43 -0500
+Subject: [PATCH 7/7] Trigger Anubarak chamber entry through the native session
+ handler
+
+---
+ .../Data/Events/TrialOfTheCrusaderEvents.cpp  | 10 ++++--
+ .../Overrides/TrialOfTheCrusaderDriver.cpp    | 34 +++++++++++++++++++
+ src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h |  1 +
+ .../DungeonClear/Util/DcTocRaidDecision.h     |  4 +++
+ t/TestTrialOfTheCrusader.cpp                  | 13 +++++++
+ 5 files changed, 60 insertions(+), 2 deletions(-)
+
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/TrialOfTheCrusaderEvents.cpp b/src/Ai/Dungeon/DungeonClear/Data/Events/TrialOfTheCrusaderEvents.cpp
+index b54b281..601e030 100644
+--- a/src/Ai/Dungeon/DungeonClear/Data/Events/TrialOfTheCrusaderEvents.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Data/Events/TrialOfTheCrusaderEvents.cpp
+@@ -51,9 +51,15 @@ namespace
+             return false;
+ 
+         InstanceScript* inst = DcTargeting::GetInstanceScript(bot);
+-        return inst && (inst->GetData(TYPE_INSTANCE_PROGRESS) < PROGRESS_ANUB_ARAK ||
++        if (!inst)
++            return false;
++        Creature* anub = inst->GetCreature(DATA_ANUBARAK);
++        return inst->GetData(TYPE_INSTANCE_PROGRESS) < PROGRESS_ANUB_ARAK ||
+             DcTocRaid::RecoveryDue(inst->GetData(TYPE_INSTANCE_PROGRESS),
+-                inst->GetBossState(BOSS_ANUBARAK), inst->GetCreature(DATA_ANUBARAK) != nullptr));
++                inst->GetBossState(BOSS_ANUBARAK), anub != nullptr) ||
++            DcTocRaid::IntroDue(inst->GetData(TYPE_INSTANCE_PROGRESS), inst->GetBossState(BOSS_ANUBARAK),
++                anub && anub->IsAlive(), anub && bot->IsValidAttackTarget(anub),
++                bot->IsAlive() && !DcTocRaid::AboveSplit(bot->GetPositionZ()));
+     }
+ 
+     // --- event 7's gate: a bot left at arena level once the floor is down ----------
+diff --git a/src/Ai/Dungeon/DungeonClear/Overrides/TrialOfTheCrusaderDriver.cpp b/src/Ai/Dungeon/DungeonClear/Overrides/TrialOfTheCrusaderDriver.cpp
+index 97ae4ee..70db788 100644
+--- a/src/Ai/Dungeon/DungeonClear/Overrides/TrialOfTheCrusaderDriver.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Overrides/TrialOfTheCrusaderDriver.cpp
+@@ -16,12 +16,16 @@
+ #include "InstanceScript.h"
+ #include "Log.h"
+ #include "ObjectAccessor.h"
++#include "ObjectMgr.h"
++#include "Opcodes.h"
+ #include "Player.h"
+ #include "PlayerbotAI.h"
+ #include "Playerbots.h"
+ #include "ServerFacade.h"
+ #include "SharedDefines.h"
+ #include "Timer.h"
++#include "WorldPacket.h"
++#include "WorldSession.h"
+ #include "Util/DcPlayerbotsConfig.h"
+ 
+ #include "Ai/Dungeon/DungeonClear/Data/DungeonBossInfo.h"
+@@ -60,6 +64,7 @@
+ namespace
+ {
+     using namespace DcTrialOfTheCrusader;
++    constexpr uint32 ANUBARAK_CHAMBER_TRIGGER = 5475;
+ 
+     bool RecoveryParty(Player* bot)
+     {
+@@ -265,6 +270,35 @@ namespace
+                 LOG_INFO("playerbots.dungeonclear", "dc_toc_recovery instance={} present={}",
+                     bot->GetInstanceId(), inst->GetCreature(DATA_ANUBARAK) != nullptr);
+             }
++            Creature* anub = inst->GetCreature(DATA_ANUBARAK);
++            if (DcTocRaid::IntroDue(PROGRESS_ANUB_ARAK, inst->GetBossState(BOSS_ANUBARAK),
++                    anub && anub->IsAlive(), Attackable(bot, anub),
++                    bot->IsAlive() && !DcTocRaid::AboveSplit(bot->GetPositionZ())) &&
++                !bot->IsBeingTeleported() && !bot->GetVehicle() && !bot->GetTransport() &&
++                !DcPlayerbotCompat::IsHumanControlled(bot) && !DcCombatFlag::AnyPartyEngagement(bot))
++            {
++                AreaTrigger const* trigger = sObjectMgr->GetAreaTrigger(ANUBARAK_CHAMBER_TRIGGER);
++                if (!trigger || trigger->map != MAP_ID || !bot->GetSession())
++                    return ObjectiveArriveResult::Done;
++                // The descent landing is outside the chamber volume. Walk into
++                // the real trigger before using the normal, range-checked handler.
++                if (!bot->IsInAreaTriggerRadius(trigger))
++                {
++                    float const ground = bot->GetMapHeight(trigger->x, trigger->y, trigger->z);
++                    if (!std::isfinite(ground) || std::abs(ground - LANDING_Z) > 10.0f)
++                        return ObjectiveArriveResult::Done;
++                    return TocRaidMoveTo(bot, botAI, st, trigger->x, trigger->y, ground)
++                        ? ObjectiveArriveResult::Running : ObjectiveArriveResult::Done;
++                }
++                if (!st.Throttled(DcThrottle::TocrIntro, CLICK_RETRY_MS))
++                {
++                    WorldPacket packet(CMSG_AREATRIGGER, 4);
++                    packet << ANUBARAK_CHAMBER_TRIGGER;
++                    packet.rpos(0);
++                    bot->GetSession()->HandleAreaTriggerOpcode(packet);
++                }
++                return ObjectiveArriveResult::Running;
++            }
+             return ObjectiveArriveResult::Done;
+         }
+         Creature* const barrett = Barrett(bot, inst);
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h b/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
+index 4a40879..a5f31bd 100644
+--- a/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcThrottle.h
+@@ -90,6 +90,7 @@ enum class DcThrottle : uint8
+     TocrLog,             // the Trial of the Crusader driver's `DcTocRaid progress=...` line
+     TocrWarn,            // the Trial of the Crusader driver's "Barrett keeps offering" WARN
+     TocrClick,           // the Trial of the Crusader driver's Barrett click (and its log line)
++    TocrIntro,           // Anub'arak's chamber areatrigger while waiting for his intro
+     UldPassLog,          // the Ulduar Leviathan pass's line
+     OcTelemetryLog,      // the Oculus driver's `DcOc ring=...` line
+     OcWarn,              // the Oculus WARNs (blocked chord, stalled leg, fabricated essence)
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcTocRaidDecision.h b/src/Ai/Dungeon/DungeonClear/Util/DcTocRaidDecision.h
+index 89f9706..25e24b9 100644
+--- a/src/Ai/Dungeon/DungeonClear/Util/DcTocRaidDecision.h
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcTocRaidDecision.h
+@@ -53,6 +53,10 @@ namespace DcTocRaid
+     {
+         return progress == 9 && (state == 0 || state == 2) && !present;
+     }
++    inline bool IntroDue(uint32 progress, uint32 state, bool present, bool attackable, bool inChamber)
++    {
++        return progress == 9 && (state == 0 || state == 2) && present && !attackable && inChamber;
++    }
+     inline uint32 ClickAchievement(uint32 difficulty, uint32 barrettEntry, bool botsOnly)
+     {
+         if (!botsOnly || barrettEntry != 35909) return 0;
+diff --git a/t/TestTrialOfTheCrusader.cpp b/t/TestTrialOfTheCrusader.cpp
+index 2761ef3..616e8ef 100644
+--- a/t/TestTrialOfTheCrusader.cpp
++++ b/t/TestTrialOfTheCrusader.cpp
+@@ -618,3 +618,16 @@ TEST(TrialOfTheCrusader, HeroicClickGateUsesOnlyTheMatchingSize)
+     EXPECT_EQ(DcTocRaid::ClickAchievement(2, 34816, true), 0u);
+     EXPECT_EQ(DcTocRaid::ClickAchievement(3, 35909, false), 0u);
+ }
++
++TEST(TrialOfTheCrusader, ChamberIntroNeverReplaysCombatOrCompletion)
++{
++    for (uint32 progress = 0; progress <= 10; ++progress)
++        for (uint32 state = 0; state <= 5; ++state)
++        {
++            EXPECT_EQ(DcTocRaid::IntroDue(progress, state, true, false, true),
++                progress == 9 && (state == 0 || state == 2));
++            EXPECT_FALSE(DcTocRaid::IntroDue(progress, state, false, false, true));
++            EXPECT_FALSE(DcTocRaid::IntroDue(progress, state, true, true, true));
++            EXPECT_FALSE(DcTocRaid::IntroDue(progress, state, true, false, false));
++        }
++}
