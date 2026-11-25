@@ -698,16 +698,17 @@ struct EncounterRun
     // The raid stands in her room out of combat for up to 15 s (buffs, as before any pull); then the real
     // combat trigger pulls the encounter, as engaging the archmages does. The first heal on her ends the
     // wait: healing her is how a raid starts this fight.
-    void Assemble()
+    // False until the instance has registered her (a fresh map may still be loading her grid).
+    bool Assemble()
     {
         Player* leader = Actor(EncounterLeader);
         InstanceScript* script = leader->GetInstanceScript();
-        if (!script) { Fail("no native instance script"); return; }
+        if (!script) { Fail("no native instance script"); return false; }
         instance = leader->GetInstanceId();
         mapDifficulty = uint32(leader->GetMap()->GetDifficulty());
-        if (leader->GetMap()->GetDifficulty() != Wanted()) { Fail("instance difficulty differs from the request"); return; }
-        Creature* dragon = leader->FindNearestCreature(36789, 150.f);
-        if (!dragon || !dragon->IsAlive()) { Fail("Valithria missing"); return; }
+        if (leader->GetMap()->GetDifficulty() != Wanted()) { Fail("instance difficulty differs from the request"); return false; }
+        Creature* dragon = leader->GetMap()->GetCreature(script->GetGuidData(10));
+        if (!dragon || !dragon->IsAlive() || !dragon->IsInWorld()) return false;
         valithria = dragon->GetGUID();
         // The native encounter refuses a sequence break. Establish only the lower-spire prerequisite.
         for (uint32 boss = 0; boss < 4; ++boss) script->SetBossState(boss, DONE);
@@ -723,6 +724,7 @@ struct EncounterRun
         sPlayerbotAIConfig.ValithriaHealerFocus = mode == "after";
         setup = true;
         Phase("prepull");
+        return true;
     }
 
     // The measured instance, whoever is still in it: a dead member may release to the graveyard outside.
@@ -842,7 +844,8 @@ struct EncounterRun
         }
         else if (state == "arrive")
         {
-            if (Arrived()) Assemble();
+            if (Arrived() && !Assemble() && state == "arrive" && phaseMs > 60000)
+                Fail("Valithria missing from the instance");
         }
         else if (state == "prepull")
         {
