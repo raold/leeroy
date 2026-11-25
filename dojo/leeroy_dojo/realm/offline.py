@@ -15,6 +15,8 @@ from .mechanics import MechanicConnection
 from .offline_fixture import FixtureCheckpoint
 
 TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
+           "naxx-gothik-pass": ("naxx-gothik-pass", 533, None),
+           "naxx-gothik-pass-control": ("naxx-gothik-pass-control", 533, None),
            "toc-full": ("toc-full", 649, None), "ulduar-full": ("ulduar-full", 603, None),
            "ulduar-route": ("ulduar-full", 603, None),
            "toc-slime-pools": ("toc", 649, None), "toc-slime-pools-control": ("toc", 649, None),
@@ -50,6 +52,9 @@ def reached(observation, *, target, token):
     instance = event.get("instance_id", 0)
     if event.get("id") != token or type(instance) is not int or instance <= 0:
         return False
+    if target in {"naxx-gothik-pass", "naxx-gothik-pass-control"}:
+        from .offline_naxx import reached_naxx
+        return reached_naxx(observation, control=target.endswith("-control"))
     if target in FULL_ROUTES:
         count, required = FULL_ROUTES[target]
         states = native.get("boss_states")
@@ -288,6 +293,12 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                         report["gate_failure"] = "valithria_frontier_wipe"
                         report["failure_observation"] = observed
                         client.command("dojo offline stop")
+                    if target.startswith("naxx-gothik-pass") and not report.get("gate_failure"):
+                        gate = observed.get("naxx_pass", {})
+                        if gate.get("measured_ms", 0) > 600000 or native.get("event", {}).get("wipes", 0) > 0:
+                            report["gate_failure"] = "naxx_pass_deadline_or_wipe"
+                            report["failure_observation"] = observed
+                            client.command("dojo offline stop")
                     if target == "toc-slime-pools" and not report.get("gate_failure"):
                         slime = observed.get("slime", {})
                         if slime.get("late_hits", 0) > 0 or slime.get("unknown_hits", 0) > 0:
@@ -326,6 +337,8 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                         report["cleanup"] = native.get("cleanup") is True
                         if target == "icc-valithria-frontier":
                             report["cleanup"] = report["cleanup"] and observed.get("valithria_frontier", {}).get("setup_strategies_restored") is True
+                        if target.startswith("naxx-gothik-pass"):
+                            report["cleanup"] = report["cleanup"] and observed.get("naxx_pass", {}).get("strategies_restored") is True
                         if toc_worm_support:
                             report["cleanup"] = report["cleanup"] and observed.get("toc_worm_support", {}).get("restored") is True
                         if target == "offline-reserves":

@@ -27,7 +27,8 @@ def add_parser(sub) -> None:
     offline = cmds.add_parser("offline-acceptance", help="prepare a synthetic guild and observe a real offline raid job")
     offline.add_argument("--target", required=True, choices=("toc-beasts", "toc-full", "ulduar-full", "ulduar-route", "toc-slime-pools", "toc-slime-pools-control",
         "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "ulduar-forced-tank-restart",
-        "icc-deathwhisper", "icc-gunship", "icc-valithria", "icc-valithria-frontier", "offline-reserves"))
+        "icc-deathwhisper", "icc-gunship", "icc-valithria", "icc-valithria-frontier", "offline-reserves",
+        "naxx-gothik-pass", "naxx-gothik-pass-control"))
     offline.add_argument("--toc-worm-support", action="store_true", help="measure the candidate worm support in this isolated run")
     cmds.add_parser("lead-acceptance", help="observe native open-world leading, following, waiting and restoration")
     vehicles = cmds.add_parser("vehicle-acceptance", help="observe real raid vehicle boarding, movement and combat")
