@@ -58,6 +58,8 @@ struct OfflineFixture
     uint32 elapsed = 0, guildId = 0, samples = 0;
     std::size_t rolled = 0;
     uint32 map = 0;
+    bool scriptedWipe = false, restartingSeen = false;
+    uint32 restartsAtWipe = 0;
     std::map<uint32, std::pair<uint64, uint64>> hits;
     std::recursive_mutex mutex;
 
@@ -167,7 +169,15 @@ struct OfflineFixture
                 { if (elapsed > 60000) { error = "fixture logout timeout"; state = "failed"; } return; }
             state = "prepared";
         }
-        else if (state == "running") ++samples;
+        else if (state == "running")
+        {
+            ++samples;
+            if (scriptedWipe)
+            {
+                auto const native = Leeroy::Guild::DojoOfflineSnapshot();
+                if (native.value("active", false) && native.value("stage", "") == "restarting") restartingSeen = true;
+            }
+        }
     }
     std::string Start(std::string const& scenario, std::string const& id)
     {
@@ -203,7 +213,32 @@ struct OfflineFixture
         if (!result.ok) return result.error;
         std::lock_guard<std::recursive_mutex> lock(mutex);
         token = id; state = "running"; error.clear(); samples = 0; hits.clear();
+        scriptedWipe = restartingSeen = false; restartsAtWipe = 0;
         return "started";
+    }
+    std::string Wipe(std::string const& id)
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
+        if (!Armed() || state != "running" || id != token || scriptedWipe || map != 603) return "wipe_not_admitted";
+        auto const native = Leeroy::Guild::DojoOfflineSnapshot();
+        if (!native.value("active", false) || native.value("stage", "") != "running") return "wipe_not_running";
+        auto* leader = Actor(1);
+        auto* instance = leader ? leader->GetInstanceScript() : nullptr;
+        auto* boss = instance ? instance->GetCreature(3) : nullptr; // Actual XT-002 encounter.
+        if (!instance || instance->GetBossState(3) != IN_PROGRESS || !boss || !boss->IsAlive() || !boss->IsInCombat())
+            return "wipe_boss_not_engaged";
+        for (std::size_t i = 1; i <= 10; ++i)
+        {
+            auto* p = Actor(i);
+            if (!p || !p->IsAlive() || p->IsBeingTeleported() || p->GetMap() != leader->GetMap() ||
+                !Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter())) return "wipe_actor_not_ready";
+        }
+        restartsAtWipe = native.value("restarts", 0u);
+        scriptedWipe = true;
+        // A test stimulus, never an earned combat outcome. All recovery after
+        // these real deaths belongs to the ordinary offline job and core.
+        for (std::size_t i = 1; i <= 10; ++i) Unit::Kill(boss, Actor(i));
+        return "wiped";
     }
     json Status()
     {
@@ -228,7 +263,8 @@ struct OfflineFixture
         for (auto const& [entry, value] : hits) damage.push_back({{"entry", entry}, {"hits", value.first}, {"requested", value.second}});
         return {{"kind", "dojo-offline-observation"}, {"format", 1}, {"state", state}, {"error", error},
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
-            {"native", Leeroy::Guild::DojoOfflineSnapshot()}, {"bodies", bodies}, {"damage", damage}};
+            {"native", Leeroy::Guild::DojoOfflineSnapshot()}, {"bodies", bodies}, {"damage", damage},
+            {"scripted_wipe", scriptedWipe}, {"restarting_seen", restartingSeen}, {"restarts_at_wipe", restartsAtWipe}};
     }
 };
 OfflineFixture fixture;
@@ -240,11 +276,12 @@ public:
     {
         static ChatCommandTable commands{{"prepare", Prepare, SEC_CONSOLE, Console::Yes},
             {"start", Start, SEC_CONSOLE, Console::Yes}, {"status", Status, SEC_CONSOLE, Console::Yes},
-            {"stop", Stop, SEC_CONSOLE, Console::Yes}};
+            {"stop", Stop, SEC_CONSOLE, Console::Yes}, {"wipe", Wipe, SEC_CONSOLE, Console::Yes}};
         static ChatCommandTable dojo{{"offline", commands}};
         return {{"dojo", dojo}};
     }
     static bool Prepare(ChatHandler* h) { h->SendSysMessage("dojo offline: " + fixture.Prepare()); return true; }
+    static bool Wipe(ChatHandler* h, Tail args) { h->SendSysMessage("dojo offline: " + fixture.Wipe(std::string(args))); return true; }
     static bool Start(ChatHandler* h, Tail args)
     {
         std::istringstream in{std::string(args)};
