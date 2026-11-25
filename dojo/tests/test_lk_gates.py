@@ -10,7 +10,8 @@ def evidence(scenario, negative=False):
                 max_gap_ms=15, reach_competitor=True, effective_healing=0 if negative else 10000,
                 heal_events=0 if negative else 3, light_samples=0, dark_samples=0, switch_ms=0,
                 crossings=0, hazard_samples=100, minimum_clearance=0, poison_hits=0,
-                room_samples=100, escape_ms=0 if negative else 2200, outside_samples=0 if negative else 100,
+                room_samples=100, harvest_samples=100, strangulate_samples=100,
+                escape_ms=0 if negative else 2200, outside_samples=0 if negative else 100,
                 inside_samples=10, late_hits=0, encounter_samples=100, defile_hits=4 if negative else 1,
                 final_hazard_clearance=-5.0 if negative else 4.0)
 
@@ -39,6 +40,13 @@ class LichKingEvidenceTest(unittest.TestCase):
             with self.subTest(changed=changed):
                 self.assertFalse(self.check(evidence("lk-defile") | changed))
         self.assertFalse(self.check(evidence("lk-defile", True) | {"defile_hits": 0}))
+
+    def test_teleport_alone_cannot_certify_a_harvest_soul_entry(self):
+        for negative in (True, False):
+            for field in ("harvest_samples", "strangulate_samples"):
+                for value in (None, True, -1, 0, 1.5, "1"):
+                    with self.subTest(negative=negative, field=field, value=value):
+                        self.assertFalse(self.check(evidence("lk-terenas", negative) | {field: value}))
 
     def test_invalid_counters_never_pass_either_control(self):
         for scenario in ("lk-terenas", "lk-defile"):

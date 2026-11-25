@@ -279,6 +279,10 @@ an arena manifest; it disables `Leeroy.Enable` so no guild bridge starts.
 
 The default invocation keeps the original three scenarios. Select the Lich King
 probes explicitly with `raid-acceptance --scenario lk-terenas --scenario lk-defile`.
+The Terenas setup casts the actual Harvest Soul on the healer and observes its
+damage aura and native strangulate vehicle before the core teleports the actor.
+Both controls must then supply the existing room-exposure evidence; a direct
+teleport or manually summoned Terenas cannot establish this entry.
 Each selected scenario always runs both controls. These probes establish specific
 mechanics only; they do not certify an entire Lich King kill, heroic Frostmourne,
 Val'kyr rescue or spirit handling. Keep the feature off until the required

@@ -59,6 +59,8 @@ def verdict(observation, *, scenario, token, negative=False):
         if o["encounter_samples"] < 10:
             problems.append("native Lich King encounter was not active")
         if scenario == "lk-terenas":
+            if any(type(o.get(k)) is not int or o[k] < 1 for k in ("harvest_samples", "strangulate_samples")):
+                problems.append("native Harvest Soul and strangulate vehicle were not observed")
             if o["room_samples"] < 10 or o.get("reach_competitor") is not True:
                 problems.append("Frostmourne room or outside follow competitor was not exercised")
             if negative and (o["heal_events"] > 0 or o["effective_healing"] > 0):

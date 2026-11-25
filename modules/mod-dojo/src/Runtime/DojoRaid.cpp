@@ -110,6 +110,7 @@ struct RaidRun
     uint32 heals = 0, damageHits = 0;
     uint32 roomSamples = 0, escapeMs = 0, outsideSamples = 0, hazardStartMs = 0;
     uint32 insideSamples = 0, lateHits = 0, encounterSamples = 0;
+    uint32 harvestSamples = 0, strangulateSamples = 0;
     float finalHazardClearance = 0.f;
     uint64 effectiveHealing = 0;
     uint64 ownerEpoch = 0;
@@ -184,6 +185,7 @@ struct RaidRun
         heals = damageHits = 0; effectiveHealing = ownerEpoch = 0; minimumClearance = 1000.f;
         roomSamples = escapeMs = outsideSamples = hazardStartMs = 0; finalHazardClearance = 0.f;
         insideSamples = lateHits = encounterSamples = 0;
+        harvestSamples = strangulateSamples = 0;
         setup = cleanup = combatObserved = competition = false; target.Clear();
         defilePaths = json::array();
         map = name == "valithria" || name == "lk-terenas" || name == "lk-defile" ? 631 : name == "twins" ? 649 : 533;
@@ -348,15 +350,14 @@ struct RaidRun
                 lichKing->SetImmuneToPC(false);
                 lichKing->AI()->AttackStart(owner);
                 bot->GetMap()->LoadGrid(495.708f, -2523.76f);
-                auto const cast = bot->CastSpell(bot, 72546, true);
+                // Use the actual hostile Harvest Soul, including its damage,
+                // native strangulate vehicle and delayed teleport. Calling only
+                // the last teleport leaves the control out of combat and lets
+                // stock follow undo the entry before it can be observed.
+                auto const cast = lichKing->CastSpell(bot, 68980, true);
                 if (cast != SPELL_CAST_OK) { Fail("native_frostmourne_entry_refused:" + std::to_string(uint32(cast))); return; }
-                // The real spell sends instance event 23617, which creates Terenas
-                // and his Warden and starts their fight. Never create duplicate
-                // room actors or count heals on an unrelated manual summon.
-                auto* terenas = bot->GetMap()->GetCreature(script->GetGuidData(39));
-                if (!terenas || terenas->GetEntry() != 36823 || !terenas->IsAlive())
-                { Fail("native_frostmourne_terenas_missing"); return; }
-                target = terenas->GetGUID();
+                Phase("harvest");
+                return;
             }
             else
             {
@@ -522,6 +523,35 @@ struct RaidRun
             if (bot && owner && !bot->IsBeingTeleported() && !owner->IsBeingTeleported() &&
                 bot->GetMapId() == map && owner->GetMap() == bot->GetMap()) Pull();
         }
+        else if (state == "harvest")
+        {
+            Player* bot = Actor(0); Player* owner = Actor(1);
+            if (!bot || !owner || !bot->IsAlive() || !owner->IsAlive())
+            { Fail("harvest_fixture_lost"); return; }
+            // Same probe reserves as observation; the native spell and vehicle
+            // alone control the entry. No movement or combat flag is supplied.
+            for (Player* p : {bot, owner})
+            {
+                p->SetMaxHealth(100000);
+                p->SetFullHealth();
+                p->SetMaxPower(POWER_MANA, 30000);
+                p->SetPower(POWER_MANA, 30000);
+            }
+            if (bot->HasAura(68980)) ++harvestSamples;
+            if (auto* base = bot->GetVehicleBase(); base && base->GetEntry() == 36598) ++strangulateSamples;
+            if (bot->IsBeingTeleported() || bot->GetMapId() != map || bot->GetInstanceId() != instance ||
+                bot->GetExactDist2d(495.708f, -2523.76f) >= 45.f ||
+                std::abs(bot->GetPositionZ() - 1049.95f) >= 35.f) return;
+            // The native teleport sends event 23617 and creates these actors.
+            auto* script = bot->GetInstanceScript();
+            auto* terenas = script ? bot->GetMap()->GetCreature(script->GetGuidData(39)) : nullptr;
+            if (!terenas || terenas->GetEntry() != 36823 || !terenas->IsAlive() ||
+                !harvestSamples || !strangulateSamples)
+            { Fail("native_frostmourne_sequence_missing"); return; }
+            target = terenas->GetGUID();
+            setup = true;
+            Phase("observe");
+        }
         else if (state == "observe") Observe(diff);
         else if (state == "cleanup")
         {
@@ -605,6 +635,7 @@ struct RaidRun
             {"combat_observed", combatObserved}, {"reach_competitor", competition}, {"effective_healing", effectiveHealing},
             {"heal_events", heals}, {"light_samples", lightSamples}, {"dark_samples", darkSamples},
             {"room_samples", roomSamples}, {"escape_ms", escapeMs}, {"outside_samples", outsideSamples},
+            {"harvest_samples", harvestSamples}, {"strangulate_samples", strangulateSamples},
             {"inside_samples", insideSamples}, {"late_hits", lateHits}, {"encounter_samples", encounterSamples},
             {"final_hazard_clearance", finalHazardClearance},
             {"switch_ms", switchMs}, {"crossings", crossings}, {"hazard_samples", hazardsSeen},
