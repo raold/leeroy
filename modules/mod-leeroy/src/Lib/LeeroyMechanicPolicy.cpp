@@ -693,18 +693,18 @@ std::vector<HazardPoint> MechanicSpots(HazardPoint at, std::vector<MechanicDuty>
     if (spacing > 0)
     {
         float sx = 0, sy = 0;
-        int near = 0;
+        int nearbyCount = 0;
         for (HazardPoint const& other : others)
             if (SameFloor(at, other) && Distance2d(at, other) <= 2.0f * spacing)
             {
                 sx += other.x;
                 sy += other.y;
-                ++near;
+                ++nearbyCount;
             }
-        if (near)
+        if (nearbyCount)
         {
-            float const dx = at.x - sx / static_cast<float>(near);
-            float const dy = at.y - sy / static_cast<float>(near);
+            float const dx = at.x - sx / static_cast<float>(nearbyCount);
+            float const dy = at.y - sy / static_cast<float>(nearbyCount);
             float const length = std::hypot(dx, dy);
             if (length > 0.01f)
                 toward = {at.x + dx / length * kMechanicMaxShiftYards, at.y + dy / length * kMechanicMaxShiftYards,
