@@ -30,6 +30,9 @@ struct DojoNaxxPass
     std::array<bool, 10> held{};
     std::array<std::array<std::array<bool, 3>, 2>, 10> strategies{};
     static constexpr std::array<uint32, 7> Prerequisites{3, 4, 5, 6, 7, 8, 10};
+    // Between the Necro Knight pack to the north and Cavaliers to the south.
+    // The whole three-yard roster footprint is outside their aggro ranges.
+    static constexpr float SetupX = 2778.f, SetupY = -3312.f, SetupZ = 267.7f;
 
     bool Release(std::array<Player*, 10> const& actors)
     {
@@ -115,16 +118,16 @@ struct DojoNaxxPass
             instance->SetCompletedEncountersMask(setupMask, false);
             if (!Leeroy::Guild::DojoPrimeNaxxStates(token))
             { error = "naxx_pass_prerequisites_refused"; Release(actors); return; }
-            leader->GetMap()->LoadGrid(2778.f, -3294.f);
+            leader->GetMap()->LoadGrid(SetupX, SetupY);
             for (std::size_t i = 0; i < actors.size(); ++i)
-                actors[i]->NearTeleportTo(2778.f + float(i % 3), -3294.f + float(i / 3), 267.7f, 3.14f);
+                actors[i]->NearTeleportTo(SetupX + float(i % 3), SetupY + float(i / 3), SetupZ, 3.14f);
             state = "arriving"; elapsed = 0;
         }
         else if (elapsed >= 1000)
         {
             for (auto* p : actors)
-                if (std::abs(p->GetPositionZ() - 267.7f) > 5.f
-                    || std::hypot(p->GetPositionX() - 2778.f, p->GetPositionY() + 3294.f) > 15.f) return;
+                if (std::abs(p->GetPositionZ() - SetupZ) > 5.f
+                    || std::hypot(p->GetPositionX() - SetupX, p->GetPositionY() - SetupY) > 15.f) return;
             if (!Release(actors)) { error = "naxx_pass_strategies_not_restored"; return; }
             ai->DoSpecificAction("dc on", Event("dc", "", driver), true);
             if (!DcRun::Of(ai).enabled) { error = "naxx_pass_driver_not_resumed"; return; }

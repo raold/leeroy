@@ -31,6 +31,7 @@ class NaxxPassTest(unittest.TestCase):
             ("body", "map", 649), ("body", "instance", 456), ("body", "alive", False),
             ("body", "owned", False), ("body", "pinned", False),
             ("body", "bosses", [3] * 15), ("event", "wipes", 1),
+            ("event", "kills", 7), ("event", "kills", True),
             ("native", "stage", "restarting"), ("native", "active", False),
         ]
         for section, key, value in changes:

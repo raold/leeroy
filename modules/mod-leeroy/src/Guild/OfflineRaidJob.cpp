@@ -174,6 +174,9 @@ struct Job
     bool rewardBound = false, groupReleased = false;
     std::vector<Member> members;
     std::vector<uint8> previousBossStates;
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+    std::vector<uint8> dojoPreparedBossStates;
+#endif
     std::vector<uint32> bossWipes;
     uint32 dcPasses = 0, dcPassCheckMs = 0;
     uint32 elapsed = 0, stageElapsed = 0, dcOff = 0, restarts = 0;
@@ -1101,6 +1104,11 @@ bool ReadBosses(Job& job, Player* leader, bool baseline)
             ++job.event.wipes;
         }
         job.previousBossStates[index] = current;
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+        // Prepared frontier prerequisites are fixture setup, never earned kills.
+        if (index < job.dojoPreparedBossStates.size() && job.dojoPreparedBossStates[index] == DONE)
+            continue;
+#endif
         if (EarnedRaidKill(leader->GetMapId(), index, current, instance->GetCompletedEncounterMask()))
             ++job.event.kills;
     }
@@ -2363,6 +2371,7 @@ bool DojoPrimeNaxxStates(std::string const& id)
         states.push_back(static_cast<uint8>(state));
     }
     active->previousBossStates = states;
+    active->dojoPreparedBossStates = states;
     return true;
 }
 

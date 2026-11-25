@@ -13,6 +13,7 @@ def reached_naxx(observation, *, control):
                    for k in ("measured_ms", "skip_ms", "engage_ms", "passes"))
             or not 0 < gate["measured_ms"] <= 600000
             or type(event.get("wipes")) is not int or event["wipes"] != 0
+            or type(event.get("kills")) is not int or event["kills"] != 0
             or observation.get("scripted_wipe") is not False):
         return False
     if control:
