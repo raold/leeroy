@@ -37,7 +37,10 @@ attest this fourth checkout alongside source, core and playerbots.
 the #476 route from the Gothik corridor. Setup marks only Anub'Rekhan,
 Faerlina, Maexxna, Noth, Heigan, Loatheb and Razuvious done and restores
 ordinary bot strategies before measurement. These seven are fixture
-prerequisites, excluded from earned kill accounting. The real offline job
+prerequisites, excluded from earned kill accounting. Setup kills their real
+creatures and Razuvious' two summoned understudies without player credit;
+setting only instance states would leave a live boss on the return route.
+Any prerequisite reactivation fails the gate. The real offline job
 must skip Gothik once and engage the real Patchwerk within 600 seconds;
 Gothik must remain undefeated. No movement, healing, attack or skip command
 is supplied during observation. The separate `naxx-gothik-pass-control`

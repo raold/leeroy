@@ -8,6 +8,8 @@ def reached_naxx(observation, *, control):
     if (gate.get("state") != "ready" or gate.get("control") is not control
             or gate.get("strategies_restored") is not True
             or gate.get("setup_bosses") != [3, 4, 5, 6, 7, 8, 10]
+            or gate.get("setup_boss_deaths") != [15956, 15953, 15952, 15954, 15936, 16011, 16061]
+            or type(gate.get("setup_add_deaths")) is not int or gate["setup_add_deaths"] != 2
             or type(gate.get("setup_completed_mask")) is not int or gate["setup_completed_mask"] != 127
             or any(type(gate.get(k)) is not int or gate[k] < 0
                    for k in ("measured_ms", "skip_ms", "engage_ms", "passes"))
