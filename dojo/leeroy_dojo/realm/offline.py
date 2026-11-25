@@ -47,6 +47,20 @@ def _set(layout, name, values):
     path.write_text(conf.render(path.read_text(encoding="utf-8"), values), encoding="utf-8")
 
 
+def _fixture_accounts(layout, log):
+    provision.ensure_accounts(layout, "DOJORAID", log=log)
+    accounts = provision.ensure_accounts(layout, "RNDBOTDOJO", log=log)
+    account = accounts["RNDBOTDOJO"]
+    if type(account) is not int or account <= 0:
+        raise LayoutError("synthetic random-bot account was not identified")
+    root = mysql.Client(layout, layout.server.root_cnf)
+    mysql.verify_identity(layout, root)
+    # MaxRandomBots stays zero: no population is created. The fixed synthetic
+    # account still needs the ordinary type-1 assignment used by cast pinning.
+    root.query(f"INSERT INTO playerbots_account_type (account_id, account_type) VALUES ({account}, 1) "
+               "ON DUPLICATE KEY UPDATE account_type=1;", database=layout.schemas["playerbots"])
+
+
 def run(layout, *, target, log=print):
     if target not in TARGETS:
         raise LayoutError("unsupported offline target")
@@ -61,8 +75,7 @@ def run(layout, *, target, log=print):
     settings = read_conf(layout.configs / "modules/mod_leeroy.conf")
     if settings.get("Leeroy.Enable") != "0" or settings.get("Leeroy.Bridge.Host") != "127.0.0.1" or settings.get("Leeroy.Bridge.Port") != str(layout.ports.get("leeroy")):
         raise LayoutError("provision the disabled isolated guild and separate bridge endpoint first")
-    provision.ensure_accounts(layout, "DOJORAID", log=log)
-    provision.ensure_accounts(layout, "RNDBOTDOJO", log=log)
+    _fixture_accounts(layout, log)
     token = "dojo-" + uuid.uuid4().hex
     out = layout.data / "runs" / (time.strftime("%Y%m%d_%H%M%S") + "-offline-" + token)
     out.mkdir(parents=True, exist_ok=False)
