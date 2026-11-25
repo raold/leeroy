@@ -30,6 +30,7 @@
 #include "Guild/HazardJob.h"
 #include "DBCStores.h"
 #include "InstanceSaveMgr.h"
+#include "MapMgr.h"
 #include "PlayerbotFactory.h"
 #include "PlayerScript.h"
 #include "Spell.h"
@@ -532,7 +533,7 @@ struct EncounterMember
 struct EncounterRun
 {
     std::string token, difficulty, mode, state = "idle", failure, outcome;
-    bool active = false, setup = false, cleanup = false, engaged = false, oldFocus = true;
+    bool active = false, setup = false, cleanup = false, engaged = false, earlyPull = false, oldFocus = true;
     uint32 elapsed = 0, phaseMs = 0, pullMs = 0, sampleMs = 0, instance = 0, mapDifficulty = 0, samples = 0;
     std::size_t prepared = 0;
     float startHp = 0.f, hp = 0.f, peakHp = 0.f;
@@ -609,7 +610,7 @@ struct EncounterRun
         if (!error.empty()) return "refused: " + error;
         std::lock_guard<std::recursive_mutex> lock(events);
         token = id; difficulty = diff; mode = how; failure.clear(); outcome.clear();
-        setup = cleanup = engaged = false;
+        setup = cleanup = engaged = earlyPull = false;
         elapsed = phaseMs = pullMs = sampleMs = instance = mapDifficulty = samples = 0;
         prepared = 0; startHp = hp = peakHp = 0.f; damageToHer = 0; valithria.Clear();
         members = {}; timeline.clear();
@@ -723,17 +724,26 @@ struct EncounterRun
         Phase("prepull");
     }
 
+    // The measured instance, whoever is still in it: a dead member may release to the graveyard outside.
+    InstanceMap* Instance() const
+    {
+        Map* map = instance ? sMapMgr->FindMap(631, instance) : nullptr;
+        return map ? map->ToInstanceMap() : nullptr;
+    }
+
     void Pull()
     {
-        Player* leader = Actor(EncounterLeader);
-        InstanceScript* script = leader->GetInstanceScript();
-        Creature* dragon = leader->GetMap()->GetCreature(valithria);
-        Creature* trigger = script ? leader->GetMap()->GetCreature(script->GetGuidData(35)) : nullptr;
+        InstanceMap* map = Instance();
+        InstanceScript* script = map ? map->GetInstanceScript() : nullptr;
+        Creature* dragon = map ? map->GetCreature(valithria) : nullptr;
+        Creature* trigger = script ? map->GetCreature(script->GetGuidData(35)) : nullptr;
         if (!dragon || !trigger) { Fail("Valithria or her combat trigger missing"); return; }
         startHp = hp = peakHp = dragon->GetHealthPct();
         if (startHp < 49.f || startHp > 51.f) { Fail("Valithria did not start at 50%"); return; }
         timeline.emplace_back(0, startHp);
-        trigger->AI()->DoZoneInCombat();
+        // A member close to an archmage may already have started it; then the core is pulling it.
+        earlyPull = script->GetBossState(10) == IN_PROGRESS;
+        if (!earlyPull) trigger->AI()->DoZoneInCombat();
         Phase("observe");
     }
 
@@ -755,7 +765,7 @@ struct EncounterRun
             bool const living = p->IsAlive();
             if (m.alive && !living) ++m.deaths;
             m.alive = living;
-            if (!living) continue;
+            if (!living || p->GetInstanceId() != instance) continue;
             ++alive;
             m.aliveMs += step;
             if (!Healer(i)) continue;
@@ -777,11 +787,11 @@ struct EncounterRun
 
     void Observe(uint32 diff)
     {
-        Player* leader = Actor(EncounterLeader);
-        if (!leader || leader->GetInstanceId() != instance) { Fail("leader left the measured instance"); return; }
-        InstanceScript* script = leader->GetInstanceScript();
-        Creature* dragon = leader->GetMap()->GetCreature(valithria);
-        EncounterState const boss = script ? script->GetBossState(10) : NOT_STARTED;
+        InstanceMap* map = Instance();
+        InstanceScript* script = map ? map->GetInstanceScript() : nullptr;
+        if (!script) { Fail("the measured instance unloaded"); return; }
+        Creature* dragon = map->GetCreature(valithria);
+        EncounterState const boss = script->GetBossState(10);
         pullMs += diff;
         if (boss == IN_PROGRESS) engaged = true;
         sampleMs += diff;
@@ -835,7 +845,9 @@ struct EncounterRun
         {
             for (std::size_t i = 0; i < actors.size(); ++i)
                 if (!Actor(i)) { Fail("fixture disconnected"); return; }
-            if (phaseMs >= EncounterPrePullMs) Pull();
+            InstanceMap* map = Instance();
+            if (!map || !map->GetInstanceScript()) { Fail("the measured instance unloaded"); return; }
+            if (phaseMs >= EncounterPrePullMs || map->GetInstanceScript()->GetBossState(10) == IN_PROGRESS) Pull();
         }
         else if (state == "observe") Observe(diff);
         else if (state == "cleanup")
@@ -906,7 +918,8 @@ struct EncounterRun
         json out = {{"format", 1}, {"kind", "dojo-valithria-encounter"}, {"token", token},
             {"difficulty", difficulty}, {"mode", mode}, {"focus", mode == "after"}, {"state", state},
             {"setup", setup}, {"cleanup", cleanup}, {"failure", failure}, {"outcome", outcome},
-            {"instance", instance}, {"map_difficulty", mapDifficulty}, {"engaged", engaged}, {"pull_ms", pullMs},
+            {"instance", instance}, {"map_difficulty", mapDifficulty}, {"engaged", engaged},
+            {"early_pull", earlyPull}, {"pull_ms", pullMs},
             {"samples", samples}, {"start_hp", startHp}, {"hp", hp}, {"peak_hp", peakHp},
             {"damage_to_her", damageToHer}, {"item_level_cap", EncounterItemLevel}, {"members", roster}};
         if (full)
