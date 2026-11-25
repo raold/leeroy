@@ -6,6 +6,7 @@
 #include "DojoRaid.h"
 #include "DojoRuntime.h"
 #include "AccountMgr.h"
+#include "AllSpellScript.h"
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "CommandScript.h"
@@ -20,6 +21,8 @@
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
+#include "Spell.h"
+#include "SpellMgr.h"
 #include "UnitScript.h"
 #include "Vehicle.h"
 #include "WorldScript.h"
@@ -52,6 +55,7 @@ struct Trial
     uint32 elapsed = 0, phaseMs = 0, samples = 0, maxGap = 0, deathAt = 0;
     uint32 startingBossHealth = 0, leastBossHealth = 0;
     json lastBodies = json::array(), lastBoss = json::object(), recentEffects = json::array();
+    json recentCasts = json::array();
     bool active = false, negative = false, ready = false, humanBoarded = false, cleanup = false, humanGone = false;
     bool oldSupport = false;
 
@@ -137,7 +141,7 @@ struct Trial
         auto why = Dojo::BeginHumanFixture(id);
         if (!why.empty()) return why;
         token = id; scenario = encounter; negative = control; failure.clear(); group.Clear(); bossGuid.Clear(); mounts = {};
-        lastBodies = json::array(); lastBoss = json::object(); recentEffects = json::array();
+        lastBodies = json::array(); lastBoss = json::object(); recentEffects = json::array(); recentCasts = json::array();
         elapsed = samples = maxGap = deathAt = startingBossHealth = leastBossHealth = 0;
         travelled = {}; hits = {}; movingHits = {}; afterDeathHits = {}; seats = {};
         surgeSamples = {}; shieldSamples = {}; ringSamples = {};
@@ -278,6 +282,8 @@ struct Trial
             std::list<Creature*> fields;
             boss->GetCreatureListWithEntryInGrid(fields, 30592, 200.f);
             if (!fields.empty()) ++fieldSamples;
+            auto const* fieldDamage = sSpellMgr->GetSpellInfo(57429);
+            if (!fieldDamage) { Fail("native_static_field_damage_missing"); return; }
             for (std::size_t i = 0; i < actors.size(); ++i)
             {
                 auto* p = Actor(i);
@@ -293,8 +299,8 @@ struct Trial
                 if (surge) ++surgeSamples[i];
                 if (surge && base->HasAura(57108)) ++shieldSamples[i];
                 float const radius = base->GetExactDist2d(boss);
-                bool const fieldSafe = std::none_of(fields.begin(), fields.end(), [base](Creature* field)
-                { return field && std::abs(base->GetPositionZ() - field->GetPositionZ()) < 20.f && base->GetExactDist2d(field) < 16.f; });
+                bool const fieldSafe = std::none_of(fields.begin(), fields.end(), [base, fieldDamage](Creature* field)
+                { return !field || base->GetExactDist(field) < fieldDamage->Effects[EFFECT_0].CalcRadius(field) + 2.f; });
                 if (!fieldSafe)
                 {
                     fieldMs[i] += diff;
@@ -417,7 +423,7 @@ struct Trial
             {"dot_samples", dotSamples}, {"field_samples", fieldSamples}, {"surge_samples", surgeSamples},
             {"shield_samples", shieldSamples}, {"safe_ring_samples", ringSamples},
             {"field_escapes", fieldEscapes}, {"longest_field_ms", longestFieldMs},
-            {"bodies", lastBodies}, {"boss", lastBoss}, {"recent_effects", recentEffects}};
+            {"bodies", lastBodies}, {"boss", lastBoss}, {"recent_effects", recentEffects}, {"recent_casts", recentCasts}};
     }
 };
 Trial trial;
@@ -483,8 +489,31 @@ public:
         trial.RecordEffect("death", killer, victim, 0);
     }
 };
+class Casts : public AllSpellScript
+{
+public:
+    Casts() : AllSpellScript("DojoVehicleCasts", {ALLSPELLHOOK_ON_CAST}) { }
+    void OnSpellCast(Spell* spell, Unit* caster, SpellInfo const* info, bool) override
+    {
+        if (!spell || spell->IsTriggered() || !caster || !info) return;
+        std::lock_guard<std::recursive_mutex> lock(trial.mutex);
+        if (!trial.active || (trial.state != "observe" && trial.state != "drakes")) return;
+        for (std::size_t slot = 0; slot < trial.mounts.size(); ++slot)
+            if (caster->GetGUID() == trial.mounts[slot])
+            {
+                auto* boss = trial.Boss();
+                json event{{"slot", slot}, {"spell", info->Id}, {"phase_ms", trial.phaseMs},
+                    {"energy", caster->GetPower(POWER_ENERGY)}, {"moving", caster->isMoving()},
+                    {"facing", caster->GetOrientation()}};
+                if (boss) event.update({{"boss_distance", caster->GetExactDist2d(boss)},
+                    {"boss_bearing", caster->GetAngle(boss)}, {"pursued", boss->GetVictim() == caster}});
+                if (trial.recentCasts.size() >= 32) trial.recentCasts.erase(trial.recentCasts.begin());
+                trial.recentCasts.push_back(std::move(event));
+            }
+    }
+};
 }
-void AddSC_dojo_vehicle() { new Commands(); new Ticks(); new Effects(); }
+void AddSC_dojo_vehicle() { new Commands(); new Ticks(); new Effects(); new Casts(); }
 #else
 void AddSC_dojo_vehicle() { }
 #endif
