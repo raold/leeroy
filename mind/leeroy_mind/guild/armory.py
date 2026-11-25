@@ -52,14 +52,15 @@ def parse_items(rows) -> dict[int, ItemInfo]:
     found = {}
     for number, row in enumerate(rows, 1):
         try:
-            if len(row) not in (18, 19, 20):
+            if len(row) not in (18, 19, 20, 21):
                 raise ValueError("expected item fields")
             entry = _id(_numeric(row[0]))
             values = [_numeric(value) for value in row[2:8]]
             stats = frozenset(value for field in row[8:18] if (value := _numeric(field, nullable=True)))
             found[entry] = ItemInfo(entry, row[1], *values, stats,
                                    _numeric(row[18]) if len(row) >= 19 and row[18] != "NULL" else None,
-                                   _numeric(row[19]) if len(row) == 20 else 0)
+                                   _numeric(row[19]) if len(row) >= 20 else 0,
+                                   _numeric(row[20]) if len(row) == 21 else -1)
         except (TypeError, ValueError):
             raise RosterError(f"item row {number}: invalid columns") from None
     return found
@@ -142,7 +143,7 @@ class MysqlArmory:
         for chunk in _chunks(ids):
             sql = ("SELECT entry, name, Quality, ItemLevel, InventoryType, class, subclass, AllowableClass, "
                    + ", ".join(f"stat_type{index}" for index in range(1, 11))
-                   + (", bonding" if binding else ", NULL") + ", BagFamily"
+                   + (", bonding" if binding else ", NULL") + ", BagFamily, AllowableRace"
                    + " FROM item_template WHERE entry IN (" + ",".join(map(str, chunk)) + ")")
             fetched = parse_items(run_mysql(self.world, sql, self.mysql_exe))
             items.update({entry: item for entry, item in fetched.items() if entry in chunk})

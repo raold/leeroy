@@ -261,7 +261,7 @@ def test_bank_binding_is_read_again_at_dispatch_without_changing_cached_items(mo
     def read(db, sql, exe):
         calls.append(sql)
         base = ["1001","Synthetic gear","4","250","2","4","0","-1"] + ["0"] * 10
-        return [base + ([next(binding_reads)] if ", bonding, BagFamily FROM" in sql else ["NULL"]) + ["0"]]
+        return [base + ([next(binding_reads)] if ", bonding, BagFamily, AllowableRace FROM" in sql else ["NULL"]) + ["0"]]
     monkeypatch.setattr(module, "run_mysql", read)
     assert armory.items([1001])[1001].bonding is None
     assert armory.bank_items([1001])[1001].bonding == 2

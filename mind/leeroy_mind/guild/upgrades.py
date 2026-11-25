@@ -19,6 +19,7 @@ class ItemInfo:
     stats: frozenset[int]
     bonding: int | None = None
     bag_family: int = 0
+    allowable_race: int = -1
 
 
 _ARMOUR = {1: 4, 2: 4, 3: 3, 4: 2, 5: 1, 6: 4, 7: 3, 8: 1, 9: 1, 11: 2}
@@ -84,6 +85,16 @@ def suits(item: ItemInfo, family: str, role: str | None, *, cls: int | None = No
         return False
     if item.item_class == 4 and item.inventory_type == _TRINKET and not item.stats & mine:
         return False
+    return True
+
+
+def can_use(item: ItemInfo, race: int, cls: int) -> bool:
+    """False when the item's AllowableRace or AllowableClass mask (-1 or 0: everyone) shuts out a
+    member of this race and class. A tier token is judged by its own masks: the piece it buys is
+    her faction's, since each side's vendor sells its own."""
+    for mask, bit in ((item.allowable_race, race), (item.allowable_class, cls)):
+        if mask > 0 and type(bit) is int and bit > 0 and not mask & (1 << (bit - 1)):
+            return False
     return True
 
 
