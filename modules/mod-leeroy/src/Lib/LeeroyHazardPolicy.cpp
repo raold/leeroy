@@ -408,7 +408,7 @@ bool HazardFirstCrossingMoves(HazardPoint from, HazardPoint goal, std::vector<Ha
 }
 
 std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std::optional<HazardPoint> waypoint,
-    std::vector<HazardZone> const& zones, float reach)
+    std::vector<HazardZone> const& zones, float reach, float minLeg)
 {
     if (std::none_of(zones.begin(), zones.end(), [&](HazardZone const& zone)
             { return zone.moving && SameFloor(at, zone) && Distance2d(at, zone.x, zone.y) <= kHazardMovingNearYards; }))
@@ -416,10 +416,11 @@ std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std
     if (!waypoint && !HazardAt(at, zones, reach) && HazardFirstCrossingMoves(at, goal, zones, reach))
         return at; // it passes: wait for the way to clear rather than walk into it
     HazardPoint const to = waypoint.value_or(goal);
+    float const leg = std::max(kHazardMovingLegYards, minLeg);
     float const length = Distance2d(at, to.x, to.y);
-    if (length <= kHazardMovingLegYards)
+    if (length <= leg)
         return to;
-    float const part = kHazardMovingLegYards / length;
+    float const part = leg / length;
     return HazardPoint{at.x + (to.x - at.x) * part, at.y + (to.y - at.y) * part, at.z + (to.z - at.z) * part};
 }
 

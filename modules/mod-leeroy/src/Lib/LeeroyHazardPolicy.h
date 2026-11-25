@@ -176,10 +176,11 @@ inline constexpr float kHazardMovingLegYards = 4.0f;
 // The first zone across the straight walk from `from` to `goal` moves: it passes, so no pocket is given up on
 // (HazardDetourAllowed is for zones that stay) and with no way round the bot waits.
 bool HazardFirstCrossingMoves(HazardPoint from, HazardPoint goal, std::vector<HazardZone> const& zones, float reach);
-// Where follow walks next near moving zones: `waypoint` (a detour) or else `goal`, cut to a short leg; the bot's
-// own spot to wait; nullopt when no moving zone is near (follow walks to the waypoint or goal as before).
+// Where follow walks next near moving zones: `waypoint` (a detour) or else `goal`, cut to a short leg, never
+// shorter than `minLeg` (HazardDetourStep: a nearer spot would stop follow); the bot's own spot to wait; nullopt
+// when no moving zone is near (follow walks to the waypoint or goal as before).
 std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std::optional<HazardPoint> waypoint,
-    std::vector<HazardZone> const& zones, float reach);
+    std::vector<HazardZone> const& zones, float reach, float minLeg);
 
 // One bot's recent exits, counted per hazard, so an exit never loops with another mover (follow, dungeon-clear's
 // route) that walks it back into the same hazards, overlapping ones included.

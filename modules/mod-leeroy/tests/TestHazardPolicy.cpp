@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <random>
 #include <vector>
 
 using namespace Leeroy::Guild;
@@ -988,12 +989,16 @@ struct HallRun
 // and once it is within 6 yards he is put at the other end; 70 s. A slime goes off (and is gone) when the bot's
 // centre comes within 1.5 yards. Every 0.1 s the bot's AI first steps out of a zone it stands in (avoid aoe, at most
 // once a second), else follows: the formation spot beside him moved off the zones, a detour waypoint kept until
-// reached or the zones change, and, with `movingRules`, the moving-npc rules (HazardMovingLeg, and no pocket
+// reached or the zones change (follow stops FollowDistance, 1.5, from the bot's edge; with `chaos`, the default formation,
+// a spot up to 3.5 yards off and the stop that much wider, drawn afresh every 3 s), and, with `movingRules`, the moving-npc rules (HazardMovingLeg, and no pocket
 // given up while a moving npc is the one in the way); without them, as #424 released it. `aware` false walks as stock.
-HallRun DojoHall(float start, bool aware, bool movingRules)
+HallRun DojoHall(float start, bool aware, bool movingRules, bool chaos = false)
 {
     float const reach = 1.5f;
-    float const step = HazardDetourStep(1.5f, reach);
+    float followStop = 1.5f; // Playerbots.FollowDistance
+    float step = HazardDetourStep(followStop, reach);
+    float dx = 0.0f, dy = 0.0f;
+    std::mt19937 draws(static_cast<std::uint32_t>(start * 1000.0f));
     HazardPoint const ends[2]{{3108.0f, -3141.0f, 293.34f}, {3195.0f, -3148.0f, 293.34f}};
     Mover bot{ends[0]};
     int side = 1; // where he stands
@@ -1036,11 +1041,19 @@ HallRun DojoHall(float start, bool aware, bool movingRules)
                     zones.push_back(zone);
             kept.reset(); // a new version: the memoised waypoint is asked again
         }
+        if (chaos && tick % 60 == 0) // ChaosFormation: a fresh offset every 3 s, half TooCloseDistance (5) each way
+        {
+            // mt19937's output is the same everywhere (a distribution's is not): urand(0, 10) by modulo
+            dx = (static_cast<float>(draws() % 11) / 10.0f - 0.5f) * 5.0f;
+            dy = (static_cast<float>(draws() % 11) / 10.0f - 0.5f) * 5.0f;
+            followStop = 1.5f + std::hypot(dx, dy);
+            step = HazardDetourStep(followStop, reach);
+        }
         if (tick % 2 == 0)
         {
             float const toBot = Dist(he, bot.at);
-            HazardPoint goal = toBot > 0.01f ? HazardPoint{he.x + (bot.at.x - he.x) / toBot * 1.5f,
-                he.y + (bot.at.y - he.y) / toBot * 1.5f, he.z} : he;
+            HazardPoint goal = toBot > 0.01f ? HazardPoint{he.x + (bot.at.x - he.x) / toBot * 1.5f + dx,
+                he.y + (bot.at.y - he.y) / toBot * 1.5f + dy, he.z} : he;
             if (auto const spots = HazardSafeSpots(goal, bot.at, zones, reach, 1); !spots.empty())
                 goal = spots.front();
             std::vector<HazardZone> inside;
@@ -1078,9 +1091,9 @@ HallRun DojoHall(float start, bool aware, bool movingRules)
                         kept = waypoints.front();
                 }
                 std::optional<HazardPoint> const leg =
-                    movingRules ? HazardMovingLeg(bot.at, goal, kept, zones, reach) : std::nullopt;
+                    movingRules ? HazardMovingLeg(bot.at, goal, kept, zones, reach, step) : std::nullopt;
                 HazardPoint const target = leg.value_or(kept.value_or(goal));
-                if (Dist(bot.at, target) > 1.5f)
+                if (Dist(bot.at, target) - reach > followStop) // FollowAction::isUseful, from the bot's edge
                     bot.Move(target, 1, t);
             }
         }
@@ -1101,10 +1114,13 @@ LEEROY_TEST(Hazard_TheDojoHallCrossingSetsNoSlimeOff)
     {
         float const start = 20.0f + static_cast<float>(offset) * 0.025f; // every phase of the 5 s waves
         ++runs;
-        HallRun const run = DojoHall(start, true, true);
-        hits += run.hits;
-        nearest = std::min(nearest, run.nearest);
-        fewCrossings += run.crossings < 2 ? 1 : 0;
+        for (bool chaos : {false, true}) // near or arrow; chaos, playerbots' default
+        {
+            HallRun const run = DojoHall(start, true, true, chaos);
+            hits += run.hits;
+            nearest = std::min(nearest, run.nearest);
+            fewCrossings += run.crossings < 2 ? 1 : 0;
+        }
         withoutHits += DojoHall(start, true, false).hits;
         straightHits += DojoHall(start, false, false).hits;
     }
