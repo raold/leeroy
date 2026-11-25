@@ -130,6 +130,13 @@ jobs:
             -o "$RUNNER_TEMP/lich-king-mechanics-tests"
           "$RUNNER_TEMP/lich-king-mechanics-tests"
 
+      - name: Check bounded raid vehicle diagnostics
+        run: |
+          c++ -std=c++20 -O2 -Wall -Wextra -Werror \
+            core/modules/mod-playerbots/tests/raid_vehicle_trace_test.cpp \
+            -o "$RUNNER_TEMP/raid-vehicle-trace-tests"
+          "$RUNNER_TEMP/raid-vehicle-trace-tests"
+
       - name: Check equipment protection decisions
         run: |
           c++ -std=c++20 -O2 -Wall -Wextra -Werror \
