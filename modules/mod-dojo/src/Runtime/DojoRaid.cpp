@@ -322,6 +322,10 @@ struct RaidRun
             }
             else
             {
+                // Tirion's native intro removes this flag before combat. The
+                // core also prevents an immune-to-PC caster attacking players,
+                // so a focused post-intro Defile probe must establish it too.
+                lichKing->SetImmuneToPC(false);
                 // Cast the real core spell: its summon/aura/growth are the stimulus.
                 auto const cast = lichKing->CastSpell(bot, 72762, true);
                 if (cast != SPELL_CAST_OK) { Fail("native_defile_cast_refused:" + std::to_string(uint32(cast))); return; }
