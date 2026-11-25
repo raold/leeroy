@@ -73,6 +73,13 @@ reaction window. Unknown damage sources, missing cast evidence, sampling gaps ov
 observer reads the spell's actual radius multiplier; it never moves a bot or
 changes a pool. These checks do not claim the whole Beasts encounter was cleared.
 
+Add `--toc-worm-support` to a ToC target to test the candidate toxin/Bile support.
+The native fixture refuses if that feature is absent from the compiled candidate,
+enables it only in this owned run, records active samples, and must restore the
+previous value during cleanup. Both the full Beasts target and the two Slime Pool
+cases accept the option. It never changes the runtime configuration files or a
+live feature switch.
+
 `--target offline-reserves` starts with nine primary members and offers the
 fixed benched healer through the production reserve field. Its gate requires
 ten distinct owned members, including that reserve, alive in the same running

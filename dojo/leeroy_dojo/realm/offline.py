@@ -125,9 +125,11 @@ def _fixture_accounts(layout, log):
     # registers this one fixed account after startup, before ordinary pinning.
 
 
-def run(layout, *, target, log=print):
+def run(layout, *, target, toc_worm_support=False, log=print):
     if target not in TARGETS:
         raise LayoutError("unsupported offline target")
+    if toc_worm_support and TARGETS[target][0] != "toc":
+        raise LayoutError("worm support requires a ToC encounter target")
     if world.running(layout):
         raise world.WorldError("offline acceptance requires a stopped dedicated dojo realm")
     preflight = world.preflight(layout)
@@ -144,7 +146,8 @@ def run(layout, *, target, log=print):
     out = layout.data / "runs" / (time.strftime("%Y%m%d_%H%M%S") + "-offline-" + token)
     out.mkdir(parents=True, exist_ok=False)
     report = dict(kind="dojo-offline-acceptance", format=1, ok=False, source=source, preflight=preflight,
-                  token=token, target=target, out=str(out), reached=False, cleanup=False, stopped=False)
+                  token=token, target=target, toc_worm_support=toc_worm_support,
+                  out=str(out), reached=False, cleanup=False, stopped=False)
     feed = None
     try:
         checkpoint = FixtureCheckpoint(layout)
@@ -194,6 +197,8 @@ def run(layout, *, target, log=print):
         report["mechanic_feed"] = dict(features=feed.features, rules=feed.rules)
         with world.ra(layout) as client:
             scenario = TARGETS[target][0]
+            if toc_worm_support:
+                scenario = "toc-worms"
             deadline = time.monotonic() + 120
             while time.monotonic() < deadline:
                 reply = client.command(f"dojo offline start {scenario} {token}")
@@ -246,12 +251,18 @@ def run(layout, *, target, log=print):
                             if "dojo offline: wiped" in reply:
                                 log(f"offline {target}: applied scripted full-wipe stimulus")
                     if not report.get("gate_failure") and reached(observed, target=target, token=token) and not report["reached"]:
+                        feature = observed.get("toc_worm_support", {})
+                        if toc_worm_support and (feature.get("requested") is not True
+                                or type(feature.get("active_samples")) is not int or feature["active_samples"] < 10):
+                            raise world.WorldError("requested worm support was not active during measurement")
                         report["reached"] = True
                         report["milestone"] = observed
                         client.command("dojo offline stop")
                     if not native.get("active", True):
                         report["terminal"] = observed
                         report["cleanup"] = native.get("cleanup") is True
+                        if toc_worm_support:
+                            report["cleanup"] = report["cleanup"] and observed.get("toc_worm_support", {}).get("restored") is True
                         if target == "offline-reserves":
                             reserve = next((b for b in observed.get("bodies", []) if b.get("slot") == 11), {})
                             report["reserve_returned"] = (reserve.get("map") == 0 and reserve.get("alive") is True

@@ -20,6 +20,7 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
+#include "PlayerbotAIConfig.h"
 #include "PlayerbotFactory.h"
 #include "Playerbots.h"
 #include "RandomPlayerbotMgr.h"
@@ -40,6 +41,14 @@
 #include <map>
 #include <mutex>
 #include <sstream>
+
+// Older production baselines can run this harness. A worm-support trial
+// refuses unless the candidate includes that feature's policy.
+#if __has_include("TocWormPolicy.h")
+#define DOJO_HAS_TOC_WORM_SUPPORT 1
+#else
+#define DOJO_HAS_TOC_WORM_SUPPORT 0
+#endif
 
 using nlohmann::json;
 using namespace Acore::ChatCommands;
@@ -85,7 +94,21 @@ struct OfflineFixture
     std::map<ObjectGuid, SlimePool> slimePools;
     uint32 clockMs = 0, slimeGap = 0, slimeInside = 0, slimeEscapes = 0, slimeOutsideMs = 0;
     uint32 slimeHits = 0, slimeLateHits = 0, slimeUnknownHits = 0;
+    bool wormRequested = false, wormOverride = false, wormPrevious = false, wormRestored = true;
+    uint32 wormSamples = 0;
     std::recursive_mutex mutex;
+
+    void RestoreWormSupport()
+    {
+#if DOJO_HAS_TOC_WORM_SUPPORT
+        if (wormOverride)
+        {
+            sPlayerbotAIConfig.TocWormSupport = wormPrevious;
+            wormOverride = false;
+            wormRestored = sPlayerbotAIConfig.TocWormSupport == wormPrevious;
+        }
+#endif
+    }
 
     bool Armed() const { return Dojo::State().plan.state == Dojo::RuntimeState::Armed && !Dojo::State().manifest; }
     Player* Actor(std::size_t i) const
@@ -198,6 +221,11 @@ struct OfflineFixture
             ++samples;
             clockMs += diff;
             auto const native = Leeroy::Guild::DojoOfflineSnapshot();
+            if (!native.value("active", false)) RestoreWormSupport();
+#if DOJO_HAS_TOC_WORM_SUPPORT
+            if (wormRequested && native.value("stage", "") == "running" && sPlayerbotAIConfig.TocWormSupport)
+                ++wormSamples;
+#endif
             if (native.value("active", false) && native.value("stage", "") != "tearing_down")
                 for (auto const& body : native.value("bodies", json::array()))
                     if (!sRandomPlayerbotMgr.IsPinned(body.value("guid", uint32(0))))
@@ -247,7 +275,9 @@ struct OfflineFixture
             return "isolated guild/owner identity mismatch";
         guildId = guild->GetId();
         bool const reserveTrial = scenario == "toc-reserves";
-        map = scenario == "toc" || reserveTrial ? 649 : scenario == "ulduar" ? 603 : scenario == "icc" ? 631 : 0;
+        bool const wormTrial = scenario == "toc-worms";
+        if (wormTrial && !DOJO_HAS_TOC_WORM_SUPPORT) return "toc_worm_feature_missing_from_candidate";
+        map = scenario == "toc" || reserveTrial || wormTrial ? 649 : scenario == "ulduar" ? 603 : scenario == "icc" ? 631 : 0;
         if (!map) return "unknown offline scenario";
         std::vector<std::size_t> requested{1, 2, 3, 4, 5, 6, 7, 8, 9};
         requested.push_back(reserveTrial ? 11 : 10);
@@ -271,6 +301,15 @@ struct OfflineFixture
         scriptedWipe = restartingSeen = false; restartsAtWipe = wipeBoss = mainTankAtWipe = 0;
         slimePools.clear(); clockMs = slimeGap = slimeInside = slimeEscapes = slimeOutsideMs = 0;
         slimeHits = slimeLateHits = slimeUnknownHits = 0;
+        wormRequested = wormTrial; wormSamples = 0; wormRestored = !wormTrial;
+#if DOJO_HAS_TOC_WORM_SUPPORT
+        if (wormTrial)
+        {
+            wormPrevious = sPlayerbotAIConfig.TocWormSupport;
+            sPlayerbotAIConfig.TocWormSupport = true;
+            wormOverride = true;
+        }
+#endif
         return "started";
     }
     std::string Wipe(std::string const& id, bool swappedTank = false)
@@ -304,6 +343,8 @@ struct OfflineFixture
     json Status()
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
+        auto const native = Leeroy::Guild::DojoOfflineSnapshot();
+        if (!native.value("active", false)) RestoreWormSupport();
         json bodies = json::array(), damage = json::array(), pools = json::array();
         for (std::size_t i = 1; i < actors.size(); ++i)
             if (auto* p = Actor(i))
@@ -329,7 +370,8 @@ struct OfflineFixture
                 {"minimum_radius", pool.minimum}, {"maximum_radius", pool.maximum}});
         return {{"kind", "dojo-offline-observation"}, {"format", 1}, {"state", state}, {"error", error},
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
-            {"native", Leeroy::Guild::DojoOfflineSnapshot()}, {"bodies", bodies}, {"damage", damage},
+            {"native", native}, {"bodies", bodies}, {"damage", damage},
+            {"toc_worm_support", {{"requested", wormRequested}, {"active_samples", wormSamples}, {"restored", wormRestored}}},
             {"scripted_wipe", scriptedWipe}, {"restarting_seen", restartingSeen}, {"restarts_at_wipe", restartsAtWipe},
             {"main_tank", MainTank(Actor(1))}, {"wipe_boss", wipeBoss}, {"main_tank_at_wipe", mainTankAtWipe},
             {"slime", {{"pools", pools}, {"max_gap_ms", slimeGap}, {"inside_samples", slimeInside},

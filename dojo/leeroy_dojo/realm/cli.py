@@ -25,6 +25,7 @@ def add_parser(sub) -> None:
     offline = cmds.add_parser("offline-acceptance", help="prepare a synthetic guild and observe a real offline raid job")
     offline.add_argument("--target", required=True, choices=("toc-beasts", "toc-slime-pools", "toc-slime-pools-control",
         "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves"))
+    offline.add_argument("--toc-worm-support", action="store_true", help="measure the candidate worm support in this isolated run")
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)
     acc_run.add_argument("--keep-running", action="store_true", help="leave a worldserver this command started")
@@ -143,7 +144,7 @@ def run(args: argparse.Namespace) -> int:
             return 0 if report["ok"] else 1
         elif command == "offline-acceptance":
             from .offline import run as run_offline
-            report = run_offline(layout, target=args.target)
+            report = run_offline(layout, target=args.target, toc_worm_support=args.toc_worm_support)
             print(f"Offline acceptance: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "provision":
