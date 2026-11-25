@@ -120,6 +120,21 @@ enum class BossState : std::uint8_t { Engaged, Killed, Wiped };
 std::optional<BossState> ClassifyBossTransition(std::uint8_t newState, std::uint8_t oldState,
     std::uint32_t map = 0, std::uint32_t boss = 0);
 
+// One row of the encounter table for the kill's map and mode: instance_encounters (creditType 0 a creature kill, 1 a
+// spell cast; creditEntry) with its DungeonEncounter.dbc bit in the instance's completed-encounter mask.
+struct EncounterCredit
+{
+    std::uint32_t creditType = 0, creditEntry = 0, bit = 0;
+};
+
+// Which encounter row a creature kill the encounter table credits reports as a boss kill, if any. Only in a raid whose
+// instance script keeps no boss states (Vault of Archavon uses SetData, so SetBossState and ClassifyBossTransition
+// never see its kills); a script with boss states reports its own, never twice. Only the instance's first credit of
+// the encounter (`updated`: its saved completed-encounter mask gained the bit just now), so a re-kill, a reload or an
+// evade reports nothing. The row is the one kill credit naming creditEntry, its bit the boss_id; none when ambiguous.
+std::optional<std::size_t> CreditedKill(bool raid, std::uint32_t scriptBossStates, bool updated,
+    std::uint32_t creditType, std::uint32_t creditEntry, std::vector<EncounterCredit> const& encounters);
+
 enum class LootMethod : std::uint8_t { Need, Greed, Master };
 enum class BgWinner : std::uint8_t { Horde, Alliance, None };
 
