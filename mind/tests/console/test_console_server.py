@@ -10,6 +10,7 @@ import pytest
 
 from leeroy_mind.console import feed, httpd, status
 from leeroy_mind.console.control import Controls
+from leeroy_mind.testing import control
 from console.rig import KEY, FakeMind, events, http, make_app, page_source, running
 
 LINKED = [SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)]
@@ -174,7 +175,20 @@ def test_stop_while_in_game_asks_first(data, store):
             assert r.status == 200 and mind.acts == ["stop"]
             r = await http(app, "POST", "/api/control", origin=True,
                            body={"service": "voice", "action": "stop"})
-            assert r.status == 409 and "comms go silent" in r.json()["confirm"]
+            assert r.status == 409 and r.json()["confirm"] == (
+                "You're in game. If you stop the voice, comms go silent until you start it "
+                "again. Stop it anyway?")
+            (data / "mind.toml").write_text("[voice]\nenabled = true\nautostart = true\n",
+                                            encoding="utf-8")
+            r = await http(app, "POST", "/api/control", origin=True,
+                           body={"service": "voice", "action": "stop"})
+            assert r.json()["confirm"] == (
+                "You're in game. If you stop the voice, comms go silent until your next login, "
+                "when the mind starts it again, or until you start it here. Stop it anyway?")
+            r = await http(app, "POST", "/api/control", origin=True,
+                           body={"service": "voice", "action": "restart"})
+            assert r.json()["confirm"] == ("You're in game. If you restart the voice, comms go "
+                                           "silent until it is back. Restart it anyway?")
     run(go())
     assert sid
 
@@ -751,10 +765,10 @@ class WorldLink:
         if self.error:
             from leeroy_mind.console.mindlink import LinkError
             raise LinkError(self.error)
-        return self.reply
+        return control.answer(op, args, self.reply)
 
 
-WORLD = {"connected": True, "server": "Acme", "version": "3.3.5", "hello_at": 1793304000.0,
+WORLD ={"connected": True, "server": "Acme", "version": "3.3.5", "hello_at": 1793304000.0,
          "cast": 5, "cast_online": 3, "human_online": False}
 
 

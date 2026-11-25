@@ -16,6 +16,7 @@ from leeroy_mind.personas.io import load_persona
 from leeroy_mind.selfies import files, store as selfies
 from leeroy_mind.protocol import Ack, Hello
 from leeroy_mind.world import targets
+from leeroy_mind.testing.wire import bridge_send
 
 
 @pytest.mark.parametrize("writer",["manual","night"])
@@ -66,6 +67,7 @@ def test_roster_invalid_is_a_known_safe_refusal(h,monkeypatch,caplog):
     enabled(h)
     monkeypatch.setattr(targets,"_refusal_logged",False)
     async def scenario():
+        @bridge_send
         async def send(cmd,**kw):
             return Ack(0,cmd.id,False,"world_roster_invalid")
         app=NS(data_dir=h.settings.data_dir,store=h.store,clock=h.clock,

@@ -113,3 +113,10 @@ install.
 - Local notes (`CLAUDE.md`, `docs/`, `private/`) are git-ignored on purpose; flag a PR that adds
   them or un-ignores them.
 - Commits carry no `Co-Authored-By` or other attribution trailers.
+
+<!-- review-outcomes:start -->
+## Checks learned from released misses
+
+- Before releasing native changes, compile the affected translation units with the production Windows/MSVC headers; portable policy tests alone do not cover Windows macros. Check: production-header MSVC syntax/build check, including new identifiers. Evidence: [msvc-near-390](https://github.com/raold/leeroy/pull/390).
+- For raid AI changes, require an isolated running-world scenario that observes the intended effect with competing stock strategies enabled. An action returning success or a policy test is not proof of healing, aura acquisition, or safe movement. Check: dojo raid acceptance receipt for the candidate native build (pending runtime gate). Evidence: [valithria-439](https://github.com/raold/leeroy/pull/439).
+<!-- review-outcomes:end -->

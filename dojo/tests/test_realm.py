@@ -276,6 +276,45 @@ class RulesTest(unittest.TestCase):
         self.assertTrue(any("the .dist says" in p for p in conf.check(rules, {**good, "Rate": "1"}, drifted)))
 
 
+class LogProvisionTest(unittest.TestCase):
+    def test_core_template_without_module_logger_provisions_and_stays_strict(self):
+        synthetic = Synthetic()
+        try:
+            lay = synthetic.load(ports__leeroy=13444)
+            rules_file = Path(lay.roots["source"]) / provision.RULES
+            rules_file.parent.mkdir(parents=True)
+            rules_file.write_text(RULES.read_text(encoding="utf-8"), encoding="utf-8")
+            rules = conf.load_rules(rules_file)["worldserver.conf"]
+            logging_keys = {"Appender.DungeonClear", "Logger.playerbots.dungeonclear"}
+            values = {**dict.fromkeys(rules.isolation, ""), **rules.ordinary,
+                      **{k: v for k, v in rules.training.items() if k not in logging_keys}}
+            original = "".join(f'{key} = "{value}"\n' for key, value in values.items())
+            dist = lay.build_bin / "configs" / rules.dist
+            dist.parent.mkdir(parents=True)
+            dist.write_text(original, encoding="utf-8")
+            (Path(lay.roots["build"]) / "dojo-configure.json").write_text(
+                json.dumps({"raid_acceptance": True, "offline_acceptance": True}), encoding="utf-8")
+            with mock.patch.object(mysql, "read_client_cnf", return_value={"password": "fixture-only"}), \
+                    mock.patch.object(mysql, "restrict_to_owner", return_value="fixture ACL"):
+                for _ in range(2):
+                    provision.write_configs(lay, only={"worldserver.conf"}, log=lambda _: None)
+                    text = (lay.configs / "worldserver.conf").read_text(encoding="utf-8")
+                    actual = conf.parse(text)
+                    self.assertEqual(actual["Appender.DungeonClear"], "2,4,1,DungeonClear.log")
+                    self.assertEqual(actual["Logger.playerbots.dungeonclear"], "4,DungeonClear")
+                    self.assertEqual(conf.check(rules, actual, conf.parse(original)), [])
+                    for key in logging_keys:
+                        self.assertEqual(text.count(key + " ="), 1)
+                    bad = {**actual, "Appender.DungeonClear": "2,4,0,DungeonClear.log"}
+                    self.assertTrue(conf.check(rules, bad, conf.parse(original)))
+                dist.write_text("\n".join(line for line in original.splitlines()
+                                          if not line.startswith("BindIP =")), encoding="utf-8")
+                with self.assertRaisesRegex(conf.ConfError, "BindIP"):
+                    provision.write_configs(lay, only={"worldserver.conf"}, log=lambda _: None)
+        finally:
+            synthetic.close()
+
+
 class AccountsTest(unittest.TestCase):
     def test_srp6_verifier(self):
         salt = bytes(range(32))

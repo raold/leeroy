@@ -14,6 +14,7 @@ from leeroy_mind import endpoint
 from leeroy_mind.console import bankview, mindlink
 from leeroy_mind.console.control import Controls
 from leeroy_mind.console.mindlink import LinkError
+from leeroy_mind.testing import control
 from console.rig import http, make_app, running
 
 SNAPSHOT = {"ok": True, "read_at": 1793304000.5, "guild": 21, "money": 1234567,
@@ -37,7 +38,7 @@ class FakeLink:
         self.timeouts.append(timeout)
         if self.error:
             raise LinkError(self.error)
-        return self.reply
+        return control.answer(op, args, self.reply)
 
 
 @pytest.fixture

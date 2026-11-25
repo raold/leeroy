@@ -13,6 +13,7 @@ from leeroy_mind.protocol import Ack, Chat, Say
 from leeroy_mind.talk.pipeline import TurnMeta, _ScopeChanged
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.testing.fake_llm import FakeLLM
+from leeroy_mind.testing.wire import bridge_send
 
 
 @pytest.fixture
@@ -222,6 +223,7 @@ def test_line_already_entered_transport_still_records_ack_after_disable_and_canc
     async def go():
         written, release = asyncio.Event(), asyncio.Event()
         commands = []
+        @bridge_send
         async def send(cmd):
             commands.append(cmd)
             written.set()

@@ -6,6 +6,7 @@ import pytest
 
 from leeroy_mind.godmode import heroics
 from leeroy_mind.protocol import Member
+from leeroy_mind.testing.wire import bridge_send
 
 NOW = 1780000000
 
@@ -165,6 +166,7 @@ class Rig:
         await self.app.connection(True)
         await self.app.event(Hello(int(self.clock.now() * 1000), "test", "1", 3, 0, (heroics.FEATURE,), 123))
 
+        @bridge_send
         async def send(cmd, *, preserve_id=False, expected_epoch=None):
             assert preserve_id and expected_epoch == self.app.transport_state.epoch
             self.app.sent.append(cmd)

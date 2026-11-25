@@ -24,6 +24,7 @@ from leeroy_mind.server import engine, runtime, state
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_clock import FakeClock
+from leeroy_mind.testing.fake_llm import check_chat
 
 START = datetime(2026, 10, 29, 20, tzinfo=timezone.utc)
 BOOT = int(START.timestamp() * 1000) - 10000
@@ -33,6 +34,7 @@ class Script(VariedLLM):
     async def chat(self, model, messages, **kwargs):
         schema = kwargs.get("format")
         if isinstance(schema, dict) and schema.get("title") == "day_plans":
+            check_chat(model, messages, **kwargs)
             answer = {
                 "blocks": [
                     {"slot": "16", "activity": "inn", "place": "org_inn"},

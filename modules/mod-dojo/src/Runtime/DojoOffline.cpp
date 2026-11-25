@@ -20,9 +20,13 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
+#include "PlayerbotAIConfig.h"
 #include "PlayerbotFactory.h"
 #include "Playerbots.h"
 #include "RandomPlayerbotMgr.h"
+#include "ScriptMgr.h"
+#include "Spell.h"
+#include "SpellInfo.h"
 #include "UnitScript.h"
 #include "World.h"
 #include "WorldScript.h"
@@ -33,9 +37,19 @@
 #include "Util/DcProvisionBudget.h"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <map>
 #include <mutex>
 #include <sstream>
+#include "DojoNaxxPass.h"
+
+// Older production baselines can run this harness. A worm-support trial
+// refuses unless the candidate includes that feature's policy.
+#if __has_include("TocWormPolicy.h")
+#define DOJO_HAS_TOC_WORM_SUPPORT 1
+#else
+#define DOJO_HAS_TOC_WORM_SUPPORT 0
+#endif
 
 using nlohmann::json;
 using namespace Acore::ChatCommands;
@@ -63,6 +77,12 @@ uint32 MainTank(Player* player)
 
 struct OfflineFixture
 {
+    struct SlimePool
+    {
+        uint32 firstMs = 0, lastMs = 0, casts = 0;
+        float radius = 0.f, minimum = 1000.f, maximum = 0.f;
+        std::array<bool, 10> inside{};
+    };
     std::array<ObjectGuid, Fixtures.size()> actors{};
     std::string state = "idle", error, token;
     uint32 elapsed = 0, guildId = 0, samples = 0;
@@ -71,8 +91,35 @@ struct OfflineFixture
     bool scriptedWipe = false, restartingSeen = false;
     uint32 restartsAtWipe = 0;
     uint32 wipeBoss = 0, mainTankAtWipe = 0;
+    bool tankSwapForced = false;
+    uint32 selfResSuppressed = 0;
     std::map<uint32, std::pair<uint64, uint64>> hits;
+    std::map<ObjectGuid, SlimePool> slimePools;
+    uint32 clockMs = 0, slimeGap = 0, slimeInside = 0, slimeEscapes = 0, slimeOutsideMs = 0;
+    uint32 slimeHits = 0, slimeLateHits = 0, slimeUnknownHits = 0;
+    bool wormRequested = false, wormOverride = false, wormPrevious = false, wormRestored = true;
+    uint32 wormSamples = 0;
+    DojoNaxxPass naxxPass;
     std::recursive_mutex mutex;
+
+    std::array<Player*, 10> RaidActors() const
+    {
+        std::array<Player*, 10> out{};
+        for (std::size_t i = 0; i < out.size(); ++i) out[i] = Actor(i + 1);
+        return out;
+    }
+
+    void RestoreWormSupport()
+    {
+#if DOJO_HAS_TOC_WORM_SUPPORT
+        if (wormOverride)
+        {
+            sPlayerbotAIConfig.TocWormSupport = wormPrevious;
+            wormOverride = false;
+            wormRestored = sPlayerbotAIConfig.TocWormSupport == wormPrevious;
+        }
+#endif
+    }
 
     bool Armed() const { return Dojo::State().plan.state == Dojo::RuntimeState::Armed && !Dojo::State().manifest; }
     Player* Actor(std::size_t i) const
@@ -183,7 +230,14 @@ struct OfflineFixture
         else if (state == "running")
         {
             ++samples;
+            clockMs += diff;
             auto const native = Leeroy::Guild::DojoOfflineSnapshot();
+            naxxPass.Tick(RaidActors(), native, token, error, diff);
+            if (!native.value("active", false)) RestoreWormSupport();
+#if DOJO_HAS_TOC_WORM_SUPPORT
+            if (wormRequested && native.value("stage", "") == "running" && sPlayerbotAIConfig.TocWormSupport)
+                ++wormSamples;
+#endif
             if (native.value("active", false) && native.value("stage", "") != "tearing_down")
                 for (auto const& body : native.value("bodies", json::array()))
                     if (!sRandomPlayerbotMgr.IsPinned(body.value("guid", uint32(0))))
@@ -191,6 +245,31 @@ struct OfflineFixture
             if (scriptedWipe)
             {
                 if (native.value("active", false) && native.value("stage", "") == "restarting") restartingSeen = true;
+            }
+            if (!slimePools.empty() && map == 649 && native.value("stage", "") == "running")
+            {
+                slimeGap = std::max(slimeGap, diff);
+                auto* leader = Actor(1);
+                bool present = leader != nullptr, anyPool = false, allOutside = true;
+                for (auto& [guid, pool] : slimePools)
+                {
+                    auto* creature = leader ? leader->GetMap()->GetCreature(guid) : nullptr;
+                    if (!creature || !creature->IsAlive() || clockMs - pool.lastMs > 1500) continue;
+                    anyPool = true;
+                    for (std::size_t i = 1; i <= 10; ++i)
+                    {
+                        auto* p = Actor(i);
+                        if (!p || !p->IsAlive() || p->IsBeingTeleported() || p->GetMap() != creature->GetMap()
+                            || !Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter()))
+                        { present = false; continue; }
+                        bool const inside = p->GetExactDist2d(creature) <= pool.radius + 0.5f;
+                        if (inside) ++slimeInside;
+                        if (pool.inside[i - 1] && !inside) ++slimeEscapes;
+                        pool.inside[i - 1] = inside;
+                        allOutside = allOutside && !inside;
+                    }
+                }
+                slimeOutsideMs = anyPool && present && allOutside ? slimeOutsideMs + diff : 0;
             }
         }
     }
@@ -208,7 +287,12 @@ struct OfflineFixture
             return "isolated guild/owner identity mismatch";
         guildId = guild->GetId();
         bool const reserveTrial = scenario == "toc-reserves";
-        map = scenario == "toc" || reserveTrial ? 649 : scenario == "ulduar" ? 603 : scenario == "icc" ? 631 : 0;
+        bool const fullRun = scenario == "toc-full" || scenario == "toc-full-worms" || scenario == "ulduar-full";
+        bool const wormTrial = scenario == "toc-worms" || scenario == "toc-full-worms";
+        bool const naxxTrial = scenario == "naxx-gothik-pass" || scenario == "naxx-gothik-pass-control";
+        if (wormTrial && !DOJO_HAS_TOC_WORM_SUPPORT) return "toc_worm_feature_missing_from_candidate";
+        map = scenario == "toc" || scenario == "toc-full" || reserveTrial || wormTrial ? 649
+            : scenario == "ulduar" || scenario == "ulduar-full" ? 603 : scenario == "icc" ? 631 : naxxTrial ? 533 : 0;
         if (!map) return "unknown offline scenario";
         std::vector<std::size_t> requested{1, 2, 3, 4, 5, 6, 7, 8, 9};
         requested.push_back(reserveTrial ? 11 : 10);
@@ -221,18 +305,39 @@ struct OfflineFixture
         Leeroy::Guild::OfflineRaidCmd cmd;
         cmd.mapId = map; cmd.size = 10; cmd.leaderGuid = actors[1].GetCounter();
         cmd.lootMasterGuid = cmd.leaderGuid; cmd.minMembers = 10;
-        cmd.maxWipes = cmd.maxWipesPerBoss = 3; cmd.timeoutMin = 45;
+        cmd.maxWipes = cmd.maxWipesPerBoss = 3; cmd.timeoutMin = fullRun ? 180 : 45;
         for (std::size_t i = 2; i <= (reserveTrial ? 9 : 10); ++i) cmd.members.push_back(actors[i].GetCounter());
         if (reserveTrial) cmd.reserves.push_back(actors[11].GetCounter());
         cmd.assistants.push_back(actors[2].GetCounter());
         auto result = Leeroy::Guild::StartRaidJob(id, cmd, Leeroy::Guild::RaidJobMode::Offline);
         if (!result.ok) return result.error;
+        if (naxxTrial && !Leeroy::Guild::DojoConfigureNaxxPass(id, scenario == "naxx-gothik-pass-control"))
+        {
+            Leeroy::Guild::DojoStopOffline(id);
+            return "naxx_pass_candidate_missing";
+        }
         std::lock_guard<std::recursive_mutex> lock(mutex);
         token = id; state = "running"; error.clear(); samples = 0; hits.clear();
+        naxxPass = {};
+        naxxPass.state = naxxTrial ? "pending" : "none";
+        naxxPass.control = scenario == "naxx-gothik-pass-control";
         scriptedWipe = restartingSeen = false; restartsAtWipe = wipeBoss = mainTankAtWipe = 0;
+        tankSwapForced = false;
+        selfResSuppressed = 0;
+        slimePools.clear(); clockMs = slimeGap = slimeInside = slimeEscapes = slimeOutsideMs = 0;
+        slimeHits = slimeLateHits = slimeUnknownHits = 0;
+        wormRequested = wormTrial; wormSamples = 0; wormRestored = !wormTrial;
+#if DOJO_HAS_TOC_WORM_SUPPORT
+        if (wormTrial)
+        {
+            wormPrevious = sPlayerbotAIConfig.TocWormSupport;
+            sPlayerbotAIConfig.TocWormSupport = true;
+            wormOverride = true;
+        }
+#endif
         return "started";
     }
-    std::string Wipe(std::string const& id, bool swappedTank = false)
+    std::string Wipe(std::string const& id, bool swappedTank = false, bool forceTankSwap = false)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
         if (!Armed() || state != "running" || id != token || scriptedWipe || map != 603) return "wipe_not_admitted";
@@ -244,13 +349,25 @@ struct OfflineFixture
         auto* boss = instance ? instance->GetCreature(encounter) : nullptr;
         if (!instance || instance->GetBossState(encounter) != IN_PROGRESS || !boss || !boss->IsAlive() || !boss->IsInCombat())
             return "wipe_boss_not_engaged";
-        uint32 const tank = MainTank(leader);
-        if (swappedTank && (!tank || tank == actors[1].GetCounter())) return "wipe_tank_not_swapped";
+        uint32 tank = MainTank(leader);
+        if (swappedTank && !forceTankSwap && (!tank || tank == actors[1].GetCounter())) return "wipe_tank_not_swapped";
+        auto* group = leader->GetGroup();
+        if (!group || !group->isRaidGroup()) return "wipe_group_not_ready";
         for (std::size_t i = 1; i <= 10; ++i)
         {
             auto* p = Actor(i);
             if (!p || !p->IsAlive() || p->IsBeingTeleported() || p->GetMap() != leader->GetMap() ||
+                p->GetGroup() != group || !sRandomPlayerbotMgr.IsPinned(actors[i].GetCounter()) ||
                 !Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter())) return "wipe_actor_not_ready";
+        }
+        if (forceTankSwap)
+        {
+            // Explicit role-change stimulus for a separate deterministic gate.
+            // It must never be reported as the encounter AI's natural choice.
+            group->SetGroupMemberFlag(actors[2], true, MEMBER_FLAG_MAINTANK);
+            tank = MainTank(leader);
+            tankSwapForced = true;
+            if (tank != actors[2].GetCounter()) return "wipe_forced_tank_not_applied";
         }
         restartsAtWipe = native.value("restarts", 0u);
         wipeBoss = encounter; mainTankAtWipe = tank;
@@ -258,12 +375,26 @@ struct OfflineFixture
         // A test stimulus, never an earned combat outcome. All recovery after
         // these real deaths belongs to the ordinary offline job and core.
         for (std::size_t i = 1; i <= 10; ++i) Unit::Kill(boss, Actor(i));
+        // The forced full-wipe stimulus includes declining pending Ankh and
+        // Soulstone offers. Otherwise automatic self-rescues turn it into a
+        // partial wipe before the ordinary full-wipe detector can observe it.
+        // Spirit of Redemption expires naturally; no healing/revival is supplied.
+        if (forceTankSwap)
+            for (std::size_t i = 1; i <= 10; ++i)
+                if (auto* p = Actor(i); p && p->GetUInt32Value(PLAYER_SELF_RES_SPELL))
+                {
+                    ++selfResSuppressed;
+                    p->SetUInt32Value(PLAYER_SELF_RES_SPELL, 0);
+                }
         return "wiped";
     }
     json Status()
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
-        json bodies = json::array(), damage = json::array();
+        auto const native = Leeroy::Guild::DojoOfflineSnapshot();
+        if (!native.value("active", false)) RestoreWormSupport();
+        if (!native.value("active", false)) naxxPass.Release(RaidActors());
+        json bodies = json::array(), damage = json::array(), pools = json::array();
         for (std::size_t i = 1; i < actors.size(); ++i)
             if (auto* p = Actor(i))
             {
@@ -282,11 +413,23 @@ struct OfflineFixture
                     {"master", GET_PLAYERBOT_AI(p)->GetMaster() ? GET_PLAYERBOT_AI(p)->GetMaster()->GetGUID().GetCounter() : 0}});
             }
         for (auto const& [entry, value] : hits) damage.push_back({{"entry", entry}, {"hits", value.first}, {"requested", value.second}});
+        for (auto const& [guid, pool] : slimePools)
+            pools.push_back({{"guid", guid.GetCounter()}, {"casts", pool.casts},
+                {"age_ms", clockMs - pool.firstMs}, {"last_ms", clockMs - pool.lastMs},
+                {"minimum_radius", pool.minimum}, {"maximum_radius", pool.maximum}});
         return {{"kind", "dojo-offline-observation"}, {"format", 1}, {"state", state}, {"error", error},
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
-            {"native", Leeroy::Guild::DojoOfflineSnapshot()}, {"bodies", bodies}, {"damage", damage},
+            {"native", native}, {"bodies", bodies}, {"damage", damage},
+            {"naxx_pass", naxxPass.Snapshot()},
+            {"toc_worm_support", {{"requested", wormRequested}, {"active_samples", wormSamples}, {"restored", wormRestored}}},
             {"scripted_wipe", scriptedWipe}, {"restarting_seen", restartingSeen}, {"restarts_at_wipe", restartsAtWipe},
-            {"main_tank", MainTank(Actor(1))}, {"wipe_boss", wipeBoss}, {"main_tank_at_wipe", mainTankAtWipe}};
+            {"main_tank", MainTank(Actor(1))}, {"wipe_boss", wipeBoss}, {"main_tank_at_wipe", mainTankAtWipe},
+            {"tank_swap_forced", tankSwapForced},
+            {"self_res_suppressed", selfResSuppressed},
+            {"slime", {{"pools", pools}, {"max_gap_ms", slimeGap}, {"inside_samples", slimeInside},
+                {"escapes", slimeEscapes}, {"outside_ms", slimeOutsideMs}, {"hits", slimeHits},
+                {"late_hits", slimeLateHits}, {"unknown_hits", slimeUnknownHits},
+                {"mechanics_enabled", sConfigMgr->GetOption<bool>("Leeroy.Mechanics.Enable", false)}}}};
     }
 };
 OfflineFixture fixture;
@@ -299,7 +442,8 @@ public:
         static ChatCommandTable commands{{"prepare", Prepare, SEC_CONSOLE, Console::Yes},
             {"start", Start, SEC_CONSOLE, Console::Yes}, {"status", Status, SEC_CONSOLE, Console::Yes},
             {"stop", Stop, SEC_CONSOLE, Console::Yes}, {"wipe", Wipe, SEC_CONSOLE, Console::Yes},
-            {"wipe-tank-swap", WipeTankSwap, SEC_CONSOLE, Console::Yes}};
+            {"wipe-tank-swap", WipeTankSwap, SEC_CONSOLE, Console::Yes},
+            {"wipe-force-tank-swap", WipeForceTankSwap, SEC_CONSOLE, Console::Yes}};
         static ChatCommandTable dojo{{"offline", commands}};
         return {{"dojo", dojo}};
     }
@@ -307,6 +451,8 @@ public:
     static bool Wipe(ChatHandler* h, Tail args) { h->SendSysMessage("dojo offline: " + fixture.Wipe(std::string(args))); return true; }
     static bool WipeTankSwap(ChatHandler* h, Tail args)
     { h->SendSysMessage("dojo offline: " + fixture.Wipe(std::string(args), true)); return true; }
+    static bool WipeForceTankSwap(ChatHandler* h, Tail args)
+    { h->SendSysMessage("dojo offline: " + fixture.Wipe(std::string(args), true, true)); return true; }
     static bool Start(ChatHandler* h, Tail args)
     {
         std::istringstream in{std::string(args)};
@@ -336,10 +482,49 @@ public:
         if (std::find(fixture.actors.begin() + 1, fixture.actors.end(), victim->GetGUID()) == fixture.actors.end()) return;
         auto& counter = fixture.hits[attacker->GetEntry()];
         ++counter.first; counter.second += amount;
+        if (attacker->GetEntry() == 35176 && attacker->GetMapId() == 649)
+        {
+            ++fixture.slimeHits;
+            auto const found = fixture.slimePools.find(attacker->GetGUID());
+            if (found == fixture.slimePools.end()) ++fixture.slimeUnknownHits;
+            else if (fixture.clockMs - found->second.firstMs > 2000) ++fixture.slimeLateHits;
+        }
+    }
+};
+class SlimeCasts : public AllSpellScript
+{
+public:
+    SlimeCasts() : AllSpellScript("DojoOfflineSlimeCasts", {ALLSPELLHOOK_ON_PREPARE, ALLSPELLHOOK_ON_CAST}) { }
+    void OnSpellPrepare(Spell* spell, Unit* caster, SpellInfo const* info) override
+    { Record(spell, caster, info, false); }
+    void OnSpellCast(Spell* spell, Unit* caster, SpellInfo const* info, bool /*skipCheck*/) override
+    { Record(spell, caster, info, true); }
+    void Record(Spell* spell, Unit* caster, SpellInfo const* info, bool completed)
+    {
+        std::lock_guard<std::recursive_mutex> lock(fixture.mutex);
+        auto* leader = fixture.Actor(1);
+        if (fixture.state != "running" || fixture.map != 649 || !leader || !spell || !caster || !info
+            || caster->GetEntry() != 35176 || caster->GetMap() != leader->GetMap() || info->Id != 66881
+            || !Leeroy::Guild::OfflineRaidOwns(leader->GetGUID().GetCounter())) return;
+        float radius = 0.f;
+        for (SpellEffectInfo const& effect : info->Effects)
+            if (effect.IsTargetingArea())
+                radius = std::max(radius, effect.CalcRadius(caster) * spell->GetSpellValue()->RadiusMod);
+        if (!std::isfinite(radius) || radius <= 0.f) { fixture.error = "invalid_native_slime_radius"; return; }
+        auto [where, inserted] = fixture.slimePools.try_emplace(caster->GetGUID());
+        auto& pool = where->second;
+        if (inserted) pool.firstMs = fixture.clockMs;
+        // Immediate damage happens before AllSpellScript::OnSpellCast. Prepare
+        // establishes identity; only the successful cast counts as stimulus.
+        if (completed)
+        {
+            ++pool.casts; pool.lastMs = fixture.clockMs; pool.radius = radius;
+            pool.minimum = std::min(pool.minimum, radius); pool.maximum = std::max(pool.maximum, radius);
+        }
     }
 };
 }
-void AddSC_dojo_offline() { new Commands(); new Ticks(); new Damage(); }
+void AddSC_dojo_offline() { new Commands(); new Ticks(); new Damage(); new SlimeCasts(); }
 #else
 void AddSC_dojo_offline() { }
 #endif

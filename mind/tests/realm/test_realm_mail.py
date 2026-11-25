@@ -25,6 +25,7 @@ from dbtemplate import open_migrated
 from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_llm import FakeLLM
+from leeroy_mind.testing.wire import port_method
 
 PROCESS = "mail-test-process"
 DAY = 86400.0
@@ -99,6 +100,7 @@ class Ports:
     def training_members(self):
         return set(self.training)
 
+    @port_method
     async def send(self, cmd):
         """The service's path: the direct part's barrier, the wire, then the ack."""
         if not self.realm.enabled:

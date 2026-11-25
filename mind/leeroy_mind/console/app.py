@@ -2363,12 +2363,14 @@ class ConsoleApp:
             return json_response(e.status, {"ok": False, "error": str(e)})
         if (action in ("stop", "restart") and self.game.state in (status.IN_GAME, status.UNKNOWN)
                 and msg.get("confirm") is not True):
-            what = "the guild goes quiet" if service == "mind" else "comms go silent"
+            what = ("the guild goes quiet until it is back" if service == "mind" else
+                    self._voice_stop_words() if action == "stop" else
+                    "comms go silent until it is back")
             if self.game.state == status.IN_GAME:
-                ask = f"You're in game. If you {action} the {service}, {what} until it is back. "
+                ask = f"You're in game. If you {action} the {service}, {what}. "
             else:
                 ask = (f"The console cannot tell whether you're in game ({self.game.reason}). "
-                       f"If you are and you {action} the {service}, {what} until it is back. ")
+                       f"If you are and you {action} the {service}, {what}. ")
             return json_response(409, {"ok": False,
                                        "confirm": ask + f"{action.capitalize()} it anyway?"})
         self.broadcast("control", {"service": service, "action": action, "phase": "running"})
@@ -2387,6 +2389,19 @@ class ConsoleApp:
             await self.relay.reconnect()
         return json_response(200, {"ok": True, "message": outcome.message,
                                    "state": outcome.state})
+
+    def _voice_stop_words(self) -> str:
+        """How long a stop lasts: with [voice] autostart the mind starts it at his next login
+        (the stop leaves a hold that keeps it down until then); without, until a start."""
+        from ..voice.config import load_voice_config
+        try:
+            autostart = load_voice_config(self.s.data_dir / "mind.toml").autostart
+        except Exception:  # ConfigError or an unreadable file: say the least it promises
+            autostart = False
+        if autostart:
+            return ("comms go silent until your next login, when the mind starts it again, or "
+                    "until you start it here")
+        return "comms go silent until you start it again"
 
     async def _after_control(self) -> None:
         self._voice_lock = None

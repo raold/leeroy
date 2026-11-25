@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import http.client
 import json
 import logging
@@ -30,6 +31,10 @@ class GpuPaused(LLMError):
     """Intentional model unavailability; callers should quietly wait or drop their turn."""
 
 
+class BadRequest(LLMError):
+    """A request Ollama would refuse, or would quietly drop a part of: never sent."""
+
+
 @dataclass(frozen=True)
 class ChatResult:
     text: str
@@ -45,6 +50,120 @@ EMBED_NUM_CTX = 2048
 # several hundred inputs part way (HTTP 400, its runner refusing a connection) while every
 # request of up to 160 passed; the library and the writer's backfill already send 32.
 EMBED_BATCH = 32
+
+# Ollama's /api/chat and /api/embed contract (api/types.go): a message's role and fields, and
+# each option's type. A wrong type is an error; an unknown option or message field is dropped
+# with no more than a server-side warning, which here is a refusal too.
+ROLES = frozenset({"system", "user", "assistant", "tool"})
+MESSAGE_KEYS = frozenset({"role", "content", "thinking", "images", "tool_calls", "tool_name"})
+_INT_OPTIONS = frozenset({"num_keep", "seed", "num_predict", "top_k", "repeat_last_n", "num_ctx",
+                          "num_batch", "num_gpu", "main_gpu", "num_thread"})
+_FLOAT_OPTIONS = frozenset({"top_p", "min_p", "typical_p", "temperature", "repeat_penalty",
+                            "presence_penalty", "frequency_penalty"})
+_DURATION_RE = re.compile(r"[-+]?(0|((\d+(\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h))+)")
+
+
+def _bad(why: str):
+    raise BadRequest(f"bad request: {why}")
+
+
+def _number(v) -> bool:
+    return type(v) in (int, float) and math.isfinite(v)
+
+
+def _options(options) -> dict:
+    try:
+        out = dict(options)
+    except (TypeError, ValueError):
+        _bad("options is not a mapping")
+    for key, v in out.items():
+        if key in _INT_OPTIONS:
+            ok = type(v) is int
+        elif key in _FLOAT_OPTIONS:
+            ok = _number(v)
+        elif key == "use_mmap":
+            ok = type(v) is bool
+        elif key == "stop":
+            ok = type(v) in (list, tuple) and all(type(s) is str for s in v)
+        else:
+            _bad(f"unknown option {key!r}")
+        if not ok:
+            _bad(f"option {key!r} has the wrong type")
+    return out
+
+
+def _keep_alive(v) -> None:
+    if not (_number(v) or (type(v) is str and _DURATION_RE.fullmatch(v))):
+        _bad("keep_alive is not seconds or a duration")
+
+
+def encode_body(body: dict) -> bytes:
+    """A request body as it goes on the wire: strict JSON (no NaN), UTF-8."""
+    try:
+        return json.dumps(body, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError) as e:
+        raise BadRequest(f"bad request: not JSON ({type(e).__name__})") from None
+
+
+def chat_body(model, messages, *, options, think=None, format=None, keep_alive=None) -> dict:
+    """The /api/chat body, checked against Ollama's contract; BadRequest when it breaks it."""
+    if type(model) is not str or not model:
+        _bad("model is not a name")
+    if type(messages) not in (list, tuple):
+        _bad("messages is not a list of messages")
+    for i, m in enumerate(messages):
+        if not isinstance(m, dict) or not set(m) <= MESSAGE_KEYS:
+            _bad(f"messages[{i}] is not a message object")
+        if m.get("role") not in ROLES:
+            _bad(f"messages[{i}].role is not one of {', '.join(sorted(ROLES))}")
+        if type(m.get("content")) is not str:
+            _bad(f"messages[{i}].content is not a string")
+        if "thinking" in m and type(m["thinking"]) is not str:
+            _bad(f"messages[{i}].thinking is not a string")
+        images = m.get("images", [])
+        if type(images) not in (list, tuple) or not all(type(x) is str for x in images):
+            _bad(f"messages[{i}].images is not a list of base64 strings")
+        for x in images:
+            try:
+                base64.b64decode(x, validate=True)
+            except ValueError:
+                _bad(f"messages[{i}].images holds one that is not base64")
+    body: dict = {"model": model, "messages": messages, "stream": False,
+                  "options": _options(options)}
+    if think is not None:
+        if type(think) is not bool:
+            _bad("think is not true, false or left out")
+        body["think"] = think
+    if format is not None:
+        if format != "json" and not isinstance(format, dict):
+            _bad('format is not "json" or a JSON schema object')
+        body["format"] = format
+    if keep_alive is not None:
+        _keep_alive(keep_alive)
+        body["keep_alive"] = keep_alive
+    encode_body(body)
+    return body
+
+
+def embed_inputs(inputs) -> list:
+    """An embed call's texts as a list: a lone string is refused, never split into letters."""
+    if isinstance(inputs, (str, bytes)):
+        _bad("input is one string, not a list of them")
+    return list(inputs)
+
+
+def embed_body(model, inputs, *, dimensions=EMBED_DIMENSIONS) -> dict:
+    """One /api/embed request's body (at most EMBED_BATCH inputs), checked as chat_body is."""
+    if type(model) is not str or not model:
+        _bad("model is not a name")
+    if type(inputs) not in (list, tuple) or not all(type(s) is str for s in inputs):
+        _bad("input is not a list of strings")
+    if type(dimensions) is not int or dimensions <= 0:
+        _bad("dimensions is not a positive integer")
+    body = {"model": model, "input": list(inputs), "dimensions": dimensions, "keep_alive": -1,
+            "options": {"num_ctx": EMBED_NUM_CTX}}
+    encode_body(body)
+    return body
 
 
 class LLMClient(Protocol):
@@ -115,7 +234,7 @@ class OllamaClient:
         self.live_borrow = None
 
     def _request(self, path: str, body: dict | None, timeout: float, attempt: _Attempt) -> dict:
-        data = None if body is None else json.dumps(body).encode("utf-8")
+        data = None if body is None else encode_body(body)
         cls = http.client.HTTPSConnection if self._https else http.client.HTTPConnection
         conn = cls(self._host, self._port, timeout=min(timeout, 5.0))
         resp = None
@@ -222,14 +341,8 @@ class OllamaClient:
 
     async def chat(self, model, messages, *, options, think=None, format=None,
                    keep_alive=None, timeout=None):
-        body: dict = {"model": model, "messages": messages, "stream": False,
-                      "options": dict(options)}
-        if think is not None:
-            body["think"] = think
-        if format is not None:
-            body["format"] = format
-        if keep_alive is not None:
-            body["keep_alive"] = keep_alive
+        body = chat_body(model, messages, options=options, think=think, format=format,
+                         keep_alive=keep_alive)
         t0 = time.monotonic()
         out = await self._call("/api/chat", body, timeout)
         seconds = time.monotonic() - t0
@@ -261,7 +374,7 @@ class OllamaClient:
     async def embed(self, model, inputs, *, dimensions=EMBED_DIMENSIONS, timeout=None):
         """One vector per input, in order, from requests of at most EMBED_BATCH inputs each.
         Any failed request fails the whole call; `timeout` applies to each request."""
-        inputs = list(inputs)
+        inputs = embed_inputs(inputs)
         result = []
         for at in range(0, len(inputs), EMBED_BATCH):
             result += await self._embed_batch(model, inputs[at:at + EMBED_BATCH],
@@ -269,9 +382,8 @@ class OllamaClient:
         return result
 
     async def _embed_batch(self, model, inputs, dimensions, timeout):
-        out = await self._call("/api/embed", {
-            "model": model, "input": inputs, "dimensions": dimensions, "keep_alive": -1,
-            "options": {"num_ctx": EMBED_NUM_CTX}}, timeout)
+        out = await self._call("/api/embed", embed_body(model, inputs, dimensions=dimensions),
+                               timeout)
         vecs = out.get("embeddings")
         if not isinstance(vecs, list) or len(vecs) != len(inputs):
             raise LLMError("/api/embed: wrong number of vectors")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import shutil
 import time
@@ -14,9 +15,20 @@ from .mechanics import MechanicConnection
 from .offline_fixture import FixtureCheckpoint
 
 TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
+           "naxx-gothik-pass": ("naxx-gothik-pass", 533, None),
+           "naxx-gothik-pass-control": ("naxx-gothik-pass-control", 533, None),
+           "toc-full": ("toc-full", 649, None), "ulduar-full": ("ulduar-full", 603, None),
+           "ulduar-route": ("ulduar-full", 603, None),
+           "toc-slime-pools": ("toc", 649, None), "toc-slime-pools-control": ("toc", 649, None),
            "icc-deathwhisper": ("icc", 631, 1), "icc-gunship": ("icc", 631, 2),
            "icc-valithria": ("icc", 631, 10), "offline-reserves": ("toc-reserves", 649, None),
-           "ulduar-restart": ("ulduar", 603, None), "ulduar-tank-restart": ("ulduar", 603, None)}
+           "ulduar-restart": ("ulduar", 603, None), "ulduar-tank-restart": ("ulduar", 603, None),
+           "ulduar-forced-tank-restart": ("ulduar", 603, None)}
+
+# Ulduar's production offline route currently supports five encounters.
+# The omitted nine remain explicitly unverified, never counted as kills.
+FULL_ROUTES = {"toc-full": (5, tuple(range(5))), "ulduar-full": (14, tuple(range(14))),
+               "ulduar-route": (14, (1, 2, 3, 5, 6))}
 
 
 def parse_status(reply):
@@ -37,11 +49,64 @@ def reached(observation, *, target, token):
     native = observation.get("native", {})
     event = native.get("event", {})
     instance = event.get("instance_id", 0)
-    if event.get("id") != token or type(instance) is not int or instance <= 0 or native.get("stage") != "running":
+    if event.get("id") != token or type(instance) is not int or instance <= 0:
+        return False
+    if target in {"naxx-gothik-pass", "naxx-gothik-pass-control"}:
+        from .offline_naxx import reached_naxx
+        return reached_naxx(observation, control=target.endswith("-control"))
+    if target in FULL_ROUTES:
+        count, required = FULL_ROUTES[target]
+        states = native.get("boss_states")
+        reason = "cleared_reachable" if target == "ulduar-route" else "cleared"
+        return (native.get("active") is False and native.get("cleanup") is True
+                and native.get("map") == map_id and event.get("state") == "done"
+                and event.get("reason") == reason and type(event.get("kills")) is int
+                and event["kills"] >= len(required) and isinstance(states, list) and len(states) == count
+                and all(type(s) is int and s in range(6) for s in states)
+                and all(states[i] == 3 for i in required)
+                and all(states[i] in (0, 3, 5) for i in range(count) if i not in required)
+                and observation.get("scripted_wipe") is False)
+    if native.get("stage") != "running":
         return False
     bodies = observation.get("bodies", [])
-    if target in {"ulduar-restart", "ulduar-tank-restart"}:
-        if target == "ulduar-tank-restart" and not (
+    if target in {"toc-slime-pools", "toc-slime-pools-control"}:
+        slime = observation.get("slime", {})
+        negative = target == "toc-slime-pools-control"
+        counts = ("max_gap_ms", "inside_samples", "escapes", "outside_ms", "hits", "late_hits", "unknown_hits")
+        if (any(type(slime.get(k)) is not int or slime[k] < 0 for k in counts)
+                or slime.get("mechanics_enabled") is not (not negative)
+                or not 0 < slime["max_gap_ms"] <= 200 or slime["unknown_hits"] != 0):
+            return False
+        actors = [b for b in bodies if b.get("slot") in range(1, 11)]
+        if (len(actors) != 10 or len({b.get("guid") for b in actors}) != 10
+                or any(type(b.get("guid")) is not int or b["guid"] <= 0 or b.get("alive") is not True
+                       or b.get("owned") is not True or b.get("pinned") is not True
+                       or b.get("map") != 649 or b.get("instance") != instance for b in actors)):
+            return False
+        pools = slime.get("pools")
+        if not isinstance(pools, list) or not pools:
+            return False
+        grew = False
+        for pool in pools:
+            if (not isinstance(pool, dict)
+                    or any(type(pool.get(k)) is not int or pool[k] < 0 for k in ("guid", "casts", "age_ms", "last_ms"))
+                    or pool["guid"] <= 0 or pool["casts"] == 0
+                    or any(type(pool.get(k)) not in (int, float) or not math.isfinite(pool[k]) or pool[k] <= 0
+                           for k in ("minimum_radius", "maximum_radius"))):
+                return False
+            if pool["maximum_radius"] < pool["minimum_radius"]:
+                return False
+            if pool["casts"] >= 15 and pool["age_ms"] >= 20000 and pool["last_ms"] <= 1500:
+                grew = grew or pool["maximum_radius"] - pool["minimum_radius"] >= 4
+        if negative:
+            return slime["hits"] > 0
+        return (grew and slime["inside_samples"] > 0 and slime["escapes"] > 0
+                and slime["outside_ms"] >= 3000 and slime["late_hits"] == 0)
+    if target in {"ulduar-restart", "ulduar-tank-restart", "ulduar-forced-tank-restart"}:
+        forced = target == "ulduar-forced-tank-restart"
+        if (forced and observation.get("tank_swap_forced") is not True) or (not forced and observation.get("tank_swap_forced") is True):
+            return False
+        if target != "ulduar-restart" and not (
                 observation.get("wipe_boss") == 2 and type(observation.get("main_tank_at_wipe")) is int
                 and observation["main_tank_at_wipe"] > 0
                 and observation["main_tank_at_wipe"] != native.get("leader")
@@ -116,9 +181,11 @@ def prepare_fixture(layout, log=print):
     return prepared, checkpoint.digest(checkpoint.receipt)
 
 
-def run(layout, *, target, log=print):
+def run(layout, *, target, toc_worm_support=False, log=print):
     if target not in TARGETS:
         raise LayoutError("unsupported offline target")
+    if toc_worm_support and TARGETS[target][0] not in {"toc", "toc-full"}:
+        raise LayoutError("worm support requires a ToC encounter target")
     if world.running(layout):
         raise world.WorldError("offline acceptance requires a stopped dedicated dojo realm")
     preflight = world.preflight(layout)
@@ -135,7 +202,12 @@ def run(layout, *, target, log=print):
     out = layout.data / "runs" / (time.strftime("%Y%m%d_%H%M%S") + "-offline-" + token)
     out.mkdir(parents=True, exist_ok=False)
     report = dict(kind="dojo-offline-acceptance", format=1, ok=False, source=source, preflight=preflight,
-                  token=token, target=target, out=str(out), reached=False, cleanup=False, stopped=False)
+                  token=token, target=target, toc_worm_support=toc_worm_support,
+                  out=str(out), reached=False, cleanup=False, stopped=False)
+    if target in FULL_ROUTES:
+        count, required = FULL_ROUTES[target]
+        report["route"] = dict(required_bosses=required, unverified_bosses=[i for i in range(count) if i not in required],
+                               scope="supported_offline_route" if target == "ulduar-route" else "all_encounters")
     feed = None
     try:
         prepared, report["fixture_checkpoint_sha256"] = prepare_fixture(layout, log)
@@ -146,7 +218,8 @@ def run(layout, *, target, log=print):
         provision.ensure_accounts(layout, "DOJODRIVER", log=log)
         _set(layout, "modules/mod_leeroy.conf", {"Leeroy.Enable": "1", "Leeroy.GuildId": str(prepared["guild"]),
                                                 "Leeroy.HumanGuid": str(prepared["owner"]),
-                                                "Leeroy.Mechanics.Enable": "1", "Leeroy.Hazards.Enable": "1"})
+                                                "Leeroy.Mechanics.Enable": "0" if target == "toc-slime-pools-control" else "1",
+                                                "Leeroy.Hazards.Enable": "1"})
         if target == "icc-valithria":
             _set(layout, "modules/mod_dungeon_clear.conf", {"DungeonClear.OfflineValithria": "1"})
         report["run_source"] = raids.provenance(layout)
@@ -163,6 +236,8 @@ def run(layout, *, target, log=print):
         report["mechanic_feed"] = dict(features=feed.features, rules=feed.rules)
         with world.ra(layout) as client:
             scenario = TARGETS[target][0]
+            if toc_worm_support:
+                scenario = "toc-full-worms" if target == "toc-full" else "toc-worms"
             deadline = time.monotonic() + 120
             while time.monotonic() < deadline:
                 reply = client.command(f"dojo offline start {scenario} {token}")
@@ -174,7 +249,7 @@ def run(layout, *, target, log=print):
             else:
                 raise world.WorldError("offline admission timed out")
             log(f"offline {target}: observing {token}")
-            deadline = time.monotonic() + 3000
+            deadline = time.monotonic() + (11100 if target in FULL_ROUTES else 3000)
             last_stage = None
             with (out / "observations.jsonl").open("w", encoding="utf-8") as trace:
                 while time.monotonic() < deadline:
@@ -185,36 +260,63 @@ def run(layout, *, target, log=print):
                     observed["observed_at"] = time.time()
                     trace.write(json.dumps(observed, sort_keys=True) + "\n")
                     trace.flush()
-                    if observed.get("error"):
+                    if observed.get("error") and not report.get("gate_failure"):
+                        report["error"] = observed["error"]
+                        report["gate_failure"] = "native_fixture_error"
+                        report["failure_observation"] = observed
                         client.command("dojo offline stop")
-                        raise world.WorldError(observed["error"])
+                        # Keep observing ordinary teardown so even a failed
+                        # fixture has a verified cleanup receipt.
                     native = observed.get("native", {})
                     if observed.get("token") != token or native.get("event", {}).get("id") != token:
                         raise world.WorldError("offline run token changed")
                     stage = native.get("stage")
+                    if target.startswith("naxx-gothik-pass") and not report.get("gate_failure"):
+                        gate = observed.get("naxx_pass", {})
+                        if gate.get("measured_ms", 0) > 600000 or native.get("event", {}).get("wipes", 0) > 0:
+                            report["gate_failure"] = "naxx_pass_deadline_or_wipe"
+                            report["failure_observation"] = observed
+                            client.command("dojo offline stop")
+                    if target == "toc-slime-pools" and not report.get("gate_failure"):
+                        slime = observed.get("slime", {})
+                        if slime.get("late_hits", 0) > 0 or slime.get("unknown_hits", 0) > 0:
+                            report["gate_failure"] = "slime_damage_after_reaction_window_or_missing_cast"
+                            report["failure_observation"] = observed
+                            client.command("dojo offline stop")
                     if stage != last_stage:
                         log(f"offline {target}: {stage or native.get('event', {}).get('state', 'unknown')}")
                         last_stage = stage
-                    if target in {"ulduar-restart", "ulduar-tank-restart"} and not observed.get("scripted_wipe") and stage == "running":
+                    if target in {"ulduar-restart", "ulduar-tank-restart", "ulduar-forced-tank-restart"} and not observed.get("scripted_wipe") and stage == "running":
                         leader = next((b for b in observed.get("bodies", []) if b.get("slot") == 1), {})
                         states = leader.get("bosses", [])
-                        boss = 2 if target == "ulduar-tank-restart" else 3
+                        boss = 3 if target == "ulduar-restart" else 2
                         swapped = (type(observed.get("main_tank")) is int and observed["main_tank"] > 0
                                    and observed["main_tank"] != native.get("leader"))
-                        if len(states) > boss and states[boss] == 1 and (target == "ulduar-restart" or swapped):
+                        if len(states) > boss and states[boss] == 1 and (target != "ulduar-tank-restart" or swapped):
                             # Admission rechecks live ownership, the exact engaged
                             # boss and every actor before the native test stimulus.
                             command = "wipe-tank-swap" if target == "ulduar-tank-restart" else "wipe"
+                            if target == "ulduar-forced-tank-restart":
+                                command = "wipe-force-tank-swap"
                             reply = client.command(f"dojo offline {command} {token}")
                             if "dojo offline: wiped" in reply:
                                 log(f"offline {target}: applied scripted full-wipe stimulus")
-                    if reached(observed, target=target, token=token) and not report["reached"]:
+                    if not report.get("gate_failure") and reached(observed, target=target, token=token) and not report["reached"]:
+                        feature = observed.get("toc_worm_support", {})
+                        if toc_worm_support and (feature.get("requested") is not True
+                                or type(feature.get("active_samples")) is not int or feature["active_samples"] < 10):
+                            raise world.WorldError("requested worm support was not active during measurement")
                         report["reached"] = True
                         report["milestone"] = observed
-                        client.command("dojo offline stop")
+                        if target not in FULL_ROUTES:
+                            client.command("dojo offline stop")
                     if not native.get("active", True):
                         report["terminal"] = observed
                         report["cleanup"] = native.get("cleanup") is True
+                        if target.startswith("naxx-gothik-pass"):
+                            report["cleanup"] = report["cleanup"] and observed.get("naxx_pass", {}).get("strategies_restored") is True
+                        if toc_worm_support:
+                            report["cleanup"] = report["cleanup"] and observed.get("toc_worm_support", {}).get("restored") is True
                         if target == "offline-reserves":
                             reserve = next((b for b in observed.get("bodies", []) if b.get("slot") == 11), {})
                             report["reserve_returned"] = (reserve.get("map") == 0 and reserve.get("alive") is True

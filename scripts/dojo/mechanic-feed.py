@@ -5,7 +5,6 @@ The dojo package stays standard-library-only. This operator script integrates
 the sibling mind package; no model or live mind service runs. stdin EOF stops
 the connection; stdout carries status only.
 """
-import argparse
 import asyncio
 import json
 from pathlib import Path
@@ -16,6 +15,7 @@ SOURCE = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(SOURCE / "dojo"), str(SOURCE / "mind")]
 
 from leeroy_dojo.realm.layout import load
+from leeroy_dojo.realm.mechanics import feed_arguments
 from leeroy_dojo.realm.world import preflight
 from leeroy_mind.bridge import BridgeClient
 from leeroy_mind.protocol import Hello, register_command
@@ -63,11 +63,7 @@ async def run(layout, guild, map_id):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--layout", type=Path, required=True)
-    parser.add_argument("--guild", type=int, required=True)
-    parser.add_argument("--map", type=int, choices=(603, 631, 649), required=True)
-    args = parser.parse_args()
+    args = feed_arguments()
     layout = load(args.layout)
     if Path(layout.roots["source"]).resolve() != SOURCE or args.guild <= 0:
         raise ValueError("candidate source or guild mismatch")

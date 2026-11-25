@@ -3,6 +3,8 @@ import os
 import socket
 import subprocess
 import sys
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +12,7 @@ from conftest import run
 from leeroy_mind.app import MindApp
 from leeroy_mind.bridge import BridgeClient
 from leeroy_mind.config import load_config
+from leeroy_mind.lifecycle import VOICE_HOLD_FILE, hold_voice, voice_hold
 from leeroy_mind.protocol import Chat
 from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.voice import attach, wire
@@ -151,6 +154,234 @@ def test_autostart_off_never_spawns(tmp_path, clock, voice_data, fake_repo, monk
     app = make_app(tmp_path, clock, f"[voice]\nenabled = true\nport = {free_port()}\n")
     app.voice.ensure_service()
     assert not calls
+    assert app.voice._relaunch_due(clock.now() + 86400) is None  # nor does the supervisor
+
+
+def supervised(tmp_path, clock, fake_repo, monkeypatch, *, answers=False):
+    """An extension with autostart on, a voice venv, a fake launch and a port that never
+    answers (or always does)."""
+    calls = spawner(monkeypatch)
+    monkeypatch.setattr(subprocess, "DETACHED_PROCESS", 1, raising=False)  # absent on Linux
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 2, raising=False)
+    pythonw = fake_repo / "voice" / ".venv" / "Scripts" / "pythonw.exe"
+    pythonw.parent.mkdir(parents=True)
+    pythonw.write_bytes(b"")
+    app = make_app(tmp_path, clock,
+                   f"[voice]\nenabled = true\nautostart = true\nport = {free_port()}\n")
+    monkeypatch.setattr(app.voice, "_port_open", lambda: answers)
+    return app.voice, calls
+
+
+def events(caplog, name):
+    return [r for r in caplog.records if r.getMessage().startswith(name)]
+
+
+def test_the_supervisor_starts_a_service_that_went_down_again(tmp_path, fast_clock, voice_data,
+                                                               fake_repo, monkeypatch, caplog):
+    """The service went down with the mind running (the 11-21/22 outages lasted until the next
+    mind restart): the mind starts it again after RELAUNCH_AFTER_S, then backs off."""
+    clock = fast_clock
+    ext, calls = supervised(tmp_path, clock, fake_repo, monkeypatch)
+
+    async def go():
+        ext.client.greeted = True
+        await ext.on_connection(True)
+        ext.client.greeted = False
+        await ext.on_connection(False)
+        launched = []
+        for _ in range(int(2 * 3600 / attach.SUPERVISE_S)):
+            await clock.advance(attach.SUPERVISE_S, step=attach.SUPERVISE_S)
+            before = len(calls)
+            await ext._supervise_once()
+            if len(calls) > before:
+                launched.append(clock.now())
+        return launched
+    start = clock.now()
+    with caplog.at_level("INFO"):
+        launched = run(go())
+    gaps = [round(b - a) for a, b in zip([start, *launched], launched)]
+    assert gaps[:5] == [60, 120, 300, 600, 1800] and set(gaps[5:]) <= {1800}
+    first = events(caplog, "voice_relaunched")[0]
+    assert "why=down" in first.getMessage() and "attempt=1" in first.getMessage()
+    args, kw = calls[0]
+    assert [str(a) for a in args][1:] == ["-m", "leeroy_voice", "run"]
+    assert kw["cwd"] == str(fake_repo / "voice")
+
+    async def back(up_s):  # it greets, stays up for up_s, and goes down again
+        ext.client.greeted = True
+        await ext.on_connection(True)
+        await clock.advance(up_s, step=up_s)
+        ext.client.greeted = False
+        await ext.on_connection(False)
+        await clock.advance(attach.RELAUNCH_AFTER_S, step=attach.RELAUNCH_AFTER_S)
+        await ext._supervise_once()
+    n = len(calls)
+    run(back(30))  # a crash soon after its start: the backoff goes on (30 min)
+    assert len(calls) == n
+    run(back(attach.STABLE_S))  # up long enough: the next outage starts from the first wait
+    assert len(calls) == n + 1
+
+
+def test_the_supervisor_waits_for_a_launch_and_never_doubles_a_live_service(
+        tmp_path, fast_clock, voice_data, fake_repo, monkeypatch):
+    clock = fast_clock
+    ext, calls = supervised(tmp_path, clock, fake_repo, monkeypatch)
+    ext.ensure_service()  # the mind's start: the service loads its models before it listens
+    assert len(calls) == 1
+
+    async def go():
+        await clock.advance(attach.RELAUNCH_AFTER_S + 5, step=attach.RELAUNCH_AFTER_S + 5)
+        await ext._supervise_once()
+        assert len(calls) == 1  # its start still has START_GRACE_S
+        await clock.advance(attach.START_GRACE_S, step=attach.START_GRACE_S)
+        await ext._supervise_once()
+        assert len(calls) == 2
+    run(go())
+
+
+def test_the_supervisor_leaves_a_service_that_answers_alone(tmp_path, fast_clock, voice_data,
+                                                            fake_repo, monkeypatch):
+    """Started by the console or ac-voice.sh while the client waits out its retry: listening,
+    so nothing is launched beside it."""
+    clock = fast_clock
+    ext, calls = supervised(tmp_path, clock, fake_repo, monkeypatch, answers=True)
+
+    async def go():
+        await ext.on_connection(False)
+        await clock.advance(3600, step=3600)
+        await ext._supervise_once()
+    run(go())
+    assert calls == []
+
+
+def test_an_operator_stop_holds_until_his_login(tmp_path, fast_clock, voice_data, fake_repo,
+                                                monkeypatch, caplog):
+    """A stop from the console (or ac-voice.sh) leaves voice.stopped: the mind leaves the service
+    down for the rest of his session and starts it at his next login."""
+    clock = fast_clock
+    ext, calls = supervised(tmp_path, clock, fake_repo, monkeypatch)
+
+    async def go():
+        ext.client.greeted = True
+        await ext.on_connection(True)
+        hold_voice(voice_data, "console")
+        ext.client.greeted = False
+        await ext.on_connection(False)
+        for _ in range(int(3 * 3600 / attach.SUPERVISE_S)):
+            await clock.advance(attach.SUPERVISE_S, step=attach.SUPERVISE_S)
+            await ext._supervise_once()
+        assert calls == []
+        await ext._on_login(SimpleNamespace(human=True, guid=1))
+        await ext._supervise_once()
+    with caplog.at_level("INFO"):
+        run(go())
+    assert len(calls) == 1 and voice_hold(voice_data) is None
+    held = events(caplog, "voice_relaunch_held")
+    assert len(held) == 1 and "by=console" in held[0].getMessage()
+    assert events(caplog, "voice_hold_lifted")
+    assert "why=login" in events(caplog, "voice_relaunched")[0].getMessage()
+
+
+def test_a_stop_after_a_login_that_found_it_up_still_holds(tmp_path, fast_clock, voice_data,
+                                                           fake_repo, monkeypatch):
+    clock = fast_clock
+    ext, calls = supervised(tmp_path, clock, fake_repo, monkeypatch)
+
+    async def go():
+        ext.client.greeted = True
+        await ext.on_connection(True)
+        await ext._on_login(SimpleNamespace(human=True, guid=1))
+        await clock.advance(attach.SUPERVISE_S, step=attach.SUPERVISE_S)
+        await ext._supervise_once()
+        hold_voice(voice_data, "console")  # he stops it mid-session
+        ext.client.greeted = False
+        await ext.on_connection(False)
+        await clock.advance(3600, step=3600)
+        await ext._supervise_once()
+    run(go())
+    assert calls == [] and voice_hold(voice_data) is not None
+
+
+def test_a_stop_after_his_login_cancels_the_logins_pending_start(tmp_path, fast_clock,
+                                                                 voice_data, fake_repo,
+                                                                 monkeypatch):
+    """Launched at 0, his login at 5 (the launch still has its grace), a Stop at 10: the
+    stop is the newer wish, so the login does not start it at 90; his next login does."""
+    clock = fast_clock
+    ext, calls = supervised(tmp_path, clock, fake_repo, monkeypatch)
+    ext.ensure_service()
+    assert len(calls) == 1
+
+    async def go():
+        await clock.advance(5, step=5)
+        await ext._on_login(SimpleNamespace(human=True, guid=1))
+        await ext._supervise_once()
+        assert len(calls) == 1  # the launch is still loading
+        ext._login_wall -= 5  # the wall clock as the fake one: his login came 5 s before
+        await clock.advance(5, step=5)
+        hold_voice(voice_data, "console")
+        await clock.advance(3600, step=3600)
+        await ext._supervise_once()
+        assert len(calls) == 1 and voice_hold(voice_data) is not None
+        await ext._on_login(SimpleNamespace(human=True, guid=1))
+        await ext._supervise_once()
+    run(go())
+    assert len(calls) == 2 and voice_hold(voice_data) is None
+
+
+def test_a_hold_older_than_the_last_greeting_is_stale(tmp_path, fast_clock, voice_data,
+                                                      fake_repo, monkeypatch):
+    """Something started the service after the stop (by hand, say): the hold no longer
+    applies, and the next outage is supervised as any other."""
+    clock = fast_clock
+    ext, calls = supervised(tmp_path, clock, fake_repo, monkeypatch)
+    hold_voice(voice_data, "script")
+    old = time.time() - 600
+    os.utime(voice_data / VOICE_HOLD_FILE, (old, old))
+
+    async def go():
+        ext.client.greeted = True
+        await ext.on_connection(True)
+        ext.client.greeted = False
+        await ext.on_connection(False)
+        await clock.advance(attach.RELAUNCH_AFTER_S, step=attach.RELAUNCH_AFTER_S)
+        await ext._supervise_once()
+    run(go())
+    assert len(calls) == 1 and voice_hold(voice_data) is None
+
+
+def test_the_minds_own_start_lifts_a_hold(tmp_path, clock, voice_data, fake_repo, monkeypatch):
+    """A mind restart has always brought the service back: a hold from before it ends there."""
+    ext, calls = supervised(tmp_path, clock, fake_repo, monkeypatch)
+    hold_voice(voice_data, "console")
+    ext.ensure_service()
+    assert len(calls) == 1 and voice_hold(voice_data) is None
+
+
+def test_the_supervisor_runs_only_with_autostart(tmp_path, clock, voice_data, fake_repo,
+                                                 monkeypatch):
+    from leeroy_mind.testing.fake_voice import FakeVoice
+    spawner(monkeypatch)
+    seen = []
+
+    async def go(toml):
+        fake = FakeVoice()
+        await fake.start()
+        app = make_app(tmp_path, clock, toml.format(port=fake.port))
+        app.voice.ensure_service = lambda: None
+
+        async def supervise():
+            seen.append(toml)
+        app.voice._supervise = supervise
+        task = asyncio.create_task(app.voice._serve())
+        await _until(lambda: app.voice.client.greeted)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await fake.close()
+    run(go("[voice]\nenabled = true\nport = {port}\n"))
+    assert seen == []
+    run(go("[voice]\nenabled = true\nautostart = true\nport = {port}\n"))
+    assert len(seen) == 1
 
 
 def test_live_guard_covers_voice(live_guard):

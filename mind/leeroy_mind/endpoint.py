@@ -101,7 +101,7 @@ from leeroy_mind.control_json import decode_body
 
 VERSION = 1
 KEY_FILE = "control.json"
-MAX_LINE = 8192  # a 400-character letter reply escaped (12 bytes an astral character) fits
+MAX_LINE = 32768  # a 2000-character Discord message escaped (12 bytes an astral character) fits
 MAX_REPLY = 65536
 READ_S = 2.0  # the console sends its line at once: a slot is not held longer
 RAID_S = 30.0  # how long one raid action may take before the console is answered anyway
@@ -914,6 +914,11 @@ def parse_request(line: bytes, key: str) -> tuple[str, dict | None]:
     return op, parse_args(value["args"])
 
 
+def refusal(error: BadRequest) -> dict:
+    """The endpoint's answer to a request parse_request refused."""
+    return {"ok": False, "error": "forbidden" if isinstance(error, Forbidden) else str(error)}
+
+
 def world_status(app) -> dict | None:
     """The game server as the last hello and the world view tell it; None before a hello, and
     {"connected": False} while the bridge is down after one (the world view is then stale: his
@@ -935,15 +940,21 @@ def encode(value) -> bytes:
             + "\n").encode("ascii")
 
 
+def request_line(key: str, op: str, args: dict | None = None) -> bytes:
+    """The line request() sends."""
+    body = {"v": VERSION, "key": key, "op": op}
+    if args is not None:
+        body["args"] = args
+    return encode(body)
+
+
 def request(port: int, key: str, op: str, args: dict | None = None, *,
             timeout: float = 5.0) -> dict:
     """One request to the endpoint on 127.0.0.1:port and its answer (a dict with a boolean ok).
     OSError when it cannot be reached, ValueError when the answer is not one."""
-    body = {"v": VERSION, "key": key, "op": op}
-    if args is not None:
-        body["args"] = args
+    line = request_line(key, op, args)
     with socket.create_connection(("127.0.0.1", port), timeout=timeout) as conn:
-        conn.sendall(encode(body))
+        conn.sendall(line)
         data = b""
         while not data.endswith(b"\n"):
             chunk = conn.recv(8192)
@@ -952,6 +963,14 @@ def request(port: int, key: str, op: str, args: dict | None = None, *,
             data += chunk
             if len(data) > MAX_REPLY:
                 raise ValueError("the endpoint's answer is too long")
+    return decode_reply(data)
+
+
+def decode_reply(data: bytes) -> dict:
+    """The answer line request() read, as a dict with a boolean ok; ValueError when it is not
+    one (too long, not JSON, no ok)."""
+    if len(data) > MAX_REPLY:
+        raise ValueError("the endpoint's answer is too long")
     try:
         reply = json.loads(data.decode("ascii"), parse_constant=_no_constant)
     except (UnicodeDecodeError, ValueError):
@@ -1066,12 +1085,9 @@ class ControlEndpoint:
     async def _answer(self, line: bytes):
         try:
             op, args = parse_request(line, self.key)
-        except Forbidden:
-            self._refused("key")
-            return {"ok": False, "error": "forbidden"}, None
         except BadRequest as e:
-            self._refused("format")
-            return {"ok": False, "error": str(e)}, None
+            self._refused("key" if isinstance(e, Forbidden) else "format")
+            return refusal(e), None
         if op == "status":
             gpu = getattr(self.app, 'gpu', None)
             if gpu is not None and gpu.paused:

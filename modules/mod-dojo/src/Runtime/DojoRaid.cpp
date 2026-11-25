@@ -388,6 +388,10 @@ struct RaidRun
         {
             Leeroy::Guild::InstallHazardFilter();
             Leeroy::Guild::DojoHazardOwner(control ? 0 : owner->GetGUID().GetCounter());
+            // Under a game client master playerbots builds the combat engine with avoid aoe as well
+            // (AutoAvoidAoe), the strategy that runs the hazard exit; these engines were built under a bot master.
+            if (!control && sPlayerbotAIConfig.AutoAvoidAoe)
+                ai->ChangeStrategy("+avoid aoe", BOT_STATE_COMBAT);
             owner->NearTeleportTo(3195.f, -3148.f, 293.34f, 3.14f);
         }
         setup = true;
@@ -477,6 +481,12 @@ struct RaidRun
         {
             // The registered mod-leeroy world hook owns the production cadence.
             // A second tick here would scan twice as often as the live realm.
+            // The filter serves only bots whose master is the owner, a game client, whose AI takes a turn every
+            // ReactDelay (0.1 s); under a bot master playerbots waits 1-3 s out of combat (GetReactDelay). Between
+            // teleports the held leader is a self-bot (its own master), which playerbots counts as a game client
+            // master; a self-bot's teleport waits for a client's ack, so it is an ordinary bot while it moves.
+            if (!control && GET_PLAYERBOT_AI(owner)->GetMaster() != owner)
+                GET_PLAYERBOT_AI(owner)->SetMaster(owner);
             if (Creature* poison = bot->FindNearestCreature(16027, 70.f))
             {
                 ++hazardsSeen;
@@ -485,6 +495,7 @@ struct RaidRun
             if (bot->GetExactDist2d(owner) < 6.f)
             {
                 ++crossings;
+                GET_PLAYERBOT_AI(owner)->SetMaster(nullptr);
                 owner->NearTeleportTo(crossings % 2 ? 3108.f : 3195.f,
                     crossings % 2 ? -3141.f : -3148.f, 293.34f, 0.f);
             }

@@ -24,6 +24,7 @@ from leeroy_mind.talk.world import WorldView
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.wow import CLASSES, RACES
+from leeroy_mind.testing.wire import WireContract
 
 HUMAN_NAME = "Testmage"
 NICK = "Zan"
@@ -127,11 +128,13 @@ class Sent:
         self.clock = clock
         self.ack = ack
         self.log: list[tuple[float, object]] = []
+        self.wire = WireContract()  # the engine's says and emotes go out as BridgeClient.send(cmd)
 
     async def __call__(self, cmd):
+        cmd_id, refusal = self.wire.send(cmd, preserve_id=False)
         self.log.append((self.clock.now(), cmd))
-        ok, error = self.ack(cmd) if self.ack is not None else (True, "")
-        return Ack(ts=0, id=cmd.id, ok=ok, error=error)
+        ok, error = (False, refusal) if refusal else self.ack(cmd) if self.ack is not None else (True, "")
+        return Ack(ts=0, id=cmd_id, ok=ok, error=error)
 
     def timed_says(self) -> list[tuple[float, Say]]:
         return [(t, c) for t, c in self.log if isinstance(c, Say)]

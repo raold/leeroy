@@ -8,6 +8,7 @@
 #include "Creature.h"
 #include "DBCStores.h"
 #include "DynamicObject.h"
+#include "Formations.h"
 #include "GameObject.h"
 #include "GridNotifiers.h"
 #include "Group.h"
@@ -88,6 +89,8 @@ bool ContextMember(Player* bot, Player* owner)
     (void)owner;
     return bot->GetGUID().GetCounter() != HumanGuid() && IsCast(bot->GetGUID().GetCounter());
 }
+// The master whose bots the last pass made aware (0: none), so map threads turn every other bot away at once.
+std::atomic<std::uint32_t> awareMaster{0};
 std::uint32_t untilPass = 0;
 std::uint32_t passes = 0;
 std::uint64_t version = 0;
@@ -454,6 +457,7 @@ void Publish(Player* owner, std::vector<Player*> const& aware, bool on)
     std::lock_guard<std::mutex> lock(snapshotLock);
     // A new version only when the zones changed, so the answers memoised against them hold between passes.
     next->version = snapshot && snapshot->zones == next->zones ? snapshot->version : ++version;
+    awareMaster.store(owner && !next->aware.empty() ? owner->GetGUID().GetCounter() : 0, std::memory_order_relaxed);
     snapshot = std::move(next);
 }
 
@@ -486,6 +490,15 @@ void Summarise()
 constexpr std::size_t kCandidates = 6; // safe spots tried against the navmesh per answer
 constexpr float kMemoYards = 0.5f;
 
+// How near the bot's follow walks it before it stops, from its edge: its formation's own distance (chaos, the
+// default, widens it by up to about 3.5 yards every few seconds). A waypoint or leg must lie beyond it.
+float FollowStop(PlayerbotAI* ai)
+{
+    if (Formation* formation = ai ? ai->GetAiObjectContext()->GetValue<Formation*>("formation")->Get() : nullptr)
+        return formation->GetMaxDistance();
+    return sPlayerbotAIConfig.FollowDistance;
+}
+
 bool Close(HazardPoint a, HazardPoint b)
 {
     return std::hypot(a.x - b.x, a.y - b.y) < kMemoYards && std::fabs(a.z - b.z) < 2.0f;
@@ -507,7 +520,8 @@ std::vector<HazardZone> const* ZonesFor(Player* bot, PlayerbotAI*& ai, std::shar
         return nullptr;
     ai = GET_PLAYERBOT_AI(bot);
     Player* master = ai ? ai->GetMaster() : nullptr;
-    if (!master || master->GetGUID().GetCounter() != HumanGuid())
+    std::uint32_t const owner = awareMaster.load(std::memory_order_relaxed);
+    if (!master || !owner || master->GetGUID().GetCounter() != owner)
         return nullptr; // every other bot, at once
     {
         std::lock_guard<std::mutex> lock(snapshotLock);
@@ -597,9 +611,18 @@ public:
 
         HazardPoint target = goal.answer;
         bool changed = goal.moved;
-        if (auto const waypoint = Detour(bot, guid, at, goal.answer, *zones, reach, selection))
+        float const step = HazardDetourStep(FollowStop(ai), reach);
+        std::optional<HazardPoint> const waypoint =
+            Detour(bot, guid, at, goal.answer, *zones, reach, selection, step);
+        if (waypoint)
         {
             target = *waypoint;
+            changed = true;
+        }
+        // Near a moving npc, short legs (or a wait), so follow plans again from each fresh pass.
+        if (auto const leg = HazardMovingLeg(at, goal.answer, waypoint, *zones, reach, step))
+        {
+            target = *leg;
             changed = true;
         }
         if (!changed)
@@ -693,12 +716,11 @@ public:
 
 private:
     // A waypoint round the hazard in the way, kept until the bot is near it; nullopt when the way is clear.
+    // `reached`: a waypoint is kept until the bot is this near, and a new one must lie at least this far away,
+    // beyond the distance at which follow stops walking (HazardDetourStep).
     static std::optional<HazardPoint> Detour(Player* bot, std::uint32_t guid, HazardPoint at, HazardPoint goal,
-        std::vector<HazardZone> const& zones, float reach, std::uint64_t zonesVersion)
+        std::vector<HazardZone> const& zones, float reach, std::uint64_t zonesVersion, float reached)
     {
-        // A waypoint is kept until the bot is this near, and a new one must lie at least this far away, beyond
-        // the distance at which follow stops walking.
-        float const reached = HazardDetourStep(sPlayerbotAIConfig.FollowDistance, reach);
         {
             std::lock_guard<std::mutex> lock(memoLock);
             auto const found = detourMemo.find(guid);
@@ -716,7 +738,8 @@ private:
             return std::nullopt; // the straight way is clear, or stepping out comes first
         {
             std::lock_guard<std::mutex> lock(memoLock);
-            if (!HazardDetourAllowed(detourTracks[guid], at, goal))
+            // A moving npc in the way passes: no pocket to give up on.
+            if (!HazardFirstCrossingMoves(at, goal, zones, reach) && !HazardDetourAllowed(detourTracks[guid], at, goal))
                 return std::nullopt; // circling in a pocket between hazards: straight, as stock
         }
         auto const waypoints = HazardDetour(at, goal, zones, reach, reached);

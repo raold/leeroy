@@ -28,6 +28,23 @@ def valid_preserved_id(cmd_id) -> bool:
             and all(c.isalnum() or c in "_-" for c in cmd_id))
 
 
+MAX_PRESERVED_IDS = 65536
+
+
+def claim_preserved_id(cmd_id, issued: set, *, in_use=()) -> str:
+    """send(preserve_id=True)'s rule, shared with the test doubles that stand in for the bridge:
+    a valid identity (valid_preserved_id) never issued before on this client and not in use now.
+    Adds it to `issued`; ValueError otherwise."""
+    if not valid_preserved_id(cmd_id):
+        raise ValueError("invalid preserved command identity")
+    if cmd_id in issued or cmd_id in in_use:
+        raise ValueError("command identity already issued")
+    if len(issued) >= MAX_PRESERVED_IDS:
+        raise ValueError("preserved command identity capacity reached")
+    issued.add(cmd_id)
+    return cmd_id
+
+
 class BridgeError(Exception):
     pass
 
@@ -408,14 +425,9 @@ class BridgeClient:
             issued = self._preserved_ids = set()
         if preserve_id:
             cmd_id = cmd.id
-            if not valid_preserved_id(cmd_id):
-                raise ValueError("invalid preserved command identity")
-            old_auto = cmd_id.startswith("m") and cmd_id[1:].isdigit() and int(cmd_id[1:]) < self._next_id
-            if cmd_id in issued or cmd_id in self._pending or old_auto:
-                raise ValueError("command identity already issued")
-            if len(issued) >= 65536:
-                raise ValueError("preserved command identity capacity reached")
-            issued.add(cmd_id)
+            old_auto = (valid_preserved_id(cmd_id) and cmd_id.startswith("m") and cmd_id[1:].isdigit()
+                        and int(cmd_id[1:]) < self._next_id)
+            claim_preserved_id(cmd_id, issued, in_use={*self._pending, cmd_id} if old_auto else self._pending)
         else:
             cmd_id = f"m{self._next_id}"
             self._next_id += 1

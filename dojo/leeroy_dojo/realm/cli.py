@@ -25,7 +25,11 @@ def add_parser(sub) -> None:
     raids.add_argument("--scenario", action="append", choices=("valithria", "twins", "poison", "lk-terenas", "lk-defile"),
                        help="repeat to select gates; defaults to Valithria, Twins and Living Poison")
     offline = cmds.add_parser("offline-acceptance", help="prepare a synthetic guild and observe a real offline raid job")
-    offline.add_argument("--target", required=True, choices=("toc-beasts", "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves"))
+    offline.add_argument("--target", required=True, choices=("toc-beasts", "toc-full", "ulduar-full", "ulduar-route", "toc-slime-pools", "toc-slime-pools-control",
+        "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "ulduar-forced-tank-restart",
+        "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves",
+        "naxx-gothik-pass", "naxx-gothik-pass-control"))
+    offline.add_argument("--toc-worm-support", action="store_true", help="measure the candidate worm support in this isolated run")
     cmds.add_parser("lead-acceptance", help="observe native open-world leading, following, waiting and restoration")
     vehicles = cmds.add_parser("vehicle-acceptance", help="observe real raid vehicle boarding, movement and combat")
     vehicles.add_argument("--scenario", action="append", choices=("leviathan", "malygos"))
@@ -148,7 +152,7 @@ def run(args: argparse.Namespace) -> int:
             return 0 if report["ok"] else 1
         elif command == "offline-acceptance":
             from .offline import run as run_offline
-            report = run_offline(layout, target=args.target)
+            report = run_offline(layout, target=args.target, toc_worm_support=args.toc_worm_support)
             print(f"Offline acceptance: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "lead-acceptance":

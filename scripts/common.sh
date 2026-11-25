@@ -44,3 +44,59 @@ ac_git_modules() {
         [ -d "$d/.git" ] && printf '%s\n' "${d%/}"
     done
 }
+
+# --- game server processes ---------------------------------------------------
+# A dojo (or any other copy of the core) runs its own authserver.exe and worldserver.exe,
+# so this install's servers are the ones running $AC_BIN's executables: told apart by
+# path, never by image name (2026-11-24: a dojo worldserver made `ac-server.sh start`
+# skip the live one, and `stop` terminated every process of those names).
+# The listing has one "pid<TAB>image<TAB>executable path" line per process named
+# authserver.exe or worldserver.exe (the path empty when Windows does not give it), then
+# a line "end", so that an empty or cut-off listing never reads as "none running".
+# AC_PROCESSES names a command that prints a listing instead (tests).
+AC_SERVERS_PS=$'$ErrorActionPreference = \'Stop\'; [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); Get-CimInstance Win32_Process -Filter "Name = \'authserver.exe\' OR Name = \'worldserver.exe\'" | ForEach-Object { "$($_.ProcessId)`t$($_.Name)`t$($_.ExecutablePath)" }; \'end\''
+
+ac_server_processes() {
+    if [ -n "${AC_PROCESSES:-}" ]; then "$AC_PROCESSES"; else
+        powershell -NoProfile -NonInteractive -Command "$AC_SERVERS_PS" </dev/null
+    fi
+}
+
+# A Windows path as a comparable key in REPLY: backslashes, no \\?\ prefix, lower case.
+# shellcheck disable=SC1003  # the quoted \\?\ is the prefix itself, not an escaped quote
+ac_path_key() { REPLY=${1//\//\\}; REPLY=${REPLY#'\\?\'}; REPLY=${REPLY,,}; }
+
+# Reads one listing into AC_PROCS. 1 (and AC_PROCS empty) when it cannot be read, a line
+# is malformed or the "end" line is missing.
+ac_list_servers() {
+    local row re=$'^[0-9]+\t[^\t]+\t'
+    if ! AC_PROCS=$(ac_server_processes 2>/dev/null | tr -d '\r'); then AC_PROCS=''; return 1; fi
+    case "$AC_PROCS" in
+        end) AC_PROCS='' ;;
+        *$'\n'end) AC_PROCS=${AC_PROCS%$'\n'end} ;;
+        *) AC_PROCS=''; return 1 ;;
+    esac
+    while IFS= read -r row; do
+        if [ -n "$row" ] && ! [[ $row =~ $re ]]; then AC_PROCS=''; return 1; fi
+    done <<< "$AC_PROCS"
+}
+
+# For image $1 (authserver.exe or worldserver.exe) in AC_PROCS: AC_LIVE, this install's
+# PIDs; AC_ELSEWHERE, how many run from another path; AC_UNREAD, how many whose path
+# cannot be read (never this install's for certain, so never stopped either).
+ac_scan_servers() {
+    local want=${1,,} pid image path
+    if [ -z "${AC_BIN_KEY:-}" ]; then
+        if command -v cygpath >/dev/null 2>&1; then ac_path_key "$(cygpath -w "$AC_BIN")"; else ac_path_key "$AC_BIN"; fi
+        AC_BIN_KEY=${REPLY%\\}
+    fi
+    AC_LIVE='' AC_ELSEWHERE=0 AC_UNREAD=0
+    while IFS=$'\t' read -r pid image path; do
+        [ -n "$pid" ] && [ "${image,,}" = "$want" ] || continue
+        if [ -z "$path" ]; then AC_UNREAD=$((AC_UNREAD + 1)); continue; fi
+        ac_path_key "$path"
+        if [ "$REPLY" = "$AC_BIN_KEY\\$want" ]; then AC_LIVE="${AC_LIVE:+$AC_LIVE }$pid"
+        else AC_ELSEWHERE=$((AC_ELSEWHERE + 1)); fi
+    done <<< "$AC_PROCS"
+    return 0
+}

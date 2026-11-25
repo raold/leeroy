@@ -104,6 +104,8 @@ struct HazardZone
     std::uint32_t phase = 0; // the object's phase mask: a body in no shared phase never meets it (0: every phase)
     bool held = false;       // an add's own aura (HeldAuraHazard): tanks hold the add in it
     bool moving = false;     // it walks, and is led along its path (HazardLeadZone)
+    // moving: where it is, its own radius before the lead, its velocity (yards a second) and how long it keeps it
+    float px = 0, py = 0, core = 0, vx = 0, vy = 0, until = 0;
     bool operator==(HazardZone const&) const = default;
 };
 
@@ -112,6 +114,18 @@ struct HazardZone
 // path makes for, at `speed` yards a second, never past that point. Unchanged when it stands still.
 inline constexpr float kHazardLeadSeconds = 1.0f;
 HazardZone HazardLeadZone(HazardZone zone, std::optional<HazardPoint> next, float speed);
+// A walk meets a moving npc as both move: the bot at kHazardWalkSpeed from start to end, then standing
+// kHazardStandAfter at the end (until its next leg), the npc on its way from a pass up to kHazardScanAge old. The
+// walk crosses its zone when the two come within the npc's own radius plus the bot's reach at any moment; passing
+// behind it is clear, stepping into its way is not.
+inline constexpr float kHazardWalkSpeed = 7.0f;
+// A bot waiting for the way to clear must be able to stand where it waits this long: no moving npc comes within
+// its own radius plus the bot's reach plus kHazardMarginYards (HazardStandClear). Else it steps aside, at most
+// kHazardAsideYards, to the nearest spot where it may.
+inline constexpr float kHazardStandSeconds = 2.0f;
+inline constexpr float kHazardAsideYards = 10.0f;
+inline constexpr float kHazardStandAfter = 1.0f;
+inline constexpr float kHazardScanAge = 0.5f;
 
 // Whether a zone concerns a body in these phases: a zone in another phase never does (Halion's two realms), nor an
 // add's own aura a tank (it holds the add there).
@@ -127,6 +141,8 @@ bool InHazard(HazardPoint p, HazardZone const& zone, float reach);
 std::optional<std::size_t> HazardAt(HazardPoint p, std::vector<HazardZone> const& zones, float reach);
 // kHazardMarginYards clear of every zone's edge (beyond the reach).
 bool HazardClear(HazardPoint p, std::vector<HazardZone> const& zones, float reach);
+// HazardClear, and no moving npc comes that near within kHazardStandSeconds: a spot to wait on.
+bool HazardStandClear(HazardPoint p, std::vector<HazardZone> const& zones, float reach);
 // The straight walk from a to b enters no zone (no point within radius plus reach).
 bool HazardSegmentClear(HazardPoint a, HazardPoint b, std::vector<HazardZone> const& zones, float reach);
 
@@ -165,6 +181,24 @@ struct HazardDetourTrack
 };
 // Called before taking a new waypoint; false once detours toward this goal stopped making progress.
 bool HazardDetourAllowed(HazardDetourTrack& track, HazardPoint at, HazardPoint goal);
+
+// Follow commits a bot to the leg it sets out on (playerbots plans again only once that leg's walk time, up to
+// MaxWaitForMove, has passed), so near a moving hazard a long leg is walked blind into a slime's path. While a
+// moving zone lies within kHazardMovingNearYards of the bot, follow walks legs of at most kHazardMovingLegYards
+// (about half a second at run speed) and so plans again from each fresh pass, and where a moving npc shuts the
+// way it waits for it to pass, where it may stand (HazardStandClear) or a step aside.
+inline constexpr float kHazardMovingNearYards = 20.0f;
+inline constexpr float kHazardMovingLegYards = 4.0f;
+// The first zone across the straight walk from `from` to `goal` moves: it passes, so no pocket is given up on
+// (HazardDetourAllowed is for zones that stay) and with no way round the bot waits.
+bool HazardFirstCrossingMoves(HazardPoint from, HazardPoint goal, std::vector<HazardZone> const& zones, float reach);
+// Where follow walks next near moving zones: a leg toward `waypoint` (a detour) or else `goal`, cut to
+// kHazardMovingLegYards but never shorter than `minLeg` (HazardDetourStep: a nearer spot would stop follow), when
+// the walk is clear; else the bot's own spot to wait, if HazardStandClear, or the nearest such spot to step aside
+// to. nullopt when no moving zone is near, when the bot stands in a zone (the exit's job), when a zone that stays
+// shuts the way (follow as before), or when no spot to wait on is in reach.
+std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std::optional<HazardPoint> waypoint,
+    std::vector<HazardZone> const& zones, float reach, float minLeg);
 
 // One bot's recent exits, counted per hazard, so an exit never loops with another mover (follow, dungeon-clear's
 // route) that walks it back into the same hazards, overlapping ones included.

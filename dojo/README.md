@@ -33,6 +33,27 @@ admits an isolated `mod-dungeon-clear` checkout. Add its absolute path as
 `ports.leeroy` to the layout. Preflight refuses live links; configure/build
 attest this fourth checkout alongside source, core and playerbots.
 
+`realm --layout <layout> offline-acceptance --target naxx-gothik-pass` tests
+the #476 route starting in Razuvious' room. Setup marks only Anub'Rekhan,
+Faerlina, Maexxna, Noth, Heigan, Loatheb and Razuvious done and restores
+ordinary bot strategies before measurement. These seven are fixture
+prerequisites, excluded from earned kill accounting. Setup kills their real
+creatures and Razuvious' two summoned understudies without player credit;
+setting only instance states would leave a live boss on the return route.
+The 45 explicitly listed trash spawns on the upper Military Quarter approach
+and ramp before Razuvious are also prepared dead, with their spawn IDs recorded.
+Leaving them fresh would require reclearing the prerequisite wing on the return
+route. The lower Gothik corridor and Construct Quarter remain fresh. Missing,
+changed or respawned prerequisite spawns fail setup or observation.
+Any prerequisite reactivation fails the gate. The real offline job
+must skip Gothik once and engage the real Patchwerk within 600 seconds;
+Gothik must remain undefeated. No movement, healing, attack or skip command
+is supplied during observation. The separate `naxx-gothik-pass-control`
+exhausts the candidate's existing pass allowance before the job's first tick;
+it must leave Gothik unskipped and terminate `dc_unreachable` through the
+ordinary five-minute route-stall hold. Both require cleanup and shutdown.
+Both refuse a candidate without #476. Neither proves a full Naxx clear.
+
 `realm --layout <layout> offline-acceptance --target toc-beasts` prepares a
 synthetic guild on `DOJORAID` and `RNDBOTDOJO`, using dungeon-clear's actual
 level-80 spec/gear factory capped at item level 245. It restarts only its owned
@@ -57,6 +78,53 @@ offline job must enter `restarting`, revive and return the complete roster, then
 remain `running` for five seconds with the actual driver and elected tank intact.
 It exercises the recovery path behind `setup:restarting:timeout` without waiting
 for an accidental wipe. The existing setup timeout and cleanup requirements apply.
+
+`--target ulduar-tank-restart` separately waits for Razorscale's real main-tank
+reassignment before applying that wipe. Recovery must restore the job's designated
+tank as well as the complete roster and driver; it does not replace the XT check.
+
+`--target ulduar-forced-tank-restart` is a separate deterministic role-recovery
+check. After real Razorscale engagement it explicitly assigns the other tank's
+ordinary group main-tank flag and records that setup before the full wipe.
+Recovery must restore the designated job tank and satisfy the same restart gate.
+The report marks the forced assignment; it cannot pass either natural-role or
+XT target. This avoids depending on a role change that correct initial grouping
+can prevent. It does not claim Razorscale was defeated.
+The forced stimulus also declines pending self-resurrection offers after the
+real deaths. Otherwise automatic Ankh/Soulstone use turns the intended full wipe
+into a partial wipe. It records the number suppressed; Spirit of Redemption
+expires normally, and the offline job alone performs the restart and revival.
+
+`--target toc-full` and `--target ulduar-full` wait for the production job to
+finish naturally. They require every encounter DONE, the earned kill count,
+the `cleared` terminal, cleanup and shutdown; reaching the first boss or a
+scripted restart cannot pass. These longer runs use a three-hour job limit with
+the same three-wipe caps. The terminal retains the actual encounter-state vector
+after actors return home. `--toc-worm-support` also works with `toc-full`.
+
+Ulduar's current offline route only covers Ignis, Razorscale, XT-002, Kologarn and
+Auriaya. `--target ulduar-route` checks completion of that entire supported route
+with the native `cleared_reachable` terminal. Its receipt explicitly lists the
+nine unverified encounters. A route pass cannot pass `ulduar-full` or establish
+that all Ulduar bosses work.
+
+Run both `--target toc-slime-pools-control` and `--target toc-slime-pools` to check
+Slime Pool avoidance during the actual Northrend Beasts pull. The control disables
+only the isolated mechanic responder and must take real pool damage. The enabled
+case requires a successfully cast pool to grow by at least four yards over twenty
+seconds, an observed entry and escape, three seconds with all ten owned actors
+outside the current pool radii, and no damage after each pool's initial two-second
+reaction window. Unknown damage sources, missing cast evidence, sampling gaps over
+200 ms, lost actors, cleanup failure or shutdown failure cannot pass. The native
+observer reads the spell's actual radius multiplier; it never moves a bot or
+changes a pool. These checks do not claim the whole Beasts encounter was cleared.
+
+Add `--toc-worm-support` to a ToC target to test the candidate toxin/Bile support.
+The native fixture refuses if that feature is absent from the compiled candidate,
+enables it only in this owned run, records active samples, and must restore the
+previous value during cleanup. Both the full Beasts target and the two Slime Pool
+cases accept the option. It never changes the runtime configuration files or a
+live feature switch.
 
 `--target offline-reserves` starts with nine primary members and offers the
 fixed benched healer through the production reserve field. Its gate requires
@@ -217,6 +285,17 @@ The training-only hazard seam supplies the synthetic owner and same-account
 members in place of the live guild roster. The real scan, reconciliation,
 playerbots movement callbacks and navmesh execute unchanged. Guild roster
 discovery and production scheduler integration are outside this gate.
+The filter serves only bots whose master is the owner, a game client: their AI
+takes a turn every `Playerbots.ReactDelay` (0.1 s). Under a bot master
+playerbots waits 1-3 s between turns out of combat (`GetReactDelay`), which no
+member of his group meets, so between teleports the Living Poison case holds its
+leader as a self-bot (its own master), which playerbots counts as a game client
+master; a self-bot's teleport waits for a client's acknowledgement, so the
+leader is an ordinary bot while it moves. Under a game client master
+playerbots also gives the combat engine `avoid aoe` (`Playerbots.AutoAvoidAoe`),
+which runs the hazard exit; the fixture's engines are built under a bot master,
+so the case adds it. A Sludge Belcher patrol pulls the leader into combat
+about 55 s in, so the crossing under way then is made in the combat engine. The negative control keeps a bot master and neither.
 
 Reports and polled native observations go under `<data>/runs/*-raids-*/`.
 `report.json` includes candidate revisions, binary/layout hashes, all selected case

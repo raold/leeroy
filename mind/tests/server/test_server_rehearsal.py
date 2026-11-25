@@ -37,7 +37,7 @@ from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_clock import FakeClock
-from leeroy_mind.testing.fake_llm import FakeLLM
+from leeroy_mind.testing.fake_llm import FakeLLM, check_chat, check_embed
 from leeroy_mind.tuning.effective import effective, MemberTuning
 from nightly.conftest import FakeAdmin
 from selfies.fakes import until
@@ -105,6 +105,7 @@ class VariedLLM(FakeLLM):
 
     async def chat(self, model, messages, **kwargs):
         if kwargs.get('format') is not None:
+            check_chat(model, messages, **kwargs)
             from leeroy_mind.llm.client import ChatResult
             self.calls.append(dict(model=model,format=kwargs['format']))
             return ChatResult('{"memories":[]}', '', 1, 0.)
@@ -123,6 +124,7 @@ class VariedLLM(FakeLLM):
         return ' '.join(self.words.sample(words, 9))
 
     async def embed(self, model, inputs, *, dimensions=512, timeout=None):
+        check_embed(model, inputs, dimensions=dimensions)
         self.calls.append(dict(input=list(inputs)))
         vectors = []
         for text in inputs:

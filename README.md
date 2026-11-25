@@ -246,6 +246,13 @@ It also renders members' voice notes for Discord DMs and transcribes the ones
 he records back. Playback keeps each engine's native sound. Every voice is a blend of synthetic
 stock voices, none cloned from a real person.
 
+With `[voice] autostart = true` in `mind.toml` the mind starts it, and starts it
+again whenever it has been unreachable for a minute (then 2, 5, 10 and every 30
+minutes while it stays down; `voice_relaunched` in the mind's log). A stop asked
+for in the console or with `ac-voice.sh stop` leaves `voice.stopped` in its data
+dir and holds it down until his next login (`voice_relaunch_held`,
+`voice_hold_lifted`); any start removes it.
+
 Its default loopback ports are 7879 for the mind and 7880 for its browser
 panel. Runtime settings and models stay in the ignored `voice-data/`; voice
 specs and synthetic references stay in `mind-data/voices/`. The
@@ -480,13 +487,37 @@ Apply them to a checkout of each module with
 ./ac-build.sh                # preflight checks, configure, build
 ./ac-release.sh [--native] [--allow-scripts] [--dry-run] <commit>...  # deploy merged main commits
 ./ac-server.sh start|stop|status # the game servers and the mind; stops the worldserver cleanly over local SOAP
-./ac-voice.sh start|stop|status  # the voice service
+                             # (only this install's servers, by executable path: never a dojo's)
+./ac-voice.sh start|stop|status  # the voice service; a stop holds it down until his next login
 ./ac-health.sh [--json]      # read-only health check of the live install
 ./ac-guild-backup.sh         # verified, pruned backups of the guild's data to another machine
 ./ac-snapshot.sh             # copy live configs and module patches into this repo
 ./ac-module-to-git.sh [--go] [--subdir P] <module> <url> <commit>  # swap a zip-extracted module for its git clone
 ./verify/run.sh [--plan] [BASE]  # before a release: only the checks this branch's diff needs
 ```
+
+Modules converted with `--subdir` now record their prefix, upstream branch and
+source/split revisions in local Git configuration (`leeroy.subtreePrefix`,
+`leeroy.subtreeUpstream`, `leeroy.subtreeRevision`). `ac-update.sh` fetches the
+upstream, splits that folder in a temporary checkout and rebases only the local
+module edits. Local merge commits require manual updating: recreating a merge
+can discard edits made only in that merge. The upstream's client files never
+enter the module directory. After an interrupted metadata write, the updater
+recovers the applied split from the shared ancestry even if upstream has advanced
+again, so it does not replay upstream commits as local edits.
+`--dry-run` fetches and computes the split without changing the module HEAD or
+revision metadata. Conflicting local edits abort back to the original HEAD;
+rewritten upstream history, a removed source folder and incomplete metadata
+require manual review. Rollback needs both the HEADs in `scripts/.last-update`
+and the matching metadata commands in `scripts/.last-update.subtrees`; restore
+the HEADs, then run the latter with Bash before updating again. Both files are
+local, overwritten by the next real update, and absent from a dry run.
+
+The Slavery Valley conversion still belongs in a quiet native release: stop both
+servers, run the converter with `--subdir server-side/mod-bg-slaveryvalley` at the
+verified zip source commit, then run `ac-build.sh`. This change performs no live
+swap or release. An older conversion without metadata remains skipped; do not
+guess its split base or set its Git upstream to the unsplit repository.
 
 `verify/run.sh` reads `git diff BASE...HEAD` (default `origin/main`) and runs the
 matching checks, fastest first: `<windows.h>` macro names in added module code,

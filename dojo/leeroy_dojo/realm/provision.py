@@ -116,6 +116,14 @@ def write_configs(layout: Layout, manifest: tuple[Path, str] | None = None, only
         if not dist_path.is_file():
             raise LayoutError(f"no {dist_path}; build the dojo core first")
         dist_text = dist_path.read_text(encoding="utf-8")
+        if name == "worldserver.conf":
+            # Module loggers are valid core logging registrations, but do not
+            # appear in the core .dist. Add only these two reviewed slots;
+            # conf.render still refuses every other missing override.
+            present = conf.parse(dist_text)
+            for key in ("Appender.DungeonClear", "Logger.playerbots.dungeonclear"):
+                if key not in present:
+                    dist_text = dist_text.rstrip() + f'\n{key} = ""\n'
         overrides = dict(file_rules.training)
         overrides.update(values[name])
         text = conf.render(dist_text, overrides)

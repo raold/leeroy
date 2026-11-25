@@ -1,4 +1,5 @@
 """Supervise the candidate mechanic-feed process without importing the mind."""
+import argparse
 import json
 from pathlib import Path
 import subprocess
@@ -6,6 +7,14 @@ import sys
 import threading
 
 from . import world
+
+
+def feed_arguments(argv=None):
+    parser = argparse.ArgumentParser(description="Feed candidate raid mechanics to an isolated dojo realm")
+    parser.add_argument("--layout", type=Path, required=True)
+    parser.add_argument("--guild", type=int, required=True)
+    parser.add_argument("--map", type=int, choices=(533, 603, 631, 649), required=True)
+    return parser.parse_args(argv)
 
 
 class MechanicConnection:

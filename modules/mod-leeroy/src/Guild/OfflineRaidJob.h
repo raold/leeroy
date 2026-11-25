@@ -44,6 +44,10 @@ void RegisterOfflineRaidHandler();
 // Observes the real job; only compiled into the isolated acceptance variant.
 nlohmann::json DojoOfflineSnapshot();
 bool DojoStopOffline(std::string const& id);
+// Naxx route fixture only: configure the negative control before any job tick,
+// then exclude explicitly prepared prerequisites from earned kill accounting.
+bool DojoConfigureNaxxPass(std::string const& id, bool suppress);
+bool DojoPrimeNaxxStates(std::string const& id);
 #endif
 }
 
