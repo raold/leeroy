@@ -18,7 +18,7 @@ from .ports import TransportUnavailable
 from .protocol import GiveLoot, GetLootReceipt
 from .roles import role_of, stat_family
 from .store import _insert_ledger, balances
-from .upgrades import upgrade_gain
+from .upgrades import can_use, upgrade_gain
 
 if TYPE_CHECKING:
     from .session import RaidContextInfo
@@ -255,6 +255,8 @@ class LootMaster:
                     for guid in members:
                         member, persona = cast.get(guid), self.ports.persona(guid)
                         if member is None or not member.online or persona is None:
+                            continue
+                        if not can_use(item, member.race, member.class_):
                             continue
                         role = role_of(member.class_, member.spec_tab, persona.play.raid_role)
                         gain = upgrade_gain(item, member.class_, stat_family(member.class_, member.spec_tab, role),
