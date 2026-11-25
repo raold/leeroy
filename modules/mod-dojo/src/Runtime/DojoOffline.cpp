@@ -35,6 +35,7 @@
 #include "Guild/OfflineRaidJob.h"
 #include "Util/DcBotProvisioning.h"
 #include "Util/DcProvisionBudget.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -96,7 +97,117 @@ struct OfflineFixture
     uint32 slimeHits = 0, slimeLateHits = 0, slimeUnknownHits = 0;
     bool wormRequested = false, wormOverride = false, wormPrevious = false, wormRestored = true;
     uint32 wormSamples = 0;
+    std::string frontier = "none";
+    std::array<bool, 13> frontierHeld{};
+    std::array<std::array<std::array<bool, 3>, 2>, 13> frontierStrategies{};
+    uint32 frontierMs = 0, frontierHeals = 0, frontierStartHealth = 0, frontierPeakHealth = 0;
+    uint32 frontierSetupMask = 0;
+    uint64 frontierHealing = 0;
+    ObjectGuid frontierDragon;
     std::recursive_mutex mutex;
+
+    bool ReleaseFrontier()
+    {
+        bool clear = true;
+        for (std::size_t i = 1; i <= 10; ++i)
+            if (frontierHeld[i])
+            {
+                auto* p = Actor(i);
+                bool restored = true;
+                if (p)
+                    for (std::size_t state = 0; state < 2; ++state)
+                    {
+                        auto* ai = GET_PLAYERBOT_AI(p);
+                        auto const engine = state == 0 ? BOT_STATE_COMBAT : BOT_STATE_NON_COMBAT;
+                        std::array<char const*, 3> const names{"stay", "passive", "follow"};
+                        for (std::size_t flag = 0; flag < names.size(); ++flag)
+                        {
+                            bool const want = frontierStrategies[i][state][flag];
+                            ai->ChangeStrategy(std::string(want ? "+" : "-") + names[flag], engine);
+                            restored = restored && ai->HasStrategy(names[flag], engine) == want;
+                        }
+                    }
+                frontierHeld[i] = !restored;
+                clear = clear && restored;
+            }
+        return clear;
+    }
+
+    void PrepareFrontier(json const& native, uint32 diff)
+    {
+        if (frontier == "none" || frontier == "ready" || !error.empty()) return;
+        if (native.value("stage", "") != "running") return;
+        frontierMs += diff;
+        if (frontierMs > 10000) { error = "valithria_frontier_setup_timeout"; ReleaseFrontier(); return; }
+        auto* leader = Actor(1);
+        auto* instance = leader ? leader->GetInstanceScript() : nullptr;
+        if (!leader || leader->GetMapId() != 631 || !instance) return;
+        for (std::size_t i = 1; i <= 10; ++i)
+        {
+            auto* p = Actor(i);
+            if (!p || !p->IsAlive() || p->IsBeingTeleported() || p->GetMap() != leader->GetMap()
+                || !Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter()) || !sRandomPlayerbotMgr.IsPinned(actors[i].GetCounter())) return;
+            if (p->IsInCombat()) { error = "valithria_frontier_actor_in_combat"; ReleaseFrontier(); return; }
+        }
+        auto* ai = GET_PLAYERBOT_AI(leader);
+        auto* driver = ai->GetMaster();
+        if (!driver) { error = "valithria_frontier_driver_missing"; ReleaseFrontier(); return; }
+        if (frontier == "pending")
+        {
+            // The ordinary job has already proved a fresh instance and enabled
+            // its real driver. This separately named mechanic fixture now
+            // selects a later encounter; it is not a full-route result.
+            if (native.value("stage_ms", 0u) > 2000 || instance->GetCompletedEncounterMask() != 0)
+            { error = "valithria_frontier_not_fresh"; return; }
+            for (uint32 boss = 0; boss <= 10; ++boss)
+                if (instance->GetBossState(boss) == DONE || instance->GetBossState(boss) == IN_PROGRESS)
+                { error = "valithria_frontier_encounter_already_started"; return; }
+            ai->DoSpecificAction("dc off", Event("dc", "", driver), true);
+            if (DcRun::Of(ai).enabled) { error = "valithria_frontier_driver_not_stopped"; return; }
+            for (std::size_t i = 1; i <= 10; ++i)
+            {
+                auto* memberAI = GET_PLAYERBOT_AI(Actor(i));
+                for (std::size_t state = 0; state < 2; ++state)
+                {
+                    auto const engine = state == 0 ? BOT_STATE_COMBAT : BOT_STATE_NON_COMBAT;
+                    std::array<char const*, 3> const names{"stay", "passive", "follow"};
+                    for (std::size_t flag = 0; flag < names.size(); ++flag)
+                        frontierStrategies[i][state][flag] = memberAI->HasStrategy(names[flag], engine);
+                    memberAI->ChangeStrategy("+stay,+passive,-follow", engine);
+                }
+                frontierHeld[i] = true;
+                Actor(i)->StopMoving();
+            }
+            leader->GetMap()->LoadGrid(4203.5f, 2484.f);
+            auto* dragon = instance->GetCreature(10);
+            if (!dragon || dragon->GetEntry() != 36789 || !dragon->IsAlive())
+            { error = "valithria_frontier_dragon_missing"; ReleaseFrontier(); return; }
+            frontierDragon = dragon->GetGUID();
+            frontierStartHealth = frontierPeakHealth = dragon->GetHealth();
+            if (!frontierStartHealth || frontierStartHealth >= dragon->GetMaxHealth())
+            { error = "valithria_frontier_dragon_not_injured"; ReleaseFrontier(); return; }
+            for (uint32 boss = 0; boss < 10; ++boss) instance->SetBossState(boss, DONE);
+            for (uint32 boss = 0; boss < 10; ++boss)
+                if (instance->GetBossState(boss) != DONE)
+                { error = "valithria_frontier_prerequisite_refused"; ReleaseFrontier(); return; }
+            frontierSetupMask = instance->GetCompletedEncounterMask();
+            if (frontierSetupMask != 0 || instance->GetBossState(10) == DONE)
+            { error = "valithria_frontier_awarded_setup_credit"; ReleaseFrontier(); return; }
+            for (std::size_t i = 1; i <= 10; ++i)
+                Actor(i)->NearTeleportTo(4182.f + float(i % 3) * 2.f, 2480.f + float(i / 3) * 2.f, 364.956f, 0.f);
+            frontier = "arriving"; frontierMs = 0;
+        }
+        else if (frontierMs >= 1000)
+        {
+            for (std::size_t i = 1; i <= 10; ++i)
+                if (std::abs(Actor(i)->GetPositionZ() - 364.956f) > 8.f
+                    || std::hypot(Actor(i)->GetPositionX() - 4182.f, Actor(i)->GetPositionY() - 2484.f) > 30.f) return;
+            if (!ReleaseFrontier()) { error = "valithria_frontier_strategies_not_restored"; return; }
+            ai->DoSpecificAction("dc on", Event("dc", "", driver), true);
+            if (!DcRun::Of(ai).enabled) { error = "valithria_frontier_driver_not_resumed"; return; }
+            frontier = "ready"; frontierMs = 0;
+        }
+    }
 
     void RestoreWormSupport()
     {
@@ -221,7 +332,15 @@ struct OfflineFixture
             ++samples;
             clockMs += diff;
             auto const native = Leeroy::Guild::DojoOfflineSnapshot();
-            if (!native.value("active", false)) RestoreWormSupport();
+            if (!native.value("active", false)) { RestoreWormSupport(); ReleaseFrontier(); }
+            PrepareFrontier(native, diff);
+            if (frontier == "ready")
+            {
+                frontierMs += diff;
+                if (auto* leader = Actor(1))
+                    if (auto* dragon = leader->GetMap()->GetCreature(frontierDragon))
+                        frontierPeakHealth = std::max(frontierPeakHealth, dragon->GetHealth());
+            }
 #if DOJO_HAS_TOC_WORM_SUPPORT
             if (wormRequested && native.value("stage", "") == "running" && sPlayerbotAIConfig.TocWormSupport)
                 ++wormSamples;
@@ -276,8 +395,9 @@ struct OfflineFixture
         guildId = guild->GetId();
         bool const reserveTrial = scenario == "toc-reserves";
         bool const wormTrial = scenario == "toc-worms";
+        bool const valithriaTrial = scenario == "icc-valithria-frontier";
         if (wormTrial && !DOJO_HAS_TOC_WORM_SUPPORT) return "toc_worm_feature_missing_from_candidate";
-        map = scenario == "toc" || reserveTrial || wormTrial ? 649 : scenario == "ulduar" ? 603 : scenario == "icc" ? 631 : 0;
+        map = scenario == "toc" || reserveTrial || wormTrial ? 649 : scenario == "ulduar" ? 603 : scenario == "icc" || valithriaTrial ? 631 : 0;
         if (!map) return "unknown offline scenario";
         std::vector<std::size_t> requested{1, 2, 3, 4, 5, 6, 7, 8, 9};
         requested.push_back(reserveTrial ? 11 : 10);
@@ -302,6 +422,9 @@ struct OfflineFixture
         slimePools.clear(); clockMs = slimeGap = slimeInside = slimeEscapes = slimeOutsideMs = 0;
         slimeHits = slimeLateHits = slimeUnknownHits = 0;
         wormRequested = wormTrial; wormSamples = 0; wormRestored = !wormTrial;
+        frontier = valithriaTrial ? "pending" : "none"; frontierHeld = {}; frontierStrategies = {};
+        frontierMs = frontierHeals = frontierStartHealth = frontierPeakHealth = frontierSetupMask = 0;
+        frontierHealing = 0; frontierDragon.Clear();
 #if DOJO_HAS_TOC_WORM_SUPPORT
         if (wormTrial)
         {
@@ -344,7 +467,7 @@ struct OfflineFixture
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
         auto const native = Leeroy::Guild::DojoOfflineSnapshot();
-        if (!native.value("active", false)) RestoreWormSupport();
+        if (!native.value("active", false)) { RestoreWormSupport(); ReleaseFrontier(); }
         json bodies = json::array(), damage = json::array(), pools = json::array();
         for (std::size_t i = 1; i < actors.size(); ++i)
             if (auto* p = Actor(i))
@@ -372,6 +495,10 @@ struct OfflineFixture
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
             {"native", native}, {"bodies", bodies}, {"damage", damage},
             {"toc_worm_support", {{"requested", wormRequested}, {"active_samples", wormSamples}, {"restored", wormRestored}}},
+            {"valithria_frontier", {{"state", frontier}, {"measured_ms", frontierMs}, {"heals", frontierHeals},
+                {"healing", frontierHealing}, {"start_health", frontierStartHealth}, {"peak_health", frontierPeakHealth},
+                {"setup_completed_mask", frontierSetupMask},
+                {"setup_strategies_restored", std::none_of(frontierHeld.begin(), frontierHeld.end(), [](bool held) { return held; })}}},
             {"scripted_wipe", scriptedWipe}, {"restarting_seen", restartingSeen}, {"restarts_at_wipe", restartsAtWipe},
             {"main_tank", MainTank(Actor(1))}, {"wipe_boss", wipeBoss}, {"main_tank_at_wipe", mainTankAtWipe},
             {"slime", {{"pools", pools}, {"max_gap_ms", slimeGap}, {"inside_samples", slimeInside},
@@ -419,7 +546,16 @@ public:
 class Damage : public UnitScript
 {
 public:
-    Damage() : UnitScript("DojoOfflineDamage", true, {UNITHOOK_ON_DAMAGE}) { }
+    Damage() : UnitScript("DojoOfflineDamage", true, {UNITHOOK_ON_DAMAGE, UNITHOOK_ON_HEAL}) { }
+    void OnHeal(Unit* healer, Unit* receiver, uint32& amount) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(fixture.mutex);
+        if (fixture.state != "running" || fixture.frontier != "ready" || !healer || !receiver || !amount
+            || receiver->GetGUID() != fixture.frontierDragon
+            || std::find(fixture.actors.begin() + 1, fixture.actors.begin() + 11, healer->GetGUID()) == fixture.actors.begin() + 11
+            || !Leeroy::Guild::OfflineRaidOwns(healer->GetGUID().GetCounter())) return;
+        ++fixture.frontierHeals; fixture.frontierHealing += amount;
+    }
     void OnDamage(Unit* attacker, Unit* victim, uint32& amount) override
     {
         std::lock_guard<std::recursive_mutex> lock(fixture.mutex);

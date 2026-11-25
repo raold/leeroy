@@ -24,7 +24,8 @@ def add_parser(sub) -> None:
     cmds.add_parser("raid-acceptance", help="run Valithria, Twins and Living Poison in a dedicated stopped dojo realm")
     offline = cmds.add_parser("offline-acceptance", help="prepare a synthetic guild and observe a real offline raid job")
     offline.add_argument("--target", required=True, choices=("toc-beasts", "toc-slime-pools", "toc-slime-pools-control",
-        "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "icc-deathwhisper", "icc-gunship", "icc-valithria", "offline-reserves"))
+        "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "icc-deathwhisper", "icc-gunship", "icc-valithria",
+        "icc-valithria-frontier", "offline-reserves"))
     offline.add_argument("--toc-worm-support", action="store_true", help="measure the candidate worm support in this isolated run")
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)

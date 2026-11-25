@@ -80,6 +80,17 @@ previous value during cleanup. Both the full Beasts target and the two Slime Poo
 cases accept the option. It never changes the runtime configuration files or a
 live feature switch.
 
+`--target icc-valithria-frontier` is a focused offline-driver check, separate from
+the full-route `icc-valithria` target. The real job must first admit the complete
+synthetic raid into a fresh instance. Before measurement, the fixture stops its
+driver, temporarily sets the actors' ordinary stay/passive strategies, selects the ten prior boss-state prerequisites without
+encounter credit, and places the raid together in Valithria's room. It then
+restores each actor's original strategies and resumes the ordinary driver. No healing, health writes,
+position changes or target completion are supplied by the fixture during
+measurement. Passing requires real raid heals, observed dragon health gain,
+native Valithria DONE, restored strategies, job cleanup and shutdown. The report
+labels this setup explicitly; it is not evidence of clearing the earlier bosses.
+
 `--target offline-reserves` starts with nine primary members and offers the
 fixed benched healer through the production reserve field. Its gate requires
 ten distinct owned members, including that reserve, alive in the same running
