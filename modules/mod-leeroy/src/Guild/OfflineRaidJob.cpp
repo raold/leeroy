@@ -632,6 +632,16 @@ void ReassertMasters(Job& job)
     }
 }
 
+void DesignateRaidTank(Group* group, ObjectGuid leader)
+{
+    if (!group || !group->isRaidGroup()) return;
+    for (auto const& slot : group->GetMemberSlots())
+        if (slot.guid == leader && (slot.flags & MEMBER_FLAG_MAINTANK)) return;
+    // This core clears the unique MT flag even when SetGroupMemberFlag is
+    // called with apply=false. Assign it once, never in a per-member loop.
+    group->SetGroupMemberFlag(leader, true, MEMBER_FLAG_MAINTANK);
+}
+
 void Grouping(Job& job)
 {
     if (job.stageElapsed >= GroupingMs)
@@ -830,7 +840,6 @@ void Grouping(Job& job)
         if (!Dungeon(job))
         {
             group->ChangeMembersGroup(guid, static_cast<uint8>(subgroup++ % MAX_RAID_SUBGROUPS));
-            group->SetGroupMemberFlag(guid, member.guid == job.command.leaderGuid, MEMBER_FLAG_MAINTANK);
             bool const assistant = std::find(job.command.assistants.begin(), job.command.assistants.end(), member.guid)
                 != job.command.assistants.end();
             group->SetGroupMemberFlag(guid, assistant, MEMBER_FLAG_ASSISTANT);
@@ -838,6 +847,7 @@ void Grouping(Job& job)
         ApplyRaidHabits(job, FindOnline(member.guid), driver);
         member.masterAssigned = true;
     }
+    DesignateRaidTank(group, Guid(job.command.leaderGuid));
     group->SendUpdate();
     if (Benchmark(job))
     {
@@ -1425,6 +1435,11 @@ void Restarting(Job& job)
         case RestartRoster::Wait:
             break;
     }
+    // Encounter strategies can swap the MT during combat (Razorscale does).
+    // Once the owned roster is regrouped, restore the job's designated driver;
+    // otherwise DC elects the off-tank and Enable waits until setup times out.
+    if (allReady && leaderPresent && job.stageElapsed >= RestartSettleMs)
+        DesignateRaidTank(FindGroup(job), leader->GetGUID());
     if (allReady && job.stageElapsed >= RestartSettleMs && Enable(job, leader))
     {
         job.dcOff = 0;
