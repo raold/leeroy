@@ -13,6 +13,22 @@ def observation():
 
 
 class RestartGateTest(unittest.TestCase):
+    def test_forced_role_stimulus_requires_restoration_and_cannot_pass_natural_targets(self):
+        sample = observation() | dict(wipe_boss=2, main_tank_at_wipe=2, main_tank=1, tank_swap_forced=True)
+        self.assertTrue(reached(sample, target="ulduar-forced-tank-restart", token="run"))
+        for other in ("ulduar-restart", "ulduar-tank-restart"):
+            self.assertFalse(reached(sample, target=other, token="run"))
+        for key, value in (("tank_swap_forced", False), ("tank_swap_forced", None),
+                           ("wipe_boss", 3), ("main_tank_at_wipe", 1), ("main_tank", 2),
+                           ("scripted_wipe", False), ("restarting_seen", False)):
+            with self.subTest(key=key):
+                self.assertFalse(reached(sample | {key: value}, target="ulduar-forced-tank-restart", token="run"))
+        for key, value in (("driver", False), ("elected", 2), ("stage_ms", 4999), ("restarts", 2)):
+            bad = copy.deepcopy(sample)
+            bad["native"][key] = value
+            with self.subTest(native=key):
+                self.assertFalse(reached(bad, target="ulduar-forced-tank-restart", token="run"))
+
     def test_tank_swap_requires_actual_razorscale_role_change_and_restoration(self):
         sample = observation() | dict(wipe_boss=2, main_tank_at_wipe=2, main_tank=1)
         self.assertTrue(reached(sample, target="ulduar-tank-restart", token="run"))

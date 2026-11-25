@@ -91,6 +91,7 @@ struct OfflineFixture
     bool scriptedWipe = false, restartingSeen = false;
     uint32 restartsAtWipe = 0;
     uint32 wipeBoss = 0, mainTankAtWipe = 0;
+    bool tankSwapForced = false;
     std::map<uint32, std::pair<uint64, uint64>> hits;
     std::map<ObjectGuid, SlimePool> slimePools;
     uint32 clockMs = 0, slimeGap = 0, slimeInside = 0, slimeEscapes = 0, slimeOutsideMs = 0;
@@ -419,6 +420,7 @@ struct OfflineFixture
         std::lock_guard<std::recursive_mutex> lock(mutex);
         token = id; state = "running"; error.clear(); samples = 0; hits.clear();
         scriptedWipe = restartingSeen = false; restartsAtWipe = wipeBoss = mainTankAtWipe = 0;
+        tankSwapForced = false;
         slimePools.clear(); clockMs = slimeGap = slimeInside = slimeEscapes = slimeOutsideMs = 0;
         slimeHits = slimeLateHits = slimeUnknownHits = 0;
         wormRequested = wormTrial; wormSamples = 0; wormRestored = !wormTrial;
@@ -435,7 +437,7 @@ struct OfflineFixture
 #endif
         return "started";
     }
-    std::string Wipe(std::string const& id, bool swappedTank = false)
+    std::string Wipe(std::string const& id, bool swappedTank = false, bool forceTankSwap = false)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
         if (!Armed() || state != "running" || id != token || scriptedWipe || map != 603) return "wipe_not_admitted";
@@ -447,13 +449,25 @@ struct OfflineFixture
         auto* boss = instance ? instance->GetCreature(encounter) : nullptr;
         if (!instance || instance->GetBossState(encounter) != IN_PROGRESS || !boss || !boss->IsAlive() || !boss->IsInCombat())
             return "wipe_boss_not_engaged";
-        uint32 const tank = MainTank(leader);
-        if (swappedTank && (!tank || tank == actors[1].GetCounter())) return "wipe_tank_not_swapped";
+        uint32 tank = MainTank(leader);
+        if (swappedTank && !forceTankSwap && (!tank || tank == actors[1].GetCounter())) return "wipe_tank_not_swapped";
+        auto* group = leader->GetGroup();
+        if (!group || !group->isRaidGroup()) return "wipe_group_not_ready";
         for (std::size_t i = 1; i <= 10; ++i)
         {
             auto* p = Actor(i);
             if (!p || !p->IsAlive() || p->IsBeingTeleported() || p->GetMap() != leader->GetMap() ||
+                p->GetGroup() != group || !sRandomPlayerbotMgr.IsPinned(actors[i].GetCounter()) ||
                 !Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter())) return "wipe_actor_not_ready";
+        }
+        if (forceTankSwap)
+        {
+            // Explicit role-change stimulus for a separate deterministic gate.
+            // It must never be reported as the encounter AI's natural choice.
+            group->SetGroupMemberFlag(actors[2], true, MEMBER_FLAG_MAINTANK);
+            tank = MainTank(leader);
+            tankSwapForced = true;
+            if (tank != actors[2].GetCounter()) return "wipe_forced_tank_not_applied";
         }
         restartsAtWipe = native.value("restarts", 0u);
         wipeBoss = encounter; mainTankAtWipe = tank;
@@ -501,6 +515,7 @@ struct OfflineFixture
                 {"setup_strategies_restored", std::none_of(frontierHeld.begin(), frontierHeld.end(), [](bool held) { return held; })}}},
             {"scripted_wipe", scriptedWipe}, {"restarting_seen", restartingSeen}, {"restarts_at_wipe", restartsAtWipe},
             {"main_tank", MainTank(Actor(1))}, {"wipe_boss", wipeBoss}, {"main_tank_at_wipe", mainTankAtWipe},
+            {"tank_swap_forced", tankSwapForced},
             {"slime", {{"pools", pools}, {"max_gap_ms", slimeGap}, {"inside_samples", slimeInside},
                 {"escapes", slimeEscapes}, {"outside_ms", slimeOutsideMs}, {"hits", slimeHits},
                 {"late_hits", slimeLateHits}, {"unknown_hits", slimeUnknownHits},
@@ -517,7 +532,8 @@ public:
         static ChatCommandTable commands{{"prepare", Prepare, SEC_CONSOLE, Console::Yes},
             {"start", Start, SEC_CONSOLE, Console::Yes}, {"status", Status, SEC_CONSOLE, Console::Yes},
             {"stop", Stop, SEC_CONSOLE, Console::Yes}, {"wipe", Wipe, SEC_CONSOLE, Console::Yes},
-            {"wipe-tank-swap", WipeTankSwap, SEC_CONSOLE, Console::Yes}};
+            {"wipe-tank-swap", WipeTankSwap, SEC_CONSOLE, Console::Yes},
+            {"wipe-force-tank-swap", WipeForceTankSwap, SEC_CONSOLE, Console::Yes}};
         static ChatCommandTable dojo{{"offline", commands}};
         return {{"dojo", dojo}};
     }
@@ -525,6 +541,8 @@ public:
     static bool Wipe(ChatHandler* h, Tail args) { h->SendSysMessage("dojo offline: " + fixture.Wipe(std::string(args))); return true; }
     static bool WipeTankSwap(ChatHandler* h, Tail args)
     { h->SendSysMessage("dojo offline: " + fixture.Wipe(std::string(args), true)); return true; }
+    static bool WipeForceTankSwap(ChatHandler* h, Tail args)
+    { h->SendSysMessage("dojo offline: " + fixture.Wipe(std::string(args), true, true)); return true; }
     static bool Start(ChatHandler* h, Tail args)
     {
         std::istringstream in{std::string(args)};

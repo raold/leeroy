@@ -26,8 +26,8 @@ def add_parser(sub) -> None:
                        help="repeat to select gates; defaults to Valithria, Twins and Living Poison")
     offline = cmds.add_parser("offline-acceptance", help="prepare a synthetic guild and observe a real offline raid job")
     offline.add_argument("--target", required=True, choices=("toc-beasts", "toc-slime-pools", "toc-slime-pools-control",
-        "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "icc-deathwhisper", "icc-gunship", "icc-valithria",
-        "icc-valithria-frontier", "offline-reserves"))
+        "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "ulduar-forced-tank-restart",
+        "icc-deathwhisper", "icc-gunship", "icc-valithria", "icc-valithria-frontier", "offline-reserves"))
     offline.add_argument("--toc-worm-support", action="store_true", help="measure the candidate worm support in this isolated run")
     cmds.add_parser("lead-acceptance", help="observe native open-world leading, following, waiting and restoration")
     vehicles = cmds.add_parser("vehicle-acceptance", help="observe real raid vehicle boarding, movement and combat")
