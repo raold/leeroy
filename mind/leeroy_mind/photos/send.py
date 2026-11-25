@@ -122,10 +122,55 @@ class PhotoSender:
             return 'anyone'
         return None
 
+    def _unsolicited(self, turn, meta, now):
+        """[photos] unsolicited: the one photo just rendered for this turn (photo_seed), in her
+        DM with him, with the same freshness, heat, repeat and file checks as any `him` photo;
+        no ration draw (unsolicited.py keeps its own caps)."""
+        from .unsolicited import WHY
+        app = self.app
+        cid = channel_id(turn.channel) if is_discord(turn.channel) else None
+        row = app.store.conn.execute(f'SELECT {snaps._COLS} FROM selfie_snap WHERE id=?',
+                                     (meta.photo_seed,)).fetchone()
+        snap = snaps._row(row) if row is not None else None
+        if (meta.why != WHY or not self._enabled() or app.cfg.talk.selfies <= 0 or snap is None
+                or snap.guid != turn.speaker or snap.audience != 'him' or snap.status != 'ready'
+                or snap.source == 'request' or cid is None or layout.dm_peer(cid) != turn.speaker
+                or turn.to_guid != app.human_guid or snap.id in self._in_flight):
+            return None
+        if (not self._fresh(snap, now, request=True) or self._copied(snap, now)
+                or not heat_live.sends(app.personas.get(turn.speaker), snap.scene)):
+            return None
+        shows = snap.scene.get('shows')
+        attachment = self._attachment(snap) if isinstance(shows, str) and shows else None
+        if attachment is None:
+            return None
+        self._in_flight[snap.id] = 'him'
+        def release():
+            self._in_flight.pop(snap.id, None)
+        def valid():
+            moment = app.clock.now()
+            row = app.store.conn.execute('SELECT status FROM selfie_snap WHERE id=?', (snap.id,)).fetchone()
+            return bool(self._enabled() and self._in_flight.get(snap.id) == 'him' and row and row[0] == 'ready'
+                        and heat_live.sends(app.personas.get(turn.speaker), snap.scene)
+                        and self._fresh(snap, moment, request=True) and not self._copied(snap, moment)
+                        and self._attachment(snap) is not None)
+        def sent(line_id, msg_id):
+            if not snaps.mark_sent(app.store, snap.id, sender=turn.speaker, channel='dm',
+                                   line_id=line_id, now=app.clock.now()):
+                raise snaps.SnapError('photo is no longer ready')
+            self._in_flight.pop(snap.id, None)
+        log('photo_offered', snap=snap.id, channel_kind='dm')
+        return PhotoOffer(snap, "You just took this photo of yourself and are sending it to him out of "
+            "the blue, because you wanted him to see you: " + shows + ". Write the short message "
+            "you'd send with it, in your own way; don't describe the photo in detail.",
+            sent, release, attachment, valid)
+
     def offer(self, turn, meta, now):
         requests = getattr(self, 'requests', None)
         if requests is not None and meta.photo_request is not None:
             return requests.offer(turn, meta, now)
+        if meta.why == 'selfie:unsolicited':
+            return self._unsolicited(turn, meta, now)
         app, dial = self.app, self.app.cfg.talk.selfies
         audience = self._channel(turn, meta)
         if not self._enabled() or audience is None or dial <= 0 or len(self._in_flight) >= MAX_IN_FLIGHT or not self._room(audience, now):

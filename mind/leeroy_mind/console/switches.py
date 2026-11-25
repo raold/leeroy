@@ -74,6 +74,7 @@ SWITCHES = (
     ('photos','requests','Selfie requests','photos.send; selfies.enabled; selfies.snaps; server.enabled'),
     ('photos','request_priority','Priority selfie requests while playing','photos.requests; chat waits during rendering'),
     ('photos','scene_from_words','Selfie scenes from his words','photos.requests'),
+    ('photos','unsolicited','Unsolicited selfies from romantic members','photos.requests; renders only while the GPU is idle'),
     ('selfies','snaps','Situational photos','selfies.enabled; identity adapter fetched'),
     ('selfies','booth','Photo booth','selfies.enabled'), ('looks','diversity','Looks diversity',''),
     ('selfies','variety','Photo style variety','selfies.enabled'),
