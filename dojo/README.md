@@ -50,6 +50,14 @@ count, missing telemetry, setup failure, or a wipe cap is a failure. Gunship
 DONE is a scripted pass, not a boss kill. The Valithria target enables its
 switch only in the isolated configuration, then restores it to off.
 
+`--target ulduar-restart` waits for the actual XT-002 encounter to engage, then
+uses a token-scoped native command to kill the ten owned synthetic raid actors.
+This is a recorded test stimulus, not an earned combat outcome. The ordinary
+offline job must enter `restarting`, revive and return the complete roster, then
+remain `running` for five seconds with the actual driver and elected tank intact.
+It exercises the recovery path behind `setup:restarting:timeout` without waiting
+for an accidental wipe. The existing setup timeout and cleanup requirements apply.
+
 `--target offline-reserves` starts with nine primary members and offers the
 fixed benched healer through the production reserve field. Its gate requires
 ten distinct owned members, including that reserve, alive in the same running
