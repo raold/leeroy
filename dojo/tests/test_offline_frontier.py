@@ -6,7 +6,7 @@ from leeroy_dojo.realm.offline import reached
 
 def observation():
     return dict(token="run", error="", samples=1000,
-        native=dict(stage="running", driver=True, leader=15, elected=15, event=dict(id="run", instance_id=42)),
+        native=dict(stage="running", driver=True, leader=15, elected=15, event=dict(id="run", instance_id=42, wipes=0)),
         bodies=[dict(slot=i, guid=14+i, owned=True, pinned=True, map=631, instance=42, bosses=[3]*11) for i in range(1, 11)],
         valithria_frontier=dict(state="ready", setup_strategies_restored=True, measured_ms=20000,
             heals=5, healing=30000, start_health=500000, peak_health=1000000, setup_completed_mask=0))
@@ -51,6 +51,13 @@ class ValithriaFrontierTest(unittest.TestCase):
         obs = observation()
         obs["bodies"][0]["bosses"][10] = 0
         self.assertFalse(reached(obs, target="icc-valithria", token="run"))
+
+    def test_clear_after_wiping_cannot_reuse_frontier_evidence(self):
+        for value in (1, 2, True, None):
+            obs = observation()
+            obs["native"]["event"]["wipes"] = value
+            with self.subTest(wipes=value):
+                self.assertFalse(reached(obs, target="icc-valithria-frontier", token="run"))
 
 
 if __name__ == "__main__":
