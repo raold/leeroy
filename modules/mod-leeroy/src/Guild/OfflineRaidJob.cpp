@@ -2266,12 +2266,49 @@ nlohmann::json DojoOfflineSnapshot()
     }
     auto* leader = FindOnline(job.command.leaderGuid);
     auto* elected = leader ? DcLeaderSignal::FindLeaderTank(leader) : nullptr;
-    return {{"active", true}, {"event", MakeJobEvent(job.event)}, {"stage", Name(job.stage)},
+    nlohmann::json observation = {{"active", true}, {"event", MakeJobEvent(job.event)}, {"stage", Name(job.stage)},
         {"map", job.command.mapId}, {"boss_states", job.previousBossStates},
         {"stage_ms", job.stageElapsed}, {"elapsed_ms", job.elapsed}, {"restarts", job.restarts},
         {"driver", Driver(job) != nullptr}, {"leader", job.command.leaderGuid},
         {"elected", elected ? elected->GetGUID().GetCounter() : 0}, {"bodies", bodies},
         {"cleanup", false}};
+#if __has_include("DcRouteStall.h")
+    observation["route_passes"] = job.dcPasses;
+#endif
+    return observation;
+}
+
+bool DojoConfigureNaxxPass([[maybe_unused]] std::string const& id, [[maybe_unused]] bool suppress)
+{
+#if __has_include("DcRouteStall.h")
+    if (!active || active->event.id != id || active->command.mapId != 533 || active->elapsed
+        || active->mode != RaidJobMode::Offline) return false;
+    // Exhaust the existing bound only for the explicitly named negative control.
+    // No production flag, fake stall, altered hold time, or skip command is added.
+    active->dcPasses = suppress ? OfflineDcPassLimit : 0;
+    return true;
+#else
+    return false; // The baseline lacks #476; never claim to test its pass path.
+#endif
+}
+
+bool DojoPrimeNaxxStates(std::string const& id)
+{
+    if (!active || active->event.id != id || active->command.mapId != 533
+        || active->stage != Stage::Running || active->stageElapsed > 10000) return false;
+    auto* leader = FindOnline(active->command.leaderGuid);
+    auto* instance = leader ? leader->GetInstanceScript() : nullptr;
+    if (!instance || instance->GetEncounterCount() != 15) return false;
+    std::vector<uint8> states;
+    for (uint32 i = 0; i < 15; ++i)
+    {
+        bool const prepared = (i >= 3 && i <= 8) || i == 10;
+        auto const state = instance->GetBossState(i);
+        if (state != (prepared ? DONE : NOT_STARTED)) return false;
+        states.push_back(static_cast<uint8>(state));
+    }
+    active->previousBossStates = states;
+    return true;
 }
 
 bool DojoStopOffline(std::string const& id)

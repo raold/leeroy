@@ -33,6 +33,19 @@ admits an isolated `mod-dungeon-clear` checkout. Add its absolute path as
 `ports.leeroy` to the layout. Preflight refuses live links; configure/build
 attest this fourth checkout alongside source, core and playerbots.
 
+`realm --layout <layout> offline-acceptance --target naxx-gothik-pass` tests
+the #476 route from the Gothik corridor. Setup marks only Anub'Rekhan,
+Faerlina, Maexxna, Noth, Heigan, Loatheb and Razuvious done and restores
+ordinary bot strategies before measurement. These seven are fixture
+prerequisites, excluded from earned kill accounting. The real offline job
+must skip Gothik once and engage the real Patchwerk within 600 seconds;
+Gothik must remain undefeated. No movement, healing, attack or skip command
+is supplied during observation. The separate `naxx-gothik-pass-control`
+exhausts the candidate's existing pass allowance before the job's first tick;
+it must leave Gothik unskipped and terminate `dc_unreachable` through the
+ordinary five-minute route-stall hold. Both require cleanup and shutdown.
+Both refuse a candidate without #476. Neither proves a full Naxx clear.
+
 `realm --layout <layout> offline-acceptance --target toc-beasts` prepares a
 synthetic guild on `DOJORAID` and `RNDBOTDOJO`, using dungeon-clear's actual
 level-80 spec/gear factory capped at item level 245. It restarts only its owned
