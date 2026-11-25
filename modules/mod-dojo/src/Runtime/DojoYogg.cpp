@@ -60,7 +60,9 @@ struct Trial
     std::array<ObjectGuid, Names.size()> observedConstrictors{};
     uint32 constrictorAttachments = 0;
     std::array<bool, Names.size()> previousMoving{};
-    std::array<std::array<uint32, 4>, Names.size()> recentSpells{}, recentSpellMs{};
+    // A native grab emits spawn, lunge, squeeze and duplicate ride effects in
+    // one update. Keep the spawn evidence until the seat position is sampled.
+    std::array<std::array<uint32, 8>, Names.size()> recentSpells{}, recentSpellMs{};
     json failureFacts = json::object();
     std::array<uint32, Names.size()> portalCasts{}, exitCasts{}, minimumSanity{};
     std::set<ObjectGuid> influenceDeaths;
@@ -83,6 +85,26 @@ struct Trial
         for (std::size_t n = 0; n < recentSpells[i].size(); ++n)
             if (recentSpells[i][n]) facts.push_back({{"spell", recentSpells[i][n]}, {"age_ms", elapsed - recentSpellMs[i][n]}});
         return facts;
+    }
+    json ConstrictorFacts(Player* p, std::size_t i) const
+    {
+        auto* base = p->GetVehicleBase();
+        if (!base) return json::object();
+        auto* creature = base->ToCreature();
+        auto* summon = creature ? creature->ToTempSummon() : nullptr;
+        auto const* spell = sSpellMgr->GetSpellInfo(64133);
+        float const angle = base->GetOrientation();
+        float const x = base->GetPositionX() + p->GetTransOffsetX() * std::cos(angle) - p->GetTransOffsetY() * std::sin(angle);
+        float const y = base->GetPositionY() + p->GetTransOffsetY() * std::cos(angle) + p->GetTransOffsetX() * std::sin(angle);
+        float const z = base->GetPositionZ() + p->GetTransOffsetZ();
+        return {{"summoned_by_actor", summon && summon->GetSummonerGUID() == p->GetGUID()},
+            {"already_observed", observedConstrictors[i] == base->GetGUID()},
+            {"lunge_aura", base->HasAura(64123, p->GetGUID())}, {"squeeze_aura", p->HasAura(64125)},
+            {"spawn_radius", spell ? spell->Effects[EFFECT_0].CalcRadius(p) : 0.f},
+            {"spawn_distance", base->GetExactDist(previous[i])},
+            {"spawn_distance_2d", base->GetExactDist2d(previous[i])},
+            {"seat_error", p->GetExactDist(x, y, z)},
+            {"base_position", {base->GetPositionX(), base->GetPositionY(), base->GetPositionZ()}}};
     }
     bool NativeConstrictorAttachment(Player* p, std::size_t i)
     {
@@ -300,6 +322,7 @@ struct Trial
                             {"motion", uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType())},
                             {"previous_motion", previousMotion[i]}, {"moving", p->isMoving()},
                             {"previous_moving", previousMoving[i]}, {"previous_vehicle_entry", previousVehicle[i]},
+                            {"constrictor", ConstrictorFacts(p, i)},
                             {"vehicle_entry", p->GetVehicleBase() ? p->GetVehicleBase()->GetEntry() : 0u},
                             {"recent_casts", CastFacts(i)},
                             {"from", {previous[i].GetPositionX(), previous[i].GetPositionY(), previous[i].GetPositionZ()}},
