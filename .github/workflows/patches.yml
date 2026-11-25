@@ -1,7 +1,7 @@
 name: patches
 
 # Applies patches/mod-playerbots (then the dojo's patches/dojo/mod-playerbots on top), patches/mod-ollama-chat and
-# patches/mod-dungeon-clear to the newest upstream. Nightly, so an upstream change that breaks a local patch shows up
+# patches/mod-dungeon-clear and patches/mod-individual-progression to the newest upstream. Nightly, so an upstream change that breaks a local patch shows up
 # as an issue here before ac-update.sh runs into the same conflict.
 
 on:
@@ -156,4 +156,38 @@ jobs:
               --body "The nightly check could not apply \`patches/mod-dungeon-clear\` to upstream \`master\`, or the result failed its lints: $RUN_URL
 
           Rebase the local commits in \`modules/mod-dungeon-clear\` (\`ac-update.sh\` stops on the same conflict), then run \`scripts/ac-snapshot.sh\` and commit."
+          fi
+
+  mod-individual-progression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: leeroy
+
+      - name: Clone upstream mod-individual-progression
+        run: git clone --filter=blob:none https://github.com/ZhengPeiRu21/mod-individual-progression.git individual-progression
+
+      - name: Apply the local patches
+        working-directory: individual-progression
+        run: |
+          git -c user.name=leeroy-ci -c user.email=ci@invalid am --3way ../leeroy/patches/mod-individual-progression/*.patch
+          git log --oneline -n "$(find ../leeroy/patches/mod-individual-progression -name '*.patch' | wc -l)"
+
+      - name: Open or update the drift issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create patch-drift --color D93F0B --description "Local patches no longer apply to upstream" --force
+          issue=$(gh issue list --label patch-drift --state open --search "mod-individual-progression in:title" --json number --jq '.[0].number')
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "Still failing: $RUN_URL"
+          else
+            gh issue create --label patch-drift               --title "mod-individual-progression patches no longer apply to upstream"               --body "The nightly check could not apply \`patches/mod-individual-progression\` to the upstream default branch: $RUN_URL
+
+          Rebase the local commits in \`modules/mod-individual-progression\` (\`ac-update.sh\` stops on the same conflict), then run \`scripts/ac-snapshot.sh\` and commit."
           fi
