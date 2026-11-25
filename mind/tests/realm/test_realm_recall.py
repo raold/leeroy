@@ -7,7 +7,7 @@ import pytest
 
 from conftest import run
 from leeroy_mind.bodies import ALL, BodyHold
-from leeroy_mind.guild.protocol import BotDo, Job, JobSkip
+from leeroy_mind.guild.protocol import BotDo, Job, JobSkip, register as register_guild_protocol
 from leeroy_mind.protocol import Ack, Hello
 from leeroy_mind.realm import protocol as p
 from leeroy_mind.realm.service import attach_realm
@@ -26,6 +26,9 @@ class Pipeline:
         self.members = set()
 
     async def __aenter__(self):
+        # Production attaches guild-life before Realm. Keep its real wire
+        # registration when this module runs without the rest of the suite.
+        register_guild_protocol()
         self.realm = attach_realm(self.app)
         self.realm.ports.cast = lambda: [SimpleNamespace(guid=g, online=g in self.online)
                                          for g in sorted(self.members)]
@@ -681,6 +684,125 @@ def test_a_rearm_that_skipped_members_is_done_and_its_defaults_go_to_everyone(pi
             assert type(h.app.sent[-1]) is p.Rearm and h.app.sent[-1].guids == (101, 102, 103)
             expected = [f"realm_rearm_skipped id={rearm.id} kind=rearm skipped={len(skipped)} members=3"]
             assert [m for m in caplog.messages if m.startswith("realm_rearm_skipped")] == (expected if skipped else [])
+    run(scenario())
+
+
+async def complete_skipped_rearm(h, members, skipped):
+    h.cast(*members)
+    h.realm.recall.restore_defaults()
+    await h.cycle()
+    rearm, = h.app.sent
+    await h.app.event(p.RealmJob(0, rearm.id, "rearm", "done", "", 0,
+                                len(members) - len(skipped), "", None, skipped))
+    await h.cycle(1.01)
+    defaults = h.app.sent[-1]
+    assert type(defaults) is BotDo
+    await h.result(defaults)
+    return rearm
+
+
+def test_skipped_rearm_retries_only_that_member_with_a_new_command(pipeline):
+    async def scenario():
+        async with pipeline as h:
+            first = await complete_skipped_rearm(h, (101, 102), (102,))
+            original = h.realm.action_store.get(first.id)
+            await h.clock.advance(13, step=13)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            assert len(h.app.sent) == 2
+            await h.clock.advance(1.1, step=1.1)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            retry = h.app.sent[-1]
+            assert type(retry) is p.Rearm and retry.guids == (102,) and retry.id != first.id
+            assert h.realm.action_store.get(first.id) == original
+            await h.result(retry)
+            await h.cycle(1.01)
+            await h.result(h.app.sent[-1])
+            await h.clock.advance(30, step=30)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            assert len(h.app.sent) == 4
+            assert h.realm.action_store.holds() == ()
+    run(scenario())
+
+
+def test_rearm_retry_with_an_unknown_result_keeps_its_hold_without_resending(pipeline):
+    async def scenario():
+        async with pipeline as h:
+            first = await complete_skipped_rearm(h, (101, 102), (102,))
+            await h.clock.advance(15, step=15)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            retry = h.app.sent[-1]
+            assert type(retry) is p.Rearm and retry.id != first.id
+            await h.app.event(p.RealmJob(0, retry.id, "rearm", "failed",
+                                        "operation_transition_unknown", 102, 0))
+            for _ in range(3):
+                await h.clock.advance(20, step=20)
+                h.realm.recall.tick(h.clock.now())
+                await h.cycle()
+            assert [c for c in h.app.sent if type(c) is p.Rearm] == [first, retry]
+            assert h.realm.action_store.holds()[0].guids == frozenset({102})
+    run(scenario())
+
+
+def test_rearm_retry_yields_to_a_new_native_holder(pipeline):
+    async def scenario():
+        async with pipeline as h:
+            await complete_skipped_rearm(h, (101, 102), (102,))
+            held = [BodyHold("training-new", "training", 2, {102}, True)]
+            h.realm.bodies.add_holder_source("new-holder", lambda: tuple(held))
+            await h.clock.advance(15, step=15)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            assert len(h.app.sent) == 2
+            held.clear()
+            h.realm.bodies.poll()
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            assert type(h.app.sent[-1]) is p.Rearm and h.app.sent[-1].guids == (102,)
+    run(scenario())
+
+
+@pytest.mark.parametrize("boundary", ["invalidate", "disconnect", "realm_off"])
+def test_rearm_retry_does_not_cross_a_control_boundary(pipeline, boundary):
+    async def scenario():
+        async with pipeline as h:
+            await complete_skipped_rearm(h, (101, 102), (102,))
+            if boundary == "invalidate":
+                h.realm.recall.invalidate()
+            elif boundary == "disconnect":
+                await h.app.connection(False)
+            else:
+                h.realm.queue.off = True
+            await h.clock.advance(20, step=20)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            assert [c for c in h.app.sent if type(c) is p.Rearm] == [h.app.sent[0]]
+    run(scenario())
+
+
+def test_due_rearm_retries_are_limited_to_sixteen_members_per_second(pipeline):
+    async def scenario():
+        async with pipeline as h:
+            members = tuple(range(101, 133))
+            first = await complete_skipped_rearm(h, members, members)
+            await h.clock.advance(15, step=15)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            retry = h.app.sent[-1]
+            assert type(retry) is p.Rearm and len(retry.guids) == 16 and retry.id != first.id
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            assert h.app.sent[-1] == retry
+            await h.clock.advance(1.01, step=1.01)
+            h.realm.recall.tick(h.clock.now())
+            await h.cycle()
+            second = h.app.sent[-1]
+            assert type(second) is p.Rearm and len(second.guids) == 16
+            assert set(retry.guids).isdisjoint(second.guids)
+            assert set(retry.guids) | set(second.guids) == set(members)
     run(scenario())
 
 

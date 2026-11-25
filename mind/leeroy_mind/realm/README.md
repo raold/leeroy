@@ -13,6 +13,19 @@ This change needs a mind release and restart, with no migration or native rebuil
 reports an empty list as ready with built-in checks active. Rolling back to an older mind
 holds Realm speech again while the file is empty. Existing entries and files are not changed.
 
+## Skipped weapon rearms
+
+A completed, successful rearm that names skipped members keeps a retry wish for each of
+those members. Recall checks due wishes every second, queues at most sixteen per check,
+and waits fifteen seconds between attempts for the same member. Normal online, ownership,
+connection and queue admission checks still apply. A successful later rearm removes the wish.
+The cache holds at most 512 members and clears when the connection identity is invalidated;
+the ordinary periodic defaults pass remains the fallback after a restart or cache overflow.
+
+Each retry uses a fresh command ID after a proved terminal result. Unknown outcomes keep
+their existing holds and reconciliation, and PvP leave skips retain their existing backoff.
+No native release or migration is needed.
+
 ## Lost ACKs and native restarts
 
 A correlated terminal job takes precedence over a lost ACK. Once its transport
@@ -20,7 +33,7 @@ settles, a complete `bot_do` receipt or a done `realm_job` completes the action
 even if the ACK timed out. Arrival order does not change the result. Failed jobs
 retain their existing rules: proved no-change refusals free the manifest;
 unproved failures stay `job_failed`, holding whatever native has not released.
-Skipped members retain their existing 600-second backoff. Mind startup also
+Skipped PvP leave members retain their existing 600-second backoff. Mind startup also
 rechecks older unknown rows carrying terminal evidence.
 
 The timeout's `transport_unknown` callback is a non-final notice: Recall waits
