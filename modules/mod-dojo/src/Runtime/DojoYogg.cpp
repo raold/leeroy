@@ -52,6 +52,9 @@ struct Trial
     std::array<bool, Names.size()> entered{}, exited{}, healerEntrants{};
     std::array<bool, Names.size()> positioned{}, wasBelow{};
     std::array<Position, Names.size()> previous{};
+    std::array<uint32, Names.size()> previousVehicle{}, previousMotion{};
+    std::array<bool, Names.size()> previousMoving{};
+    std::array<std::array<uint32, 4>, Names.size()> recentSpells{}, recentSpellMs{};
     json failureFacts = json::object();
     std::array<uint32, Names.size()> portalCasts{}, exitCasts{}, minimumSanity{};
     std::set<ObjectGuid> influenceDeaths;
@@ -68,6 +71,13 @@ struct Trial
     }
     void Phase(std::string const& next) { state = next; phaseMs = 0; }
     void Fail(std::string const& why) { failure = why; Phase("cleanup"); }
+    json CastFacts(std::size_t i) const
+    {
+        json facts = json::array();
+        for (std::size_t n = 0; n < recentSpells[i].size(); ++n)
+            if (recentSpells[i][n]) facts.push_back({{"spell", recentSpells[i][n]}, {"age_ms", elapsed - recentSpellMs[i][n]}});
+        return facts;
+    }
     std::string Start(std::string const& id, bool control)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -89,6 +99,7 @@ struct Trial
         elapsed = samples = maxGap = illusion = portals = brainStart = brainLeast = brainHits = exitRemaining = initialSanity = 0;
         maxBelow = maxHealersBelow = tanksBelow = 0; minHealersAbove = 100;
         entered = {}; exited = {}; healerEntrants = {}; positioned = {}; wasBelow = {};
+        previousVehicle = {}; previousMotion = {}; previousMoving = {}; recentSpells = {}; recentSpellMs = {};
         portalCasts = {}; exitCasts = {}; minimumSanity.fill(100); influenceDeaths.clear();
         failureFacts = json::object();
         ready = cleanup = humanGone = false; active = true;
@@ -210,7 +221,16 @@ struct Trial
             {
                 auto* p = Actor(i);
                 if (!p || !p->IsAlive() || p->GetMap() != leader->GetMap() || p->IsCharmed())
-                { Fail("yogg_actor_dead_lost_or_charmed"); return; }
+                {
+                    failureFacts = {{"slot", i}, {"present", p != nullptr}, {"recent_casts", CastFacts(i)}};
+                    if (p)
+                    {
+                        failureFacts["alive"] = p->IsAlive(); failureFacts["health"] = p->GetHealth();
+                        failureFacts["charmed"] = p->IsCharmed(); failureFacts["map"] = p->GetMapId();
+                        failureFacts["instance"] = p->GetInstanceId();
+                    }
+                    Fail("yogg_actor_dead_lost_or_charmed"); return;
+                }
                 auto* sanity = p->GetAura(63050);
                 uint32 const stacks = sanity ? sanity->GetStackAmount() : 0;
                 minimumSanity[i] = std::min(minimumSanity[i], stacks);
@@ -232,12 +252,19 @@ struct Trial
                         failureFacts = {{"slot", i}, {"distance", p->GetExactDist(previous[i])},
                             {"delta_ms", diff}, {"run_speed", p->GetSpeed(MOVE_RUN)},
                             {"motion", uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType())},
+                            {"previous_motion", previousMotion[i]}, {"moving", p->isMoving()},
+                            {"previous_moving", previousMoving[i]}, {"previous_vehicle_entry", previousVehicle[i]},
+                            {"vehicle_entry", p->GetVehicleBase() ? p->GetVehicleBase()->GetEntry() : 0u},
+                            {"recent_casts", CastFacts(i)},
                             {"from", {previous[i].GetPositionX(), previous[i].GetPositionY(), previous[i].GetPositionZ()}},
                             {"to", {p->GetPositionX(), p->GetPositionY(), p->GetPositionZ()}},
                             {"downstairs", downstairs}, {"portal_casts", portalCasts[i]}, {"exit_casts", exitCasts[i]}};
                         Fail("measured_yogg_actor_jumped"); return;
                     }
                     previous[i] = p->GetPosition(); positioned[i] = true; wasBelow[i] = downstairs;
+                    previousVehicle[i] = p->GetVehicleBase() ? p->GetVehicleBase()->GetEntry() : 0u;
+                    previousMotion[i] = uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType());
+                    previousMoving[i] = p->isMoving();
                 }
                 if (downstairs)
                 {
@@ -358,6 +385,12 @@ public:
         if (found == trial.actors.end()) return;
         auto const i = std::size_t(found - trial.actors.begin());
         uint32 const id = spell->GetSpellInfo()->Id;
+        for (std::size_t n = trial.recentSpells[i].size() - 1; n > 0; --n)
+        {
+            trial.recentSpells[i][n] = trial.recentSpells[i][n - 1];
+            trial.recentSpellMs[i][n] = trial.recentSpellMs[i][n - 1];
+        }
+        trial.recentSpells[i][0] = id; trial.recentSpellMs[i][0] = trial.elapsed;
         if (id == 63997 || id == 63998 || id == 63989) ++trial.portalCasts[i];
         if (id == 63992) ++trial.exitCasts[i];
     }
