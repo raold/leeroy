@@ -1,7 +1,7 @@
-From 75d3ab8eecdb51d9bed1d66b948087249d493231 Mon Sep 17 00:00:00 2001
+From 779f2caa9f35b827bdad4579f21ff6cfc40fa708 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Wed, 25 Nov 2026 08:43:37 -0500
-Subject: [PATCH 23/23] fix(Raid/TOC): Respect ground hazards while seeking a
+Subject: [PATCH 24/26] fix(Raid/TOC): Respect ground hazards while seeking a
  toxin cure
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH 23/23] fix(Raid/TOC): Respect ground hazards while seeking a
  1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/src/Ai/Raid/TOC/TocStrategy.cpp b/src/Ai/Raid/TOC/TocStrategy.cpp
-index 7cf85c37..a221679a 100644
+index 1149e5ad..79552949 100644
 --- a/src/Ai/Raid/TOC/TocStrategy.cpp
 +++ b/src/Ai/Raid/TOC/TocStrategy.cpp
 @@ -175,8 +175,10 @@ bool TocToxinCureAction::Execute(Event /*event*/)

@@ -1,7 +1,7 @@
-From 7338544faaa53a520af7f87759a0ac9b287d262e Mon Sep 17 00:00:00 2001
+From 6c0047cbaf79340de8ecd72acf63a52ab8088584 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Tue, 24 Nov 2026 23:42:30 -0500
-Subject: [PATCH 22/22] fix(Raid/Ulduar): Recognize active Leviathan SPECIAL
+Subject: [PATCH 23/26] fix(Raid/Ulduar): Recognize active Leviathan SPECIAL
  state
 
 The native boss remains SPECIAL while fighting. Require a living boss in
