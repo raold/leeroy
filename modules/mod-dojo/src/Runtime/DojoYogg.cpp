@@ -15,6 +15,7 @@
 #include "GroupMgr.h"
 #include "InstanceScript.h"
 #include "Map.h"
+#include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
@@ -51,6 +52,7 @@ struct Trial
     std::array<bool, Names.size()> entered{}, exited{}, healerEntrants{};
     std::array<bool, Names.size()> positioned{}, wasBelow{};
     std::array<Position, Names.size()> previous{};
+    json failureFacts = json::object();
     std::array<uint32, Names.size()> portalCasts{}, exitCasts{}, minimumSanity{};
     std::set<ObjectGuid> influenceDeaths;
     ObjectGuid group, brainGuid, saraGuid;
@@ -88,6 +90,7 @@ struct Trial
         maxBelow = maxHealersBelow = tanksBelow = 0; minHealersAbove = 100;
         entered = {}; exited = {}; healerEntrants = {}; positioned = {}; wasBelow = {};
         portalCasts = {}; exitCasts = {}; minimumSanity.fill(100); influenceDeaths.clear();
+        failureFacts = json::object();
         ready = cleanup = humanGone = false; active = true;
         oldSupport = sPlayerbotAIConfig.YoggBrainSupport;
         sPlayerbotAIConfig.YoggBrainSupport = true;
@@ -211,7 +214,13 @@ struct Trial
                 auto* sanity = p->GetAura(63050);
                 uint32 const stacks = sanity ? sanity->GetStackAmount() : 0;
                 minimumSanity[i] = std::min(minimumSanity[i], stacks);
-                if (!stacks) { Fail("sanity_lost"); return; }
+                if (!stacks)
+                {
+                    failureFacts = {{"slot", i}, {"aura_present", sanity != nullptr},
+                        {"health", p->GetHealth()}, {"charmed", p->IsCharmed()},
+                        {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()}};
+                    Fail("sanity_lost"); return;
+                }
                 bool const downstairs = Below(p);
                 if (!p->IsBeingTeleported())
                 {
@@ -219,7 +228,15 @@ struct Trial
                         (downstairs ? portalCasts[i] > 0 : exitCasts[i] > 0);
                     if (positioned[i] && !portalTransition &&
                         p->GetExactDist(previous[i]) > 1.f + p->GetSpeed(MOVE_RUN) * float(diff) * 0.0015f)
-                    { Fail("measured_yogg_actor_jumped"); return; }
+                    {
+                        failureFacts = {{"slot", i}, {"distance", p->GetExactDist(previous[i])},
+                            {"delta_ms", diff}, {"run_speed", p->GetSpeed(MOVE_RUN)},
+                            {"motion", uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType())},
+                            {"from", {previous[i].GetPositionX(), previous[i].GetPositionY(), previous[i].GetPositionZ()}},
+                            {"to", {p->GetPositionX(), p->GetPositionY(), p->GetPositionZ()}},
+                            {"downstairs", downstairs}, {"portal_casts", portalCasts[i]}, {"exit_casts", exitCasts[i]}};
+                        Fail("measured_yogg_actor_jumped"); return;
+                    }
                     previous[i] = p->GetPosition(); positioned[i] = true; wasBelow[i] = downstairs;
                 }
                 if (downstairs)
@@ -275,7 +292,8 @@ struct Trial
             {"healer_entrants", std::count(healerEntrants.begin(), healerEntrants.end(), true)},
             {"min_healers_above", minHealersAbove}, {"tank_below_samples", tanksBelow},
             {"influence_deaths", influenceDeaths.size()}, {"brain_hits", brainHits},
-            {"brain_start_health", brainStart}, {"brain_least_health", brainLeast}, {"exit_remaining_ms", exitRemaining}};
+            {"brain_start_health", brainStart}, {"brain_least_health", brainLeast}, {"exit_remaining_ms", exitRemaining},
+            {"failure_facts", failureFacts}};
     }
     char const* controlStrategy() const
     { return negative ? "-stay,-passive,-follow,-ulduar" : "-stay,-passive,-follow,+ulduar"; }
