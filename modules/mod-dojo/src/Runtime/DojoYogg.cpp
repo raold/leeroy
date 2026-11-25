@@ -32,7 +32,6 @@
 #include "TemporarySummon.h"
 #include "UnitScript.h"
 #include "Vehicle.h"
-#include "VehicleScript.h"
 #include "WorldScript.h"
 #include <algorithm>
 #include <array>
@@ -165,8 +164,8 @@ struct Trial
             || base->GetExactDist2d(constrictorOrigins[i]) >
                 std::max(spell->Effects[EFFECT_0].CalcRadius(p), p->GetCombatReach()) + 0.1f)
             return false;
-        // Require the actual native boarding callback as well as the summon,
-        // lunge and squeeze. SetInFront can rotate the base without relocating
+        // Require the occupied seat witnessed by the native squeeze cast,
+        // after lunge has boarded its target. SetInFront can rotate the base without relocating
         // its passenger, so retain the seat destination witnessed when boarding
         // instead of assuming the later base orientation was used for arrival.
         auto const& seat = constrictorSeats[i];
@@ -512,26 +511,6 @@ struct Trial
     { return negative ? "-stay,-passive,-follow,-ulduar" : "-stay,-passive,-follow,+ulduar"; }
 };
 Trial trial;
-class Seats : public VehicleScript
-{
-public:
-    Seats() : VehicleScript("DojoYoggSeats") { }
-    void OnAddPassenger(Vehicle* vehicle, Unit* passenger, int8 seatId) override
-    {
-        std::lock_guard<std::recursive_mutex> lock(trial.mutex);
-        if ((trial.state != "observe" && trial.state != "portals") || !vehicle || !passenger
-            || !passenger->IsPlayer() || vehicle->GetPassenger(seatId) != passenger) return;
-        auto* base = vehicle->GetBase();
-        auto* creature = base ? base->ToCreature() : nullptr;
-        auto* summon = creature ? creature->ToTempSummon() : nullptr;
-        if (!summon || base->GetEntry() != 33983 || base->GetMap() != passenger->GetMap()
-            || summon->GetSummonerGUID() != passenger->GetGUID()) return;
-        auto found = std::find(trial.actors.begin(), trial.actors.end(), passenger->GetGUID());
-        if (found == trial.actors.end()) return;
-        trial.constrictorSeats[std::size_t(found - trial.actors.begin())] =
-            {base->GetGUID(), SeatPosition(passenger, base), trial.elapsed};
-    }
-};
 class Commands : public CommandScript
 {
 public:
@@ -610,6 +589,22 @@ public:
             trial.constrictorOrigins[i] = player->GetPosition();
             trial.constrictorCastMs[i] = trial.elapsed;
         }
+        if (id == 64125 && spell->m_targets.GetUnitTarget() == player)
+        {
+            // GrabPlayer casts lunge synchronously, then squeeze. At this
+            // second cast the core has already installed the actual passenger.
+            // VehicleScript is not a global hook on this fork, so observe this
+            // existing player hook without replacing the encounter's AI.
+            auto* base = player->GetVehicleBase();
+            auto* creature = base ? base->ToCreature() : nullptr;
+            auto* summon = creature ? creature->ToTempSummon() : nullptr;
+            auto* kit = player->GetVehicle();
+            if (kit && summon && base->GetEntry() == 33983 && base->GetMap() == player->GetMap()
+                && summon->GetSummonerGUID() == player->GetGUID() && base->HasAura(64123, player->GetGUID())
+                && kit->GetPassenger(player->GetTransSeat()) == player
+                && trial.constrictorSeats[i].base != base->GetGUID())
+                trial.constrictorSeats[i] = {base->GetGUID(), SeatPosition(player, base), trial.elapsed};
+        }
         if (spell->GetSpellInfo()->HasEffect(SPELL_EFFECT_CHARGE))
         {
             auto* target = spell->m_targets.GetUnitTarget();
@@ -653,7 +648,7 @@ public:
     }
 };
 }
-void AddSC_dojo_yogg() { new Commands(); new Ticks(); new MapTicks(); new Effects(); new Casts(); new Seats(); }
+void AddSC_dojo_yogg() { new Commands(); new Ticks(); new MapTicks(); new Effects(); new Casts(); }
 #else
 void AddSC_dojo_yogg() { }
 #endif
