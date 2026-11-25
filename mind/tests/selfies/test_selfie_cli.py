@@ -305,8 +305,9 @@ def test_snap_readiness_reports_rendered_nsfw_and_missing_photo(snaproot, capsys
     assert {r["kind"] for r in rendered} == {"situation", "tile"}
     assert {"guid": 103, "kind": "situation", "status": "refused", "codes": ["no_photo"],
             "nsfw": None} in out["results"]
-    assert out["guild_similarity"]["code"] == "worker_unsupported"
-    assert "faces alike: skipped (worker_unsupported)" in captured.err
+    assert out["guild_similarity"]["code"] == "ok"  # an identity worker's encoder scores them
+    assert sorted(out["guild_similarity"]["guids"]) == [101, 102]
+    assert "guild faces alike (uncalibrated): max=0.5000 mean=0.4000" in captured.err
     assert "rendered () nsfw=0.0100" in captured.err
 
 

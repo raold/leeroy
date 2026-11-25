@@ -15,6 +15,7 @@ from console.rig import FakeMind, http, make_app, running
 from leeroy_mind.console import boardview, mindlink
 from leeroy_mind.console.control import Controls
 from leeroy_mind.console.mindlink import LinkError
+from leeroy_mind.testing import control
 
 NOW = 1_793_304_000.0
 HUMAN = 1100
@@ -227,7 +228,7 @@ class FakeLink:
         self.timeouts.append(timeout)
         if self.error:
             raise self.error if isinstance(self.error, LinkError) else LinkError(self.error)
-        return self.reply
+        return control.answer(op, args, self.reply)
 
 
 @asynccontextmanager

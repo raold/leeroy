@@ -206,6 +206,10 @@ class MechanicFeed:
                 await asyncio.sleep(0)
 
 
+def register() -> None:
+    register_command("raid_mechanics", RaidMechanics)
+
+
 def attach(app):
     """Off (the default), invalid or without [training] playbooks: nothing is attached and native gets no
     table, so its responder moves nobody."""
@@ -220,7 +224,7 @@ def attach(app):
         log("raidplay_respond_off", reason="playbook_error")
         return None
     from leeroy_mind.guild.protocol import register as register_guild
-    register_command("raid_mechanics", RaidMechanics)
+    register()
     register_guild()
     feed = MechanicFeed(app, playbooks)
     app.register_event_handler("hello", feed.event)

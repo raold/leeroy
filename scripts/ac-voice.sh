@@ -10,6 +10,10 @@
 # NOTE ON STOPPING: a plain taskkill posts WM_CLOSE to the service's hidden
 # window, and it stops cleanly with WoW's volume restored. If it has not gone
 # after 5 s it is terminated; the next start then restores WoW's volume.
+#
+# A stop also leaves voice.stopped in the data dir. The mind (with [voice]
+# autostart) starts a service that went down again, but leaves one held this
+# way down until his next login; a start, here or anywhere, removes the hold.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -31,6 +35,7 @@ while IFS='=' read -r key value; do
     esac
 done <<< "$where"
 [ -n "$DATA_DIR" ] && [ -n "$MIND_PORT" ] && [ -n "$UI_PORT" ] || die "bad output from where"
+HOLD="$DATA_DIR/voice.stopped"
 
 # The pid of the service holding the lock; fails when none does.
 held_pid() { "$PYTHON" -m leeroy_voice held | tr -d '\r'; }
@@ -63,6 +68,7 @@ start)
     if pid=$(held_pid); then
         die "already running, pid $pid: $DATA_DIR/voice.lock is held"
     fi
+    rm -f "$HOLD"
     mkdir -p "$DATA_DIR/logs"
     log "starting leeroy-voice"
     "$PYTHONW" -m leeroy_voice run >"$DATA_DIR/logs/voice-stdout.log" 2>&1 &
@@ -77,11 +83,14 @@ start)
     die "not listening after ${START_WAIT_S} s: see $DATA_DIR/logs/voice-stdout.log and voice.log"
     ;;
 stop)
+    hold() { printf '{"by": "script", "at": %s}\n' "$(date +%s)" > "$HOLD"; }
     if ! pid=$(held_pid); then
+        hold
         printf '    leeroy-voice already stopped\n'
         exit 0
     fi
     [ -n "$pid" ] || die "$DATA_DIR/voice.lock is held, but voice.pid names nobody"
+    hold
     taskkill //PID "$pid" >/dev/null 2>&1 || true
     for _ in 1 2 3 4 5; do
         alive "$pid" || break

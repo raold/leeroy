@@ -15,6 +15,7 @@ from leeroy_mind.raidlead.service import RaidLeadService
 from leeroy_mind.talk.raid import RaidState
 from leeroy_mind.talk.world import WorldView
 from leeroy_mind.testing.fake_llm import FakeLLM
+from leeroy_mind.testing.wire import WireContract
 
 HUMAN = 1
 LIVE = "invented-live-model"
@@ -51,6 +52,7 @@ class Ports:
     def __init__(self, clock):
         self.clock = clock
         self.sent, self.said, self.exact = [], [], []
+        self.wire = WireContract()
         self.acks = deque()  # (ok, error) per send; default ok
         self.jobs = deque()  # Job, a callable(cmd) -> Job, or None (no terminal)
         self.waits = []
@@ -59,8 +61,9 @@ class Ports:
         return "Rowan"
 
     async def send(self, cmd):
+        _, refusal = self.wire.send(cmd, preserve_id=True)  # guild life's ports keep every identity
         self.sent.append(cmd)
-        ok, error = self.acks.popleft() if self.acks else (True, "")
+        ok, error = (False, refusal) if refusal else self.acks.popleft() if self.acks else (True, "")
         return Ack(0, cmd.id, ok, error)
 
     async def wait_job(self, cmd_id, timeout_s):
@@ -84,12 +87,14 @@ class Ports:
 class Bridge:
     def __init__(self):
         self.sent = []
+        self.wire = WireContract()
         self.acks = deque()
 
     async def send(self, cmd, *, preserve_id=False):
+        cmd_id, refusal = self.wire.send(cmd, preserve_id=preserve_id)
         self.sent.append(cmd)
-        ok, error = self.acks.popleft() if self.acks else (True, "")
-        return Ack(0, cmd.id, ok, error)
+        ok, error = (False, refusal) if refusal else self.acks.popleft() if self.acks else (True, "")
+        return Ack(0, cmd_id, ok, error)
 
 
 def done(cmd, *, skip=()):

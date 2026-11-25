@@ -2,6 +2,9 @@ import pytest
 
 from leeroy_mind.decisions import bank, ledger
 from leeroy_mind.realm import protocol
+from leeroy_mind.testing.wire import bridge_mock, port_send
+
+protocol.register()  # the Realm's ports exist only once its types are registered
 
 
 def snapshot(*slots):
@@ -118,7 +121,6 @@ def test_daily_cap_uses_midnight_offset_on_both_dst_transitions(store, clock, mo
 def test_mail_hold_at_scheduled_realm_transport(store, clock):
     import asyncio
     from types import SimpleNamespace as NS
-    from unittest.mock import AsyncMock
     from uuid import uuid4
     from leeroy_mind.realm.actions import ActionContext
     from leeroy_mind.realm.direct import DirectLedger
@@ -132,7 +134,7 @@ def test_mail_hold_at_scheduled_realm_transport(store, clock):
         d = DirectLedger(store, process_id="p", clock=clock)
         rules = bank.bank_rules()
         app = NS(clock=clock, store=store, human_guid=1, engine=NS(raid=None),
-                 bridge=NS(send=AsyncMock()), decisions=NS(rules_for=lambda _: rules))
+                 bridge=NS(send=bridge_mock()), decisions=NS(rules_for=lambda _: rules))
         realm = app.realm = NS(enabled=True, _stopping=False, parts={"direct":d}, part=lambda _: d,
                               queue=NS(owns_command=lambda cmd:False), app=app, action_context=lambda:ctx)
         realm.ports = LivePorts(app, on_send=lambda cmd: Realm.on_send(realm, cmd))
@@ -165,7 +167,6 @@ def test_lineup_removed_after_withdrawal_preparation_stops_dispatch(store, guild
     import asyncio
     from dataclasses import replace
     from types import SimpleNamespace as NS
-    from unittest.mock import AsyncMock
     import pytest
     from leeroy_mind.decisions.config import DecisionsConfig
     from leeroy_mind.realm.actions import ActionContext
@@ -188,7 +189,7 @@ def test_lineup_removed_after_withdrawal_preparation_stops_dispatch(store, guild
         rules = bank.bank_rules()
         rules.features = {"member_bank_mail"}
         app = NS(store=store,clock=clock,human_guid=1,world=NS(members=cast),personas=guild,engine=NS(raid=None),
-                 bridge=NS(send=AsyncMock()), decisions=NS(rules_for=lambda _:rules,config=DecisionsConfig()))
+                 bridge=NS(send=bridge_mock()), decisions=NS(rules_for=lambda _:rules,config=DecisionsConfig()))
         app.guild = NS(armory=NS(bank=lambda _:snapshot((0,46377,20),(1,46377,20))),
                        raid_night=NS(active=False),offline=NS(active=False))
         ctx = ActionContext(enabled=True,connected=True,presence_known=True,process_id="p",
@@ -449,6 +450,7 @@ def test_confirmed_bank_tick_preserves_opaque_history_and_serves_next_request(st
         assert direct.on_job(job)
         assert not direct.on_job(job)
 
+    @port_send
     async def send(cmd):
         assert rules.checks[cmd.id]()
         finish(cmd)

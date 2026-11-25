@@ -1206,7 +1206,7 @@ def test_a_barrier_turn_is_one_typed_line_recorded_with_its_ack(store, tmp_path)
     (say,) = r.sent.says()
     assert say.text == LONG  # As given: no typing style.
     ((line, ack),) = recorded
-    assert type(ack) is Ack and ack.ok is True and ack.id == say.id
+    assert type(ack) is Ack and ack.ok is True and ack.id == r.sent.wire.lines[-1]["id"]  # the id it went out with
     row = store.conn.execute("SELECT channel,from_guid,to_guid,text,origin FROM chat_line WHERE id=?",
                              (line,)).fetchone()
     assert tuple(row) == ("whisper", 103, RIG_HUMAN, say.text, "mind")

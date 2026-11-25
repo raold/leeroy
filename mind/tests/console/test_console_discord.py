@@ -21,6 +21,8 @@ from leeroy_mind.console import app as console_app, mindlink
 from leeroy_mind.console.control import Controls
 from leeroy_mind.console.mindlink import LinkError
 from leeroy_mind.discord import store as dstore
+from leeroy_mind.discord.text import MAX_TEXT
+from leeroy_mind.testing import control
 from console.rig import FakeMind, http, make_app, running
 
 LINKED = [SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101)]
@@ -64,7 +66,7 @@ class FakeLink:
         self.timeouts.append(timeout)
         if self.error:
             raise LinkError(self.error)
-        return self.reply
+        return control.answer(op, args, self.reply)
 
 
 @asynccontextmanager
@@ -272,6 +274,26 @@ def test_posting_relays_to_the_mind_and_broadcasts(data, cast):
     assert [c[0] for c in link.calls] == ["discord"]
     assert link.calls[0][1]["channel"] == "general" and link.calls[0][1]["action"] == "post"
     assert mindlink.DISCORD_S == 10.0 and link.timeouts == [mindlink.DISCORD_S]
+
+
+def test_a_full_length_message_of_escaped_characters_reaches_the_mind(data, cast):
+    """Discord takes 2000 code points (discord.text.MAX_TEXT); the line to the mind escapes
+    each astral one to 12 bytes, and the endpoint must still read it."""
+    link = FakeLink({"ok": True, "id": 9})
+    long = "\U0001F600" * MAX_TEXT
+
+    def utf8(body):  # as the page's JSON.stringify sends it
+        return json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+    async def go():
+        async with served(build(data, link=link)) as app:
+            r = await post(app, utf8({"action": "post", "channel": "general", "text": long}))
+            assert r.status == 200 and r.json() == {"ok": True, "id": 9}
+            r = await post(app, utf8({"action": "edit", "message": 3,
+                                      "text": "é" * MAX_TEXT}))
+            assert r.status == 200
+    asyncio.run(go())
+    assert link.calls[0][1]["text"] == long
 
 
 def test_the_minds_refusal_comes_back_as_409_with_its_words(data, cast):

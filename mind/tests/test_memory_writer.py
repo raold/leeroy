@@ -11,7 +11,7 @@ from leeroy_mind.memory.recall import Recall
 from leeroy_mind.memory.writer import Embedder, MemoryCandidate, MemoryWriter, WriteResult
 from leeroy_mind.protocol import Chat
 from leeroy_mind.storage.rows import cosine, unpack_vec
-from leeroy_mind.testing.fake_llm import FakeLLM, fake_embed
+from leeroy_mind.testing.fake_llm import FakeLLM, check_embed, fake_embed
 
 
 def jump(clock, seconds):
@@ -214,7 +214,8 @@ class _SameVec(FakeLLM):
     """Scores every text as one vector, as a real embedder scores a close paraphrase."""
 
     async def embed(self, model, inputs, *, dimensions=512, timeout=None):
-        return [fake_embed("new job monday", dimensions) for _ in inputs]
+        return [fake_embed("new job monday", dimensions)
+                for _ in check_embed(model, inputs, dimensions=dimensions)]
 
 
 def _line(store, channel, frm, to, text):
