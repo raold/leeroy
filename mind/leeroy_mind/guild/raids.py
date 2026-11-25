@@ -30,7 +30,8 @@ CATALOG: dict[str, Raid] = {
                ("os", "obsidian sanctum", "sarth", "sartharion")),
     "eoe": Raid("eoe", "The Eye of Eternity", 616, 4500, (10, 25), False, 13, 1,
                 ("eoe", "eye of eternity", "maly", "malygos")),
-    # VoA emits no boss-state events and must not be used in offline rotations.
+    # VoA keeps no boss states: native reports its kills from the encounter table (no engages or
+    # wipes), and offline raids read boss states, so it must not be used in offline rotations.
     "voa": Raid("voa", "Vault of Archavon", 624, 4603, (10, 25), False, 13, 4,
                 ("voa", "vault", "vault of archavon", "archavon")),
     "ony": Raid("ony", "Onyxia's Lair", 249, 2159, (10, 25), False, 13, 1,

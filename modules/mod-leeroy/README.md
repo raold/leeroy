@@ -230,6 +230,18 @@ mind's 30-minute stall stop). The job switches dungeon-clear off (`full_wipe dea
 and its existing `dc_stopped` restart revives the raid at the entrance 30 s later, within the run's restart and
 wipe limits. Benchmarks never take this full-wipe regroup. **Native rebuild required.**
 
+# Kills in raids whose script keeps no boss states
+
+The mind hears a boss kill as a `boss` event, sent from `SetBossState`. Vault of Archavon's instance script keeps
+no boss states (it uses `SetData`), so no VoA kill ever reached the mind: on 2026-11-25 his VoA 25 raid killed
+Emalon and Koralon and kept `kills 0`, with no kill DKP. The core still credits each kill through the encounter
+table (`instance_encounters`, creditType 0) into the instance's saved completed-encounter mask, and mod-leeroy
+now reports that credit (`OnAfterUpdateEncounterState`, policy `CreditedKill`) as the same `boss` event, state
+`killed`, with `boss_id` the encounter's `DungeonEncounter.dbc` bit (VoA's own order: Archavon 0, Emalon 1,
+Koralon 2, Toravon 3) and `boss_name` the DBC's name. Only in a raid whose script has no boss states, so a script
+that sets DONE is never reported twice; only when the mask gained the bit just now, so a re-kill, a reload or an
+evade reports nothing. Such raids still send no `engaged` or `wiped`. **Native rebuild required.**
+
 # Rezzes in the owner's group
 
 Stock playerbots leaves a member of a real player's group lying dead: it never releases
