@@ -270,6 +270,44 @@ what = "a Valithria pull ended in a wipe (tg_pull 631:10)"
 db = { from = "tg_pull", where = "map = 631 AND boss_id = 10 AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "kind" }
 
 [[feature]]
+id = "valithria_healer_focus"
+name = "Valithria: every healer but one on her, none in the portals, mana cooldowns spent"
+prs = [497]
+note = "Set `since` to the native release that carries playerbots patch 0021; older watch lines have no focus field."
+
+[[feature.switch]]
+source = "playerbots"
+key = "Playerbots.ValithriaHealerFocus"
+default = true
+
+[[feature.evidence]]
+id = "focused_pull"
+kind = "observed"
+what = "a watched Valithria pull ran with the healer focus on (valithria_watch focus=1)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ diff=\d+ focus=1 '
+example = "2026-11-26 21:04:05 valithria_watch instance=812 diff=2 focus=1 hp=71.2 healers=3 dragon=3 casts=11"
+
+[[feature.evidence]]
+id = "watch_done"
+kind = "working"
+what = "a watched Valithria pull ended with her healed (valithria_watch end=done)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ end=done '
+example = "2026-11-26 21:09:40 valithria_watch instance=812 end=done hp=100.0"
+
+[[feature.evidence]]
+id = "watch_reset"
+kind = "failed"
+what = "a watched Valithria pull reset (valithria_watch end=reset)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ end=reset '
+example = "2026-11-26 21:02:10 valithria_watch instance=812 end=reset hp=63.5"
+
+[[feature]]
 id = "living_poison"
 name = "Naxxramas: his group keeps clear of the Living Poison slimes"
 prs = [424]

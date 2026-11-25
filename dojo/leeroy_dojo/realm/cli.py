@@ -22,6 +22,10 @@ def add_parser(sub) -> None:
     cmds.add_parser("db-status", help="report whether the dojo MySQL instance runs and is the dojo's")
     cmds.add_parser("db-check", help="check the instance's identity, schema set and the restricted user's grants")
     cmds.add_parser("raid-acceptance", help="run Valithria, Twins and Living Poison in a dedicated stopped dojo realm")
+    vt = cmds.add_parser("valithria-encounter",
+                         help="full Valithria pulls of a fixed ten-player bot raid, healer focus off and on")
+    vt.add_argument("--run", action="append", dest="runs",
+                    help="difficulty:mode, one of 10n:before 10n:after 10h:before 10h:after (repeatable; default all)")
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)
     acc_run.add_argument("--keep-running", action="store_true", help="leave a worldserver this command started")
@@ -137,6 +141,15 @@ def run(args: argparse.Namespace) -> int:
             from .raids import run as run_raids
             report = run_raids(layout)
             print(f"Raid acceptance: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
+            return 0 if report["ok"] else 1
+        elif command == "valithria-encounter":
+            from .raids import ENCOUNTER_RUNS, encounter
+            report = encounter(layout, tuple(args.runs or ENCOUNTER_RUNS))
+            for r in report["runs"]:
+                print(f"{'ok  ' if r['ok'] else 'FAIL'} {r['name']}: {json.dumps(r['summary'])}")
+                for problem in r["problems"]:
+                    print(f"     {problem}")
+            print(f"Valithria encounter: {'ran' if report['ok'] else 'NOT complete'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "provision":
             manifest = None

@@ -104,6 +104,36 @@ effective health gain; neither a requested heal nor an action success counts.
 `dojo raid status` reports the current token and observations; `dojo raid abort`
 requests fixture cleanup. A failed cleanup refuses further scenarios.
 
+### Valithria encounter, before and after the healer focus
+
+`realm --layout <raid-layout.json> valithria-encounter [--run 10n:before] ...`
+pulls the whole Valithria encounter with one fixed ten-player raid of synthetic
+bots on `DOJORAID`: a Discipline priest, a Holy paladin and a Restoration shaman
+(the 10-player healer template of the owner's guild fill, created in that order,
+so with no druid the priest is the reserved raid healer, as in the 2026-11-25
+10-heroic wipe), a Protection warrior and paladin, and a Fire mage, Marksmanship
+hunter, Affliction warlock, Combat rogue and Elemental shaman. The first run
+gears each with playerbots' own factory (its premade spec and glyphs, epic gear
+capped at item level 245) and later runs keep that gear; every run refills
+potions and reagents, clears the fixtures' Icecrown binds and fills the
+10-heroic door's achievement prerequisite. The mage leads as a self-bot, so the
+others have a game-client master as in his raids. After 15 s out of combat in
+her room with the lower-spire boss states set, the real combat trigger pulls
+the encounter. Nothing then heals, damages, moves, casts or writes health for
+anyone: the run ends at her own `DONE` (healed to full), a reset or wipe, or a
+15-minute cap. `before` pulls with `Playerbots.ValithriaHealerFocus` off,
+`after` with it on; the switch is restored at cleanup. The default runs all
+four: 10-player normal and heroic, each before and after.
+
+Each pull's `<data>/runs/*-valithria-*/` holds the polled trace, the final
+observation (her health every 10 s, deaths, and per healer: portal trips, time
+in the dream, time in reach and sight of her, effective healing on her from the
+core's `OnHeal`, mana cooldowns and potions, lowest mana, top Emerald Vigor and
+Twisted Nightmares stacks) and `report.json`. A run is `killed` only with her
+own `DONE` and full health. The live install has `Playerbots.BotCheats` `raid`
+(instant taunts); the dojo keeps stock rules, so its tanks hold adds less well
+than the live raid's.
+
 CI tests the verdict contract and the ordinary disabled build. A green unit test
 job is **not** a running-world acceptance receipt: the private extracted game
 assets and dedicated realm are required to run this gate before a raid release.
