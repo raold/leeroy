@@ -155,18 +155,17 @@ wanted2=$(bytes "$zip2")
 run mod-sub "$up2" "$sub_commit"; expect 0; has 'added    2'; has 'missing  4'   # the whole repository
 run --go --subdir server-side/mod-sub/ mod-sub "$up2" "$sub_commit"
 expect 0
-has 'no upstream (ac-update.sh skips it)'
+has 'ac-update.sh follows origin/master with this prefix only'
 [ "$(bytes "$zip2")" = "$wanted2" ] || fail "the nested module's folder changed"; ok
 [ "$(g "$zip2" rev-parse 'HEAD^{tree}')" = "$(g "$up2" rev-parse "$sub_commit:server-side/mod-sub")" ] \
     || fail "the split is not the subfolder's tree"; ok
 [ ! -e "$zip2/client-side" ] && [ ! -e "$zip2/README.md" ] || fail "the rest of the repository leaked in"; ok
 if g "$zip2" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then fail "the split tracks an upstream"; fi; ok
 [ -z "$(g "$zip2" status --porcelain)" ] || fail "the nested checkout is not clean"; ok
-# The printed recipe updates it.
-printf 'void y();\n' > "$up2/server-side/mod-sub/src/y.cpp"
-g "$up2" add -A && g "$up2" commit --quiet -m y
-recipe=$(grep -F 'git fetch origin' <<< "$output" | sed 's/^ *//')
-(eval "$recipe") >/dev/null 2>&1 || fail "the update recipe failed: $recipe"
-[ -f "$zip2/src/y.cpp" ] || fail "the recipe did not bring upstream's change"; ok
+# The updater's metadata records both histories, without a misleading Git upstream.
+[ "$(g "$zip2" config --local leeroy.subtreePrefix)" = server-side/mod-sub ] || fail "missing prefix"; ok
+[ "$(g "$zip2" config --local leeroy.subtreeUpstream)" = origin/master ] || fail "missing upstream"; ok
+[ "$(g "$zip2" config --local leeroy.subtreeRevision)" = "$sub_commit $(g "$zip2" rev-parse HEAD)" ] \
+    || fail "missing source/split revision"; ok
 
 printf 'ac-module-to-git self-test: %d checks passed\n' "$checks"

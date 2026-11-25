@@ -42,6 +42,8 @@ jobs:
         run: bash scripts/tests/ac-prune-native-logs.sh
       - name: zip module to git self-test (temporary repositories only)
         run: bash scripts/tests/ac-module-to-git.sh
+      - name: subtree module update self-test (temporary repositories only)
+        run: bash scripts/tests/ac-update-subtree.sh
       - name: verify runner self-test (temporary repositories and a stub mind)
         run: bash scripts/tests/verify-run.sh
       - name: flaky report self-test (invented runs only)
