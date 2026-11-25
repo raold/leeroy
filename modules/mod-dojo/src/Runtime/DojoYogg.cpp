@@ -12,6 +12,7 @@
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "Group.h"
+#include "GameObject.h"
 #include "GroupMgr.h"
 #include "InstanceScript.h"
 #include "Map.h"
@@ -63,6 +64,15 @@ struct Trial
     // A native grab emits spawn, lunge, squeeze and duplicate ride effects in
     // one update. Keep the spawn evidence until the seat position is sampled.
     std::array<std::array<uint32, 8>, Names.size()> recentSpells{}, recentSpellMs{};
+    struct SpellTeleport
+    {
+        ObjectGuid target;
+        Position origin, destination;
+        uint32 castMs = 0, teleportMs = 0;
+        bool pending = false, observed = false;
+    };
+    std::array<SpellTeleport, Names.size()> spellTeleports{};
+    uint32 nativeSpellTeleports = 0;
     json failureFacts = json::object();
     std::array<uint32, Names.size()> portalCasts{}, exitCasts{}, minimumSanity{};
     std::set<ObjectGuid> influenceDeaths;
@@ -136,6 +146,17 @@ struct Trial
         ++constrictorAttachments;
         return true;
     }
+    bool NativeSpellTeleport(Player* p, std::size_t i, uint32 diff)
+    {
+        auto& proof = spellTeleports[i];
+        if (!proof.observed || elapsed - proof.teleportMs > 200 || !p->HasAura(51690)
+            || p->GetMapId() != 603 || Below(p) != wasBelow[i]
+            || proof.origin.GetExactDist(previous[i]) > 1.f + p->GetSpeed(MOVE_RUN) * float(diff) * 0.0015f
+            || p->GetExactDist(proof.destination) > 0.1f) return false;
+        proof.observed = false;
+        ++nativeSpellTeleports;
+        return true;
+    }
     std::string Start(std::string const& id, bool control)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -159,6 +180,7 @@ struct Trial
         entered = {}; exited = {}; healerEntrants = {}; positioned = {}; wasBelow = {};
         previousVehicle = {}; previousMotion = {}; previousMoving = {}; recentSpells = {}; recentSpellMs = {};
         observedConstrictors = {}; constrictorAttachments = 0;
+        spellTeleports = {}; nativeSpellTeleports = 0;
         portalCasts = {}; exitCasts = {}; minimumSanity.fill(100); influenceDeaths.clear();
         failureFacts = json::object();
         ready = cleanup = humanGone = false; active = true;
@@ -315,7 +337,7 @@ struct Trial
                         (downstairs ? portalCasts[i] > 0 : exitCasts[i] > 0);
                     if (positioned[i] && !portalTransition &&
                         p->GetExactDist(previous[i]) > 1.f + p->GetSpeed(MOVE_RUN) * float(diff) * 0.0015f
-                        && !NativeConstrictorAttachment(p, i))
+                        && !NativeConstrictorAttachment(p, i) && !NativeSpellTeleport(p, i, diff))
                     {
                         failureFacts = {{"slot", i}, {"distance", p->GetExactDist(previous[i])},
                             {"delta_ms", diff}, {"run_speed", p->GetSpeed(MOVE_RUN)},
@@ -380,6 +402,31 @@ struct Trial
     json Status()
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
+        json bodies = json::array(), room = json::array();
+        Player* roomActor = nullptr;
+        if (state == "observe")
+            for (std::size_t i = 0; i < actors.size(); ++i)
+                if (auto* p = Actor(i))
+                {
+                    auto* target = GET_PLAYERBOT_AI(p)->GetAiObjectContext()->GetValue<Unit*>("current target")->Get();
+                    auto* exit = Below(p) ? p->FindNearestGameObject(194625, 250.f) : nullptr;
+                    bodies.push_back({{"slot", i}, {"x", p->GetPositionX()}, {"y", p->GetPositionY()},
+                        {"z", p->GetPositionZ()}, {"facing", p->GetOrientation()}, {"moving", p->isMoving()},
+                        {"target_entry", target ? target->GetEntry() : 0u},
+                        {"exit_distance", exit ? p->GetExactDist(exit) : -1.f}, {"recent_casts", CastFacts(i)}});
+                    if (!roomActor && Below(p)) roomActor = p;
+                }
+        if (roomActor)
+            for (uint32 entry : {33943u, 33716u, 33717u, 33718u, 33719u, 33720u, 33567u, 33433u, 33990u})
+            {
+                std::list<Creature*> nearby;
+                roomActor->GetCreatureListWithEntryInGrid(nearby, entry, 180.f);
+                for (auto* creature : nearby)
+                    if (room.size() < 64 && creature->GetPositionZ() < 300.f)
+                        room.push_back({{"entry", entry}, {"guid", creature->GetGUID().GetCounter()},
+                            {"x", creature->GetPositionX()}, {"y", creature->GetPositionY()}, {"z", creature->GetPositionZ()},
+                            {"alive", creature->IsAlive()}, {"health", creature->GetHealth()}, {"gaze", creature->HasAura(64167)}});
+            }
         return {{"kind", "dojo-yogg-observation"}, {"format", 1}, {"token", token}, {"state", state}, {"failure", failure},
             {"negative", negative}, {"ready", ready}, {"cleanup", cleanup}, {"samples", samples}, {"max_gap_ms", maxGap},
             {"illusion", illusion}, {"portals", portals}, {"initial_sanity_members", initialSanity},
@@ -389,7 +436,8 @@ struct Trial
             {"min_healers_above", minHealersAbove}, {"tank_below_samples", tanksBelow},
             {"influence_deaths", influenceDeaths.size()}, {"brain_hits", brainHits},
             {"brain_start_health", brainStart}, {"brain_least_health", brainLeast}, {"exit_remaining_ms", exitRemaining},
-            {"failure_facts", failureFacts}, {"native_constrictor_attachments", constrictorAttachments}};
+            {"failure_facts", failureFacts}, {"native_constrictor_attachments", constrictorAttachments},
+            {"native_spell_teleports", nativeSpellTeleports}, {"bodies", bodies}, {"room", room}};
     }
     char const* controlStrategy() const
     { return negative ? "-stay,-passive,-follow,-ulduar" : "-stay,-passive,-follow,+ulduar"; }
@@ -445,7 +493,7 @@ public:
 class Casts : public PlayerScript
 {
 public:
-    Casts() : PlayerScript("DojoYoggCasts", {PLAYERHOOK_ON_SPELL_CAST}) { }
+    Casts() : PlayerScript("DojoYoggCasts", {PLAYERHOOK_ON_SPELL_CAST, PLAYERHOOK_ON_BEFORE_TELEPORT}) { }
     void OnPlayerSpellCast(Player* player, Spell* spell, bool) override
     {
         std::lock_guard<std::recursive_mutex> lock(trial.mutex);
@@ -462,6 +510,36 @@ public:
         trial.recentSpells[i][0] = id; trial.recentSpellMs[i][0] = trial.elapsed;
         if (id == 63997 || id == 63998 || id == 63989) ++trial.portalCasts[i];
         if (id == 63992) ++trial.exitCasts[i];
+        if (id == 57840 && player->HasAura(51690))
+        {
+            auto* target = spell->m_targets.GetUnitTarget();
+            if (target && target->GetMap() == player->GetMap() && player->IsValidAttackTarget(target))
+            {
+                auto& proof = trial.spellTeleports[i];
+                proof = {};
+                proof.target = target->GetGUID(); proof.origin = player->GetPosition();
+                proof.castMs = trial.elapsed; proof.pending = true;
+            }
+        }
+    }
+    bool OnPlayerBeforeTeleport(Player* player, uint32 map, float x, float y, float z,
+        float orientation, uint32 options, Unit*) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(trial.mutex);
+        if (trial.state != "observe" || !player || map != 603 || player->GetMapId() != map
+            || !(options & TELE_TO_SPELL) || !player->HasAura(51690)) return true;
+        auto found = std::find(trial.actors.begin(), trial.actors.end(), player->GetGUID());
+        if (found == trial.actors.end()) return true;
+        auto& proof = trial.spellTeleports[std::size_t(found - trial.actors.begin())];
+        if (!proof.pending || proof.castMs != trial.elapsed) return true;
+        proof.pending = false;
+        auto* target = ObjectAccessor::GetUnit(*player, proof.target);
+        if (!target || target->GetMap() != player->GetMap() || !player->IsValidAttackTarget(target)) return true;
+        // Witness the core's actual destination, then require the measured actor
+        // to arrive there. A recent spell ID alone never permits a displacement.
+        proof.destination = Position(x, y, z, orientation);
+        proof.teleportMs = trial.elapsed; proof.observed = true;
+        return true;
     }
 };
 }

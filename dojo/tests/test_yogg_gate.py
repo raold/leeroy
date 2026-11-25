@@ -7,7 +7,7 @@ def observed(negative=False):
     team = [False, False, True, False, False, True, False, True, True]
     return dict(kind="dojo-yogg-observation", format=1, token="test", state="done", failure="",
                 negative=negative, ready=True, cleanup=True, portals=4, initial_sanity_members=9,
-                samples=500, max_gap_ms=60, illusion=1, max_below=0 if negative else 4,
+                samples=500, max_gap_ms=60, native_spell_teleports=0, illusion=1, max_below=0 if negative else 4,
                 max_healers_below=0 if negative else 1, healer_entrants=0 if negative else 1, min_healers_above=2, tank_below_samples=0,
                 influence_deaths=0 if negative else 8, brain_hits=0 if negative else 10,
                 brain_start_health=1000000, brain_least_health=1000000 if negative else 900000,
@@ -41,6 +41,7 @@ class YoggGateTest(unittest.TestCase):
     def test_unexposed_or_insensitive_control_fails(self):
         for key, value in (("portals", 0), ("initial_sanity_members", 0), ("samples", True),
                            ("entered", [True] + [False] * 8), ("brain_hits", 1), ("influence_deaths", 1),
-                           ("failure", "yogg_actor_dead_lost_or_charmed")):
+                           ("failure", "yogg_actor_dead_lost_or_charmed"), ("native_spell_teleports", True),
+                           ("native_spell_teleports", -1)):
             sample = observed(True); sample[key] = value
             self.assertFalse(verdict(sample, token="test", negative=True)["ok"], key)

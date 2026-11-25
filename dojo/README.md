@@ -199,6 +199,9 @@ is an expected control outcome, never a positive pass.
 The harness never moves the measured vehicles, casts their abilities or changes
 health during observation. It records native effects and positional samples,
 rejects observation gaps above 200 ms, and requires cleanup and world shutdown.
+Movement uses the map-update interval and both observed endpoint speeds, so
+expiry of a native speed aura cannot apply the slower final rate retroactively.
+The original distance margin is unchanged, and unexplained jumps still fail.
 These are mechanic probes, not full boss kills. They do not certify Leviathan's
 opening gauntlet, nested gunners, pyrite supply, hard modes or 25-player coverage.
 Adding them or passing their verdict tests does not authorize live enablement.
@@ -214,13 +217,18 @@ send exactly four bots, including one healer and no tank, retain a healer above,
 kill actual influence tentacles, damage the brain and use real exit portals
 before the cast finishes. All actors must remain alive and retain sanity.
 
+The observer recognizes Killing Spree movement only with both its native spell
+and teleport callbacks, the active aura, a valid hostile target and arrival at
+the witnessed destination. A recent cast alone is insufficient. Room geometry,
+actor facing and targets are recorded to diagnose failed illusion clears.
+
 The negative control disables the raid strategy while leaving the same real
 encounter stimulus. Both cases require cleanup and shutdown. Actor health
 reserves are setup-only; the harness never heals, attacks or teleports on their
 behalf during the measured wave. The report names the randomly selected native
 illusion. One successful wave does not certify the other two illusions, later
-waves, a complete kill, keeper variants or 25-player teams. Live support remains
-off until the required coverage has actual passing receipts.
+waves, a complete kill, keeper variants or 25-player teams. Live enablement
+requires actual passing receipts for the required coverage.
 
 ### Open-world leading
 

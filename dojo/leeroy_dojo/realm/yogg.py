@@ -19,7 +19,7 @@ def verdict(o, *, token, negative=False):
             problems.append(f"invalid {key}")
     counts = ("samples", "max_gap_ms", "illusion", "max_below", "max_healers_below", "healer_entrants", "min_healers_above",
               "tank_below_samples", "influence_deaths", "brain_hits", "brain_start_health", "brain_least_health",
-              "exit_remaining_ms")
+              "exit_remaining_ms", "native_spell_teleports")
     for key in counts:
         if type(o.get(key)) is not int or o[key] < 0:
             problems.append(f"invalid {key}")

@@ -263,8 +263,10 @@ struct RaidRun
         Position const point = StartPoint();
         for (std::size_t i = 0; i < actors.size(); ++i)
         {
+            // The native intro's lower platform point is within Harvest Soul's
+            // 60-yard range of the seated boss; the platform center is not.
             Position const destination = scenario == "lk-terenas"
-                ? Position(503.62f, -2124.65f, 840.857f, 0.f) : point;
+                ? Position(465.073f, -2123.470f, 840.8569f, 0.f) : point;
             if (!Actor(i)->TeleportTo(map, destination.GetPositionX(), destination.GetPositionY() + float(i) * 2.f,
                     destination.GetPositionZ(), 0.f)) { Fail("fixture teleport refused"); return false; }
         }

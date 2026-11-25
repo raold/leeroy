@@ -3,6 +3,7 @@
 #if DOJO_TRAINING_BUILD
 #if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
 #include "DojoHuman.h"
+#include "DojoMotion.h"
 #include "DojoRaid.h"
 #include "DojoRuntime.h"
 #include "AccountMgr.h"
@@ -49,6 +50,7 @@ struct Trial
     std::array<ObjectGuid, 2> actors{}, mounts{};
     std::array<Position, 2> initial{}, previous{};
     std::array<float, 2> travelled{};
+    std::array<float, 2> previousSpeed{};
     std::array<uint32, 2> hits{}, movingHits{}, afterDeathHits{}, seats{};
     std::array<uint32, 2> surgeSamples{}, shieldSamples{}, ringSamples{};
     std::array<uint32, 2> fieldMs{}, longestFieldMs{}, fieldEscapes{};
@@ -117,7 +119,8 @@ struct Trial
                 if (base) body["vehicle"] = {{"entry", base->GetEntry()}, {"alive", base->IsAlive()},
                     {"health", base->GetHealth()}, {"max_health", base->GetMaxHealth()},
                     {"energy", base->GetPower(POWER_ENERGY)}, {"combo_points", base->GetComboPoints()},
-                    {"combat", base->IsInCombat()}, {"moving", base->isMoving()}};
+                    {"combat", base->IsInCombat()}, {"moving", base->isMoving()},
+                    {"flight_speed", base->GetSpeed(MOVE_FLIGHT)}, {"run_speed", base->GetSpeed(MOVE_RUN)}};
                 lastBodies.push_back(std::move(body));
             }
         if (auto* boss = Boss()) lastBoss = {{"health", boss->GetHealth()}, {"combat", boss->IsInCombat()},
@@ -292,6 +295,7 @@ struct Trial
                 auto* ai = GET_PLAYERBOT_AI(p);
                 auto* base = p->GetVehicleBase();
                 mounts[i] = base->GetGUID(); seats[i] = base->GetEntry(); initial[i] = previous[i] = base->GetPosition();
+                previousSpeed[i] = base->GetSpeed(MOVE_FLIGHT);
                 ai->SetMaster(human);
                 ai->ChangeStrategy(negative ? "-wotlk-eoe" : "+wotlk-eoe", BOT_STATE_COMBAT);
                 ai->ChangeStrategy(negative ? "-wotlk-eoe" : "+wotlk-eoe", BOT_STATE_NON_COMBAT);
@@ -317,12 +321,14 @@ struct Trial
                 if (!p || !p->IsAlive() || !base || !base->IsAlive() || base->GetGUID() != mounts[i] ||
                     !p->GetVehicle() || p->GetVehicle()->GetPassenger(0) != p || base->GetMap() != boss->GetMap())
                 { Fail("drake_driver_or_mount_lost"); return; }
-                if (base->GetExactDist(previous[i]) > 1.f + base->GetSpeed(MOVE_FLIGHT) * float(diff) * 0.0015f)
+                if (!Dojo::ContinuousMovement(base->GetExactDist(previous[i]), previousSpeed[i],
+                    base->GetSpeed(MOVE_FLIGHT), diff))
                 {
                     failureFacts = {{"slot", i}, {"diff_ms", diff}, {"phase_ms", phaseMs},
                         {"previous", {previous[i].GetPositionX(), previous[i].GetPositionY(), previous[i].GetPositionZ()}},
                         {"current", {base->GetPositionX(), base->GetPositionY(), base->GetPositionZ()}},
                         {"distance", base->GetExactDist(previous[i])}, {"flight_speed", base->GetSpeed(MOVE_FLIGHT)},
+                        {"previous_speed", previousSpeed[i]},
                         {"run_speed", base->GetSpeed(MOVE_RUN)}, {"moving", base->isMoving()},
                         {"motion", uint32(base->GetMotionMaster()->GetCurrentMovementGeneratorType())},
                         {"spline_velocity", base->movespline->Velocity()},
@@ -330,6 +336,7 @@ struct Trial
                     Fail("measured_drake_jumped"); return;
                 }
                 previous[i] = base->GetPosition();
+                previousSpeed[i] = base->GetSpeed(MOVE_FLIGHT);
                 travelled[i] = std::max(travelled[i], base->GetExactDist(initial[i]));
                 bool const surge = base->HasAura(57407) || base->HasAura(60936);
                 if (surge) ++surgeSamples[i];
@@ -385,7 +392,10 @@ struct Trial
                 auto* boss = Boss();
                 if (!boss || boss->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE)) { Fail("leviathan_not_ready"); return; }
                 for (std::size_t i = 0; i < actors.size(); ++i)
+                {
                     initial[i] = previous[i] = Actor(i)->GetVehicleBase()->GetPosition();
+                    previousSpeed[i] = Actor(i)->GetVehicleBase()->GetSpeed(MOVE_RUN);
+                }
                 boss->AI()->AttackStart(tank->GetVehicleBase());
                 boss->AI()->DoZoneInCombat();
                 // Entering combat applies native Leviathan health scaling.
@@ -410,9 +420,11 @@ struct Trial
                 if (!p->IsAlive() || !base || !base->IsAlive() || base->GetGUID() != mounts[i] ||
                     base->GetMap() != boss->GetMap() || !p->GetVehicle() || p->GetVehicle()->GetPassenger(0) != p)
                 { Fail("vehicle_driver_or_mount_lost"); return; }
-                if (base->GetExactDist2d(previous[i]) > 1.f + base->GetSpeed(MOVE_RUN) * float(diff) * 0.0015f)
+                if (!Dojo::ContinuousMovement(base->GetExactDist2d(previous[i]), previousSpeed[i],
+                    base->GetSpeed(MOVE_RUN), diff))
                 { Fail("measured_vehicle_jumped"); return; }
                 previous[i] = base->GetPosition();
+                previousSpeed[i] = base->GetSpeed(MOVE_RUN);
                 travelled[i] = std::max(travelled[i], base->GetExactDist2d(initial[i]));
             }
             // Real raid stimulus: the human dies after both bots are driving.
