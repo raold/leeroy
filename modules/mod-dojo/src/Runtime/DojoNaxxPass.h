@@ -8,6 +8,7 @@
 #include "Group.h"
 #include "InstanceScript.h"
 #include "Map.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
@@ -31,6 +32,7 @@ struct DojoNaxxPass
     bool control = false, skipped = false, engaged = false;
     uint32 elapsed = 0, skipMs = 0, engageMs = 0, passes = 0, setupMask = 0;
     std::vector<uint32> setupDeaths;
+    std::vector<uint32> setupTrashDeaths;
     uint32 setupAddDeaths = 0;
     std::array<bool, 10> held{};
     std::array<std::array<std::array<bool, 3>, 2>, 10> strategies{};
@@ -38,6 +40,47 @@ struct DojoNaxxPass
     // Between the Necro Knight pack to the north and Cavaliers to the south.
     // The whole three-yard roster footprint is outside their aggro ranges.
     static constexpr float SetupX = 2778.f, SetupY = -3312.f, SetupZ = 267.7f;
+
+    bool PrepareApproach(Map* map, std::string& error)
+    {
+        // The upper Military Quarter approach and ramp preceding Razuvious.
+        // A raid that defeated him already cleared these packs. Explicit spawn
+        // IDs keep the lower Gothik corridor and Construct Quarter untouched.
+        static constexpr std::array<std::pair<uint32, uint32>, 45> spawns{{
+            {127638, 16145}, {127646, 16145}, {127647, 16145}, {127648, 16145},
+            {127650, 16145}, {127651, 16145}, {127652, 16145}, {127653, 16146},
+            {127654, 16146}, {127666, 16146}, {127667, 16146}, {127668, 16146},
+            {127669, 16146}, {127672, 16146}, {127673, 16146}, {127674, 16146},
+            {127675, 16146}, {127693, 16156}, {127694, 16156}, {127695, 16156},
+            {127696, 16156}, {127697, 16156}, {127698, 16156}, {127699, 16156},
+            {127700, 16156}, {127703, 16156}, {127704, 16156}, {127705, 16156},
+            {127750, 16163}, {127751, 16163}, {127752, 16163}, {127755, 16164},
+            {127756, 16164}, {127758, 16165}, {127759, 16165}, {127764, 16167},
+            {127765, 16167}, {127766, 16167}, {127767, 16167}, {127768, 16167},
+            {127769, 16167}, {127790, 16193}, {127791, 16193}, {127792, 16193},
+            {127793, 16193}}};
+        for (auto const& [spawnId, entry] : spawns)
+        {
+            auto const* data = sObjectMgr->GetCreatureData(spawnId);
+            if (!data || data->mapid != 533 || data->id != entry || data->spawntimesecs <= 600)
+            { error = "naxx_pass_approach_spawn_changed"; return false; }
+            map->LoadGrid(data->posX, data->posY);
+            auto const bounds = map->GetCreatureBySpawnIdStore().equal_range(spawnId);
+            Creature* found = nullptr;
+            for (auto it = bounds.first; it != bounds.second; ++it)
+                if (it->second)
+                {
+                    if (found) { error = "naxx_pass_duplicate_approach_spawn"; return false; }
+                    found = it->second;
+                }
+            if (!found || found->GetEntry() != entry || !found->IsAlive())
+            { error = "naxx_pass_approach_not_fresh"; return false; }
+            Unit::Kill(found, found, false);
+            if (found->IsAlive()) { error = "naxx_pass_approach_survived"; return false; }
+            setupTrashDeaths.push_back(spawnId);
+        }
+        return true;
+    }
 
     bool PrepareDeaths(Map* map, std::string& error)
     {
@@ -119,6 +162,13 @@ struct DojoNaxxPass
         auto* ai = GET_PLAYERBOT_AI(leader);
         if (state == "ready")
         {
+            for (uint32 spawnId : setupTrashDeaths)
+            {
+                auto const bounds = leader->GetMap()->GetCreatureBySpawnIdStore().equal_range(spawnId);
+                for (auto it = bounds.first; it != bounds.second; ++it)
+                    if (it->second && it->second->IsAlive())
+                    { error = "naxx_pass_approach_respawned"; return; }
+            }
             for (uint32 i : Prerequisites)
                 if (instance->GetBossState(i) != DONE)
                 { error = "naxx_pass_prerequisite_reactivated"; return; }
@@ -162,7 +212,8 @@ struct DojoNaxxPass
                 held[i] = true;
                 actors[i]->StopMoving();
             }
-            if (!PrepareDeaths(leader->GetMap(), error)) { Release(actors); return; }
+            if (!PrepareApproach(leader->GetMap(), error) || !PrepareDeaths(leader->GetMap(), error))
+            { Release(actors); return; }
             for (uint32 i : Prerequisites) instance->SetBossState(i, DONE);
             // DBC order differs from script indices: Anub, Faerlina, Maexxna,
             // Noth, Heigan, Loatheb, Razuvious occupy encounter-mask bits 0..6.
@@ -193,6 +244,7 @@ struct DojoNaxxPass
             {"gothik_skipped", skipped}, {"skip_ms", skipMs}, {"patchwerk_engaged", engaged},
             {"engage_ms", engageMs}, {"passes", passes}, {"setup_completed_mask", setupMask},
             {"setup_boss_deaths", setupDeaths}, {"setup_add_deaths", setupAddDeaths},
+            {"setup_trash_deaths", setupTrashDeaths},
             {"setup_bosses", Prerequisites},
             {"strategies_restored", std::none_of(held.begin(), held.end(), [](bool value) { return value; })}};
     }
