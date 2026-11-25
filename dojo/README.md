@@ -85,6 +85,14 @@ The training-only hazard seam supplies the synthetic owner and same-account
 members in place of the live guild roster. The real scan, reconciliation,
 playerbots movement callbacks and navmesh execute unchanged. Guild roster
 discovery and production scheduler integration are outside this gate.
+The filter serves only bots whose master is the owner, a game client: their AI
+takes a turn every `Playerbots.ReactDelay` (0.1 s). Under a bot master
+playerbots waits 1-3 s between turns out of combat (`GetReactDelay`), which no
+member of his group meets, so between teleports the Living Poison case holds its
+leader as a self-bot (its own master), which playerbots counts as a game client
+master; a self-bot's teleport waits for a client's acknowledgement, so the
+leader is an ordinary bot while it moves. The negative control keeps a bot
+master.
 
 Reports and polled native observations go under `<data>/runs/*-raids-*/`.
 `report.json` includes candidate revisions, binary/layout hashes, all six case
