@@ -915,6 +915,23 @@ struct EncounterRun
             }
             if (Player* p = Actor(i))
             {
+                PlayerbotAI* ai = GET_PLAYERBOT_AI(p);
+                row["map"] = p->GetMapId();
+                row["in_instance"] = instance && p->GetInstanceId() == instance;
+                row["x"] = p->GetPositionX();
+                row["y"] = p->GetPositionY();
+                row["z"] = p->GetPositionZ();
+                row["combat"] = p->IsInCombat();
+                row["alive"] = p->IsAlive();
+                row["health_pct"] = p->GetHealthPct();
+                if (p->getPowerType() == POWER_MANA) row["mana_pct"] = p->GetPowerPct(POWER_MANA);
+                Player* master = ai->GetMaster();
+                row["master"] = master ? (master == p ? "self" : master->GetName()) : "-";
+                if (InstanceMap* map = Instance())
+                    if (Creature* dragon = map->GetCreature(valithria); dragon && p->GetMap() == map)
+                        row["distance_to_her"] = p->GetDistance(dragon);
+                if (Engine* engine = ai->GetCurrentEngine())
+                    row["last_action"] = std::string(engine->GetLastAction()).substr(0, 160);
                 row["level"] = p->GetLevel();
                 row["item_level"] = uint32(p->GetAverageItemLevel());
                 row["max_health"] = p->GetMaxHealth();
@@ -931,6 +948,15 @@ struct EncounterRun
             {"early_pull", earlyPull}, {"pull_ms", pullMs},
             {"samples", samples}, {"start_hp", startHp}, {"hp", hp}, {"peak_hp", peakHp},
             {"damage_to_her", damageToHer}, {"item_level_cap", EncounterItemLevel}, {"members", roster}};
+        if (InstanceMap* map = Instance())
+            if (InstanceScript* script = map->GetInstanceScript())
+            {
+                out["boss_state"] = uint32(script->GetBossState(10));
+                if (Creature* trigger = map->GetCreature(script->GetGuidData(35)))
+                    out["trigger_combat"] = trigger->IsInCombat();
+                if (Creature* dragon = map->GetCreature(valithria))
+                    out["her_position"] = {dragon->GetPositionX(), dragon->GetPositionY(), dragon->GetPositionZ()};
+            }
         if (full)
         {
             json line = json::array();
