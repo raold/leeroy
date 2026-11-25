@@ -5,11 +5,12 @@ from dataclasses import replace
 import pytest
 
 from conftest import run
-from photos.test_request_recovery import make_app, workers
+from photos.test_request_recovery import advance_to, make_app, tick, workers
 from photos.test_request_service import drive, offline
 from leeroy_mind.llm.borrow import LiveReloadFailed
 from leeroy_mind.llm.client import GpuPaused
 from leeroy_mind.photos import request_store as records
+from leeroy_mind.photos.requests import RENDER_WAIT_S, SUBSTITUTE, TAKING_NOW
 
 
 def answered(app, message):
@@ -62,6 +63,22 @@ def test_borrow_refused_at_admission_keeps_the_plan_and_sends_a_ready_photo(
             request = records.get(app.store, posted['id'])
             assert request.failure is None and request.ended is None and not made
             assert records.snap(app.store, request.fresh_snap).status == 'planned'
+            if priority:
+                # On demand she says she's taking it; the queue's borrow is what is refused.
+                assert request.fallback_message is None
+                await tick(app)
+                request = records.get(app.store, posted['id'])
+                assert request.failure is None and request.fresh_message is None and not made
+                assert records.snap(app.store, request.fresh_snap).status == 'planned'
+                # Not rendered within RENDER_WAIT_S: a photo she already had, said honestly.
+                await advance_to(app, request.created + RENDER_WAIT_S + 1)
+                await tick(app)
+                request = records.get(app.store, posted['id'])
+                assert request.failure is None and request.fresh_message == request.followup_message
+                assert request.fresh_message is not None and not made
+                instructions = '\n'.join(m['content'] for call in app.llm.calls for m in call.get('messages', ()))
+                assert SUBSTITUTE in instructions and TAKING_NOW in instructions
+                return
             assert request.fallback_message == request.initial_message
             instructions = '\n'.join(m['content'] for call in app.llm.calls for m in call.get('messages', ()))
             assert "didn't work out" not in instructions
