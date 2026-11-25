@@ -187,13 +187,14 @@ struct Trial
         return "started";
     }
     bool Measuring() const { return state == "boarding" || state == "observe" || state == "drakes" || state == "reset"; }
+    bool MapPhase() const { return Measuring() || state == "vehicle_settle" || state == "human_board"; }
     void WorldUpdate(uint32 diff)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
         if (!active) return;
         elapsed += diff;
         if (elapsed > 300000 && state != "cleanup" && state != "logout") Fail("vehicle_fixture_deadline");
-        if (Measuring())
+        if (MapPhase())
         {
             auto* human = Dojo::HumanFixture(token);
             if (human && human->GetMap() && human->GetMapId() == (scenario == "malygos" ? 616u : 603u)) return;
@@ -204,7 +205,7 @@ struct Trial
     void MapUpdate(Map* map, uint32 diff)
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
-        auto* human = active && Measuring() ? Dojo::HumanFixture(token) : nullptr;
+        auto* human = active && MapPhase() ? Dojo::HumanFixture(token) : nullptr;
         // The playerbots core batches raid-map physics across world ticks.
         // Observe after that map's actual update with the same elapsed time
         // that advanced its splines, never a shorter unrelated world tick.
@@ -282,7 +283,7 @@ struct Trial
                 ai->ChangeStrategy(disabled ? "-ulduar" : "+ulduar", BOT_STATE_COMBAT);
                 ai->ChangeStrategy(disabled ? "-ulduar" : "+ulduar", BOT_STATE_NON_COMBAT);
             }
-            Phase("human_board");
+            Phase("vehicle_settle");
         }
         else if (state == "malygos_phase1")
         {
@@ -384,6 +385,13 @@ struct Trial
             if (boss->HasAura(56092, mounts[1])) ++dotSamples;
             if (phaseMs >= 90000) Phase("cleanup");
         }
+        else if (state == "vehicle_settle")
+        {
+            // Reset queues the retired vehicle set for map removal. Let that
+            // map finish a full update before clicking its replacement set;
+            // world ticks can otherwise board a vehicle awaiting removal.
+            Phase("human_board");
+        }
         else if (state == "human_board")
         {
             if (!human || !tank || !ranged) { Fail("vehicle_actor_lost"); return; }
@@ -399,7 +407,13 @@ struct Trial
         {
             ++samples; maxGap = std::max(maxGap, diff);
             if (!human || !human->IsAlive() || !human->GetVehicle() || !tank || !ranged)
-            { Fail("boarding_stimulus_lost"); return; }
+            {
+                failureFacts = {{"human_present", human != nullptr}, {"human_alive", human && human->IsAlive()},
+                    {"human_health", human ? human->GetHealth() : 0u},
+                    {"human_vehicle", human && human->GetVehicleBase() ? human->GetVehicleBase()->GetEntry() : 0u},
+                    {"tank_present", tank != nullptr}, {"ranged_present", ranged != nullptr}};
+                Fail("boarding_stimulus_lost"); return;
+            }
             for (std::size_t i = 0; i < actors.size(); ++i)
             {
                 auto* p = Actor(i);
@@ -520,7 +534,7 @@ struct Trial
                 GET_PLAYERBOT_AI(p)->ChangeStrategy("-stay,-passive,+ulduar", BOT_STATE_COMBAT);
                 GET_PLAYERBOT_AI(p)->ChangeStrategy("-stay,-passive,+follow,+ulduar", BOT_STATE_NON_COMBAT);
             }
-            Phase("human_board");
+            Phase("vehicle_settle");
         }
         else if (state == "cleanup")
         {
