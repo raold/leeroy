@@ -214,6 +214,9 @@ then stages a second pull. Its damage, moving-hit and human-death checks count
 only that second pull. The negative omits the evade and must show no replacement.
 This exposes the core hard-reset behavior directly; installing its commit alone
 is not a passing receipt. Reset staging is outside measured combat.
+The surviving actors withdraw to the setup point immediately after the evade;
+they cannot re-aggro a respawn before its idle state is observed. No healing,
+resurrection or boss/accessory creation is supplied at this boundary.
 Boarding waits for the map to finish removing the vehicle set retired by setup;
 the scripted human clicks the replacement on a subsequent map update. Measured
 boarding and combat retain the same cadence and effect requirements.

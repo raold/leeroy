@@ -480,6 +480,15 @@ struct Trial
                 }
                 resetRequested = true;
                 boss->AI()->EnterEvadeMode();
+                // The reset boundary is setup, not measured combat. Withdraw
+                // surviving actors so a freshly respawned boss cannot aggro
+                // them before its idle state and new accessories are observed.
+                for (auto* p : {human, tank, ranged})
+                {
+                    p->ExitVehicle(); p->CombatStop(true);
+                    if (!p->TeleportTo(603, StartPoint.GetPositionX(), StartPoint.GetPositionY(), StartPoint.GetPositionZ(), 0.f))
+                    { Fail("reset_withdraw_refused"); return; }
+                }
                 Phase("reset");
                 return;
             }
