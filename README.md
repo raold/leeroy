@@ -95,8 +95,13 @@ flowchart LR
   database and ports, for training combat policies, never touching the live
   realm.
 
-Nothing new is on by default: each optional feature sits behind a switch in
-`mind.toml` or the module config, and an invalid setting means off.
+A shipped feature is on: each one sits behind a switch in `mind.toml` or the
+module config so it can be turned off safely, but a merged feature defaults to
+on and the live config is set to match at release. A feature that is not ready
+to run is not merged. A switch is off only by an explicit owner ruling, kept as
+an explicit `false` with a comment (today `[heat] public_cap`,
+`[talk] coherence_length`, `[talk] dm_own_time` and `[lab] promote`). An invalid
+setting still means off, and the console's Ops tab shows each switch's state.
 Personas, memories, prompts, photos and logs stay in the ignored `mind-data/`.
 
 ## The mind
