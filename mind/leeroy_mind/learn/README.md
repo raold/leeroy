@@ -319,10 +319,10 @@ Coach review safeguards: eligible members rotate by last coaching time, then evi
 [learn]
 enabled = true
 bandit = true
-apply = false
+apply = true
 ```
 
-Set `apply = true` and restart to apply active arms and approved lessons to every
+With `apply = true` (the default; restart after a change) the table applies active arms and approved lessons to every
 model-generated pipeline turn: game chat, whispers, voice, banter, Discord answers,
 DMs and autonomous server conversations. It defaults to true; an invalid value
 disables the learning table. Deterministic templates and tuning previews retain
@@ -456,7 +456,7 @@ and `learn rollback` treat them as any arm.
 enabled = true
 bandit = true
 coach = true
-cycle = false
+cycle = true
 ```
 
 `cycle = true` (the default; an invalid table disables learning; restart the mind)

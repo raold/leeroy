@@ -55,7 +55,7 @@ void LeeroyModule::LoadConfig(bool /*reload*/)
     cfg.raidLeadEnable = sConfigMgr->GetOption<bool>("Leeroy.RaidLead.Enable", true);
     cfg.realmMaxActionsPerTick = std::clamp(sConfigMgr->GetOption<uint32>("Leeroy.Realm.MaxActionsPerTick", 5), 1u, 20u);
     cfg.realmAnnounce = sConfigMgr->GetOption<bool>("Leeroy.Realm.Announce", true);
-    cfg.castGuard = sConfigMgr->GetOption<bool>("Leeroy.CastGuard", false);
+    cfg.castGuard = sConfigMgr->GetOption<bool>("Leeroy.CastGuard", true);
     cfg.queueFence = sConfigMgr->GetOption<bool>("Leeroy.QueueFence.Enable", true);
     cfg.castArenaTeamsLeave = sConfigMgr->GetOption<bool>("Leeroy.CastArenaTeams.Leave", true);
     // Relative whitelist paths name files beside mod_leeroy.conf, where the core loads module configs from.
