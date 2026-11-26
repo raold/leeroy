@@ -218,6 +218,10 @@ def test_config_reads_the_length_switch_on_its_own(tmp_path):
     assert cfg.talk.coherence is True and cfg.talk.coherence_length is False
     path.write_text('[talk]\ncoherence_length = true\n', encoding="utf-8")
     cfg = load_config(path)
+    # coherence on by default (2026-11-25); the length rule off (owner ruling 2026-11-25)
+    assert cfg.talk.coherence is True and cfg.talk.coherence_length is True
+    path.write_text('[talk]\ncoherence = false\ncoherence_length = true\n', encoding="utf-8")
+    cfg = load_config(path)
     assert cfg.talk.coherence is False and cfg.talk.coherence_length is True
     path.write_text('[talk]\ncoherence_length = "yes"\n', encoding="utf-8")
     assert load_config(path).talk.coherence_length is False  # anything but true is off

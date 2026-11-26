@@ -14,6 +14,7 @@ from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_llm import FakeLLM
 
 from test_app import CAST, ORION, Harness, chat, hello, seed_db, toml
+from shipped_off import off
 
 LINES = itertools.cycle(["leading it, let's go", "on you, stacking up now", "copy that", "got it boss"])
 
@@ -27,7 +28,7 @@ async def running(tmp_path, clock, *, raidlead):
     bridge = FakeBridge([{**hello(HUMAN), "features": ["item_links", "playstyle", "raidlead"]}, CAST])
     port = await bridge.start()
     extra = "\n[raidlead]\nenabled = true\n" if raidlead else ""
-    (tmp_path / "mind.toml").write_text(toml(port) + extra, encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off(toml(port) + extra), encoding="utf-8")
     seed_db(tmp_path / "mind.db", clock)
     llm = FakeLLM(script, models={ORION})
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=llm, clock=clock, rng_seed=1)
@@ -146,7 +147,7 @@ def test_a_boss_brief_reaches_the_game_word_for_word(tmp_path, clock):
                              {**CAST, "members": [*CAST["members"], me]}])
         port = await bridge.start()
         (tmp_path / "mind.toml").write_text(
-            toml(port) + "\n[raidlead]\nenabled = true\nbriefs = true\n", encoding="utf-8")
+            off(toml(port) + "\n[raidlead]\nenabled = true\nbriefs = true\n"), encoding="utf-8")
         seed_db(tmp_path / "mind.db", clock)
         app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path,
                       llm=FakeLLM(script, models={ORION}), clock=clock, rng_seed=1)

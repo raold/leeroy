@@ -15,10 +15,11 @@ from leeroy_mind.nightly import budget
 from leeroy_mind.nightly.pipeline import STAGES
 from leeroy_mind.nightly.runner import NightRunner
 from .test_reward import line, signals, screened
+from shipped_off import off
 
 
 def enable(tmp_path):
-    (tmp_path / "mind.toml").write_text("[learn]\nenabled=true\n")
+    (tmp_path / "mind.toml").write_text(off("[learn]\nenabled=true\n"))
 
 
 def test_night_selection_cap_survives_resume_and_new_backfill(context, store, clock, tmp_path, monkeypatch):
@@ -129,8 +130,9 @@ def test_reward_and_night_receipt_rollback_together(context, store, clock, tmp_p
     assert "reward_write_failed" in caplog.text
 
 
-def test_attach_is_off_by_default_and_requires_no_model(tmp_path):
+def test_attach_follows_the_switch_and_requires_no_model(tmp_path):
     runner = NightRunner(STAGES, lambda *_: None)
+    (tmp_path / "mind.toml").write_text("[learn]\nenabled=false\n")
     night.attach(runner, tmp_path)
     assert runner.stages == STAGES
     enable(tmp_path)

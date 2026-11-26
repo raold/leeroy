@@ -73,10 +73,12 @@ export function api(path, opts) {
       var kind = r.headers.get("content-type") || "";
       var photo = /^\/api\/(face\?|selfies\/photo\?|discord\/image\?)/.test(path);
       var voiceNote = /^\/api\/discord\/voice\?id=[1-9]\d*$/.test(path);
-      var maximum = voiceNote ? 2 * 1024 * 1024 : photo ? 4 * 1024 * 1024 : path.indexOf("/api/selfies/images?") === 0 ? 24 * 1024 * 1024 : 1024 * 1024;
+      var video = /^\/api\/discord\/video\?id=[1-9]\d*$/.test(path);
+      var maximum = video ? 50 * 1024 * 1024 : voiceNote ? 2 * 1024 * 1024 : photo ? 4 * 1024 * 1024 : path.indexOf("/api/selfies/images?") === 0 ? 24 * 1024 * 1024 : 1024 * 1024;
       var bytes = await boundedBody(r, maximum);
-      if ((photo || voiceNote) && r.status === 200) {
+      if ((photo || voiceNote || video) && r.status === 200) {
         if (voiceNote && !['audio/ogg','audio/wav'].includes(kind.split(';')[0])) { throw new Error('The voice note could not be read.'); }
+        if (video && !['video/mp4','video/webm','video/quicktime'].includes(kind.split(';')[0])) { throw new Error('The video could not be read.'); }
         r.blob = function () { return Promise.resolve(new Blob([bytes], { type: kind })); };
       }
       else if (kind.indexOf("application/json") >= 0) {

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 from conftest import HUMAN, OFFICERS, TEST_CAST, make_persona, seed_test_cast
+from shipped_off import off
 from leeroy_mind.config import HumanCfg, RomanceCfg, TalkCfg, load_config
 from leeroy_mind.library.chunks import Chunk
 from leeroy_mind.llm.scheduler import LLMScheduler
@@ -304,7 +305,12 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
     the ones it was written for (tests/test_wow_grounding_pipeline.py and the WoW golden,
     golden_wow.json, cover it). `wow_topic`: [talk] wow_topic (talk/wowtopic.py), on by default
     in mind.toml but off here unless a test asks, likewise (tests/test_wow_topic_pipeline.py and
-    the WoW golden cover it)."""
+    the WoW golden cover it). Every other switch that defaults on since 2026-11-25 is off here, in
+    the config and in a mind.toml the rig writes when `data_dir` has none (tests/shipped_off.py),
+    so every test's turns are the ones it was written for."""
+    if not (data_dir / "mind.toml").exists():
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "mind.toml").write_text(off(), encoding="utf-8")
     if not store.persona_versions():
         seed_test_cast(store)
     store.upsert_cast([Member(guid=HUMAN, name=HUMAN_NAME, race=1, class_=8, gender=0, level=80,
@@ -317,10 +323,13 @@ def make_rig(store, clock, data_dir, *, reply: str = "fair enough", script=None,
                                        intent=intent, situation=situation, shape=shape,
                                        dm_mirror=dm_mirror, coherence=coherence,
                                        coherence_length=coherence_length,
-                                       wow_grounding=wow_grounding, wow_topic=wow_topic),
-                  romance=RomanceCfg(dial, jealousy, realism=romance_realism),
+                                       wow_grounding=wow_grounding, wow_topic=wow_topic,
+                                       aware=False, realism=False, combat_quiet=False,
+                                       texture=False, recall_diversity=False),
+                  romance=RomanceCfg(dial, jealousy, activities=False, realism=romance_realism),
                   human=HumanCfg(NICK, real_name, "he"),
-                  life=replace(base.life, availability=availability, state=life_state))
+                  life=replace(base.life, availability=availability, state=life_state,
+                               day_plans=False, dungeons=False))
     world = WorldView(is_officer=lambda g: g in OFFICERS)
     now = clock.now()
     world.apply(Hello(ts=0, server="mod-leeroy", version="0.1.0", guild_id=21,

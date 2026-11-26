@@ -36,14 +36,14 @@ def line(store, **over):
 
 
 @pytest.mark.parametrize('text,expected', [
-    ('', False), ('[outreach]\nenabled=true', True),
+    ('', True), ('[outreach]\nenabled=true', True),
     ('[outreach]\nenabled=false', False), ('[outreach]\nenabled=1', False),
     ('[outreach]\nenabled="yes"', False), ('outreach=true', False),
     ('[outreach]\nenabled=true\nextra=true', False), ('[outreach', False),
 ])
-def test_config_is_strict_and_off_by_default(tmp_path, text, expected):
+def test_config_is_strict_and_on_by_default(tmp_path, text, expected):
     path = tmp_path / 'mind.toml'
-    assert not load_outreach_config(path).enabled
+    assert load_outreach_config(path).enabled  # on by default (2026-11-25)
     path.write_text(text, encoding='utf-8')
     assert load_outreach_config(path).enabled is expected
 

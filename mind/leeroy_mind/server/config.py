@@ -1,4 +1,4 @@
-"""The server stays off unless its entire table is valid."""
+"""The server is on when its table or key is missing, and off unless its entire table is valid."""
 import logging
 import re
 import tomllib
@@ -13,7 +13,7 @@ _TIME = re.compile(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]')
 
 @dataclass(frozen=True, slots=True)
 class ServerConfig:
-    enabled: bool = False
+    enabled: bool = True
     quiet_window: tuple[time, time] = (time(3), time(8))
     conversations_per_hour: float = 2.5
     in_game_share: float = .5
@@ -24,11 +24,14 @@ class ServerConfig:
     channel_topics: bool = True
 
 
+OFF = ServerConfig(enabled=False)
+
+
 def _invalid(path: Path, key: str) -> ServerConfig:
     if (path, key) not in _warned:
         _warned.add((path, key))
         log.warning('server_config_invalid key=%s', key)
-    return ServerConfig()
+    return OFF
 
 
 def load_server_config(path: Path) -> ServerConfig:

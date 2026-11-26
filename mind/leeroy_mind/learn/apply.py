@@ -11,7 +11,7 @@ from leeroy_mind.personas.stances import is_woman
 from leeroy_mind.prompts import note_template
 from leeroy_mind.tuning.effective import dials_of
 from . import arms, audience, bandit, lessons
-from .config import LearnCfg
+from .config import OFF as LEARN_OFF
 from .control import effective, vetoed
 from .recipe import Snapshot
 
@@ -31,7 +31,7 @@ class Applied:
 
 
 def active(engine, guid):
-    cfg = getattr(engine, 'learn_settings', LearnCfg())
+    cfg = getattr(engine, 'learn_settings', LEARN_OFF)
     if not getattr(engine, 'learn_enabled', False) or not cfg.enabled or not cfg.apply:
         return None
     cfg = effective(engine.store.conn, cfg)

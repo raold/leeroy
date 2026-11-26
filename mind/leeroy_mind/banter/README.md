@@ -1,7 +1,7 @@
 # Public banter
 
-`[banter] enabled = true` opts in on restart; `per_hour = 2` is the default.
-Missing, malformed or unknown settings disable it. The hourly allowance accepts
+`[banter] enabled` is on by default (read on restart); `per_hour = 2` is the default.
+Malformed or unknown settings disable it. The hourly allowance accepts
 0–12 and persists across restarts, shared by guild chat and Discord General.
 
 Topics are recent recorded owner deaths, group wipes/loot, posted calendar

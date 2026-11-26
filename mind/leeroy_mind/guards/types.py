@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 import sqlite3
 
-from .config import GuardsCfg
+from .config import OFF, GuardsCfg
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ class HistoryLine:
 @dataclass(frozen=True)
 class GuardStores:
     conn: sqlite3.Connection
-    config: GuardsCfg = field(default_factory=GuardsCfg)
+    config: GuardsCfg = field(default_factory=lambda: OFF)  # none given: the guards off
     claims_enabled: bool = False
     # Caller-observed Discord/DM history; captured readers are mandatory there.
     history: tuple[HistoryLine, ...] = field(default=(), repr=False)

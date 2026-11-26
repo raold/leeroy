@@ -212,10 +212,11 @@ def test_slime_pool_tracks_damage_ticks_only_on_a_capable_native():
 
 
 @pytest.mark.parametrize("text, want", [
-    (None, (False, "off")),
-    ("", (False, "off")),
+    (None, (True, "")),  # respond and [training] playbooks: on by default (2026-11-25)
+    ("", (True, "")),
+    ("[training]\nplaybooks = false\n", (False, "needs_playbooks")),
     ("[raidplay]\nrespond = false\n", (False, "off")),
-    ("[raidplay]\nrespond = true\n", (False, "needs_playbooks")),
+    ("[raidplay]\nrespond = true\n", (True, "")),
     ("[raidplay]\nrespond = true\n[training]\nplaybooks = false\n", (False, "needs_playbooks")),
     ("[raidplay]\nrespond = true\n[training]\nplaybooks = 3\n", (False, "needs_playbooks")),
     ("[raidplay]\nrespond = 1\n", (False, "invalid")),
@@ -224,7 +225,7 @@ def test_slime_pool_tracks_damage_ticks_only_on_a_capable_native():
     ("[raidplay\n", (False, "invalid")),
     (ON, (True, "")),
 ])
-def test_the_switch_is_off_by_default_and_invalid_means_off(tmp_path, text, want):
+def test_the_switch_is_on_by_default_and_invalid_means_off(tmp_path, text, want):
     if text is not None:
         (tmp_path / "mind.toml").write_text(text, encoding="utf-8")
     assert settings(tmp_path / "mind.toml") == want
@@ -349,8 +350,10 @@ def test_a_refused_table_is_logged_by_code(caplog):
 
 def test_attach_adds_nothing_when_off(tmp_path):
     app = _App(tmp_path)
+    (tmp_path / "mind.toml").write_text("[raidplay]\nrespond = false\n", encoding="utf-8")
     assert respond.attach(app) is None
-    (tmp_path / "mind.toml").write_text("[raidplay]\nrespond = true\n", encoding="utf-8")
+    (tmp_path / "mind.toml").write_text("[raidplay]\nrespond = true\n[training]\nplaybooks = false\n",
+                                        encoding="utf-8")
     assert respond.attach(app) is None                     # without [training] playbooks
     assert app.handlers == {} and app.hooks == [] and app.background == []
     (tmp_path / "mind.toml").write_text(ON, encoding="utf-8")
@@ -449,6 +452,11 @@ def test_the_switch_is_on_the_ops_board(tmp_path):
     from leeroy_mind.console import opsview as ops
     deadline = time.monotonic() + 10
     (tmp_path / "mind.toml").write_text("[raidplay]\nrespond = true\n", encoding="utf-8")
+    rows = ops.switches_view(tmp_path, deadline, mind_started=None)["rows"]
+    row = next(r for r in rows if r["table"] == "raidplay")
+    assert row["state"] == "on" and row["unmet"] == []  # [training] playbooks on by default
+    (tmp_path / "mind.toml").write_text("[raidplay]\nrespond = true\n[training]\nplaybooks = false\n",
+                                        encoding="utf-8")
     rows = ops.switches_view(tmp_path, deadline, mind_started=None)["rows"]
     row = next(r for r in rows if r["table"] == "raidplay")
     assert row["state"] == "on" and row["unmet"] == ["training.playbooks"]

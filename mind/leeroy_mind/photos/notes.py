@@ -4,7 +4,7 @@ The join independently verifies the image's actual outlet. Private/lust scenes c
 channel evidence even if an attachment was linked incorrectly. No filenames enter prompts.
 """
 import json
-from .look import photo_note
+from .look import photo_note, video_note
 
 
 def _snaps(conn, column, ids):
@@ -62,7 +62,10 @@ def by_messages(conn, ids, *, uploads=False, members=False, memes=False):
     out = {mid: note for mid, (note, _) in _snaps(conn,'m.id',ids).items()} if members else {}
     if uploads and ids:
         from leeroy_mind.discord.store import attachments
-        out.update({mid:photo_note(row['look']) for mid,row in attachments(conn,ids).items()
+        from leeroy_mind.videos.files import by_messages as videos, duration_words
+        clips = videos(conn, ids)  # his videos: the attachment is their stills
+        out.update({mid: video_note(row['look'], duration_words(clips[mid]['ms'])) if mid in clips
+                    else photo_note(row['look']) for mid, row in attachments(conn, ids).items()
                     if row['kind'] == 'upload'})
     if memes and ids:  # [culture] memes
         out.update(_memes(conn, ids))

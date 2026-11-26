@@ -15,12 +15,13 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.talk.romance import OVERLAY_CAP_TOKENS
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
+from shipped_off import off
 
 SECRET = "OVERLAYTEXT"  # a word only the overlays hold: it must never be printed
 
 
 def _setup(root: Path, port: int) -> Path:
-    (root / "mind.toml").write_text(f"[bridge]\nport = {port}\n", encoding="utf-8")
+    (root / "mind.toml").write_text(off(f"[bridge]\nport = {port}\n"), encoding="utf-8")
     s = Store(open_migrated(root / "mind.db"), clock=FakeClock(datetime(2026, 10, 29,
                                                                  tzinfo=timezone.utc)))
     try:

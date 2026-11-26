@@ -35,11 +35,11 @@ def rows(store):
                                      ("[bakeoff]\ncapture = false\n", False),
                                      ("[bakeoff]\ncapture = 1\n", False),
                                      ("[bakeoff]\ncapture = true\nextra = 1\n", False),
-                                     ("[bakeoff\n", False), ("", False)])
-def test_the_switch_is_a_boolean_and_off_by_default(tmp_path, text, on):
+                                     ("[bakeoff\n", False), ("", True), ("[bakeoff]\n", True)])
+def test_the_switch_is_a_boolean_and_on_by_default(tmp_path, text, on):
     (tmp_path / "mind.toml").write_text(text)
     assert load(tmp_path / "mind.toml") == BakeoffCfg(on)
-    assert load(tmp_path / "absent.toml") == BakeoffCfg()
+    assert load(tmp_path / "absent.toml") == BakeoffCfg() == BakeoffCfg(True)
 
 
 def test_off_captures_nothing(rig):
@@ -242,6 +242,9 @@ class Runner:
         self.stages.append((name, after, model, fn))
 
 
+OFF = "[bakeoff]\ncapture = false\n"
+
+
 def _app(store, clock, tmp_path, text):
     (tmp_path / "mind.toml").write_text(text)
     return SimpleNamespace(data_dir=tmp_path, store=store, clock=clock, engine=SimpleNamespace(),
@@ -249,7 +252,7 @@ def _app(store, clock, tmp_path, text):
 
 
 def test_attach_reads_the_switch_prunes_and_adds_the_night_prune_only_when_needed(store, clock, tmp_path):
-    app = _app(store, clock, tmp_path, "")
+    app = _app(store, clock, tmp_path, OFF)
     capture.attach(app)
     assert app.engine.bakeoff_capture is False and app.night_runner.stages == []
     app = _app(store, clock, tmp_path, "[bakeoff]\ncapture = true\n")
@@ -260,7 +263,7 @@ def test_attach_reads_the_switch_prunes_and_adds_the_night_prune_only_when_neede
     with store.transaction():
         for i, age in enumerate((20, 1)):
             record(store, turn, _meta(), i, now=clock.now() - age * 86400)
-    app = _app(store, clock, tmp_path, "")  # off again, but a row is still there to prune
+    app = _app(store, clock, tmp_path, OFF)  # off again, but a row is still there to prune
     capture.attach(app)
     assert [r["line_id"] for r in rows(store)] == [1]
     assert [s[0] for s in app.night_runner.stages] == ["bakeoff"]
@@ -309,7 +312,7 @@ def test_a_beat_s_lines_never_reach_the_store():
 def test_the_ops_switchboard_lists_the_capture_switch(tmp_path):
     from leeroy_mind.console import opsview
     import time
-    for text, state in (("", "off"), ("[bakeoff]\ncapture = true\n", "on"),
+    for text, state in (("", "on"), (OFF, "off"), ("[bakeoff]\ncapture = true\n", "on"),
                         ("[bakeoff]\ncapture = 1\n", "invalid")):
         (tmp_path / "mind.toml").write_text(text)
         rows_ = opsview.switches_view(tmp_path, time.monotonic() + 10, mind_started=None)["rows"]

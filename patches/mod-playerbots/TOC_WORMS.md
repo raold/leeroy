@@ -1,7 +1,8 @@
 # ToC worm cures
 
-`Playerbots.TocWormSupport = 0` is the default. The candidate is not approved for
-live enablement until the isolated offline ToC gate completes Northrend Beasts.
+`Playerbots.TocWormSupport = 1` is the shipped default; `0` disables new cure and
+spacing actions. The release must set the live option to `1` as well. A release
+requires the isolated offline ToC gate to complete Northrend Beasts.
 
 The baseline reproduced three wipes and zero encounter kills. On the first pull,
 three poisoned ranged bots remained about 40 yards from Burning Bile and were
@@ -19,8 +20,10 @@ teleports, other maps/phases and dead players are excluded as appropriate. A hum
 can be a cure destination, but is never elected to perform a bot rescue.
 
 Validation: native MSVC syntax checks, standalone policy tests and the module's
-codestyle checker pass. Real candidate encounter acceptance is pending. The
-change does not claim to fix Icehowl charges or every source of Slime Pool damage.
+codestyle checker pass. The recorded `20261125_215236` full ToC run completed
+Beasts, Jaraxxus, Champions and Twins before three Anub'arak wipes. The restack
+behind main's Valithria patch needs its own candidate verification. This change
+does not claim to fix Icehowl charges or every source of Slime Pool damage.
 
 Failing baseline: `20261124_213821-offline-dojo-152ecd20dcc1402c815e940bfba5816b`,
 source `beebc340`, playerbots `072d8a7a`, dungeon-clear `e6654f52`. The run recorded

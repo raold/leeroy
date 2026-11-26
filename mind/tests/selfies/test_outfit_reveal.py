@@ -20,6 +20,7 @@ from selfies.test_request_scene import app, save  # noqa: F401
 from selfies.test_selfie_prompt import woman, man
 from selfies.test_varied_sets import DAY, ON, _prompts, _render, lust
 from selfies.test_words_scene import LUST_PICKS, words
+from selfies.fakes import selfie_cfg
 
 
 def scene(category="swim", **over):
@@ -36,7 +37,7 @@ def test_setting_is_omitted_by_default_and_requires_integer_one_to_five(tmp_path
         path.write_text(f"[selfies]\noutfit_reveal = {level}\n")
         cfg = load_selfie_config(path)
         assert cfg.outfit_reveal == level
-        assert not cfg.romance_styling and not cfg.enabled
+        assert cfg.romance_styling and cfg.enabled  # on by default (2026-11-25)
     for bad in ("0", "6", "-1", "true", '"5"', "2.5"):
         path.write_text(f"[selfies]\noutfit_reveal = {bad}\n")
         with pytest.raises(ConfigError, match="outfit_reveal"):
@@ -338,7 +339,7 @@ def test_ordinary_profile_worker_draws_configured_gym_outfit_without_editing_per
     save_persona(h.store, p, source="generated", ts=h.T, race="Human", class_name="Warrior")
     kind._record(h.store, 101, LUST, photo)
     queue_more(h.store, 101, now=h.T)
-    _render(h, tmp_path, SelfieCfg(enabled=True, outfit_reveal=5))
+    _render(h, tmp_path, selfie_cfg(enabled=True, outfit_reveal=5))
     prompts = _prompts(h, 101, 1)
     assert len(prompts) == 4 and all("sports crop top" in text for text in prompts)
     assert all("shorts" in text and "bikini" not in text for text in prompts)

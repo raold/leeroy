@@ -407,3 +407,105 @@ async def test_a_named_lead_outside_the_raid_leaves_him_its_lead(setup):
     [(raid_id, *_)] = records(ports)
     from leeroy_mind.guild.store import NAMED_LEAD_KEY
     assert _get(ports.conn, NAMED_LEAD_KEY.format(raid_id=raid_id)) is None
+
+
+def not_raided(ports, raid_id):
+    return _get(ports.conn, f"guild:raid:{raid_id}:not-raided") is True
+
+
+@_run_async
+async def test_his_group_led_into_a_fresh_copy_takes_its_raid_there(setup):
+    """Raid 26, 2026-11-25: his add10 entered Ulduar 618 and the raid was bound there; 15 minutes later he
+    unbound, filled to 25 and led the group into 635, where four bosses died. The record stayed on 618, so
+    every kill and drop in 635 was dropped (kills 0). His group's raid follows it into the new copy."""
+    ports, _, night = setup
+    await adopted(setup)
+    [(old, *_)] = records(ports)
+    await night.on_zone(Zone(0, 1, 4395, "Dalaran"))
+    await advance(ports, 300)
+    await night.tick()
+    assert night.state is State.RUNNING and night.session.raid_id == old
+    ports.jobs["summon"].append(summoned(instance_id=92))
+    await night.on_zone(Zone(0, 1, 4812, "Icecrown Citadel"))
+    await night.on_guild_group(group_event(ports, instance_id=92))
+    await night.tick()
+    await night.tick()
+    [(_, *_, ended, outcome), (new, *_, new_ended, _)] = records(ports)
+    # The copy left before any fight was no raid: its attendance is taken back and paid once, in the new copy.
+    assert ended is not None and outcome == "new_instance" and not_raided(ports, old)
+    assert attendance(ports, old) == {} and ledger(ports, old, "attendance") == []
+    assert new_ended is None and night.session.raid_id == new and night.session.ctx.instance_id == 92
+    assert attendance(ports, new) == {g: "raided" for g in (*GROUP, 1)}
+    assert [type(c) for c in ports.sent] == [Summon, SetLootMaster, Summon, SetLootMaster]
+    assert set(ports.sent[2].guids) == set(GROUP) and ports.sent[2].where == "inside"
+
+    # Kills in the new copy count; the old copy's evidence belongs to nobody now.
+    now = int(ports.clock.now() * 1000)
+    await night.on_boss(Boss(now, 631, 77, 0, "", "killed", (1, *GROUP)))
+    await night.on_boss(Boss(now, 631, 92, 1, "", "killed", (1, *GROUP)))
+    await night.tick()
+    assert night.session.kills == 1
+    assert ledger(ports, new, "kill") == sorted((*GROUP, 1)) and ledger(ports, old, "kill") == []
+
+
+@_run_async
+async def test_a_raid_that_fought_keeps_its_record_when_his_group_moves_on(setup):
+    ports, _, night = setup
+    await adopted(setup)
+    [(old, *_)] = records(ports)
+    await night.on_boss(Boss(int(ports.clock.now() * 1000), 631, 77, 0, "", "killed", (1, *GROUP)))
+    await night.tick()
+    ports.jobs["summon"].append(summoned(instance_id=92))
+    await night.on_guild_group(group_event(ports, instance_id=92))
+    await night.tick()
+    await night.tick()
+    [(_, *_, ended, outcome), (new, *_)] = records(ports)
+    assert ended is not None and outcome == "new_instance" and not not_raided(ports, old)
+    assert ledger(ports, old, "attendance") == sorted((*GROUP, 1)) and ledger(ports, old, "kill") == sorted((*GROUP, 1))
+    assert night.session.raid_id == new and night.session.ctx.instance_id == 92
+    assert ledger(ports, new, "attendance") == sorted((*GROUP, 1))
+
+
+@_run_async
+async def test_a_copy_that_already_has_a_record_takes_nothing_over(setup):
+    ports, _, night = setup
+    await adopted(setup)
+    ports.jobs["summon"].append(summoned(instance_id=92))
+    await night.on_guild_group(group_event(ports, instance_id=92))
+    await night.tick()
+    await night.tick()
+    [_, (new, *_)] = records(ports)
+    sent = len(ports.sent)
+    # Back into 77, which has its (voided) record: no third record, and the raid in 92 goes on.
+    await night.on_guild_group(group_event(ports, instance_id=77))
+    # Not a raid instance, or a mode the raid has not: nothing moves either.
+    await night.on_guild_group(group_event(ports, map=574, instance_id=93, difficulty=0))
+    await night.on_guild_group(group_event(ports, instance_id=94, difficulty=7))
+    await night.tick()
+    assert len(records(ports)) == 2 and len(ports.sent) == sent
+    assert night.state is State.RUNNING and night.session.raid_id == new and night.session.ctx.instance_id == 92
+
+
+@_run_async
+async def test_vault_of_archavon_kills_pay_dkp_like_any_raids(setup):
+    """Raid 27, 2026-11-25: Emalon and Koralon died in VoA 25 and the raid kept kills 0. VoA's script keeps no
+    boss states; mod-leeroy now reports its kills from the encounter table (boss_id the DungeonEncounter bit,
+    the DBC's name), killed only, with no engage before it."""
+    ports, _, night = setup
+    await logged_in(setup)
+    await night.on_zone(Zone(0, 1, 4603, "Vault of Archavon"))
+    await night.on_guild_group(group_event(ports, map=624, instance_id=35))
+    ports.jobs["summon"].append(summoned(instance_id=35))
+    await night.tick()
+    await night.tick()
+    [(raid_id, size, *_)] = records(ports, "voa")
+    assert size == 25 and night.session.ctx.instance_id == 35
+    now = int(ports.clock.now() * 1000)
+    await night.on_boss(Boss(now, 624, 35, 1, "Emalon the Storm Watcher", "killed", (1, *GROUP)))
+    await night.on_boss(Boss(now, 624, 35, 1, "Emalon the Storm Watcher", "killed", (1, *GROUP)))  # never twice
+    await night.on_boss(Boss(now + 1000, 624, 35, 2, "Koralon the Flame Watcher", "killed", (1, *GROUP)))
+    await night.tick()
+    assert night.session.kills == 2
+    assert ledger(ports, raid_id, "kill") == sorted([*GROUP, 1] * 2)
+    lines = [text for _, channel, text in ports.said if channel == "raid" and " dkp to " in text]
+    assert [line.rsplit(" for ", 1)[1] for line in lines] == ["Emalon the Storm Watcher", "Koralon the Flame Watcher"]

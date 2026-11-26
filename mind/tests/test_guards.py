@@ -135,3 +135,22 @@ def test_continuation_skips_person_and_guild_checks_and_record_is_idempotent():
         g.record(f"x{i}", 300 + i, 1004.0, K.OPEN)
     assert not g.allow(101, K.OPEN, 1005.0)
     assert g.allow(101, K.OPEN, 1005.0, continuation=True)
+
+
+def test_loot_lines_pass_a_full_guild_window():
+    """2026-11-25 13:45: an achievement gz burst filled guild_per_min and dropped the DKP
+    officer's loot call (say_dropped reason=guards)."""
+    g = make()
+    for i in range(6):
+        g.record(f"gz{i}", 200 + i, 1000.0 + i, K.GZ)
+    assert not g.allow(2782, K.CALLOUT, 1010.0)
+    assert g.allow(2782, K.CALLOUT, 1010.0, window_exempt=True)
+    # a non-loot line in the same state is still dropped
+    assert not g.allow(2782, K.CALLOUT, 1010.0)
+    assert not g.allow(2783, K.OPEN, 1010.0)
+    assert not g.allow(2783, K.REPLY_HUMAN, 1010.0)
+    # the exemption skips only the guild window: the person's own interval still holds
+    g.record("loot1", 2782, 1011.0, K.CALLOUT)
+    assert g.allow(2782, K.CALLOUT, 1012.0, window_exempt=True)
+    g.record("open1", 2790, 1012.0, K.OPEN)
+    assert not g.allow(2790, K.OPEN, 1013.0, window_exempt=True)

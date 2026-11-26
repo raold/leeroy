@@ -35,6 +35,7 @@ from nightly.test_night_enrich import APPEARANCE
 from nightly.test_night_photo_kind import KIND
 
 from .fakes import CLOCK, fake_command, until
+from shipped_off import off
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "session_basic.jsonl"
 CAST = load_fixture(FIXTURE)[1]  # 101-105, invented
@@ -89,8 +90,8 @@ def test_profile_photos_end_to_end(tmp_path, monkeypatch):
         bridge_port = await bridge.start()
         out["ports"] = [bridge_port]
         (data / "mind.toml").write_text(
-            f"[bridge]\nport = {bridge_port}\n[talk]\nchattiness = 0\n"
-            "[selfies]\nenabled = true\n", encoding="utf-8")
+            off(f"[bridge]\nport = {bridge_port}\n[talk]\nchattiness = 0\n"
+            "[selfies]\nenabled = true\n"), encoding="utf-8")
         store = Store(open_db(data / "mind.db"), clock=clock)
         try:
             seed_test_cast(store)

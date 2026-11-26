@@ -278,3 +278,15 @@ def test_reaction_mapping_distinguishes_laugh_from_acknowledgement(rig,question,
     result = review(GuardStores(rig.store.conn,rig.engine.live_review.config),
                     Draft(101,"guild","lol",parent_id=parent,now=rig.clock.now(),real_answer_due=True))
     assert result.action=="react" and result.reaction==emoji
+
+
+def test_window_exempt_say_as_passes_a_full_guild_window_and_others_do_not(rig):
+    async def go(text, **kw):
+        task = asyncio.create_task(rig.engine.say_as(101,"raid",text,kind=TurnKind.CALLOUT,**kw))
+        await rig.advance(100)
+        return task.result()
+    now = rig.clock.now()
+    for i in range(6):
+        rig.engine.guards.record(f"gz{i}",300+i,now,TurnKind.GZ)
+    assert not rig.sync(go("pulling in 5"))
+    assert rig.sync(go("loot: Testblade, bid in raid chat",window_exempt=True))

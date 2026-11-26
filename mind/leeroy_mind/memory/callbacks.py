@@ -28,11 +28,13 @@ _REF = re.compile(r"(memory|chat|event):([1-9][0-9]*)\Z")
 
 
 def load_callbacks_config(path: Path) -> bool:
-    """Only a valid [callbacks] enabled=true table enables callers; fail closed."""
+    """[callbacks] enabled: on when missing; an invalid table or an unreadable file is off."""
     try:
         table = tomllib.loads(path.read_text(encoding="utf-8-sig")).get("callbacks", {})
         return (isinstance(table, dict) and not set(table) - {"enabled"}
-                and type(table.get("enabled", False)) is bool and table.get("enabled", False))
+                and type(table.get("enabled", True)) is bool and table.get("enabled", True))
+    except FileNotFoundError:
+        return True
     except (OSError, UnicodeError, tomllib.TOMLDecodeError):
         return False
 

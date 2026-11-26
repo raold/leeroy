@@ -1,7 +1,7 @@
 # Varied fictional appearances
 
-`[looks] diversity = true` enables the deterministic sampler for cast generation
-and nightly newcomers. It defaults to false; malformed or unknown settings disable
+`[looks] diversity` enables the deterministic sampler for cast generation
+and nightly newcomers. It defaults to true; malformed or unknown settings disable
 it. The switch is read at startup, or once per manual generator command. The
 generator still makes its existing two model calls. Sampling supplies the appearance;
 only that freshly sampled version is marked for initial disclosure/taste enrichment.

@@ -25,6 +25,7 @@ from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.talk.prompt import relationship_card
 from nightly.conftest import consistent
 from nightly.test_night_encounters import encounter, prompt, reply, seeded
+from shipped_off import merge
 
 run = asyncio.run
 DAY = 86400.0
@@ -63,8 +64,10 @@ def pursue(h, guid, *, ago=3600.0, kind="flirt", channel="guild"):
 
 # -- the switch -------------------------------------------------------------------------------
 
-def test_config_is_off_unless_a_valid_table_turns_it_on(tmp_path):
+def test_config_is_on_by_default_and_a_false_or_invalid_table_turns_it_off(tmp_path):
     path = tmp_path / "mind.toml"
+    assert drama_config.load_drama_config(path).member_romance is True
+    path.write_bytes(b"[drama]\nmember_romance = false\n")
     assert drama_config.load_drama_config(path).member_romance is False
     path.write_bytes(b"[drama]\nmember_romance = true\n")
     assert drama_config.load_drama_config(path).member_romance is True
@@ -77,6 +80,8 @@ def test_config_is_off_unless_a_valid_table_turns_it_on(tmp_path):
 def test_settings_read_the_switch(tmp_path):
     from leeroy_mind.config import load_config
     from leeroy_mind.nightly.settings import load_settings
+    assert load_settings(load_config(tmp_path / "mind.toml"), tmp_path).member_romance is True
+    (tmp_path / "mind.toml").write_bytes(b"[drama]\nmember_romance = false\n")
     assert load_settings(load_config(tmp_path / "mind.toml"), tmp_path).member_romance is False
     (tmp_path / "mind.toml").write_bytes(b"[drama]\nmember_romance = true\n")
     assert load_settings(load_config(tmp_path / "mind.toml"), tmp_path).member_romance is True
@@ -86,6 +91,7 @@ def test_attach_adds_the_night_stage_only_when_on(tmp_path):
     from leeroy_mind.nightly.pipeline import STAGES
     from leeroy_mind.nightly.runner import NightRunner
     app = SimpleNamespace(data_dir=tmp_path, night_runner=NightRunner(STAGES, lambda *a: None))
+    (tmp_path / "mind.toml").write_bytes(b"[drama]\nmember_romance = false\n")
     assert couples.attach(app) is None
     assert "couples" not in [s.name for s in app.night_runner.stages]
     (tmp_path / "mind.toml").write_bytes(b"[drama]\nmember_romance = true\n")
@@ -964,6 +970,7 @@ def test_a_rumour_may_name_a_couple_when_the_switch_is_on(h):
 # -- live talk ------------------------------------------------------------------------------
 
 def test_a_card_between_two_members_names_their_romance_outside_group_turns(monkeypatch):
+    monkeypatch.setattr(drama_config, "_PINNED", False)
     r = Relationship(a=101, b=102, affinity=30, familiarity=50, romance_stage="late_nights")
     assert "dating" not in relationship_card("Belra", r, is_human=False)  # the mind started off
     monkeypatch.setattr(drama_config, "_PINNED", True)
@@ -1069,7 +1076,7 @@ def test_the_switch_is_pinned_at_mind_start(h, monkeypatch):
     from nightly.test_night_wiring import app_for, context
     monkeypatch.setattr(drama_config, "_PINNED", False)
     path = h.settings.data_dir / "mind.toml"
-    path.write_bytes(b"[drama]\nmember_romance = true\n")
+    merge(path, {"drama": {"member_romance": True}})
     app = app_for(h)
     try:
         path.write_bytes(b"[drama]\nmember_romance = false\n")

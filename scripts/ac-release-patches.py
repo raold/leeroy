@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 
-MODULES = ("mod-playerbots", "mod-dungeon-clear")
+MODULES = ("mod-playerbots", "mod-dungeon-clear", "mod-individual-progression")
 PIN_FILE = "src/Bot/RandomPlayerbotMgr.cpp"
 OPERATIONS = ("rebase-apply", "rebase-merge", "CHERRY_PICK_HEAD", "MERGE_HEAD", "REVERT_HEAD", "sequencer")
 

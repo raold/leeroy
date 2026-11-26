@@ -8,7 +8,7 @@ from discord.test_discord_talk import answers
 from discord.test_own_time import own_time, run_for
 from leeroy_mind.discord import store as dstore
 from leeroy_mind.discord.talk import RETRY_S, TRIES
-from leeroy_mind.groups.config import GroupsConfig
+from leeroy_mind.groups.config import OFF as GROUPS_OFF
 from leeroy_mind.groups.service import OWED
 
 
@@ -121,7 +121,7 @@ def test_disabled_groups_leave_persisted_timing_untouched_on_action(store,tmp_pa
         ch=ask(rig,desk,action='group_create',members=[101,102])['channel']
         mid=ask(rig,desk,action='post',channel=ch,text=addressed(rig,[101],'hello friends'))['id']
         before=store.get_meta(OWED+str(mid))
-        talk.app.groups.config=GroupsConfig()
+        talk.app.groups.config=GROUPS_OFF
         dstore.edit(store,mid,author=1,text='urgent, need help',now=rig.clock.now())
         talk.on_his_action()
         run_for(rig,talk,500)

@@ -21,6 +21,7 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_bridge import FakeBridge, load_fixture
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
+from shipped_off import off
 
 START = datetime(2026, 10, 29, 20, 0, tzinfo=timezone.utc)  # night "2026-10-29"
 T_HELLO = int(START.timestamp() * 1000)  # the server's ms clock when it greets
@@ -116,7 +117,7 @@ async def mind(tmp_path: Path, clock: FakeClock, *, events, llm: FakeLLM | None 
     port = await bridge.start()
     if not bridge_up:
         await bridge.go_down()  # the worldserver is not there: connections are refused
-    (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off(toml(port)), encoding="utf-8")
     seed_db(tmp_path / "mind.db", clock)
     llm = llm or FakeLLM(reply, models={LIVE})
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=llm, clock=clock,
@@ -413,7 +414,7 @@ def test_a_login_checks_the_live_model_the_reloaded_config_names(tmp_path, caplo
             await h.wait(lambda: h.app.world.online and h.app.model_ready)
             port = h.app.cfg.bridge.port
             (tmp_path / "mind.toml").write_text(
-                toml(port) + '\n[models]\nlive = "next-live:1b"\n', encoding="utf-8")
+                off(toml(port) + '\n[models]\nlive = "next-live:1b"\n'), encoding="utf-8")
             h.app.engine.greeter_draw = lambda rng: rng.randint(2, 3)  # a login some greet
             await h.bridge.push(presence("login"))
             await h.wait(lambda: _count(caplog, "session_started") == 1)
@@ -471,7 +472,7 @@ def test_a_relog_inside_the_model_check_still_skips_the_old_sessions_hooks(tmp_p
             await h.wait(lambda: h.app.store.open_session() is None)
             port = h.app.cfg.bridge.port  # his relog reloads another live model: a check
             (tmp_path / "mind.toml").write_text(
-                toml(port) + '\n[models]\nlive = "next-live:1b"\n', encoding="utf-8")
+                off(toml(port) + '\n[models]\nlive = "next-live:1b"\n'), encoding="utf-8")
             llm.armed = True
             await h.bridge.push(presence("login"))
             await asyncio.wait_for(llm.entered.wait(), 3.0)  # his login waits in the check
@@ -506,7 +507,7 @@ def test_a_login_checks_the_model_only_when_the_reload_changed_it(tmp_path, capl
             await h.wait(lambda: h.app.store.open_session() is None)
             port = h.app.cfg.bridge.port
             (tmp_path / "mind.toml").write_text(
-                toml(port) + '\n[models]\nlive = "next-live:1b"\n', encoding="utf-8")
+                off(toml(port) + '\n[models]\nlive = "next-live:1b"\n'), encoding="utf-8")
             await h.bridge.push(presence("login"))
             await h.wait(lambda: _count(caplog, "session_started") == 2)
             assert llm.lists == before + 1 and h.app.model_ready  # changed: checked at once

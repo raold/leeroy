@@ -5,7 +5,7 @@ members who answer look at it first.
 
 ## Switches
 
-`[photos]` in `mind.toml`; all switches default false, and an invalid table means off.
+`[photos]` in `mind.toml`; all switches default true, and an invalid table means off.
 
 - `enabled = true` allows owner uploads. Restart both the mind and the console after
   changing it.
@@ -19,14 +19,14 @@ members who answer look at it first.
 - `request_priority = true` (with `requests`) lets explicit photo requests render while
   the owner is in WoW and skips the offline grace for queued requests. It interrupts a
   background night, booth or bulk render and waits for its worker to stop before loading
-  the requested-image worker. Restart the mind after changing it. Missing/false keeps
+  the requested-image worker. Restart the mind after changing it. `false` keeps
   the offline-only policy. Remove the key before rolling back to older code, which
   treats an unknown `[photos]` key as an invalid table.
   Ops lists it as **Priority selfie requests while playing**.
   It also makes requests on demand (owner, 2026-11-25: "i could dm a bot, request a selfie, and
   they do so immediately"; see "On demand" below).
 - `unsolicited = true` (with `requests`) lets a highly romantic member DM him a fresh selfie of
-  her own accord while the GPU is idle (below, "Unsolicited selfies"). Default false; restart the
+  her own accord while the GPU is idle (below, "Unsolicited selfies"). Default true; restart the
   mind after changing it. Without `requests` it logs `photos_unsolicited_needs` and stays off.
   Older code reads the key as an invalid table, so remove it before rolling back.
 - `scene_from_words = true` (with `requests`) reads his words into the requested photo's scene
@@ -266,9 +266,14 @@ and inspect the live model's GPU residency after handback.
 
 ## Uploads
 
-- Attach or paste an image in a Discord channel or DM. The page resizes it to a JPEG and
-  strips its metadata locally before upload. Send stays disabled while a photo is being
-  prepared.
+- Attach, paste, or drag an image from the desktop onto the open channel or DM (a "Drop to
+  attach" overlay covers the conversation while a file is over it). All three take the same
+  path: the page resizes it to a JPEG and strips its metadata locally before upload. Send
+  stays disabled while a photo is being prepared. One photo goes with a message; of several
+  dropped or pasted files the first that can be attached is taken and the page says so; other
+  files are refused in words. Dragged text and links drop as before, and a file dropped
+  elsewhere on the page is refused there rather than opening in place of the console. With
+  `[videos] enabled` the same path takes a short video (`videos/README.md`).
 - Limits: 4 MiB a photo, four a minute and 200 a local day. After a console restart, the
   day's count is rebuilt from the staged files. Images refused before they are written
   do not count.

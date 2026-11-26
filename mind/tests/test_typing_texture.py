@@ -63,11 +63,11 @@ def test_you_inside_a_contraction_is_never_abbreviated(texture):
 # -- the switch -----------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("value", [None, "false", "true", "1", '"true"'])
-def test_switch_defaults_off_and_an_invalid_value_is_off(tmp_path, value):
+def test_switch_defaults_on_and_an_invalid_value_is_off(tmp_path, value):
     path = tmp_path / "mind.toml"
     if value is not None:
         path.write_bytes(f"[talk]\ntexture = {value}\n".encode())
-    assert load_config(path).talk.texture is (value == "true")
+    assert load_config(path).talk.texture is (value in (None, "true"))  # on by default (2026-11-25)
 
 
 def test_texture_is_seeded_and_fixed_per_member():

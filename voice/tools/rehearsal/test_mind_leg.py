@@ -25,6 +25,7 @@ from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.voice import wire
 from rehearsal_common import (CUT_LINE, FIRST_LINE, RUN, WORKTREE, endpoint, package_path, publish,
                               stage, under, until)
+from shipped_off import off
 
 
 def test_mind_leg(tmp_path, monkeypatch, live_guard):
@@ -71,13 +72,13 @@ def test_mind_leg(tmp_path, monkeypatch, live_guard):
         bridge_port = endpoint(await bridge.start())
         assert len({bridge_port, ollama_port, *ready["ports"]}) == 4
         (root / "mind.toml").write_text(
-            '[models]\nlive="rehearsal-chat"\nlive_fallback="rehearsal-fallback"\n'
+            off('[models]\nlive="rehearsal-chat"\nlive_fallback="rehearsal-fallback"\n'
             'reflection="rehearsal-reflection"\nembedding="rehearsal-embed"\n'
             f'[bridge]\nhost="127.0.0.1"\nport={bridge_port}\n'
             f'[ollama]\nurl="http://127.0.0.1:{ollama_port}"\n'
             '[talk]\nchattiness=0\n[voice]\nenabled=true\nautostart=false\n'
             'hot_mic_per_month=0\nelsewhere_lines_per_10min=0\n'
-            f'host="127.0.0.1"\nport={port}\non_comms_raider=1.0\non_comms_social=1.0\n',
+            f'host="127.0.0.1"\nport={port}\non_comms_raider=1.0\non_comms_social=1.0\n'),
             encoding="utf-8")
         cfg = load_config(root / "mind.toml")
         store = Store(open_db(root / "mind.db"), clock=SystemClock())

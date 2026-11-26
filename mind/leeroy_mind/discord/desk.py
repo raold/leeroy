@@ -16,6 +16,7 @@ an edit never loosens it: one that drops the line's ask (memory.privacy.DONT_TEL
 line as she read it. His delete leaves the line: she may have read it, and a delete does not
 unsay it. A post from before these lines has none, and its edit changes only the message."""
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -67,9 +68,12 @@ class DiscordDesk:
         self.app = app
         from leeroy_mind.groups.service import Groups
         app.groups = Groups(app)
-        from leeroy_mind.photos.config import PhotosConfig, load_photos_config
+        from leeroy_mind.photos.config import OFF as PHOTOS_OFF, load_photos_config
         self.photos = (load_photos_config(Path(app.data_dir) / 'mind.toml')
-                       if getattr(app, 'data_dir', None) is not None else PhotosConfig())
+                       if getattr(app, 'data_dir', None) is not None else PHOTOS_OFF)
+        from leeroy_mind.videos.config import OFF as VIDEOS_OFF, load_videos_config
+        self.videos = (load_videos_config(Path(app.data_dir) / 'mind.toml')
+                       if getattr(app, 'data_dir', None) is not None else VIDEOS_OFF)
         from leeroy_mind.voice_notes.service import VoiceNotes
         app.voice_notes = VoiceNotes(app)
         if app.voice_notes.config.enabled:
@@ -124,23 +128,32 @@ class DiscordDesk:
                     return app.voice_notes.human_post(args,self)
                 except AudioRefused as error:
                     raise _Refused('voice_note_'+error.code,AUDIO_WORDS.get(error.code,'The recording could not be saved.')) from None
-            image = args.get('image')
+            image, video = args.get('image'), args.get('video')
+            attached = image is not None or video is not None
             attachment = None
-            if image is not None:
+            if attached:
                 from leeroy_mind.photos import uploads
+                from leeroy_mind.videos import files as vfiles
                 if not self.photos.enabled:
                     raise _Refused('photos_off', uploads.WORDS['off'])
+                if video is not None and not self.videos.enabled:
+                    raise _Refused('videos_off', vfiles.WORDS['off'])
                 self._photo_posts = [t for t in self._photo_posts if now - t < 60]
                 if len(self._photo_posts) >= uploads.MINUTE_MAX:
                     raise _Refused('photos_minute', uploads.WORDS['minute'])
                 # Not externally visible: adopt fills this row before commit.
                 attachment = dstore.AttachmentIn('upload', 'discord/images/pending', 16, 16, 1)
             with store.transaction():
-                if image is not None:
+                if attached:
                     day = app.clock.local().date().isoformat()
+                if image is not None:
                     count = uploads.day_count(store.conn, day)
                     if count >= uploads.DAY_MAX:
                         raise _Refused('photos_day', uploads.WORDS['day'])
+                if video is not None:
+                    clips = vfiles.day_count(store.conn, day)
+                    if clips >= vfiles.DAY_MAX:
+                        raise _Refused('videos_day', vfiles.WORDS['day'])
                 mid = dstore.post(store, channel=args["channel"], author=me, origin="human",
                                   text=args["text"], reply_to=args.get("reply_to"),
                                   thread=args.get("thread"), now=now, attachment=attachment)
@@ -153,6 +166,18 @@ class DiscordDesk:
                     store.conn.execute('UPDATE discord_attachment SET path=?,width=?,height=?,bytes=? '
                                        'WHERE message=?', (path, w, h, size, mid))
                     store.set_meta(uploads.DAY_KEY.format(day), str(count + 1))
+                if video is not None:
+                    # His video: its stills are the message's attachment (what the look sees and
+                    # older code shows as a photo); the video itself is named in meta.
+                    try:
+                        path, w, h, size, facts = vfiles.adopt(app.data_dir, video, mid)
+                    except vfiles.VideoRefused as error:
+                        raise _Refused('videos_' + error.code,
+                                       vfiles.WORDS.get(error.code, vfiles.WORDS['busy'])) from None
+                    store.conn.execute('UPDATE discord_attachment SET path=?,width=?,height=?,bytes=? '
+                                       'WHERE message=?', (path, w, h, size, mid))
+                    store.set_meta(vfiles.META_KEY.format(mid), json.dumps(facts, sort_keys=True))
+                    store.set_meta(vfiles.DAY_KEY.format(day), str(clips + 1))
                 line, chat = self._his_line(mid, me, now)
                 server = getattr(app, 'server', None)
                 if server is not None and (peer := layout.dm_peer(args['channel'])) is not None:
@@ -165,9 +190,9 @@ class DiscordDesk:
                 server.engine.his_post(args['channel'])
                 server.dms.his_post(args['channel'])
                 server.reactions.after_post(mid, author=me, channel=args['channel'], text=args['text'], his=True)
-            if image is not None:
+            if attached:
                 self._photo_posts.append(now)
-            self.signal_post(line, args.get("reply_to"), media=image is not None, thread=args.get("thread"))
+            self.signal_post(line, args.get("reply_to"), media=attached, thread=args.get("thread"))
             try:
                 app.on_his_discord_line(line, chat, now)
             except Exception as e:  # the post is stored: its answers still come
@@ -175,7 +200,7 @@ class DiscordDesk:
                           error=type(e).__name__)
             hook = getattr(app, "discord_talk", None)
             if hook is not None:
-                if image is not None and hasattr(hook, 'begin_photo'):
+                if attached and hasattr(hook, 'begin_photo'):
                     # The control request has a 10s deadline; vision runs after commit.
                     hook.begin_photo()
                     self._spawn_photo(self._look_then_answer(mid))
@@ -258,14 +283,17 @@ class DiscordDesk:
 
     async def _look_then_answer(self, message: int) -> None:
         from leeroy_mind.imagefiles import read_image
-        from leeroy_mind.photos.look import look_at
+        from leeroy_mind.photos.look import LOOK_PROMPT, look_at, video_prompt
+        from leeroy_mind.videos.files import by_messages as videos
         app = self.app
         with app.store.transaction():
             row = dstore.attachments(app.store.conn, [message]).get(message)
+            clip = videos(app.store.conn, [message]).get(message)  # his video: look at its stills
         if row is None:
             return
+        prompt = video_prompt(clip['frames']) if clip is not None else LOOK_PROMPT
         data = await asyncio.to_thread(read_image, app.data_dir / row['path'], app.data_dir)
-        look = await look_at(app, data) if data is not None else None
+        look = await look_at(app, data, prompt) if data is not None else None
         if look:
             dstore.set_look(app.store, message, look, now=app.clock.now())
         if not app.stopping:
@@ -305,8 +333,11 @@ class DiscordDesk:
             from leeroy_mind.groups.audience import message_readers
             if member not in message_readers(app.store.conn,message):
                 return
-        prefix = (f'{app.engine.human.called} sent me a photo: ' if peer else
-                  f"{app.engine.human.called} posted a photo in #{row['channel']}: ")
+        from leeroy_mind.videos.files import by_messages as videos
+        with app.store.transaction():
+            what = 'video' if message in videos(app.store.conn, [message]) else 'photo'
+        prefix = (f'{app.engine.human.called} sent me a {what}: ' if peer else
+                  f"{app.engine.human.called} posted a {what} in #{row['channel']}: ")
         await app.writer.write(MemoryCandidate(owner=member, kind='observation',
             text=truncate_words(prefix + sentences(photo['look'])[0], 200), t_event=int(row['ts']),
             actors=(app.human_guid,), importance=4, valence=0., source='chat',

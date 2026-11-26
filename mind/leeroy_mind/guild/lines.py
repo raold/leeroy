@@ -79,6 +79,7 @@ OUTCOME_WORDS = {
     "cancelled": "called it off",
     "hangout": "turned it into a hangout",
     "disbanded": "the group broke up",
+    "new_instance": "moved on to a fresh instance",
     "failed": "couldn't fill the raid",
     "assemble_timeout": "never got everyone together",
 }

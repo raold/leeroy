@@ -363,7 +363,7 @@ def test_weekly_report_keeps_ids_and_numbers_and_lists_saved_versions(store,cloc
     assert report['week']=='2026-W44' and report['note'] is None
     assert report['promoted'][0]=={'kind':'arm','id':'length.1.v1','context':['guild','none','natural'],'probability':.95}
     assert result['versions']==[{'version':version,'created':now,'reason':'cycle','week':'2026-W44','restored_from':None}]
-    assert result['cycle'] is False and 'Invented' not in json.dumps(result)
+    assert result['cycle'] is True and 'Invented' not in json.dumps(result)  # [learn] cycle: its default
 
 
 def test_lab_rollback_goes_through_the_learn_op(store,clock):

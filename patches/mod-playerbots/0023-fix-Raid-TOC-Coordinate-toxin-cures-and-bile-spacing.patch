@@ -1,0 +1,413 @@
+From 20e0105ffc69c0af21ea3430806c3fbbf81c9cca Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 22:09:10 -0500
+Subject: [PATCH 23/46] fix(Raid/TOC): Coordinate toxin cures and bile spacing
+
+---
+ conf/playerbots.conf.dist         |   5 ++
+ src/Ai/Raid/TOC/RaidTocStrategy.h |  39 +++++++++++-
+ src/Ai/Raid/TOC/TocStrategy.cpp   | 101 ++++++++++++++++++++++++++++++
+ src/Ai/Raid/TOC/TocWormPolicy.h   |  83 ++++++++++++++++++++++++
+ src/PlayerbotAIConfig.cpp         |   1 +
+ src/PlayerbotAIConfig.h           |   1 +
+ tests/toc_worm_test.cpp           |  54 ++++++++++++++++
+ 7 files changed, 282 insertions(+), 2 deletions(-)
+ create mode 100644 src/Ai/Raid/TOC/TocWormPolicy.h
+ create mode 100644 tests/toc_worm_test.cpp
+
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index c8838cf8..4ab1d583 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -503,6 +503,11 @@ Playerbots.ValithriaHealerFocus = 1
+ # hurting her. 0 keeps every healer out of the dream. Default: 1.
+ Playerbots.ValithriaPortals = 1
+ 
++# Meet a Burning Bile carrier before Paralytic Toxin roots the victim, rescue
++# paralysed victims and separate carriers after the cure. Opt in after a dojo gate.
++# Uses ordinary movement and the core's Bile effect; never removes an aura itself.
++Playerbots.TocWormSupport = 0
++
+ # Opt-in Malygos drake positioning/rotation and human-led Flame Leviathan vehicles.
+ # Uses normal boarding and spell costs; never moves the human or skips a boss.
+ Playerbots.RaidVehicleSupport = 0
+diff --git a/src/Ai/Raid/TOC/RaidTocStrategy.h b/src/Ai/Raid/TOC/RaidTocStrategy.h
+index 941fa1c4..fa6c3317 100644
+--- a/src/Ai/Raid/TOC/RaidTocStrategy.h
++++ b/src/Ai/Raid/TOC/RaidTocStrategy.h
+@@ -35,22 +35,57 @@ public:
+     bool Execute(Event event) override;
+ };
+ 
++class TocWormTrigger : public Trigger
++{
++public:
++    TocWormTrigger(PlayerbotAI* botAI) : Trigger(botAI, "toc worms") {}
++    bool IsActive() override;
++};
++
++class TocToxinCureAction : public MovementAction
++{
++public:
++    TocToxinCureAction(PlayerbotAI* botAI) : MovementAction(botAI, "toc toxin cure") {}
++    bool isUseful() override;
++    bool Execute(Event event) override;
++};
++
++class TocBileSpacingAction : public MovementAction
++{
++public:
++    TocBileSpacingAction(PlayerbotAI* botAI) : MovementAction(botAI, "toc bile spacing") {}
++    bool isUseful() override;
++    bool Execute(Event event) override;
++};
++
+ class RaidTocActionContext : public NamedObjectContext<Action>
+ {
+ public:
+-    RaidTocActionContext() { creators["toc twin essence"] = &RaidTocActionContext::Essence; }
++    RaidTocActionContext()
++    {
++        creators["toc twin essence"] = &RaidTocActionContext::Essence;
++        creators["toc toxin cure"] = &RaidTocActionContext::Cure;
++        creators["toc bile spacing"] = &RaidTocActionContext::Spacing;
++    }
+ 
+ private:
+     static Action* Essence(PlayerbotAI* botAI) { return new TocEssenceAction(botAI); }
++    static Action* Cure(PlayerbotAI* botAI) { return new TocToxinCureAction(botAI); }
++    static Action* Spacing(PlayerbotAI* botAI) { return new TocBileSpacingAction(botAI); }
+ };
+ 
+ class RaidTocTriggerContext : public NamedObjectContext<Trigger>
+ {
+ public:
+-    RaidTocTriggerContext() { creators["toc twin essence"] = &RaidTocTriggerContext::Essence; }
++    RaidTocTriggerContext()
++    {
++        creators["toc twin essence"] = &RaidTocTriggerContext::Essence;
++        creators["toc worms"] = &RaidTocTriggerContext::Worms;
++    }
+ 
+ private:
+     static Trigger* Essence(PlayerbotAI* botAI) { return new TocEssenceTrigger(botAI); }
++    static Trigger* Worms(PlayerbotAI* botAI) { return new TocWormTrigger(botAI); }
+ };
+ 
+ #endif
+diff --git a/src/Ai/Raid/TOC/TocStrategy.cpp b/src/Ai/Raid/TOC/TocStrategy.cpp
+index 3ee12e72..7cf85c37 100644
+--- a/src/Ai/Raid/TOC/TocStrategy.cpp
++++ b/src/Ai/Raid/TOC/TocStrategy.cpp
+@@ -4,14 +4,18 @@
+  * or (at your option) any later version.
+  */
+ 
++#include <array>
++
+ #include "Creature.h"
+ #include "Group.h"
+ #include "InstanceScript.h"
+ #include "Map.h"
++#include "ObjectAccessor.h"
+ #include "Playerbots.h"
+ #include "RaidInteractionPolicy.h"
+ #include "RaidTocStrategy.h"
+ #include "Spell.h"
++#include "TocWormPolicy.h"
+ #include "WorldSession.h"
+ 
+ namespace
+@@ -25,6 +29,18 @@ constexpr uint32 NPC_LIGHT_ESSENCE = 34568;
+ constexpr uint32 NPC_DARK_ESSENCE = 34567;
+ constexpr float ESSENCE_SEARCH_RANGE = 120.0f;
+ constexpr float ESSENCE_CLICK_RANGE = 4.0f;
++constexpr uint32 BOSS_BEASTS = 0;
++constexpr std::array<uint32, 2> WORM_GUID_KEYS{6, 7};  // DATA_DREADSCALE and DATA_ACIDMAW.
++constexpr std::array<uint32, 4> SPELL_PARALYTIC_TOXIN{66823, 67618, 67619, 67620};
++constexpr uint32 SPELL_BURNING_BILE = 66869;
++constexpr float BILE_CONTACT_RANGE = 8.0f;
++constexpr float BILE_SEPARATION = 13.0f;
++
++bool HasToxin(Player* player)
++{
++    return std::any_of(SPELL_PARALYTIC_TOXIN.begin(), SPELL_PARALYTIC_TOXIN.end(),
++                       [player](uint32 spell) { return player->HasAura(spell); });
++}
+ 
+ Colour CastingVortex(Creature* twin)
+ {
+@@ -78,15 +94,100 @@ Colour NeededEssence(PlayerbotAI* ai)
+     Colour const wanted = RaidInteractions::WantedEssence(current, target ? target->GetEntry() : 0, vortex, touch);
+     return wanted == current ? Colour::None : wanted;
+ }
++
++bool WormPhase(PlayerbotAI* ai)
++{
++    Player* bot = ai->GetBot();
++    if (!sPlayerbotAIConfig.TocWormSupport || bot->GetMapId() != MAP_TRIAL_OF_THE_CRUSADER || !bot->IsAlive() ||
++        IsSelfBot(bot) || !bot->GetGroup() || !bot->GetGroup()->isRaidGroup() || bot->IsBeingTeleported() ||
++        bot->GetVehicle() || bot->GetTransport() || ai->HasStrategy("stay", BOT_STATE_COMBAT) ||
++        ai->HasStrategy("passive", BOT_STATE_COMBAT))
++        return false;
++    auto* instance = bot->GetInstanceScript();
++    if (!instance || instance->GetBossState(BOSS_BEASTS) != IN_PROGRESS)
++        return false;
++    // The last worm's poison can outlive it during the Icehowl transition.
++    if (HasToxin(bot) || bot->HasAura(SPELL_BURNING_BILE))
++        return true;
++    for (uint32 key : WORM_GUID_KEYS)
++        if (Creature* worm = instance->GetCreature(key); worm && worm->IsAlive() && worm->IsInCombat())
++            return true;
++    return false;
++}
++
++Player* WormTarget(PlayerbotAI* ai, bool spacing)
++{
++    if (!WormPhase(ai))
++        return nullptr;
++    Player* bot = ai->GetBot();
++    std::vector<TocWorms::Member> members;
++    for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
++    {
++        Player* member = ref->GetSource();
++        if (!member || !member->IsInWorld() || !member->IsAlive() || member->IsBeingTeleported() ||
++            member->GetMap() != bot->GetMap() || !member->InSamePhase(bot) || member->GetVehicle() ||
++            member->GetTransport())
++            continue;
++        members.push_back({member->GetGUID().GetCounter(), member->GetPositionX(), member->GetPositionY(),
++                           GET_PLAYERBOT_AI(member) && !IsSelfBot(member), PlayerbotAI::IsTank(member),
++                           HasToxin(member), member->HasAura(SPELL_BURNING_BILE),
++                           member->HasUnitState(UNIT_STATE_ROOT | UNIT_STATE_STUNNED)});
++    }
++    auto const self = std::find_if(members.begin(), members.end(),
++                                   [bot](auto const& member) { return member.guid == bot->GetGUID().GetCounter(); });
++    if (self == members.end())
++        return nullptr;
++    auto const wanted = spacing ? TocWorms::Avoid(*self, members) : TocWorms::Contact(*self, members);
++    return wanted ? ObjectAccessor::GetPlayer(bot->GetMap(), ObjectGuid::Create<HighGuid::Player>(uint32(wanted)))
++                  : nullptr;
++}
+ }  // namespace
+ 
+ void RaidTocStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+ {
+     triggers.push_back(new TriggerNode("toc twin essence", {NextAction("toc twin essence", ACTION_RAID + 8)}));
++    triggers.push_back(new TriggerNode("toc worms", {NextAction("toc toxin cure", ACTION_RAID + 11),
++                                                     NextAction("toc bile spacing", ACTION_RAID + 10)}));
+ }
+ 
+ bool TocEssenceTrigger::IsActive() { return NeededEssence(botAI) != Colour::None; }
+ 
++bool TocWormTrigger::IsActive() { return WormPhase(botAI); }
++
++bool TocToxinCureAction::isUseful() { return WormTarget(botAI, false) != nullptr; }
++
++bool TocBileSpacingAction::isUseful() { return WormTarget(botAI, true) != nullptr; }
++
++bool TocToxinCureAction::Execute(Event /*event*/)
++{
++    Player* target = WormTarget(botAI, false);
++    if (!target || !bot->IsWithinLOSInMap(target))
++        return false;
++    float const distance = bot->GetExactDist2d(target);
++    if (distance <= BILE_CONTACT_RANGE)
++    {
++        bot->StopMoving();
++        SetDuration(500);  // Wait for the real periodic Bile effect; do not remove the toxin.
++        return true;
++    }
++    float const x =
++        target->GetPositionX() + (bot->GetPositionX() - target->GetPositionX()) * BILE_CONTACT_RANGE / distance;
++    float const y =
++        target->GetPositionY() + (bot->GetPositionY() - target->GetPositionY()) * BILE_CONTACT_RANGE / distance;
++    bot->InterruptNonMeleeSpells(false);
++    return MoveTo(bot->GetMapId(), x, y, target->GetPositionZ(), false, false, false, false,
++                  MovementPriority::MOVEMENT_FORCED, true);
++}
++
++bool TocBileSpacingAction::Execute(Event /*event*/)
++{
++    Player* target = WormTarget(botAI, true);
++    if (!target)
++        return false;
++    bot->InterruptNonMeleeSpells(false);
++    return MoveAway(target, std::max(3.0f, BILE_SEPARATION - bot->GetExactDist2d(target)));
++}
++
+ bool TocEssenceAction::isUseful() { return NeededEssence(botAI) != Colour::None; }
+ 
+ bool TocEssenceAction::Execute(Event /*event*/)
+diff --git a/src/Ai/Raid/TOC/TocWormPolicy.h b/src/Ai/Raid/TOC/TocWormPolicy.h
+new file mode 100644
+index 00000000..0ef733cb
+--- /dev/null
++++ b/src/Ai/Raid/TOC/TocWormPolicy.h
+@@ -0,0 +1,83 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#ifndef PLAYERBOTS_TOCWORMPOLICY_H
++#define PLAYERBOTS_TOCWORMPOLICY_H
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <tuple>
++#include <vector>
++
++namespace TocWorms
++{
++struct Member
++{
++    std::uint64_t guid = 0;
++    float x = 0, y = 0;
++    bool bot = true, tank = false, toxin = false, bile = false, rooted = false;
++};
++
++inline float Distance(Member const& a, Member const& b) { return std::hypot(a.x - b.x, a.y - b.y); }
++
++// Mobile victims go to the carrier before the slow becomes paralysis. A
++// paralysed victim instead gets one elected carrier, preferring a non-tank.
++inline std::uint64_t Contact(Member const& self, std::vector<Member> const& members)
++{
++    if (self.rooted)
++        return 0;
++    Member const* chosen = nullptr;
++    if (self.toxin)
++    {
++        for (auto const& other : members)
++            if (other.guid != self.guid && other.bile && Distance(self, other) <= 120.0f &&
++                (!chosen || std::make_pair(Distance(self, other), other.guid) <
++                                std::make_pair(Distance(self, *chosen), chosen->guid)))
++                chosen = &other;
++    }
++    else if (self.bile)
++    {
++        for (auto const& victim : members)
++        {
++            if (!victim.toxin || !victim.rooted || Distance(self, victim) > 120.0f)
++                continue;
++            Member const* carrier = nullptr;
++            for (auto const& other : members)
++                if (other.bot && other.bile && !other.rooted && !other.toxin && other.guid != victim.guid &&
++                    Distance(victim, other) <= 120.0f &&
++                    (!carrier || std::make_tuple(other.tank, Distance(victim, other), other.guid) <
++                                     std::make_tuple(carrier->tank, Distance(victim, *carrier), carrier->guid)))
++                    carrier = &other;
++            if (carrier && carrier->guid == self.guid &&
++                (!chosen || std::make_pair(Distance(self, victim), victim.guid) <
++                                std::make_pair(Distance(self, *chosen), chosen->guid)))
++                chosen = &victim;
++        }
++    }
++    return chosen ? chosen->guid : 0;
++}
++
++// The cure gets priority over spacing. Two carriers agree which one yields,
++// so a tank can keep its worm while other carriers move away from it.
++inline std::uint64_t Avoid(Member const& self, std::vector<Member> const& members)
++{
++    if (self.rooted || self.toxin || Contact(self, members))
++        return 0;
++    Member const* chosen = nullptr;
++    for (auto const& other : members)
++    {
++        if (other.guid == self.guid || !other.bile || Distance(self, other) >= 12.0f)
++            continue;
++        if (self.bile && other.bot && std::make_pair(!self.tank, self.guid) < std::make_pair(!other.tank, other.guid))
++            continue;
++        if (!chosen ||
++            std::make_pair(Distance(self, other), other.guid) < std::make_pair(Distance(self, *chosen), chosen->guid))
++            chosen = &other;
++    }
++    return chosen ? chosen->guid : 0;
++}
++}  // namespace TocWorms
++#endif
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index 094411aa..f27a89da 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -314,6 +314,7 @@ bool PlayerbotAIConfig::Initialize()
+     TwinValkyrInteractions = sConfigMgr->GetOption<bool>("Playerbots.TwinValkyrInteractions", false);
+     ValithriaHealerFocus = sConfigMgr->GetOption<bool>("Playerbots.ValithriaHealerFocus", true);
+     ValithriaPortals = sConfigMgr->GetOption<bool>("Playerbots.ValithriaPortals", true);
++    TocWormSupport = sConfigMgr->GetOption<bool>("Playerbots.TocWormSupport", false);
+     RaidVehicleSupport = sConfigMgr->GetOption<bool>("Playerbots.RaidVehicleSupport", false);
+     LichKingMechanics = sConfigMgr->GetOption<bool>("Playerbots.LichKingMechanics", false);
+ 
+diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
+index 953970e1..8316a418 100644
+--- a/src/PlayerbotAIConfig.h
++++ b/src/PlayerbotAIConfig.h
+@@ -110,6 +110,7 @@ public:
+     bool TwinValkyrInteractions;
+     bool ValithriaHealerFocus;
+     bool ValithriaPortals;
++    bool TocWormSupport;
+     bool RaidVehicleSupport;
+     bool LichKingMechanics;
+     bool AllowAccountBots, AllowGuildBots, AllowTrustedAccountBots;
+diff --git a/tests/toc_worm_test.cpp b/tests/toc_worm_test.cpp
+new file mode 100644
+index 00000000..38a9dff1
+--- /dev/null
++++ b/tests/toc_worm_test.cpp
+@@ -0,0 +1,54 @@
++/*
++ * This file is part of the mod-playerbots module for AzerothCore. See AUTHORS file for Copyright
++ * information; released under GNU GPL v2 license, redistribute/modify under version 2 of the License,
++ * or (at your option) any later version.
++ */
++#include <iostream>
++
++#include "../src/Ai/Raid/TOC/TocWormPolicy.h"
++
++int main()
++{
++    using namespace TocWorms;
++    int failures = 0;
++    auto check = [&](bool value)
++    {
++        if (!value)
++            ++failures;
++    };
++    Member tank{1, 0, 0, true, true, false, true, false};
++    Member victim{2, 40, 0, true, false, true, false, false};
++    std::vector<Member> group{tank, victim};
++    check(Contact(victim, group) == tank.guid);  // Observed 40-yard separation must not wait for paralysis.
++    check(Contact(tank, group) == 0);
++    check(Avoid(victim, group) == 0);  // The cure deliberately enters Bile's radius.
++    victim.rooted = true;
++    group[1] = victim;
++    check(Contact(victim, group) == 0);
++    check(Contact(tank, group) == victim.guid);
++    Member healer{3, 80, 0, true, false, false, true, false};
++    group.push_back(healer);
++    check(Contact(tank, group) == 0);  // Prefer a mobile non-tank carrier to moving the worm.
++    check(Contact(healer, group) == victim.guid);
++    group[2].bot = false;
++    check(Contact(tank, group) == victim.guid);  // Never elect a human to execute a bot rescue.
++    group[2].rooted = true;
++    check(Contact(tank, group) == victim.guid);
++    group[2].x = 500;
++    check(Contact(tank, group) == victim.guid);
++    victim.rooted = victim.toxin = false;
++    victim.x = 7;
++    group = {tank, victim};
++    check(Contact(victim, group) == 0);
++    check(Avoid(victim, group) == tank.guid);  // After the real cure, leave the damaging radius.
++    victim.x = 13;
++    check(Avoid(victim, group) == 0);
++    healer.x = 2;
++    group = {tank, healer};
++    check(Avoid(tank, group) == 0);
++    check(Avoid(healer, group) == tank.guid);
++    std::reverse(group.begin(), group.end());
++    check(Avoid(tank, group) == 0 && Avoid(healer, group) == tank.guid);
++    std::cout << "ToC worm policy failures: " << failures << '\n';
++    return failures ? 1 : 0;
++}

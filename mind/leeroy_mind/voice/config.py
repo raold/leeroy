@@ -1,5 +1,6 @@
 """The [voice] table of mind.toml. config.py leaves it alone (EXTENSION_SECTIONS); it is read
-here, and only here, so a mind without the section behaves exactly as before."""
+here, and only here. A mind without the section has voice on (OFF is what an invalid one reads
+as)."""
 import tomllib
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -9,14 +10,17 @@ from leeroy_mind.config import _HOSTS, ConfigError, log
 
 @dataclass(frozen=True)
 class VoiceCfg:
-    enabled: bool = False
+    enabled: bool = True
     host: str = "127.0.0.1"  # loopback only
     port: int = 7879
-    autostart: bool = False  # start leeroy-voice when nothing listens on the port
+    autostart: bool = True  # start leeroy-voice when nothing listens on the port
     on_comms_raider: float = 0.9  # chance a raider is on comms tonight (Task 13)
     on_comms_social: float = 0.6
     hot_mic_per_month: float = 1.0
     elsewhere_lines_per_10min: int = 6
+
+
+OFF = VoiceCfg(enabled=False, autostart=False)
 
 
 def _bool(v) -> bool:

@@ -1,7 +1,7 @@
 # Godmode, strings and member activities
 
 He edits a member's mind, and he pulls strings that she carries out in her own way. Both are
-off by default.
+on by default.
 
 ## Operator notes
 
@@ -10,11 +10,11 @@ off by default.
 enabled = true
 ```
 
-Restart the mind and the console after changing it. Missing, `false` or invalid (a non-boolean
-value or an unknown key) means off; an invalid table logs `godmode_config_invalid` once. Run
+Restart the mind and the console after changing it. Missing means on (the default); `false` or
+invalid (a non-boolean value or an unknown key) means off; an invalid table logs `godmode_config_invalid` once. Run
 `db migrate` with the mind stopped first: migration `0046_strings.sql` adds `godmode_intent`.
 Edits and Discord strings are mind-only. Strings in game (Part B) also need the native rebuild
-and `Leeroy.Strings.Enable = 1` in `mod_leeroy.conf` (default 0, `.reload config`); without it
+and `Leeroy.Strings.Enable = 1` in `mod_leeroy.conf` (default 1, `.reload config`); without it
 they are reported `off`, and an older worldserver's as `unsupported`.
 
 With it off:
@@ -152,7 +152,7 @@ key, Origin and `--no-control` gates as Board replies.
 
 Enable `[life] day_plans = true` for the nightly reflection stage and `[realm] enabled = true` for execution.
 The native worldserver also needs `Leeroy.DayPlans.Enable = 1` and `Leeroy.Realm.Enable = 1`. The day switches
-default off and work independently of godmode edits. The mind applies `life.day_plans` on its normal nightly
+default on and work independently of godmode edits. The mind applies `life.day_plans` on its normal nightly
 and presence configuration reload. Disabling it stops new schedules, body commands and day projections.
 Previously journaled work still reconciles. The native key reloads with `.reload config`. A fresh
 bridge greeting advertises `day_plan_handoff_v1` for admission.

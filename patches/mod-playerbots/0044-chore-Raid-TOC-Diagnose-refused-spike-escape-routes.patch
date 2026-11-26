@@ -1,0 +1,140 @@
+From ce49c87302362825c6b87f180501f2a644841b2d Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 23:15:23 -0500
+Subject: [PATCH 44/46] chore(Raid/TOC): Diagnose refused spike escape routes
+
+---
+ src/Ai/Raid/TOC/RaidTocStrategy.h |  1 +
+ src/Ai/Raid/TOC/TocStrategy.cpp   | 71 ++++++++++++++++++++++++++++---
+ 2 files changed, 66 insertions(+), 6 deletions(-)
+
+diff --git a/src/Ai/Raid/TOC/RaidTocStrategy.h b/src/Ai/Raid/TOC/RaidTocStrategy.h
+index 61d44e4d..b047a227 100644
+--- a/src/Ai/Raid/TOC/RaidTocStrategy.h
++++ b/src/Ai/Raid/TOC/RaidTocStrategy.h
+@@ -61,6 +61,7 @@ public:
+ 
+ private:
+     uint32 _lastEscape = 0;
++    uint32 _lastRouteLog = 0;
+ };
+ 
+ class TocFrostSphereAction : public AttackAction
+diff --git a/src/Ai/Raid/TOC/TocStrategy.cpp b/src/Ai/Raid/TOC/TocStrategy.cpp
+index a1d736aa..51c61271 100644
+--- a/src/Ai/Raid/TOC/TocStrategy.cpp
++++ b/src/Ai/Raid/TOC/TocStrategy.cpp
+@@ -176,12 +176,29 @@ Creature* FrostSphere(PlayerbotAI* ai)
+     return grounded < 2 ? chosen : nullptr;
+ }
+ 
+-bool CompleteRoute(Player* bot, Position const& point, Creature* spike = nullptr)
++struct TocRouteProbe
++{
++    uint32 type = 0, points = 0;
++    float length = 0.0f;
++    bool blocked = false;
++    Position actual;
++};
++
++bool CompleteRoute(Player* bot, Position const& point, Creature* spike = nullptr, TocRouteProbe* probe = nullptr)
+ {
+     PathGenerator path(bot);
+     path.SetPathLengthLimit(200.0f);
+-    if (!path.CalculatePath(point.GetPositionX(), point.GetPositionY(), point.GetPositionZ()) ||
+-        path.GetPathType() != PATHFIND_NORMAL)
++    bool const calculated = path.CalculatePath(point.GetPositionX(), point.GetPositionY(), point.GetPositionZ());
++    if (probe)
++    {
++        probe->type = uint32(path.GetPathType());
++        probe->points = uint32(path.GetPath().size());
++        probe->length = path.getPathLength();
++        auto const& end = path.GetActualEndPosition();
++        probe->actual.Relocate(end.x, end.y, end.z);
++        probe->blocked = false;
++    }
++    if (!calculated || path.GetPathType() != PATHFIND_NORMAL)
+         return false;
+     if (spike)
+     {
+@@ -196,7 +213,11 @@ bool CompleteRoute(Player* bot, Position const& point, Creature* spike = nullptr
+             float const lengthSq = dx * dx + dy * dy;
+             float const fraction = lengthSq > 0.0f ? std::clamp((sx * dx + sy * dy) / lengthSq, 0.0f, 1.0f) : 0.0f;
+             if (std::hypot(sx - fraction * dx, sy - fraction * dy) < clearance)
++            {
++                if (probe)
++                    probe->blocked = true;
+                 return false;
++            }
+         }
+     }
+     return true;
+@@ -306,8 +327,33 @@ bool TocSpikeEscapeAction::Escaping() const { return _lastEscape && GetMSTimeDif
+ bool TocSpikeEscapeAction::Execute(Event /*event*/)
+ {
+     Creature* spike = ThreateningSpike(botAI);
+-    if (!spike || !botAI->CanMove())
++    if (!spike)
++        return false;
++    TocRouteProbe probe;
++    Position goal = bot->GetPosition();
++    unsigned rejected = 0, blocked = 0, floorRejected = 0;
++    auto const note = [&](unsigned reason)
++    {
++        if (_lastRouteLog && GetMSTimeDiffToNow(_lastRouteLog) < 10000)
++            return;
++        _lastRouteLog = getMSTime();
++        LOG_WARN("playerbots",
++                 "toc_spike route_refused instance={} bot={} reason={} marked={} victim={}"
++                 " rejected={} blocked={} floor={} path={} points={} length={}"
++                 " bot_x={} bot_y={} bot_z={} spike_x={} spike_y={} spike_z={}"
++                 " goal_x={} goal_y={} goal_z={} end_x={} end_y={} end_z={}",
++                 bot->GetInstanceId(), bot->GetGUID().GetCounter(), reason, bot->HasAura(SPELL_SPIKE_MARK),
++                 spike->GetVictim() ? spike->GetVictim()->GetGUID().GetCounter() : 0, rejected, blocked, floorRejected,
++                 probe.type, probe.points, probe.length, bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(),
++                 spike->GetPositionX(), spike->GetPositionY(), spike->GetPositionZ(), goal.GetPositionX(),
++                 goal.GetPositionY(), goal.GetPositionZ(), probe.actual.GetPositionX(), probe.actual.GetPositionY(),
++                 probe.actual.GetPositionZ());
++    };
++    if (!botAI->CanMove())
++    {
++        note(1);
+         return false;
++    }
+     std::vector<Position> destinations;
+     if (bot->HasAura(SPELL_SPIKE_MARK))
+     {
+@@ -337,18 +383,31 @@ bool TocSpikeEscapeAction::Execute(Event /*event*/)
+     }
+     for (Position const& point : destinations)
+     {
++        goal = point;
+         // Check every navmesh leg, including corners, against the pursuing spike.
+-        if (bot->GetExactDist2d(point) < 1.0f || std::abs(point.GetPositionZ() - bot->GetPositionZ()) > 4.0f ||
+-            !CompleteRoute(bot, point, spike))
++        if (bot->GetExactDist2d(point) < 1.0f || std::abs(point.GetPositionZ() - bot->GetPositionZ()) > 4.0f)
++        {
++            ++floorRejected;
+             continue;
++        }
++        if (!CompleteRoute(bot, point, spike, &probe))
++        {
++            ++rejected;
++            if (probe.blocked)
++                ++blocked;
++            continue;
++        }
+         bot->InterruptNonMeleeSpells(false);
+         bot->AttackStop();
+         bool const moving = MoveTo(bot->GetMapId(), point.GetPositionX(), point.GetPositionY(), point.GetPositionZ(),
+                                    false, false, false, false, MovementPriority::MOVEMENT_FORCED);
+         if (moving)
+             _lastEscape = getMSTime();
++        else
++            note(3);
+         return moving;
+     }
++    note(2);
+     return false;
+ }
+ 

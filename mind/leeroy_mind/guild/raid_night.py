@@ -415,6 +415,11 @@ class RaidNight:
         never twice for one instance and never for a 5-man. A member the command added as a tank is a
         tank of that raid: the server judges bear form, Thick Hide and Frost Presence, which the mind
         cannot see. Raid nights the mind forms keep its own rule.
+
+        His group's raid follows the group: when he leads it into another raid instance (a fresh copy
+        after `.instance unbind`, or another raid), the raid bound to the old copy ends `new_instance`
+        and this one is adopted. Kills and drops in the new copy never belonged to the old record (raid
+        26, 2026-11-25: Ulduar 618 stayed open while his 25 killed four bosses in 635, all dropped).
         """
         if ev.leader_guid != self.ports.human_guid or not self._present or not self.ports.human_online():
             return
@@ -425,9 +430,16 @@ class RaidNight:
                 self.ports.conn.execute("DELETE FROM meta WHERE key=?", (FORMED_GROUP_KEY,))
         raid = next((r for r in CATALOG.values() if r.map_id == ev.map), None)
         mode = _DIFFICULTIES.get(ev.difficulty)
-        if (raid is None or mode is None or self.active or self.run is not None or self._adoption is not None
+        if (raid is None or mode is None or self._adoption is not None
                 or type(ev.instance_id) is not int or not 0 < ev.instance_id <= 0xFFFFFFFF
                 or validate(raid, *mode, raid.min_tier) is not None):
+            return
+        if self._moved(raid, ev.instance_id):
+            old = self.session
+            log.info("guild_raid_moved raid_id=%d from_map=%d from_instance=%d map=%d instance=%d",
+                     old.raid_id, old.ctx.map_id, old.ctx.instance_id, ev.map, ev.instance_id)
+            self._end("new_instance")
+        elif self.active or self.run is not None:
             return
         members = tuple(dict.fromkeys(g for g in ev.members
                                       if type(g) is int and g > 0 and g != self.ports.human_guid))
@@ -436,6 +448,14 @@ class RaidNight:
         self._adoption = (raid.key, *mode, ev.instance_id, members, frozenset(self._added_tanks),
                           getattr(ev, "roster_followed", False) is True)
         self.state = State.FORMING
+
+    def _moved(self, raid, instance_id):
+        """His own group's running raid (adopted) is bound to another copy than the one he led it into,
+        and that one has no record yet."""
+        return (self._adopted and self.run is not None and self.session is not None and not self._closing
+                and self.state in {State.ASSEMBLING, State.RUNNING}
+                and type(self.session.ctx.instance_id) is int and self.session.ctx.instance_id != instance_id
+                and not self._instance_recorded(raid.key, instance_id))
 
     def _instance_recorded(self, raid_key, instance_id):
         rows = self.ports.conn.execute("SELECT raid_id FROM guild_raid WHERE raid_key=? AND started>=?",
@@ -1000,7 +1020,13 @@ class RaidNight:
             if stop_dc and run is not None and not run.lead_is_human:
                 await self._stop_dc(run)
             await self._drain_events(None, events=events, current=run)
-            vote = await session.close(outcome)
+            # A copy left before any fight was no raid: its attendance goes, and his group's raid in the
+            # new copy pays it once.
+            if outcome == "new_instance" and not (session.kills or session.wipes):
+                session.retract_attendance()
+                vote = await session.close(outcome, raided=False)
+            else:
+                vote = await session.close(outcome)
             if vote is not None and vote not in self._votes:
                 self._votes.append(vote)
             self._closing.popleft()

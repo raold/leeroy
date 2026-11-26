@@ -53,9 +53,9 @@ def gen_context(h,*,cap=2,night="2026-10-29"):
     return ctx
 
 
-@pytest.mark.parametrize("text",["", "[world]\nenabled=false", "[world]\nenabled=1", "[world]\nenabled=true\nrealm='yes'",
+@pytest.mark.parametrize("text",["[world]\nenabled=false", "[world]\nenabled=1", "[world]\nenabled=true\nrealm='yes'",
     "[world]\nenabled=true\nunknown=true", "[world]\nenabled=true\nworld_per_night=0", "[world]\nenabled=true\nworld_selfies_per_night=51"])
-def test_world_invalid_and_missing_are_off(h,text):
+def test_world_invalid_and_false_are_off(h,text):
     path = h.settings.data_dir/"mind.toml"
     path.write_text(text,encoding="utf-8")
     assert not config.load(path).enabled

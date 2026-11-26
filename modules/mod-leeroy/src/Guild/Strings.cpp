@@ -744,8 +744,8 @@ bool StringStayHeld(std::uint32_t guid)
 
 void ReloadStrings()
 {
-    enabled = sConfigMgr->GetOption<bool>("Leeroy.Strings.Enable", false);
-    invitesOn = sConfigMgr->GetOption<bool>("Leeroy.Invites.Enable", false);
+    enabled = sConfigMgr->GetOption<bool>("Leeroy.Strings.Enable", true);
+    invitesOn = sConfigMgr->GetOption<bool>("Leeroy.Invites.Enable", true);
 }
 
 void RegisterStringsHandler()
