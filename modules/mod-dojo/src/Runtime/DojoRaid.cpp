@@ -694,7 +694,8 @@ struct EncounterRun
     // Called as the raid's fresh instance is created, before any creature in it has loaded.
     void SetSpire(Map* map)
     {
-        if (!active || state != "arrive" || map->GetId() != 631 || !map->IsRaid()) return;
+        // The instanced base map (instance id 0) is a container, not an InstanceMap.
+        if (!active || state != "arrive" || map->GetId() != 631 || !map->IsRaid() || !map->GetInstanceId()) return;
         InstanceMap* created = map->ToInstanceMap();
         InstanceScript* script = created ? created->GetInstanceScript() : nullptr;
         if (!script) return;
