@@ -135,8 +135,9 @@ previous value during cleanup. Both the full Beasts target and the two Slime Poo
 cases accept the option. It never changes the runtime configuration files or a
 live feature switch.
 
-ToC observations include at most sixteen nearby Beasts actors with health, enrage,
-current spell, target and position, and a ring of the last thirty-two spell-damage
+ToC observations include at most sixteen nearby Beasts actors and pools with health,
+enrage, current cast/channel, target and position. Raid actor observations also retain
+health/mana limits, healer role, casts/channels and targets. A ring keeps the last thirty-two spell-damage
 calculations against the synthetic raid. Each calculation carries a sequence,
 run-relative time, instance, actor slot and spell ID. Sort by sequence and deduplicate
 across observations; the ring can overwrite events between polls. These calculations

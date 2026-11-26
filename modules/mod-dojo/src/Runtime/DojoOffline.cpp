@@ -420,8 +420,17 @@ struct OfflineFixture
                     if (p->HasAura(spell)) auras.push_back(spell);
                 if (auto* script = p->GetInstanceScript())
                     for (uint32 b = 0; b < script->GetEncounterCount(); ++b) bosses.push_back(uint32(script->GetBossState(b)));
+                auto* casting = p->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+                auto* channel = p->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+                auto* victim = p->GetVictim();
                 bodies.push_back({{"slot", i}, {"guid", actors[i].GetCounter()}, {"alive", p->IsAlive()},
                     {"map", p->GetMapId()}, {"instance", p->GetInstanceId()}, {"health", p->GetHealth()},
+                    {"max_health", p->GetMaxHealth()}, {"mana", p->GetPower(POWER_MANA)},
+                    {"max_mana", p->GetMaxPower(POWER_MANA)}, {"healer", PlayerbotAI::IsHeal(p)},
+                    {"cast", casting ? casting->GetSpellInfo()->Id : 0u},
+                    {"channel", channel ? channel->GetSpellInfo()->Id : 0u},
+                    {"target", victim ? victim->GetGUID().GetCounter() : 0u},
+                    {"target_entry", victim ? victim->GetEntry() : 0u},
                     {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
                     {"combat", p->IsInCombat()}, {"bosses", bosses}, {"auras", auras},
                     {"speed_run", p->GetSpeed(MOVE_RUN)}, {"tank", PlayerbotAI::IsTank(p)},
@@ -433,7 +442,7 @@ struct OfflineFixture
         // Read only, bounded diagnostics for the actual Beasts actors. In
         // particular, distinguish a surviving enraged worm from a cure stall.
         if (auto* leader = Actor(1); leader && map == 649 && leader->GetMapId() == map)
-            for (uint32 entry : {34796u, 34799u, 35144u, 34797u})
+            for (uint32 entry : {34796u, 34799u, 35144u, 34797u, 35176u})
             {
                 std::list<Creature*> found;
                 leader->GetCreatureListWithEntryInGrid(found, entry, 200.f);
@@ -441,12 +450,14 @@ struct OfflineFixture
                     if (enemies.size() < 16)
                     {
                         auto* cast = creature->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+                        auto* channel = creature->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
                         auto* victim = creature->GetVictim();
                         enemies.push_back({{"entry", entry}, {"guid", creature->GetGUID().GetCounter()},
                             {"instance", creature->GetInstanceId()}, {"alive", creature->IsAlive()},
                             {"health", creature->GetHealth()}, {"max_health", creature->GetMaxHealth()},
                             {"enraged", creature->HasAura(68335)},
                             {"cast", cast ? cast->GetSpellInfo()->Id : 0u},
+                            {"channel", channel ? channel->GetSpellInfo()->Id : 0u},
                             {"target", victim ? victim->GetGUID().GetCounter() : 0u},
                             {"x", creature->GetPositionX()}, {"y", creature->GetPositionY()},
                             {"z", creature->GetPositionZ()}, {"facing", creature->GetOrientation()}});
