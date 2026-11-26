@@ -237,11 +237,13 @@ def parse_encounter(text):
     return json.loads(rows[0])
 
 
-def encounter(layout, runs=ENCOUNTER_RUNS, *, log=print):
+def encounter(layout, runs=ENCOUNTER_RUNS, *, item_level=245, log=print):
     """Full Valithria pulls of one fixed ten-player bot raid, before and after the healer focus switch."""
     for item in runs:
         if item not in ENCOUNTER_RUNS + ENCOUNTER_EXTRA:
             raise LayoutError(f"unknown encounter run {item!r}; use {', '.join(ENCOUNTER_RUNS + ENCOUNTER_EXTRA)}")
+    if type(item_level) is not int or not 200 <= item_level <= 284:
+        raise LayoutError("item level must be 200-284")
     if world.running(layout):
         raise world.WorldError("the encounter needs a stopped dedicated dojo instance")
     preflight = world.preflight(layout)
@@ -256,7 +258,7 @@ def encounter(layout, runs=ENCOUNTER_RUNS, *, log=print):
     out.mkdir(parents=True, exist_ok=False)
     results = []
     report = dict(kind="dojo-valithria-encounters", format=1, ok=False, source=source, preflight=preflight,
-                  runs=results, stopped=False, out=str(out))
+                  item_level=item_level, runs=results, stopped=False, out=str(out))
     started = False
     try:
         started = True
@@ -267,7 +269,7 @@ def encounter(layout, runs=ENCOUNTER_RUNS, *, log=print):
                 token = uuid.uuid4().hex
                 name = f"{difficulty}-{mode}"
                 log(f"valithria {name}: starting")
-                reply = client.command(f"dojo raid encounter start {token} {difficulty} {mode}")
+                reply = client.command(f"dojo raid encounter start {token} {difficulty} {mode} {item_level}")
                 if "dojo encounter: started" not in reply:
                     raise world.WorldError(f"native encounter start refused: {reply}")
                 deadline = time.monotonic() + ENCOUNTER_DEADLINE_S

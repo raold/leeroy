@@ -39,6 +39,7 @@
 #include "SpellInfo.h"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -488,7 +489,7 @@ constexpr std::array<EncounterSlot, 10> Roster{{
     {"Dojovstorm", CLASS_SHAMAN, RACE_DRAENEI, "ele pve"},
 }};
 constexpr std::size_t EncounterLeader = 5;
-constexpr uint32 EncounterItemLevel = 245;
+constexpr uint32 EncounterItemLevel = 245;  // the guild's raiders average 238 (tg_member, 2026-11)
 constexpr uint32 EncounterSetupMs = 240000;
 constexpr uint32 EncounterPrePullMs = 15000;
 constexpr uint32 EncounterCapMs = 15 * 60 * 1000;
@@ -542,6 +543,7 @@ struct EncounterRun
     bool active = false, setup = false, cleanup = false, engaged = false, earlyPull = false, oldFocus = true,
         oldPortals = true;
     uint32 elapsed = 0, phaseMs = 0, pullMs = 0, sampleMs = 0, instance = 0, mapDifficulty = 0, samples = 0;
+    uint32 itemLevel = EncounterItemLevel;
     std::size_t prepared = 0;
     float startHp = 0.f, hp = 0.f, peakHp = 0.f;
     uint64 damageToHer = 0;
@@ -612,8 +614,10 @@ struct EncounterRun
         return "";
     }
 
-    std::string Start(std::string const& id, std::string const& diff, std::string const& how, bool checkRunning)
+    std::string Start(std::string const& id, std::string const& diff, std::string const& how, uint32 gear,
+                      bool checkRunning)
     {
+        if (gear < 200 || gear > 284) return "refused: item level is 200-284";
         if (active || state == "cleanup_failed") return "refused: an encounter run or unproved cleanup is active";
         if (checkRunning) return "refused: a raid check is running";
         if (Dojo::State().plan.state != Dojo::RuntimeState::Armed || Dojo::State().manifest)
@@ -627,7 +631,7 @@ struct EncounterRun
         std::string error = Create();
         if (!error.empty()) return "refused: " + error;
         std::lock_guard<std::recursive_mutex> lock(events);
-        token = id; difficulty = diff; mode = how; failure.clear(); outcome.clear();
+        token = id; difficulty = diff; mode = how; itemLevel = gear; failure.clear(); outcome.clear();
         setup = cleanup = engaged = earlyPull = false;
         elapsed = phaseMs = pullMs = sampleMs = instance = mapDifficulty = samples = 0;
         prepared = 0; startHp = hp = peakHp = 0.f; damageToHer = 0; valithria.Clear();
@@ -651,7 +655,14 @@ struct EncounterRun
         if (!p->IsAlive()) { p->ResurrectPlayer(1.f); p->SpawnCorpseBones(); }
         int8 const spec = PremadeSpec(slot.cls, slot.spec);
         if (spec < 0) { Fail(std::string("premade spec missing: ") + slot.spec); return false; }
-        uint32 const gearScore = PlayerbotFactory::CalcMixedGearScore(EncounterItemLevel, ITEM_QUALITY_EPIC);
+        uint32 const gearScore = PlayerbotFactory::CalcMixedGearScore(itemLevel, ITEM_QUALITY_EPIC);
+        if (p->GetLevel() >= 80 && std::abs(p->GetAverageItemLevel() - float(itemLevel)) > 8.f)
+        {
+            // Another item level was asked for: regear once; later runs at it keep this gear.
+            PlayerbotFactory factory(p, 80, ITEM_QUALITY_EPIC, gearScore);
+            factory.InitEquipment(false);
+            p->SaveToDB(false, false);
+        }
         if (p->GetLevel() < 80)
         {
             PlayerbotFactory randomizer(p, 80, ITEM_QUALITY_EPIC, gearScore);
@@ -997,7 +1008,7 @@ struct EncounterRun
             {"instance", instance}, {"map_difficulty", mapDifficulty}, {"engaged", engaged},
             {"early_pull", earlyPull}, {"pull_ms", pullMs},
             {"samples", samples}, {"start_hp", startHp}, {"hp", hp}, {"peak_hp", peakHp},
-            {"damage_to_her", damageToHer}, {"item_level_cap", EncounterItemLevel}, {"members", roster}};
+            {"damage_to_her", damageToHer}, {"item_level_cap", itemLevel}, {"members", roster}};
         if (InstanceMap* map = Instance())
             if (InstanceScript* script = map->GetInstanceScript())
             {
@@ -1138,10 +1149,14 @@ public:
     {
         std::istringstream in{std::string(args)};
         std::string token, difficulty, mode, extra;
-        in >> token >> difficulty >> mode >> extra;
+        uint32 gear = EncounterItemLevel;
+        in >> token >> difficulty >> mode;
+        if (!(in >> gear)) gear = EncounterItemLevel;
+        in >> extra;
         if (!extra.empty() || mode.empty())
-            handler->SendSysMessage("usage: dojo raid encounter start <token> 10n|10h before|after|noportals");
-        else handler->SendSysMessage("dojo encounter: " + encounter.Start(token, difficulty, mode, run.active));
+            handler->SendSysMessage("usage: dojo raid encounter start <token> 10n|10h before|after|noportals [ilvl]");
+        else
+            handler->SendSysMessage("dojo encounter: " + encounter.Start(token, difficulty, mode, gear, run.active));
         return true;
     }
     static bool EncounterStatus(ChatHandler* handler, Tail args)
