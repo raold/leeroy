@@ -94,7 +94,7 @@ struct Trial
         ObjectGuid target;
         Position origin, destination;
         uint32 castMs = 0, teleportMs = 0;
-        bool pending = false, observed = false;
+        bool pending = false, observed = false, castAura = false, teleportAura = false;
     };
     std::array<SpellTeleport, Names.size()> spellTeleports{};
     uint32 nativeSpellTeleports = 0;
@@ -179,7 +179,9 @@ struct Trial
     bool NativeSpellTeleport(Player* p, std::size_t i, uint32 diff)
     {
         auto& proof = spellTeleports[i];
-        if (!proof.observed || elapsed - proof.teleportMs > 200 || !p->HasAura(51690)
+        // The last native pulse can finish as the aura expires. Its presence
+        // must be witnessed at the cast and teleport, not at a later map sample.
+        if (!proof.observed || !proof.castAura || !proof.teleportAura || elapsed - proof.teleportMs > 200
             || p->GetMapId() != 603 || Below(p) != wasBelow[i]
             || proof.origin.GetExactDist(previous[i]) > 1.f + p->GetSpeed(MOVE_RUN) * float(diff) * 0.0015f
             || p->GetExactDist(proof.destination) > 0.1f) return false;
@@ -412,6 +414,13 @@ struct Trial
                             {"previous_motion", previousMotion[i]}, {"moving", p->isMoving()},
                             {"previous_moving", previousMoving[i]}, {"previous_vehicle_entry", previousVehicle[i]},
                             {"constrictor", ConstrictorFacts(p, i)},
+                            {"spell_teleport", {{"observed", spellTeleports[i].observed},
+                                {"pending", spellTeleports[i].pending}, {"cast_aura", spellTeleports[i].castAura},
+                                {"teleport_aura", spellTeleports[i].teleportAura}, {"current_aura", p->HasAura(51690)},
+                                {"cast_age_ms", elapsed - spellTeleports[i].castMs},
+                                {"teleport_age_ms", elapsed - spellTeleports[i].teleportMs},
+                                {"origin_gap", spellTeleports[i].origin.GetExactDist(previous[i])},
+                                {"arrival_gap", p->GetExactDist(spellTeleports[i].destination)}}},
                             {"vehicle_entry", p->GetVehicleBase() ? p->GetVehicleBase()->GetEntry() : 0u},
                             {"recent_casts", CastFacts(i)},
                             {"from", {previous[i].GetPositionX(), previous[i].GetPositionY(), previous[i].GetPositionZ()}},
@@ -630,7 +639,7 @@ public:
                 auto& proof = trial.spellTeleports[i];
                 proof = {};
                 proof.target = target->GetGUID(); proof.origin = player->GetPosition();
-                proof.castMs = trial.elapsed; proof.pending = true;
+                proof.castMs = trial.elapsed; proof.pending = true; proof.castAura = true;
             }
         }
     }
@@ -650,7 +659,7 @@ public:
         // Witness the core's actual destination, then require the measured actor
         // to arrive there. A recent spell ID alone never permits a displacement.
         proof.destination = Position(x, y, z, orientation);
-        proof.teleportMs = trial.elapsed; proof.observed = true;
+        proof.teleportMs = trial.elapsed; proof.observed = true; proof.teleportAura = true;
         return true;
     }
 };
