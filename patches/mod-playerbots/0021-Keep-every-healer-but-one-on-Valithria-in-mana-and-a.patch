@@ -1,15 +1,15 @@
-From ebe7114cea2725f40839eb40d7922eaf55fcabce Mon Sep 17 00:00:00 2001
+From 5535dc32aaddf0c038907d94dd7f06084cf20fa3 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
-Date: Wed, 25 Nov 2026 20:13:43 -0500
+Date: Wed, 25 Nov 2026 20:36:19 -0500
 Subject: [PATCH] Keep every healer but one on Valithria, in mana, and alive in
  the dream
 
 Playerbots.ValithriaHealerFocus (default 1) and Playerbots.ValithriaPortals (default 1).
 
 In the 2026-11-25 10-heroic wipe the two dragon healers spent every 45 s portal cycle in the
-dream, collected 14 and 19 stacks of Twisted Nightmares (200 Nature damage a second per stack,
-40 s) and died of it; the paladin ran dry in 50 s because her heal (ACTION_RAID + 2) outranks
-every class mana cooldown.
+dream and died after their third trip; the same pull in the dojo gave them 14 and 19 stacks of
+Twisted Nightmares (200 Nature damage a second per stack, 40 s) and killed both. The paladin ran
+dry in 50 s because her heal (ACTION_RAID + 2) outranks every class mana cooldown.
 
 - One raid healer at any size and difficulty; every other healer heals her.
 - icc valithria mana (ACTION_RAID + 3): Divine Plea below 65% mana, Shadowfiend below 60% and
@@ -17,17 +17,20 @@ every class mana cooldown.
 - The healers on her keep taking the portals (Emerald Vigor and Twisted Nightmares are the
   fight's mana and healing, and on heroic an uncollected cloud hurts her); on heroic a bot stops
   taking clouds at 6 stacks and heals itself. ValithriaPortals = 0 keeps every healer out.
-- A healer who does not portal comes back to her side while portals are up.
-- valithria_watch gains focus=, valithria_healer gains mana_cd=.
-- ValithriaHealerFocus = 0 restores the earlier allocation and portal handling.
+- A healer who does not portal comes back to her side while portals are up; a healer on her steps
+  out of a Column of Frost or Mana Void first (both dragon healers died to one column in a dojo
+  pull), and a raider's step out of a void, column or worm ends the group action's tick instead of
+  being replaced by its leash or attack move.
+- valithria_watch gains focus= (also on its end line), valithria_healer gains mana_cd=.
+- ValithriaHealerFocus = 0 restores the earlier allocation, portal handling and movement.
 ---
- conf/playerbots.conf.dist                |  12 +++
+ conf/playerbots.conf.dist                |  13 +++
  src/Ai/Raid/ICC/Action/ICCActions.h      |   8 ++
- src/Ai/Raid/ICC/Action/ICCActions_VT.cpp |  22 ++++-
+ src/Ai/Raid/ICC/Action/ICCActions_VT.cpp |  60 +++++++++++--
  src/Ai/Raid/ICC/ICCActionContext.h       |   2 +
  src/Ai/Raid/ICC/ICCMultipliers.cpp       |   3 +-
  src/Ai/Raid/ICC/ICCScripts.h             |   1 +
- src/Ai/Raid/ICC/ICCShared.cpp            |  95 +++++++++++++++++++--
+ src/Ai/Raid/ICC/ICCShared.cpp            | 100 ++++++++++++++++++++--
  src/Ai/Raid/ICC/ICCShared.h              |   6 ++
  src/Ai/Raid/ICC/ICCStrategy.cpp          |   4 +
  src/Ai/Raid/ICC/ICCTriggerContext.h      |   2 +
@@ -37,21 +40,22 @@ every class mana cooldown.
  src/PlayerbotAIConfig.cpp                |   2 +
  src/PlayerbotAIConfig.h                  |   2 +
  tests/raid_interactions_test.cpp         | 103 +++++++++++++++++++++++
- 16 files changed, 346 insertions(+), 17 deletions(-)
+ 16 files changed, 384 insertions(+), 23 deletions(-)
 
 diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
-index 12609d05..17a53f9d 100644
+index 12609d05..c8838cf8 100644
 --- a/conf/playerbots.conf.dist
 +++ b/conf/playerbots.conf.dist
-@@ -490,6 +490,18 @@ Playerbots.ApplyInstanceStrategies = 1
+@@ -490,6 +490,19 @@ Playerbots.ApplyInstanceStrategies = 1
  # Requires ApplyInstanceStrategies (or the toc strategy added explicitly). Default: 0.
  Playerbots.TwinValkyrInteractions = 0
  
 +# Icecrown Citadel, Valithria Dreamwalker: every healer but one heals her (the one left keeps the
-+# raid up and tops her up while the raid is healthy), healers who do not portal stay at her side, each
-+# healer spends its mana cooldown before running dry, and on heroic a portal healer stops taking
-+# Nightmare clouds at 6 stacks of Twisted Nightmares and heals itself. 0 restores the earlier
-+# allocation (one or two raid healers) and portal handling. Default: 1.
++# raid up and tops her up while the raid is healthy), healers who do not portal stay at her side and
++# step out of Columns of Frost and Mana Voids, each healer spends its mana cooldown before running
++# dry, on heroic a portal healer stops taking Nightmare clouds at 6 stacks of Twisted Nightmares and
++# heals itself, and a raider's step out of a void, column or worm is no longer overridden by its next
++# move. 0 restores the earlier allocation, portal handling and movement. Default: 1.
 +Playerbots.ValithriaHealerFocus = 1
 +
 +# With ValithriaHealerFocus: the healers on her take the Dream (normal) or Nightmare (heroic) portals
@@ -82,10 +86,10 @@ index 2d11a86a..7dcad11e 100644
  {
  public:
 diff --git a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
-index 952b7afe..c6125416 100644
+index 952b7afe..cf351a9d 100644
 --- a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
 +++ b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
-@@ -102,8 +102,11 @@ bool IccValithriaGroupAction::Execute(Event /*event*/)
+@@ -102,20 +102,27 @@ bool IccValithriaGroupAction::Execute(Event /*event*/)
          }
      }
  
@@ -99,7 +103,75 @@ index 952b7afe..c6125416 100644
      {
          return MoveTo(bot->GetMapId(), ICC_VDW_HEAL_POSITION.GetPositionX(), ICC_VDW_HEAL_POSITION.GetPositionY(),
                        ICC_VDW_HEAL_POSITION.GetPositionZ(), false, false, false, false,
-@@ -936,6 +939,21 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+                       MovementPriority::MOVEMENT_NORMAL);
+     }
+ 
+-    // Avoidance
++    // Avoidance. Without ValithriaHealerFocus the rest of this action then ran on and its leash or attack move
++    // replaced the step out (raiders died in Columns of Frost); with it the step out ends this tick.
++    bool const focus = sPlayerbotAIConfig.ValithriaHealerFocus;
+     if (manaVoid && bot->GetExactDist2d(manaVoid) < 10.0f && !botAI->GetAura("Twisted Nightmares", bot) &&
+         !botAI->GetAura("Emerald Vigor", bot))
+     {
+         botAI->Reset();
+-        FleePosition(manaVoid->GetPosition(), 11.0f, 250U);
++        bool const fled = FleePosition(manaVoid->GetPosition(), 11.0f, 250U);
++        if (focus)
++            return fled || bot->isMoving();
+     }
+ 
+     for (Unit* column : frostColumns)
+@@ -123,14 +130,18 @@ bool IccValithriaGroupAction::Execute(Event /*event*/)
+         if (column && bot->GetExactDist2d(column) < 7.0f)
+         {
+             botAI->Reset();
+-            FleePosition(column->GetPosition(), 8.0f, 250U);
++            bool const fled = FleePosition(column->GetPosition(), 8.0f, 250U);
++            if (focus)
++                return fled || bot->isMoving();
+         }
+     }
+ 
+     if (worm && worm->IsAlive() && worm->GetVictim() == bot && !PlayerbotAI::IsTank(bot))
+     {
+         botAI->Reset();
+-        FleePosition(worm->GetPosition(), 10.0f, 250U);
++        bool const fled = FleePosition(worm->GetPosition(), 10.0f, 250U);
++        if (focus)
++            return fled || bot->isMoving();
+     }
+ 
+     // Zombie handling: only exploding-zombie flee here (any non-tank within 20f).
+@@ -855,6 +866,28 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+         return false;
+     }
+ 
++    // Her heal outranks the group action's sidestep, so a healer on her stood in a Column of Frost (both
++    // dragon healers died to one in a 10-normal dojo pull) and in Mana Voids. Step out first, a few yards,
++    // still in reach of her (ValithriaHealerFocus).
++    if (sPlayerbotAIConfig.ValithriaHealerFocus)
++    {
++        std::list<Creature*> columns;
++        bot->GetCreatureListWithEntryInGrid(columns, NPC_COLUMN_OF_FROST, 10.0f);
++        for (Creature* column : columns)
++            if (column && column->IsAlive() && bot->GetExactDist2d(column) < 7.0f)
++            {
++                IccValithriaNoteHeal(bot, "hazard", false);
++                return FleePosition(column->GetPosition(), 8.0f, 250U);
++            }
++        Creature* manaVoid = bot->FindNearestCreature(NPC_MANA_VOID, 12.0f);
++        if (manaVoid && bot->GetExactDist2d(manaVoid) < 10.0f && !botAI->GetAura("Twisted Nightmares", bot) &&
++            !botAI->GetAura("Emerald Vigor", bot))
++        {
++            IccValithriaNoteHeal(bot, "hazard", false);
++            return FleePosition(manaVoid->GetPosition(), 11.0f, 250U);
++        }
++    }
++
+     if (!bot->HasAura(SPELL_DREAM_STATE))
+     {
+         constexpr float NORMAL_SPEED = 1.0f;
+@@ -936,6 +969,21 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
      return cast;
  }
  
@@ -168,7 +240,7 @@ index c4bfac25..60eef5c3 100644
  
      struct ValithriaWatch
 diff --git a/src/Ai/Raid/ICC/ICCShared.cpp b/src/Ai/Raid/ICC/ICCShared.cpp
-index 956e12c7..eb90a372 100644
+index 956e12c7..b08011d7 100644
 --- a/src/Ai/Raid/ICC/ICCShared.cpp
 +++ b/src/Ai/Raid/ICC/ICCShared.cpp
 @@ -294,7 +294,8 @@ bool ValithriaChasedBy(Player* bot, uint32 entry)
@@ -268,7 +340,19 @@ index 956e12c7..eb90a372 100644
  }
  
  namespace
-@@ -457,20 +536,22 @@ void IccValithriaWatch(Creature* valithria)
+@@ -395,8 +474,9 @@ void IccValithriaWatch(Creature* valithria)
+     if (encounter != IN_PROGRESS || !valithria->IsAlive())
+     {
+         if (watch.engaged)
+-            LOG_INFO("playerbots", "valithria_watch instance={} end={} hp={:.1f}", instanceId,
+-                     encounter == DONE ? "done" : "reset", valithria->GetHealthPct());
++            LOG_INFO("playerbots", "valithria_watch instance={} end={} hp={:.1f} focus={}", instanceId,
++                     encounter == DONE ? "done" : "reset", valithria->GetHealthPct(),
++                     sPlayerbotAIConfig.ValithriaHealerFocus ? 1 : 0);
+         watch = IcecrownHelpers::ValithriaWatch{};
+         state.vtHealNotes.clear();
+         return;
+@@ -457,20 +537,22 @@ void IccValithriaWatch(Creature* valithria)
          std::string const did(RaidInteractions::LastExecutedAction(trace));
          lines.push_back(Acore::StringFormat(
              "valithria_healer instance={} guid={} name={} class={} alloc={} now={} icc={} hp={:.0f} mana={:.0f} "

@@ -431,7 +431,10 @@ output in `patches/`:
   mana, range, heals cast on her, mana cooldowns, last spell and target).
   `Playerbots.ValithriaHealerFocus` (playerbots patch 0021, default `1`) keeps
   every healer but one on her at any size and difficulty, brings a healer who
-  does not portal back to her side while portals are up, has each healer spend
+  does not portal back to her side while portals are up, steps a healer on her
+  out of a Column of Frost or Mana Void (her heal outranked the sidestep), stops
+  any raider's step out of a void, column or worm being replaced by its next
+  move, has each healer spend
   its mana cooldown before running dry (Divine Plea below 65% mana,
   Shadowfiend below 60% and Hymn of Hope below 25%, Mana Tide Totem and
   Innervate below 50%), and on heroic stops a portal healer taking Nightmare

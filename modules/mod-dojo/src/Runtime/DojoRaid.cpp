@@ -867,6 +867,12 @@ struct EncounterRun
         }
         if (!outcome.empty())
         {
+            // She can reach DONE between samples: take her health once more before leaving.
+            if (dragon && dragon->IsAlive())
+            {
+                hp = dragon->GetHealthPct();
+                peakHp = std::max(peakHp, hp);
+            }
             timeline.emplace_back(pullMs, hp);
             Phase("cleanup");
         }
