@@ -565,6 +565,8 @@ struct OfflineFixture
                 bodies.push_back({{"slot", i}, {"guid", actors[i].GetCounter()}, {"alive", p->IsAlive()},
                     {"map", p->GetMapId()}, {"instance", p->GetInstanceId()}, {"health", p->GetHealth()},
                     {"max_health", p->GetMaxHealth()}, {"mana", p->GetPower(POWER_MANA)},
+                    {"anub_expose_stacks", p->GetAuraCount(67721) + p->GetAuraCount(67847)},
+                    {"armor", p->GetArmor()}, {"facing", p->GetOrientation()},
                     {"max_mana", p->GetMaxPower(POWER_MANA)}, {"healer", PlayerbotAI::IsHeal(p)},
                     {"cast", casting ? casting->GetSpellInfo()->Id : 0u},
                     {"channel", channel ? channel->GetSpellInfo()->Id : 0u},
@@ -590,7 +592,7 @@ struct OfflineFixture
         // Read only, bounded diagnostics for Beasts and Anub actors: distinguish
         // a cure stall from an enraged worm, and spike routes from permafrost.
         if (auto* leader = Actor(1); leader && map == 649 && leader->GetMapId() == map)
-            for (uint32 entry : {34660u, 34606u, 34564u, 34796u, 34799u, 35144u, 34797u, 35176u})
+            for (uint32 entry : {34660u, 34606u, 34564u, 34605u, 34607u, 34796u, 34799u, 35144u, 34797u, 35176u})
             {
                 std::list<Creature*> found;
                 leader->GetCreatureListWithEntryInGrid(found, entry, 200.f);
@@ -604,6 +606,7 @@ struct OfflineFixture
                             {"instance", creature->GetInstanceId()}, {"alive", creature->IsAlive()},
                             {"health", creature->GetHealth()}, {"max_health", creature->GetMaxHealth()},
                             {"enraged", creature->HasAura(68335)},
+                            {"berserk", creature->HasAura(26662)},
                             {"spike_trail", creature->HasAura(65921)},
                             {"permafrost", creature->HasAura(65882)},
                             {"motion", uint32(creature->GetMotionMaster()->GetCurrentMovementGeneratorType())},
