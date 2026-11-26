@@ -29,6 +29,7 @@
 #include "UnitScript.h"
 #include "World.h"
 #include "WorldScript.h"
+#include "WorldPacket.h"
 #include "WorldSession.h"
 #include "Guild/HazardJob.h"
 #include "DBCStores.h"
@@ -617,6 +618,7 @@ struct EncounterRun
     std::size_t prepared = 0;
     float startHp = 0.f, hp = 0.f, peakHp = 0.f;
     uint64 damageToHer = 0;
+    uint32 leaderTeleportAcks = 0;
     ObjectGuid valithria;
     std::array<ObjectGuid, 10> actors{};
     std::array<EncounterMember, 10> members{};
@@ -713,7 +715,7 @@ struct EncounterRun
         outcome.clear();
         setup = cleanup = engaged = earlyPull = false;
         elapsed = phaseMs = pullMs = sampleMs = instance = mapDifficulty = samples = 0;
-        prepared = 0; startHp = hp = peakHp = 0.f; damageToHer = 0; valithria.Clear();
+        prepared = 0; startHp = hp = peakHp = 0.f; damageToHer = 0; leaderTeleportAcks = 0; valithria.Clear();
         members = {}; forcedLogout = {}; timeline.clear(); damageTaken.clear(); killers.clear();
         adds.clear(); deaths.clear(); addCasts.clear(); finalBySpell.clear(); pendingSpell.clear();
         addTimeline.clear();
@@ -885,6 +887,24 @@ struct EncounterRun
         Phase("observe");
     }
 
+    // The owner's client acknowledges his own near teleports (his Blink). The self-bot leader has no client: playerbots
+    // leaves a self-bot's acknowledgement to its client, and while the leader waits every bot with him as master skips
+    // its turn (PlayerbotAI::DoNextAction), so one Blink froze the whole raid for 30 s or to the wipe. This is the
+    // acknowledgement his client sends; it moves nobody.
+    void AckLeaderTeleport()
+    {
+        Player* leader = Actor(EncounterLeader);
+        if (!leader || !leader->IsBeingTeleportedNear()) return;
+        Player* mover = leader->m_mover ? leader->m_mover->ToPlayer() : nullptr;
+        if (!mover) return;
+        WorldPacket ack(MSG_MOVE_TELEPORT_ACK, 20);
+        ack << mover->GetPackGUID();
+        ack << uint32(0);
+        ack << uint32(0);
+        leader->GetSession()->HandleMoveTeleportAck(ack);
+        ++leaderTeleportAcks;
+    }
+
     // The owner's auras on the leader, again whenever one is gone (none survives a death).
     static void OwnerBuffs(Player* leader)
     {
@@ -1040,6 +1060,7 @@ struct EncounterRun
         elapsed += diff; phaseMs += diff;
         if ((state == "login" || state == "prepare" || state == "arrive") && elapsed > EncounterSetupMs)
             Fail("setup deadline");
+        if (state == "prepull" || state == "observe") AckLeaderTeleport();
         if (state == "login")
         {
             bool all = true;
@@ -1165,7 +1186,7 @@ struct EncounterRun
         }
         json out = {{"format", 1}, {"kind", "dojo-valithria-encounter"}, {"token", token},
             {"difficulty", difficulty}, {"mode", mode}, {"focus", mode != "before"}, {"portals", mode != "noportals"},
-            {"adds", mode == "adds"}, {"owner_buffs", ownerBuffs},
+            {"adds", mode == "adds"}, {"owner_buffs", ownerBuffs}, {"leader_teleport_acks", leaderTeleportAcks},
             {"raid_cheat", true},
             {"state", state},
             {"setup", setup}, {"cleanup", cleanup}, {"failure", failure}, {"outcome", outcome},

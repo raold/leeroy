@@ -128,6 +128,7 @@ def run(layout, *, log=print):
     report = dict(kind="dojo-raid-acceptance", format=1, ok=False, source=source, preflight=preflight,
                   cases=results, stopped=False, out=str(out))
     started = False
+    seen = {}
     try:
         started = True
         world.start(layout, log=log)
@@ -267,6 +268,7 @@ def encounter(layout, runs=ENCOUNTER_RUNS, *, item_level=245, owner_buffs=False,
     report = dict(kind="dojo-valithria-encounters", format=1, ok=False, source=source, preflight=preflight,
                   item_level=item_level, owner_buffs=owner_buffs, runs=results, stopped=False, out=str(out))
     started = False
+    seen = {}
     try:
         started = True
         world.start(layout, log=log)
@@ -275,6 +277,9 @@ def encounter(layout, runs=ENCOUNTER_RUNS, *, item_level=245, owner_buffs=False,
                 difficulty, mode = item.split(":")
                 token = uuid.uuid4().hex
                 name = f"{difficulty}-{mode}" + ("-buffed" if owner_buffs else "")
+                # A repeated run keeps its own files: 10n-after, 10n-after-2, ...
+                seen[name] = seen.get(name, 0) + 1
+                name += f"-{seen[name]}" if seen[name] > 1 else ""
                 log(f"valithria {name}: starting")
                 reply = client.command(f"dojo raid encounter start {token} {difficulty} {mode} {item_level}"
                                        + (" buffed" if owner_buffs else ""))
