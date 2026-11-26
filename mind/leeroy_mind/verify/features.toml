@@ -310,7 +310,7 @@ example = "2026-11-26 21:02:10 valithria_watch instance=812 end=reset hp=63.5 fo
 
 [[feature]]
 id = "valithria_adds"
-name = "Valithria: tanks split her adds, zombies and worms die first, volleys are interrupted"
+name = "Valithria: tanks split her adds, skeletons and zombies die first, volleys are interrupted"
 prs = [506]
 note = "Set `since` to the native release that carries playerbots patch 0022; older watch lines have no adds field."
 

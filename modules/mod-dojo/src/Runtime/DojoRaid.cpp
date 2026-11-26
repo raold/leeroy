@@ -736,6 +736,8 @@ struct EncounterRun
         Player* p = Actor(i);
         EncounterSlot const& slot = Roster[i];
         if (p->GetGroup()) p->RemoveFromGroup();
+        // The owner's auras are permanent and saved with the character: only a buffed run may start with them.
+        ClearOwnerBuffs(p);
         if (!p->IsAlive()) { p->ResurrectPlayer(1.f); p->SpawnCorpseBones(); }
         int8 const spec = PremadeSpec(slot.cls, slot.spec);
         if (spec < 0) { Fail(std::string("premade spec missing: ") + slot.spec); return false; }
@@ -911,6 +913,12 @@ struct EncounterRun
         if (!leader || !leader->IsAlive()) return;
         for (uint32 spell : OwnerAuras)
             if (!leader->HasAura(spell)) leader->AddAura(spell, leader);
+    }
+
+    static void ClearOwnerBuffs(Player* p)
+    {
+        for (uint32 spell : OwnerAuras)
+            p->RemoveAurasDueToSpell(spell);
     }
 
     static AddVictim VictimOf(int slot)
@@ -1104,6 +1112,7 @@ struct EncounterRun
                 if (Player* p = Actor(i))
                 {
                     p->CombatStop(true);
+                    ClearOwnerBuffs(p);
                     GET_PLAYERBOT_AI(p)->SetCheat(BotCheatMask::none);
                     GET_PLAYERBOT_AI(p)->SetMaster(nullptr);
                     GET_PLAYERBOT_AI(p)->ChangeStrategy("+passive,+stay", BOT_STATE_NON_COMBAT);
