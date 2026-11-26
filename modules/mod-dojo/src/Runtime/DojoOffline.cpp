@@ -745,7 +745,7 @@ public:
         if (fixture.state != "running" || fixture.map != 649 || !leader || !spell || !caster || !info
             || caster->GetMap() != leader->GetMap()
             || !Leeroy::Guild::OfflineRaidOwns(leader->GetGUID().GetCounter())) return;
-        if (completed) fixture.tocIntro.Cast(caster, info->Id);
+        fixture.tocIntro.Cast(caster, info->Id, completed);
         if (caster->GetEntry() != 35176 || info->Id != 66881) return;
         float radius = 0.f;
         for (SpellEffectInfo const& effect : info->Effects)

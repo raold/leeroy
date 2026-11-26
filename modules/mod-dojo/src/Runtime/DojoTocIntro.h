@@ -33,19 +33,37 @@ struct DojoTocIntro
     std::set<uint64> groundedSpheres, stoppedSpikes;
     std::set<ObjectGuid> pendingGrounds;
     std::map<ObjectGuid, ObjectGuid> pendingStops;
+    std::map<ObjectGuid, std::pair<ObjectGuid, uint32>> preparedStops;
+    uint32 spikeFailPrepared = 0, spikeFailCasts = 0;
     ObjectGuid bossGuid;
     std::array<bool, 10> held{};
     std::array<uint64, 10> epochs{};
     std::array<std::array<std::array<bool, 3>, 2>, 10> strategies{};
 
-    void Cast(Unit* caster, uint32 spell)
+    void Cast(Unit* caster, uint32 spell, bool completed)
     {
         if (!completeEncounter || state != "ready" || !caster || caster->GetMapId() != 649
             || caster->GetInstanceId() != instanceId) return;
-        if (caster->GetEntry() == 34606 && spell == 66193)
+        if (completed && caster->GetEntry() == 34606 && spell == 66193)
             pendingGrounds.insert(caster->GetGUID());
-        if (caster->GetEntry() == 34660 && spell == 66181 && caster->GetVictim())
-            pendingStops[caster->GetGUID()] = caster->GetVictim()->GetGUID();
+        if (caster->GetEntry() != 34660 || spell != 66181) return;
+        if (!completed)
+        {
+            ++spikeFailPrepared;
+            if (auto* victim = caster->GetVictim())
+                preparedStops[caster->GetGUID()] = {victim->GetGUID(), measuredMs};
+        }
+        else
+        {
+            ++spikeFailCasts;
+            // Preserve the pursued identity before the spell/core stop effects.
+            // Preparation alone never counts: still require a successful cast
+            // and the subsequent idle spike/living unmarked player observation.
+            auto const found = preparedStops.find(caster->GetGUID());
+            if (found != preparedStops.end() && measuredMs - found->second.second <= 1000)
+                pendingStops[caster->GetGUID()] = found->second.first;
+            preparedStops.erase(caster->GetGUID());
+        }
     }
 
     bool Release(std::array<Player*, 10> const& actors)
@@ -193,6 +211,8 @@ struct DojoTocIntro
             {"complete_encounter", completeEncounter}, {"boss_start_health", bossStartHealth},
             {"boss_least_health", bossLeastHealth}, {"grounded_spheres", groundedSpheres.size()},
             {"stopped_spikes", stoppedSpikes.size()},
+            {"spike_fail_prepared", spikeFailPrepared}, {"spike_fail_casts", spikeFailCasts},
+            {"spike_stop_candidates", pendingStops.size()},
             {"strategies_restored", std::none_of(held.begin(), held.end(), [](bool value) { return value; })}};
     }
 };
