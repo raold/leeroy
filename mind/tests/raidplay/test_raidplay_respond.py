@@ -95,7 +95,7 @@ def test_every_table_is_bounded_and_fits_one_bridge_line():
                                              "duration", "landing"}
         for rule in wire["mechanics"]:                     # entries only for a nearest area, which needs them
             assert ("entries" in rule) == (rule["area"] == "nearest")
-    assert sum(len(rules) for rules in found.values()) == 118  # 48 mechanics over their difficulties
+    assert sum(len(rules) for rules in found.values()) == 126  # 50 mechanics over their difficulties
 
 
 def test_naxx_responses_use_actual_cover_clouds_and_the_injected_member():
