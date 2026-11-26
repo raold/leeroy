@@ -122,6 +122,43 @@ def no_text(*outputs):
     assert not found, found
 
 
+def seed_guild(store, now, *, members, per=4) -> None:
+    """His guild-chat lines in one session, each member's answer a captured turn."""
+    sid = store.start_session(now - 3 * 86400)
+    t = now - 3 * 86400 + 500
+    for m in members:
+        for i in range(per):
+            t += 40
+            store.insert_chat_line(Chat(0, "guild", 1, "Testmage", 0, HIS[i % len(HIS)], 0, 0),
+                                   session_id=sid, origin="human", ts=t)
+            t += 20
+            text = MEMBER[(i + m) % len(MEMBER)]
+            lid = store.insert_chat_line(Chat(0, "guild", m, TEST_CAST[m][0], 0, text, 0, 0),
+                                         session_id=sid, origin="mind", ts=t)
+            capture(store, line_id=lid, ts=t, guid=m, text=text, channel="guild")
+        t += 3600
+    store.conn.commit()
+    store.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+
+def test_guild_session_and_group_dm_turns_are_frozen_whole_in_one_split_each(data, store, clock):
+    from bakeoff.rig import seed_discord
+    seed_guild(store, clock.now(), members=(101, 102))
+    seed_discord(store, clock.now(), channel="gdm:7", members=(101, 102), per=4)
+    kinds = {}
+    for n in range(4):  # fresh random salts
+        version = f"g{n}"
+        assert eval_bank(data, "build", "--version", version) == 0
+        for split in bank.SPLITS:
+            for c in cases(data, version, split):
+                assert bank.split_of(manifest(data, version)["salt"], c["conversation"]) == split
+                kinds.setdefault(c["kind"], set()).add(c["conversation"])
+                if c["kind"] == "gdm":
+                    assert c["conversation"].startswith("gdm:") and c["channel"] == "gdm:7"
+    assert {"guild", "gdm", "whisper"} <= set(kinds)
+    assert len(kinds["gdm"]) == 1 and len(kinds["guild"]) == 1
+
+
 # -- the split ------------------------------------------------------------------------------------
 
 def test_split_is_a_salted_hash_of_the_conversation_about_seventy_thirty():

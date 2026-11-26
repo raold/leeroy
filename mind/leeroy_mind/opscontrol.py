@@ -1,4 +1,4 @@
-"""Opt-in operator work, owned by the running mind. No console-side database writes.
+"""Operator work, owned by the running mind. No console-side database writes.
 
 Requests return promptly; one task keeps its reservation until its real work ends. An ACK
 to offline stop is pending, never completion. Public replies/logs contain fixed words and

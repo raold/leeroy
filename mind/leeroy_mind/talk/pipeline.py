@@ -5175,7 +5175,7 @@ class Pipeline:
                              or (turn.channel == "whisper" and turn.to_guid == hg))
 
     def _coherent(self) -> bool:
-        """[talk] coherence (default off; anything but true is off): her want and place hold
+        """[talk] coherence (default on; anything but true is off): her want and place hold
         through a conversation, every waiting line of his is answered. Never the length rule
         (_length_rule)."""
         return getattr(getattr(self.cfg, "talk", None), "coherence", False) is True

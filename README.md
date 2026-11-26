@@ -102,6 +102,13 @@ to run is not merged. A switch is off only by an explicit owner ruling, kept as
 an explicit `false` with a comment (today `[heat] public_cap`,
 `[talk] coherence_length`, `[talk] dm_own_time` and `[lab] promote`). An invalid
 setting still means off, and the console's Ops tab shows each switch's state.
+Known exceptions pending patch re-export: `Playerbots.LichKingMechanics`,
+`Playerbots.YoggBrainSupport`, `Playerbots.RaidVehicleSupport`,
+`Playerbots.RaidVehicleDiagnostics`, `Playerbots.TwinValkyrInteractions` and
+`DungeonClear.OfflineValithria` are on in this install's live config but still
+default off in their patches (`patches/`), until the patches are re-exported
+with the new defaults. The package sections below that call them opt-in describe
+those patch defaults.
 Personas, memories, prompts, photos and logs stay in the ignored `mind-data/`.
 
 ## The mind
@@ -488,7 +495,7 @@ Apply them to a checkout of each module with
 
 | Path | What |
 |---|---|
-| `scripts/` | Update, backup, build, release, start/stop, health, voice, guild-backup and snapshot scripts (Git Bash on Windows), and `scripts/dojo/` (PowerShell, for the dojo's isolated build) |
+| `scripts/` | Update, backup, build, release, start/stop, health, voice, guild-backup and snapshot scripts (Git Bash on Windows), and `scripts/dojo/` (PowerShell, for the dojo's isolated build); `scripts/pr-ready.sh <pr> [--json]` is the pre-merge gate: base main, not a draft, merge state CLEAN, the ruleset's required checks green, every review thread resolved, and a review of the last non-merge commit, either Codex's or a `claude-local reviewed <sha>` PR comment from a maintainer (exit 0 ready, 1 not ready, 2 tool error; stub tests in `scripts/tests/pr-ready.sh`) |
 | `config/` | Snapshots of the live server and module configs, secrets masked |
 | `patches/mod-playerbots/` | Local playerbots commits, as `git format-patch` output |
 | `patches/mod-ollama-chat/` | Local mod-ollama-chat commits, same format |

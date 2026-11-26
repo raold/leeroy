@@ -241,6 +241,8 @@ def test_the_dist_sets_every_native_switch_to_its_compiled_default():
     compiled = dict(re.findall(r'GetOption<bool>\("(Leeroy\.[A-Za-z.]+)",\s*(true|false)\)', text))
     written = dict(re.findall(r"^(Leeroy\.[A-Za-z.]+) = ([01])$", dist.read_text("utf-8"), re.MULTILINE))
     assert {"Leeroy.Telemetry.Enable", "Leeroy.Training.Enable"} <= set(compiled)
+    assert {k: compiled[k] for k in ("Leeroy.CastGuard", "Leeroy.GuildAdd.FollowRoster")} ==         {"Leeroy.CastGuard": "true", "Leeroy.GuildAdd.FollowRoster": "true"}
+    assert [written[k] for k in ("Leeroy.CastGuard", "Leeroy.GuildAdd.FollowRoster")] == ["1", "1"]
     assert sorted(set(compiled) - set(written)) == []  # every native boolean is in the template
     assert [k for k, v in compiled.items() if written[k] != ("1" if v == "true" else "0")] == []
 

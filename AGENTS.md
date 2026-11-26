@@ -107,6 +107,11 @@ install.
 - A switch is off only by an explicit owner ruling, recorded as an explicit `false` (or `0`) in
   the live config with a comment, and in the PR that adds it. Current rulings: `[heat]
   public_cap`, `[talk] coherence_length`, `[talk] dm_own_time`, `[lab] promote`.
+- Known exceptions pending patch re-export: `Playerbots.LichKingMechanics`, `YoggBrainSupport`,
+  `RaidVehicleSupport`, `RaidVehicleDiagnostics`, `Playerbots.TwinValkyrInteractions` and
+  `DungeonClear.OfflineValithria` are on in the live config but default off in their patches
+  (`patches/` is exported by `ac-snapshot.sh`, never edited by hand) until those are re-exported.
+  Do not flag them, and do not hand-edit the patches.
 - Every switch is still a safe off: it must stop new work without losing in-flight state (see
   `mind/leeroy_mind/console/ROLLOUT.md`). An invalid value means off, and the console's Ops tab
   shows each switch's state; keep both true for a new switch.
@@ -129,11 +134,21 @@ install.
   them or un-ignores them.
 - Commits carry no `Co-Authored-By` or other attribution trailers.
 
+### Review receipts
+
+- `scripts/pr-ready.sh` counts a review as covering the PR's last non-merge commit (or a later
+  merge of main) when it is Codex's own (the `chatgpt-codex-connector[bot]` App, or a Bot-typed
+  account of that name) or a PR comment reading `claude-local reviewed <sha>` (7-40 hex) from the
+  owner, a member or a collaborator (`author_association`), or from `raold`. Anyone else's
+  receipt is ignored.
+
 ### How to report findings
 
 - Report a bug class once: one finding listing every affected `file:line`, not one finding per
   site or per round.
 - Tag a finding about code the PR did not change as **Pre-existing**; never block on it.
+  `scripts/pr-ready.sh` blocks on any unresolved review thread, so the action on a Pre-existing
+  thread is to reply (noting it is out of scope) and resolve it; do not leave it open.
 - On a re-review, look only at commits after the last commit you already reviewed.
 - Start the summary with a count line: `N findings (P1 a, P2 b)`.
 - No style or naming nits. Report only correctness, security, data loss, release safety and

@@ -2,7 +2,7 @@
 while the GPU is idle (owner, 2026-11-25: "when gpu is idle id like bots that are highly romantic
 to send selfies unsolicited").
 
-Off by default; it needs `requests` (the borrow gate and the request render). Once a minute, while
+On by default (`[photos] unsolicited`); it needs `requests` (the borrow gate and the request render). Once a minute, while
 nothing else wants the GPU (no Free GPU pause; no WoW login, offline raid, voice or Discord desk
 lease, only the server's pin; no night running or due; no booth, bulk or request render; no
 request waiting; he offline from WoW for ten minutes), it may, at CHANCE a minute, pick one woman
