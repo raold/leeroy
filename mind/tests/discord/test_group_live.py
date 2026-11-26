@@ -6,7 +6,7 @@ from discord.test_discord_talk import rig_for, talk_for, answers
 from discord.test_own_time import at, own_time, run_for, hand
 from leeroy_mind.discord.desk import DiscordDesk
 from leeroy_mind.endpoint import discord_args, BadRequest
-from leeroy_mind.groups.config import GroupsConfig
+from leeroy_mind.groups.config import OFF as GROUPS_OFF, GroupsConfig
 from leeroy_mind.groups import store as groups
 
 
@@ -71,7 +71,7 @@ def test_group_own_time_is_per_member_and_off_releases_deferred(store,tmp_path,m
 def test_group_ops_off_are_worded_and_arguments_strict(store,tmp_path):
     rig,talk,desk=setup(store,tmp_path)
     try:
-        talk.app.groups.config=GroupsConfig()
+        talk.app.groups.config=GROUPS_OFF
         result=ask(rig,desk,action='group_create',members=[101,102])
         assert not result['ok'] and 'turned off' in result['error']
         for args in [dict(action='group_create',members=[101]),dict(action='group_add',channel='general',guid=101),

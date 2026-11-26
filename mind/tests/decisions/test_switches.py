@@ -1,5 +1,5 @@
-"""Part C's kinds (rank reviews, boss strategy, bank requests) each need their own [decisions]
-switch, default off; rank reviews open at most POLLS_PER_TICK polls a tick and POLLS_PER_DAY a
+"""Part C's kinds (rank reviews, boss strategy, bank requests) each have their own [decisions]
+switch, default on (2026-11-25); rank reviews open at most POLLS_PER_TICK polls a tick and POLLS_PER_DAY a
 local day; looking for bank requests reads the bank at most every DISCOVER_EVERY_S."""
 import asyncio
 from dataclasses import replace
@@ -11,10 +11,11 @@ import pytest
 
 from leeroy_mind.decisions import bank, ledger, polls, ranks
 from leeroy_mind.decisions.attach import attach_decisions
-from leeroy_mind.decisions.config import DecisionsConfig, load_decisions_config
+from leeroy_mind.decisions.config import OFF, DecisionsConfig, load_decisions_config
 from leeroy_mind.decisions.service import DecisionsService
 
 PART_C = {'rank_reviews': 'rank', 'boss_strategy': 'strategy', 'bank_requests': 'bank'}
+PART_C_OFF = dict.fromkeys(PART_C, False)
 RANKS = {"officer": 1, "raider": 2, "social": 3}
 
 
@@ -24,22 +25,25 @@ def write(tmp_path, extra=''):
     return path
 
 
-def test_part_c_switches_default_off_and_load(tmp_path):
+def test_part_c_switches_default_on_and_load(tmp_path):
     cfg = load_decisions_config(write(tmp_path))
-    assert (cfg.rank_reviews, cfg.boss_strategy, cfg.bank_requests) == (False, False, False)
-    assert [k for k in ('lineup', 'loot_rule', 'bank', 'strategy', 'rank') if cfg.kind_on(k)] == ['lineup', 'loot_rule']
+    assert (cfg.rank_reviews, cfg.boss_strategy, cfg.bank_requests) == (True, True, True)
+    assert [k for k in ('lineup', 'loot_rule', 'bank', 'strategy', 'rank') if cfg.kind_on(k)] == [
+        'lineup', 'loot_rule', 'bank', 'strategy', 'rank']
     for switch, kind in PART_C.items():
         cfg = load_decisions_config(write(tmp_path, f'{switch} = true\n'))
         assert getattr(cfg, switch) is True and cfg.kind_on(kind)
         assert not replace(cfg, enabled=False).kind_on(kind)
+        cfg = load_decisions_config(write(tmp_path, f'{switch} = false\n'))
+        assert getattr(cfg, switch) is False and not cfg.kind_on(kind)
         # Invalid is off: the whole table, as any invalid [decisions] key
-        assert load_decisions_config(write(tmp_path, f'{switch} = 1\n')) == DecisionsConfig()
+        assert load_decisions_config(write(tmp_path, f'{switch} = 1\n')) == OFF
 
 
 def test_service_runs_only_the_kinds_switched_on(store, clock):
     def service(**switches):
         return DecisionsService(NS(store=store, clock=clock, human_guid=1),
-                                DecisionsConfig(enabled=True, **switches))
+                                DecisionsConfig(enabled=True, **{**PART_C_OFF, **switches}))
     assert service().kinds_on == {'lineup', 'loot_rule'}
     assert service(rank_reviews=True, bank_requests=True).kinds_on == {'lineup', 'loot_rule', 'rank', 'bank'}
 
@@ -79,12 +83,12 @@ def training():
 
 
 def test_attach_wires_training_and_the_cast_only_for_their_switches(tmp_path):
-    write(tmp_path)
+    write(tmp_path, 'rank_reviews = false\nboss_strategy = false\nbank_requests = false\n')
     off = app_for(tmp_path, training())
     assert attach_decisions(off) is not None
     assert off.handlers == ['hello'] and off.training.listener.guild_layer is None
     assert off.training.applier.guild_hold is None and off.training.listener.guild_hold() is False
-    write(tmp_path, 'rank_reviews = true\nboss_strategy = true\n')
+    write(tmp_path, 'rank_reviews = true\nboss_strategy = true\nbank_requests = false\n')
     on = app_for(tmp_path, training())
     assert attach_decisions(on) is not None
     assert on.handlers == ['hello', 'cast'] and callable(on.training.listener.guild_layer)
@@ -183,7 +187,7 @@ def test_bank_requests_off_never_reads_the_bank(store, guild, clock, monkeypatch
     app, rules = bank_app(store, guild, clock)
     read = AsyncMock(return_value=None)
     monkeypatch.setattr(bank, 'read', read)
-    service = DecisionsService(app, DecisionsConfig(enabled=True))
+    service = DecisionsService(app, DecisionsConfig(enabled=True, bank_requests=False))
     service.rules['bank'] = rules
     for minute in range(20):
         clock._t += 60

@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 from conftest import TEST_CAST, seed_test_cast
+from shipped_off import off
 from leeroy_mind.config import load_config
 from leeroy_mind.protocol import Chat, Member
 from leeroy_mind.talk.prompt import COMMS_RULES
@@ -100,7 +101,7 @@ def seed(store, now, *, members=(101, 102, 103, 104, 105), per=8) -> Path:
                         first_reply="(nothing)" if retried else None)
             t += 3600
     root = Path(store.conn.execute("PRAGMA database_list").fetchone()[2]).parent
-    (root / "mind.toml").write_text("")
+    (root / "mind.toml").write_text(off())  # every shipped switch off: the turns as written
     store.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     return root
 

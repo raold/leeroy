@@ -379,8 +379,8 @@ def test_string_do_crosses_the_real_bridge(tmp_path, clock):
         return True, ""
 
     def prepare(app):
-        with (tmp_path / "mind.toml").open("a", encoding="utf-8") as f:
-            f.write("\n" + GODMODE)
+        from shipped_off import merge
+        merge(tmp_path / "mind.toml", {"godmode": {"enabled": True}})
         app.godmode = attach(app)
 
     async def scenario():

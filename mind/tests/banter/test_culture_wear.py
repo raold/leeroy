@@ -102,7 +102,8 @@ def test_banter_receipt_requires_delivery_and_rechecks_mood(rig,monkeypatch,sent
     assert (rig.store.get_meta(key) is not None)==sent
 
 
-@pytest.mark.parametrize('config',['','[culture]\nenabled=true\n','[server]\nenabled=true\n[culture]\nenabled=false\n'])
+@pytest.mark.parametrize('config',['[culture]\nenabled=false\n','[server]\nenabled=false\n[culture]\nenabled=true\n',
+                                   '[server]\nenabled=true\n[culture]\nenabled=false\n'])
 def test_tease_gate_off_keeps_legacy_roles_and_reservations(rig,config):
     from leeroy_mind.banter.service import role
     from leeroy_mind.storage.rows import Relationship

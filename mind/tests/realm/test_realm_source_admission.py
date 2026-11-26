@@ -25,6 +25,7 @@ from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_llm import FakeLLM
 from test_realm_live_proof import EXPECTED, PAYLOADS, TYPES, insert
+from shipped_off import off
 
 TABLES = ('realm_source', 'realm_fact', 'realm_fact_origin', 'realm_knows', 'realm_kill')
 KILL = 'verified_raid_kill_v1'
@@ -139,8 +140,8 @@ class Native:
 async def application(tmp_path, clock, monkeypatch, *, enabled=True, confirmed=True,
                       establish=True):
     path = tmp_path / 'mind.toml'
-    path.write_text('[talk]\nchattiness = 0\n[realm]\nenabled = '
-                    + str(enabled).lower() + '\n', encoding='utf-8')
+    path.write_text(off('[talk]\nchattiness = 0\n[realm]\nenabled = '
+                    + str(enabled).lower() + '\n'), encoding='utf-8')
     seed = Store(open_migrated(tmp_path / 'mind.db'), clock=clock)
     seed_test_cast(seed)
     with seed.transaction():

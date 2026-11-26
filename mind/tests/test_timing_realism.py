@@ -355,11 +355,11 @@ def test_correction_is_dropped_if_state_changes_during_its_wait(rig, monkeypatch
 
 
 @pytest.mark.parametrize("value", [None, "false", "true", "42", '"true"'])
-def test_config_defaults_off_and_invalid_flag_is_off(tmp_path, value):
+def test_config_defaults_on_and_invalid_flag_is_off(tmp_path, value):
     path = tmp_path / "mind.toml"
     if value is not None:
         path.write_text("[talk]\nrealism = " + value, encoding="utf-8")
-    assert load_config(path).talk.realism is (value == "true")
+    assert load_config(path).talk.realism is (value in (None, "true"))  # on by default (2026-11-25)
     path.write_text("[talk]\nrealism = true\nmisspelled = true", encoding="utf-8")
     assert load_config(path).talk.realism
 

@@ -13,7 +13,7 @@ from leeroy_mind.guild.raids import split_key
 
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
-    enabled: bool = False
+    enabled: bool = True
     telemetry: bool = True
     observe_days: int = 28
     act: bool = True
@@ -30,7 +30,7 @@ class TrainingConfig:
     lead_voice: bool = True
     gate_pulls: int = 12
     gate_max_ms: float = 1.0
-    playbooks: bool = False
+    playbooks: bool = True
     core_dir: Path = Path(r"F:\azerothcore\azerothcore-wotlk")
 
 

@@ -68,12 +68,12 @@ class DiscordDesk:
         self.app = app
         from leeroy_mind.groups.service import Groups
         app.groups = Groups(app)
-        from leeroy_mind.photos.config import PhotosConfig, load_photos_config
+        from leeroy_mind.photos.config import OFF as PHOTOS_OFF, load_photos_config
         self.photos = (load_photos_config(Path(app.data_dir) / 'mind.toml')
-                       if getattr(app, 'data_dir', None) is not None else PhotosConfig())
-        from leeroy_mind.videos.config import VideosConfig, load_videos_config
+                       if getattr(app, 'data_dir', None) is not None else PHOTOS_OFF)
+        from leeroy_mind.videos.config import OFF as VIDEOS_OFF, load_videos_config
         self.videos = (load_videos_config(Path(app.data_dir) / 'mind.toml')
-                       if getattr(app, 'data_dir', None) is not None else VideosConfig())
+                       if getattr(app, 'data_dir', None) is not None else VIDEOS_OFF)
         from leeroy_mind.voice_notes.service import VoiceNotes
         app.voice_notes = VoiceNotes(app)
         if app.voice_notes.config.enabled:

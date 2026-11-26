@@ -1,7 +1,7 @@
 # Signals
 
-`[signals] enabled = true` records observations without changing talk decisions.
-Missing, malformed, unknown or non-boolean settings mean off. Enabling needs a
+`[signals] enabled = true` (the default) records observations without changing talk decisions.
+Malformed, unknown or non-boolean settings mean off. Enabling needs a
 normal application migration; `signals status` and `signals member 101` only open
 `mind.db` read-only and never migrate. Both accept `--data-dir`. Output contains
 UTC day, kind, source and count, without source words or names.

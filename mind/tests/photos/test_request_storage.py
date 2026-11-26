@@ -12,7 +12,6 @@ from leeroy_mind.personas.io import load_persona
 from leeroy_mind.photos import request_store as requests, request_stock
 from leeroy_mind.photos.send import photo_seeds
 from leeroy_mind.selfies import files, snaps
-from leeroy_mind.selfies.config import SelfieCfg
 from leeroy_mind.selfies.scene_choices import compose_choices
 from leeroy_mind.selfies.store import current, pick
 from leeroy_mind.storage import db
@@ -20,6 +19,7 @@ from leeroy_mind.storage.store import Store
 from selfies.fakes import ready, ready_snap, renderable_cast
 from selfies.test_scene_choices import PICKS
 from photos.test_images import jpeg
+from selfies.fakes import selfie_cfg
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def app(store, tmp_path, clock):
     people = {g: load_persona(store, g) for g in (101, 102, 103)}
     instance = SimpleNamespace(store=store, data_dir=tmp_path, clock=clock,
         cfg=SimpleNamespace(talk=SimpleNamespace(selfies=3)),
-        selfies=SimpleNamespace(cfg=SelfieCfg(enabled=True, snaps=True)),
+        selfies=SimpleNamespace(cfg=selfie_cfg(enabled=True, snaps=True)),
         personas=SimpleNamespace(get=people.get), people=people)
     for guid in people:
         ready(store, tmp_path, guid, 1)

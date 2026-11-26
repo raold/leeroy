@@ -18,6 +18,7 @@ from leeroy_mind.nightly.pipeline import STAGES
 from leeroy_mind.nightly.runner import NightRunner
 from leeroy_mind.protocol import Chat
 from leeroy_mind.testing.fake_clock import FakeClock
+from shipped_off import off
 
 UTC = timezone.utc
 WEEK, LAST = '2026-W44', '2026-W43'
@@ -263,7 +264,7 @@ def test_a_frozen_members_lines_do_not_count_toward_an_arms_gate(store):
 
 
 def test_global_freeze_runs_nothing(context, store, tmp_path, caplog):
-    (tmp_path / 'mind.toml').write_text('[learn]\nenabled=true\nbandit=true\ncycle=true\n')
+    (tmp_path / 'mind.toml').write_text(off('[learn]\nenabled=true\nbandit=true\ncycle=true\n'))
     winning(store)
     store.set_meta(control.PREFIX + 'freeze', 'true')
 
@@ -705,14 +706,14 @@ def test_cli_rollback_holds_the_service_lock_and_lists_versions(store, tmp_path,
 # -- the stage, its switch and the live consumers ----------------------------------------------------
 
 def stage_names(tmp_path, store, text):
-    (tmp_path / 'mind.toml').write_text(text)
+    (tmp_path / 'mind.toml').write_text(off(text))
     runner = NightRunner(STAGES, lambda *_: None)
     night.attach(runner, tmp_path, store)
     return [s.name for s in runner.stages]
 
 
 def test_off_means_no_stage_and_on_runs_after_the_bandit(tmp_path, store):
-    assert load_learn_config(tmp_path / 'absent.toml').cycle is False
+    assert load_learn_config(tmp_path / 'absent.toml').cycle is True  # on by default (2026-11-25)
     assert 'learn_cycle' not in stage_names(tmp_path, store, '[learn]\nenabled=true\nbandit=true\n')
     assert 'learn_cycle' not in stage_names(tmp_path, store, '[learn]\nenabled=false\ncycle=true\n')
     assert 'learn_cycle' not in stage_names(tmp_path, store, '[learn]\nenabled=true\ncycle="yes"\n')
@@ -721,7 +722,7 @@ def test_off_means_no_stage_and_on_runs_after_the_bandit(tmp_path, store):
 
 
 def test_stage_runs_once_per_week_and_logs_counts_only(context, store, tmp_path, caplog):
-    (tmp_path / 'mind.toml').write_text('[learn]\nenabled=true\nbandit=true\ncycle=true\n')
+    (tmp_path / 'mind.toml').write_text(off('[learn]\nenabled=true\nbandit=true\ncycle=true\n'))
     winning(store)
 
     async def go():
@@ -750,7 +751,7 @@ def test_coach_receives_last_weeks_report_only_with_the_cycle_on(context, store,
     store.set_meta(control.REPORT_KEY, json.dumps(report))
     seen = {}
     for name, toml in (('off', 'enabled=true\ncoach=true\n'), ('on', 'enabled=true\ncoach=true\ncycle=true\n')):
-        (tmp_path / 'mind.toml').write_text('[learn]\n' + toml)
+        (tmp_path / 'mind.toml').write_text(off('[learn]\n' + toml))
 
         async def go():
             async with context(lambda *_: json.dumps(answer([])), learn_enabled=True, learn_coach=True,

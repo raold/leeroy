@@ -74,9 +74,9 @@ def test_upload_post_view_play_and_delete(data, store, clock):
 def test_upload_gates(data, monkeypatch, mode, expected):
     async def go():
         if mode == 'off':
-            (data / 'mind.toml').write_text('[photos]\nenabled=true')
+            (data / 'mind.toml').write_text('[photos]\nenabled=true\n[videos]\nenabled=false')
         if mode == 'photos_off':
-            (data / 'mind.toml').write_text('[videos]\nenabled=true')
+            (data / 'mind.toml').write_text('[videos]\nenabled=true\n[photos]\nenabled=false')
         if mode == 'tools':
             monkeypatch.setattr(files, 'tools', lambda: None)
         app = build(data, link=FakeLink())

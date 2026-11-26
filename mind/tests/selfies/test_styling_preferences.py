@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from leeroy_mind.discord import store as discord
-from leeroy_mind.learn.config import LearnCfg
+from leeroy_mind.learn.config import OFF as LEARN_OFF, LearnCfg
 from leeroy_mind.selfies import romance_styling as S, styling_history as H, words_scene as W
 from leeroy_mind.selfies.scene import _text_codes, build_scene_prompt, scene_from, scene_json, scene_renderable
 from leeroy_mind.selfies.snaps import mark_rendered, mark_sent
@@ -144,7 +144,7 @@ def test_whisper_and_dm_photo_feedback_have_the_same_credit(store):
     assert [v for _, v in read(store).rated] == [1, 1]
 
 
-@pytest.mark.parametrize('learn', [LearnCfg(), LearnCfg(apply=True, freeze=True),
+@pytest.mark.parametrize('learn', [LEARN_OFF, LearnCfg(apply=True, freeze=True),
                                  LearnCfg(apply=True, frozen_members=(101,))])
 def test_learning_controls_stop_preference_bias_but_keep_repeat_avoidance(store, learn):
     _, _, mid = sent(store)

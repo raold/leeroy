@@ -129,10 +129,10 @@ def test_talk_selfies_defaults_to_three_and_refuses_eleven(tmp_path):
         load_config(p)
 
 
-def test_talk_recall_diversity_is_off_by_default_and_a_non_boolean_reads_off(tmp_path):
-    """[talk] recall_diversity (memory/diversity.py): off unless set true."""
-    assert load_config(tmp_path / "missing.toml").talk.recall_diversity is False
-    assert "\nrecall_diversity = false " in DEFAULT_TOML
+def test_talk_recall_diversity_is_on_by_default_and_a_non_boolean_reads_off(tmp_path):
+    """[talk] recall_diversity (memory/diversity.py): on unless set false; anything else is off."""
+    assert load_config(tmp_path / "missing.toml").talk.recall_diversity is True
+    assert "\nrecall_diversity = true " in DEFAULT_TOML
     for raw, want in (("true", True), ("false", False), ('"yes"', False), ("1", False)):
         p = tmp_path / "m.toml"
         p.write_text(f"[talk]\nrecall_diversity = {raw}\n", encoding="utf-8")

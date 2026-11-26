@@ -18,9 +18,12 @@ LINKED = [SimpleNamespace(state=5, remote_port=7878, remote="127.0.0.1", pid=101
 
 @pytest.fixture
 def data(store):
-    """The store fixture's tmp dir holds a migrated mind.db: the data dir."""
-    return store.conn.execute("PRAGMA database_list").fetchone()["file"] and \
-        __import__("pathlib").Path(store.conn.execute("PRAGMA database_list").fetchone()["file"]).parent
+    """The store fixture's tmp dir holds a migrated mind.db: the data dir, its mind.toml with every
+    switch that defaults on since 2026-11-25 off (tests/shipped_off.py)."""
+    from shipped_off import off
+    root = __import__("pathlib").Path(store.conn.execute("PRAGMA database_list").fetchone()["file"]).parent
+    (root / "mind.toml").write_text(off(), encoding="utf-8")
+    return root
 
 
 @asynccontextmanager

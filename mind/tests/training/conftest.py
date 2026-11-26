@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from leeroy_mind.testing.wire import bridge_mock
+from shipped_off import off
 
 from .fakes import FakeTrainingPorts
 
@@ -27,6 +28,7 @@ def rig(store, clock, tmp_path):
 def app_stub(fake, tmp_path):
     from leeroy_mind.config import load_config
     from leeroy_mind.storage.store import Store
+    (tmp_path / "mind.toml").write_text(off(), encoding="utf-8")  # the shipped switches off
     app = SimpleNamespace(cfg=load_config(tmp_path / "mind.toml"), data_dir=tmp_path,
         clock=fake.clock, store=Store(fake.conn, clock=fake.clock), human_guid=fake.human_guid,
         handlers={}, backgrounds=[], connections=[], before={}, drains=[], receipts={},
@@ -50,6 +52,7 @@ def app(tmp_path, clock):
     from leeroy_mind.app import MindApp
     from leeroy_mind.config import load_config
     from leeroy_mind.testing.fake_llm import FakeLLM
+    (tmp_path / "mind.toml").write_text(off(), encoding="utf-8")  # the shipped switches off
     instance = MindApp(load_config(tmp_path / "mind.toml"), tmp_path,
                        llm=FakeLLM(), clock=clock, rng_seed=1)
     instance.bridge.send = bridge_mock()

@@ -107,9 +107,9 @@ def test_optional_wire_flag_is_strict_and_absent_by_default():
 
 
 @pytest.mark.parametrize("value,expected", [("true", True), ("false", False), ('"true"', False), ("1", False)])
-def test_config_is_opt_in_and_malformed_values_are_off(tmp_path, value, expected):
+def test_config_is_on_by_default_and_malformed_values_are_off(tmp_path, value, expected):
     path = tmp_path / "mind.toml"
-    assert load_config(path).talk.combat_quiet is False
+    assert load_config(path).talk.combat_quiet is True  # since 2026-11-25
     path.write_text(f"[talk]\ncombat_quiet = {value}\n", encoding="utf-8")
     assert load_config(path).talk.combat_quiet is expected
 

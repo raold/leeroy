@@ -22,6 +22,7 @@ from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_llm import FakeLLM
+from shipped_off import off
 
 
 async def until(predicate):
@@ -34,7 +35,7 @@ async def until(predicate):
 @asynccontextmanager
 async def application(tmp_path, clock, *, confirmed=7, original_bridge=False):
     path = tmp_path / "mind.toml"
-    path.write_text("[realm]\nenabled = true\n", encoding="utf-8")
+    path.write_text(off("[realm]\nenabled = true\n"), encoding="utf-8")
     seed = Store(open_migrated(tmp_path / "mind.db"), clock=clock)
     seed.upsert_cast([Member(7, "Rook", 1, 1, 0, 80, 0, False, 0, 0, 2)], clock.now())
     if confirmed is not None:

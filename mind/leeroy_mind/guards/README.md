@@ -16,7 +16,8 @@ memory adds a repetition reason; a new fact about an old topic remains allowed.
 
 The core config accepts this extension. Call `load_guards_config(path)` separately
 when constructing `GuardStores`. No live configuration is changed by this package.
-Missing, malformed or unknown settings disable the whole table.
+Missing settings mean the defaults (the guards on); malformed or unknown settings disable the
+whole table.
 
 ```toml
 [guards]
@@ -36,8 +37,8 @@ phrase_cooldown = true
 ```
 
 These are provisional task-12 thresholds. Its embedding measurements used fake
-word-hash vectors, so semantic enforcement requires a separate explicit opt-in
-after calibration with the caller's embedding model. Lexical overlap and cosine
+word-hash vectors, so semantic enforcement has its own switch, `semantic_enabled` (on by
+default since 2026-11-25), for calibration with the caller's embedding model. Lexical overlap and cosine
 trigger at `>=`; relevance requires both scores strictly below their thresholds.
 Fewer than four words bypass near-duplicate and semantic relevance checks.
 
@@ -382,7 +383,7 @@ openers ("okay so listen", "second thing first"), the last two groups slop, for 
 ## Live adapter
 
 `[guards] enabled = true` admits review independently of `[talk] aware = true`.
-Both remain off by default. The card uses up to 600 estimated tokens for guild/officer/
+Both are on by default. The card uses up to 600 estimated tokens for guild/officer/
 Discord, 450 for whispers/DMs, and 400 for other game channels, plus a fixed
 delimiter, inside `LIVE_BUDGET`, before the final instruction. If the prompt is
 over budget, the card is removed first. Model cards use names and relative ages;

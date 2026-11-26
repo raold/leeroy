@@ -57,7 +57,7 @@ gates remain in the existing renderer.
 
 ## Optional automatic night choices
 
-`[selfies] variety = true` opts in, read once at startup; the default is false. Invalid tables cannot
+`[selfies] variety = true` is the default, read once at startup. Invalid tables cannot
 enable it. The lust pass uses the same balanced assigner. The plain pass still
 asks its reflection model, adding up to eight recent outfits and eight settings
 as quoted observations in user content. Its built-in system prompt is unchanged;
@@ -78,7 +78,7 @@ and queued work, while disabling new automatic assignments and history writes.
 
 ## Varied sets
 
-**Her face in every new set** (`[selfies] identity_sets = true`, owner 2026-11-14; default false,
+**Her face in every new set** (`[selfies] identity_sets = true`, owner 2026-11-14; default true,
 read at the mind's start; needs the selfie worker's `ipadapter` pin, and `yunet` for the tight
 face crop). Profile sets used to render from text alone, so every candidate and every new set
 was a different woman who fit the description. With the switch on, the night's `selfies` stage
@@ -90,7 +90,7 @@ no chosen photo yet (her first set) renders plainly on the same worker. Log `sel
 guid= set= scales=`. Measured 2026-11-14 on Aima and Maristine's varied plans: the same woman as
 her cover in every look, from-behind shots kept, her cover's lighting no longer tints the scene.
 
-`[selfies] varied_sets = true` (default false; read at the mind's start; an invalid or
+`[selfies] varied_sets = true` (default true; read at the mind's start; an invalid or
 unknown-key table keeps it off) allows a varied set for each woman of the lust style: one set
 whose four candidates each have their own look and pose, composed by code (`varied.py`) from
 fixed lists in `kind.py` (`VARIED_LOOKS`, `VARIED_VIEWS`, `VARIED_FRAMINGS`), never by a model:

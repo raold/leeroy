@@ -736,7 +736,7 @@ def test_boss_brief_is_the_playbook_hook_and_boss_plan_the_standing_call():
 
 # -- off ----------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("text", ["", "[raidlead]\nenabled = false", '[raidlead]\nenabled = "true"',
+@pytest.mark.parametrize("text", ["[raidlead]\nenabled = false", '[raidlead]\nenabled = "true"',
                                   "[raidlead]\nenabled = true\nextra = 1", "[raidlead\n"])
 def test_off_or_invalid_attaches_nothing(store, clock, tmp_path, text):
     app = make_app(store, clock, tmp_path)

@@ -184,7 +184,7 @@ audience, and a group DM is shared only with those who were in it.
 ### Learning
 
 A self-improvement loop in which the guild learns from how the player
-responds. Each piece is off by default, and none writes chat text to its logs.
+responds. Each piece is on by default, and none writes chat text to its logs.
 
 - **Member claims** (`[claims]`): a night stage remembers each member's own
   facts, opinions and plans, with a model-free contradiction check. See the
@@ -309,7 +309,7 @@ raid. Requested damage counters cannot establish actual boss DPS, and dummy
 results cannot establish a field rotation win. Voice send records do not prove
 audible playback or complete callouts.
 
-Training is disabled by default. Private records live in the mind data
+Training is enabled by default. Private records live in the mind data
 directory's `mind.db` (`tg_` tables and scoped receipts). Use `python -m
 leeroy_mind training status`, `training report --week YYYY-Www` and `training
 trials` to inspect them. With the mind stopped, `training rollback --context

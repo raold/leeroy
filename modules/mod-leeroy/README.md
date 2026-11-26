@@ -445,7 +445,7 @@ offline raid).
 
 # The raid lead (his orders to his own group)
 
-`Leeroy.RaidLead.Enable` (default 0, reloadable with `.reload config`) is the native half of the
+`Leeroy.RaidLead.Enable` (default 1, reloadable with `.reload config`) is the native half of the
 mind's `[raidlead]` (`mind/leeroy_mind/raidlead/README.md`). Pure policy is
 `Lib/LeeroyRaidLeadPolicy.*` (unit tests `TestRaidLeadPolicy.cpp`); the world-thread side is
 `Guild/RaidLead.cpp`. Hello lists `features: [..., "raidlead"]` so the mind knows the build has it.
@@ -492,7 +492,7 @@ set**, and the leader flag is never touched.
 Logs carry ids, guids and codes only. **Native rebuild required** (`ac-release.sh --native`).
 ## Members' heroic parties
 
-`Leeroy.MemberDungeon.Enable = 1` enables the guild party runner after `.reload config`. It defaults to 0. The separate `Leeroy.Strings.Enable` key controls the owner's in-game strings. The mind's `[life] dungeons` switch admits a party after members agree on Discord. Halls of Lightning heroic uses normal entry and a dedicated DungeonClear test driver. The party tank leads. The native receipt records the original start, party, copy and return evidence in the characters database. Deploy the native module and mind together with `ac-release.sh --native`.
+`Leeroy.MemberDungeon.Enable = 1` enables the guild party runner after `.reload config`. It defaults to 1. The separate `Leeroy.Strings.Enable` key controls the owner's in-game strings. The mind's `[life] dungeons` switch admits a party after members agree on Discord. Halls of Lightning heroic uses normal entry and a dedicated DungeonClear test driver. The party tank leads. The native receipt records the original start, party, copy and return evidence in the characters database. Deploy the native module and mind together with `ac-release.sh --native`.
 
 Receipt reads, schema creation and checkpoint transactions run through the asynchronous Characters
 database pool. A start's positive acknowledgement waits for its first durable receipt before changing any member;
@@ -545,7 +545,7 @@ attacked, and `follow` walks it to its formation spot beside him, through and in
 `avoid aoe` is also reactive (a dynamic object's area only once its aura is on the bot; a trap or trigger npc
 only when its centre is within 15 yards) and ignores anything above `Playerbots.MaxAoeAvoidRadius` (15).
 
-`Leeroy.Hazards.Enable` (default 0, `.reload config`) changes that for the cast bots of his group only
+`Leeroy.Hazards.Enable` (default 1, `.reload config`) changes that for the cast bots of his group only
 (`HazardJob`, pure policy `LeeroyHazardPolicy`). A member qualifies while it is a cast bot (not a self-bot),
 in his group (not a battleground or battlefield group) with him as its master; a Realm lease, offline raid,
 training state or pending bot command leaves the body to its owner (nothing added or removed).
@@ -708,7 +708,7 @@ guids, counts and reason codes only. **Native rebuild required, with the playerb
 
 Stock playerbots meets most boss mechanics only after standing in them: `avoid aoe` steps out once an effect has
 landed (and only with a real-player master), and nothing at all handles the mechanics the raid playbooks mark
-`handled_by = "none"`. `Leeroy.Mechanics.Enable` (default 0, `.reload config`) moves the cast bots of the owner's
+`handled_by = "none"`. `Leeroy.Mechanics.Enable` (default 1, `.reload config`) moves the cast bots of the owner's
 group and of a running offline raid when the boss **starts casting**, from the playbooks
 (`mind/leeroy_mind/raidplay/README.md`, the mind's `[raidplay] respond`). The world side is `Guild/MechanicJob.*`,
 pure policy and geometry `Lib/LeeroyMechanicPolicy.*` (unit tests `TestMechanicPolicy.cpp`); the bodies move
@@ -810,7 +810,7 @@ mind sends one `string_do {guid, kind, target_guid, emote}` (`Guild/Strings.cpp`
 `job` (kind `string_do`) whose `reason` says what she did (`came`, `joined`, `joined_far`, `following`,
 `stopped`, `challenged`, `emoted`, `sat`); or it refuses with one code in the ack and changes nothing.
 
-`Leeroy.Strings.Enable` (default 0, `.reload config`; `off` while 0). Every kind needs him online and alive, the
+`Leeroy.Strings.Enable` (default 1, `.reload config`; `off` while 0). Every kind needs him online and alive, the
 member a pinned cast member of his guild on a random-bot account run by playerbots, and her body free of every
 ownership fence: a Realm lease, training, an offline raid, a pending bot command (`MutationReason`; a member of
 his own group under every fence but the one that holds his group for him, as his add command treats her). Never
@@ -855,7 +855,7 @@ outcome=`, `string_refused guid= kind= code=`, `string_stay_lifted guid=`. **Nat
 
 His invitations in game chat ("meet me at the bank", "let's go fishing in Dalaran"; the mind's
 `[talk] invites`, `mind/leeroy_mind/invites/README.md`) are the same `string_do` marked `"via":
-"invite"`, which answers to `Leeroy.Invites.Enable` (default 0, `.reload config`; `off` while 0)
+"invite"`, which answers to `Leeroy.Invites.Enable` (default 1, `.reload config`; `off` while 0)
 instead of `Leeroy.Strings.Enable`. Hello's `features` lists `invites`. Every fence and shared
 refusal above holds, and two kinds are added (pure policy `Lib/LeeroyStrings.h`, spots
 `Lib/LeeroyInviteSpots.h`):
@@ -893,7 +893,7 @@ queue. **Native rebuild required.**
 
 His "you lead", "take the lead", "take us questing", "go grind", "lead us to the inn" in party,
 raid or a whisper (the mind's `[talk] lead`, `mind/leeroy_mind/lead/README.md`) is `lead_do`
-(`Guild/Lead.cpp`, pure policy `Lib/LeeroyLead.h`), answering to `Leeroy.Lead.Enable` (default 0,
+(`Guild/Lead.cpp`, pure policy `Lib/LeeroyLead.h`), answering to `Leeroy.Lead.Enable` (default 1,
 `.reload config`; `off` while 0, and 0 ends the lead in force). Hello's `features` lists `lead`.
 One lead at a time (a newer start ends the one in force, `replaced`).
 
@@ -1113,7 +1113,7 @@ and its desk separately never spends a try on an older worldserver's `busy:` ref
 A native rebuild adds `get_world_roster` (complete, bounded roster pages carrying
 an independent `request` token) and `world_say` (Trade/General for an eligible
 member of a current rival guild). Both require `Leeroy.Realm.Enable = 1` and
-`Leeroy.World.Enable = 1`. World defaults to 0; `.reload config` applies the switch.
+`Leeroy.World.Enable = 1`. World defaults to 1; `.reload config` applies the switch.
 The roster excludes the owner, our guild and every character on auction-bot
 accounts. Missing character/account evidence refuses the guild. A member row that breaks
 the page rules (or repeats a guid) is left out of the roster instead of refusing all of it,

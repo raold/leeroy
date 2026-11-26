@@ -20,7 +20,7 @@ class FakeTrainingPorts:
     def __init__(self, tmp_path, clock):
         self.clock = clock
         self.conn = open_migrated(Path(tmp_path) / "mind.db")
-        self.cfg = TrainingConfig()
+        self.cfg = TrainingConfig(enabled=False, playbooks=False)  # as before 2026-11-25
         self.human_guid = 1
         self.ident = HumanIdentity(1, "Testmage", "Testy", "", True, "he")
         self.online = False

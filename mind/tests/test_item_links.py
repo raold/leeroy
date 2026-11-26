@@ -374,6 +374,8 @@ def test_the_app_reads_the_item_names_before_the_bridge_connects(tmp_path, clock
 
     async def main():
         item_library(tmp_path / "library.db", clock)
+        from shipped_off import off
+        (tmp_path / "mind.toml").write_text(off(), encoding="utf-8")  # the shipped switches off
         app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
         warm = []
 

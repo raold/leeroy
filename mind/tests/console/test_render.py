@@ -96,8 +96,7 @@ def test_mind_down_or_unanswered_says_so_without_forwarding(tmp_path):
     (True, {"ok": True, "selfie_render": None}, {"running": False, "code": "checking"}),
 ])
 def test_the_strip_reads_the_mind_status(tmp_path, on, reply, expect):
-    if on:
-        (tmp_path / "mind.toml").write_text("[selfies]\nenabled = true\n", encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(f"[selfies]\nenabled = {str(on).lower()}\n", encoding="utf-8")
 
     async def go():
         link = FakeLink({**reply, "typing": [], "gpu": None})
@@ -121,8 +120,7 @@ def test_the_strip_reads_the_mind_status(tmp_path, on, reply, expect):
 def test_the_strip_never_shows_an_old_read_and_starts_as_mind_toml_says(tmp_path, on, before):
     """No flip on the first read with selfies off; a page that opens long after the last read
     sees checking, not a run that may have ended."""
-    if on:
-        (tmp_path / "mind.toml").write_text("[selfies]\nenabled = true\n", encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(f"[selfies]\nenabled = {str(on).lower()}\n", encoding="utf-8")
     now = [1000.0]
 
     async def go():

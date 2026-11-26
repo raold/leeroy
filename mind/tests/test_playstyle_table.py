@@ -14,13 +14,14 @@ from leeroy_mind.playstyle.service import KEY, TABLE_FEATURE, PlayStyles
 from leeroy_mind.protocol import Ack, Boss, Cast, Group, Hello, Login
 from leeroy_mind.testing.wire import bridge_send
 from test_playstyle import app_for
+from shipped_off import off
 
 TABLE_HELLO = ('playstyle', TABLE_FEATURE)
 
 
 def table_rig(store, tmp_path, owned=(), *, refuse=lambda cmd: ''):
     register()
-    (tmp_path/'mind.toml').write_text('[playstyle]\nenabled=true')
+    (tmp_path/'mind.toml').write_text(off('[playstyle]\nenabled=true'))
     app = app_for(store, tmp_path)
     store.set_meta(KEY, json.dumps(list(owned)))
     service = PlayStyles(app)
@@ -128,7 +129,7 @@ def test_a_changed_persona_or_switch_sends_the_table_again(store, tmp_path):
         await drain(service)
         assert len(tables(sent)) == 2
         assert dict((e.guid, e.param) for e in tables(sent)[1].styles)[102] == style(careless).param
-        (tmp_path/'mind.toml').write_text('[playstyle]\nenabled=false')
+        (tmp_path/'mind.toml').write_text(off('[playstyle]\nenabled=false'))
         await service.event(Login(0, 104, False))
         await drain(service)
         assert len(tables(sent)) == 3 and tables(sent)[2].styles == ()  # off: native takes the table's styles back
@@ -251,7 +252,7 @@ def test_a_table_whose_ack_was_lost_is_still_cleared_when_the_switch_goes_off(st
         await service.event(Hello(0, 'fake', '1', 21, 1, TABLE_HELLO))
         await drain(service)
         assert len(tables(sent)) == 1 and tables(sent)[0].styles
-        (tmp_path/'mind.toml').write_text('[playstyle]\nenabled=false')
+        (tmp_path/'mind.toml').write_text(off('[playstyle]\nenabled=false'))
         await service.event(Login(0, 102, False))
         await drain(service)
         assert len(tables(sent)) == 2 and tables(sent)[1].styles == ()
@@ -316,7 +317,7 @@ def test_real_mind_fake_bridge_sends_one_table_and_no_bot_do(tmp_path, clock, ca
         bridge = FakeBridge([{**hello(HUMAN), 'features': ['playstyle', TABLE_FEATURE]}, CAST],
                             known_types=CORE_COMMAND_TYPES | {'bot_do', 'playstyle_table'})
         port = await bridge.start()
-        (tmp_path/'mind.toml').write_text(toml(port, chattiness=0)+'\n[playstyle]\nenabled=true\n')
+        (tmp_path/'mind.toml').write_text(off(toml(port, chattiness=0)+'\n[playstyle]\nenabled=true\n'))
         seed_db(tmp_path/'mind.db', clock)
         cfg = load_config(tmp_path/'mind.toml')
         llm = FakeLLM(models={cfg.models.live, cfg.models.reflection, cfg.models.embedding})

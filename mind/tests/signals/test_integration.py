@@ -20,6 +20,7 @@ from leeroy_mind.voice.comms import Comms
 from leeroy_mind.voice.store import VoiceStore
 from leeroy_mind.voice.wire import Played
 from .test_signals import saved
+from shipped_off import off
 
 
 @asynccontextmanager
@@ -27,8 +28,8 @@ async def mind(tmp_path, *, enabled=True):
     clock = fake_clock()
     bridge = FakeBridge([hello(HUMAN), CAST])
     port = await bridge.start()
-    (tmp_path / 'mind.toml').write_text(toml(port) + '\n[talk]\nchattiness=0\n'
-        f'[signals]\nenabled={str(enabled).lower()}\n', encoding='utf-8')
+    (tmp_path / 'mind.toml').write_text(off(toml(port) + '\n[talk]\nchattiness=0\n'
+        f'[signals]\nenabled={str(enabled).lower()}\n'), encoding='utf-8')
     seed_db(tmp_path / 'mind.db', clock)
     cfg = load_config(tmp_path / 'mind.toml')
     replies = iter(('the cart wheel needs another spoke', 'your lantern still has enough oil',

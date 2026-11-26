@@ -1,4 +1,4 @@
-"""[decisions] in mind.toml, read once at the start. Off by default; an invalid table is off, and
+"""[decisions] in mind.toml, read once at the start. On by default; an invalid table is off, and
 decisions also need [server] enabled (the D2 engine argues them out)."""
 from dataclasses import dataclass, fields, replace
 import logging
@@ -10,7 +10,7 @@ from leeroy_mind.server.config import load_server_config
 log = logging.getLogger(__name__)
 _warned: set[tuple[Path, str]] = set()
 RANGES = {'bank_items_per_day': (0, 50), 'bank_restock_per_week': (0, 60), 'loot_poll_days': (3, 60)}
-# Part C's kinds each have a switch of their own, off by default; Part B's lineups and loot rules
+# Part C's kinds each have a switch of their own, on by default; Part B's lineups and loot rules
 # run whenever decisions are enabled. A kind switched off proposes, polls, posts and seeds nothing.
 KIND_SWITCHES = {'rank': 'rank_reviews', 'strategy': 'boss_strategy', 'bank': 'bank_requests'}
 BOOLS = frozenset({'enabled', *KIND_SWITCHES.values()})
@@ -18,17 +18,20 @@ BOOLS = frozenset({'enabled', *KIND_SWITCHES.values()})
 
 @dataclass(frozen=True, slots=True)
 class DecisionsConfig:
-    enabled: bool = False
+    enabled: bool = True
     bank_items_per_day: int = 10
     loot_poll_days: int = 14
     bank_restock_per_week: int = 20
-    rank_reviews: bool = False
-    boss_strategy: bool = False
-    bank_requests: bool = False
+    rank_reviews: bool = True
+    boss_strategy: bool = True
+    bank_requests: bool = True
 
     def kind_on(self, kind: str) -> bool:
         switch = KIND_SWITCHES.get(kind)
         return self.enabled and (switch is None or getattr(self, switch))
+
+
+OFF = DecisionsConfig(enabled=False, rank_reviews=False, boss_strategy=False, bank_requests=False)
 
 
 def _warn(path: Path, code: str, key: str = '') -> None:
@@ -48,13 +51,13 @@ def load_decisions_config(path: Path) -> DecisionsConfig:
         return DecisionsConfig()
     except (OSError, UnicodeError, tomllib.TOMLDecodeError):
         _warn(path, 'decisions_config_invalid', 'file')
-        return DecisionsConfig()
+        return OFF
     if not isinstance(table, dict):
         _warn(path, 'decisions_config_invalid', 'decisions')
-        return DecisionsConfig()
+        return OFF
     if set(table) - {f.name for f in fields(DecisionsConfig)}:
         _warn(path, 'decisions_config_invalid', 'unknown')
-        return DecisionsConfig()
+        return OFF
     for key, value in table.items():
         if key in BOOLS:
             valid = type(value) is bool
@@ -63,7 +66,7 @@ def load_decisions_config(path: Path) -> DecisionsConfig:
             valid = type(value) is int and lo <= value <= hi
         if not valid:
             _warn(path, 'decisions_config_invalid', key)
-            return DecisionsConfig()
+            return OFF
     cfg = DecisionsConfig(**table)
     if cfg.enabled and not load_server_config(path).enabled:
         _warn(path, 'decisions_need_server')

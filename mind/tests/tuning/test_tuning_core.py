@@ -230,6 +230,7 @@ def test_an_availability_world_override_reaches_the_life_config(tmp_path):
 
 
 def test_a_dm_mirror_world_override_reaches_the_talk_config(tmp_path):
+    (tmp_path / "mind.toml").write_text("[talk]\nshape = false\n", encoding="utf-8")
     cfg = load_config(tmp_path / "mind.toml")
     out = merge(cfg, Tuning().with_value("world", "", "dm_mirror", 9))
     assert out.talk.dm_mirror == 9 and cfg.talk.dm_mirror == 5 and not cfg.talk.shape

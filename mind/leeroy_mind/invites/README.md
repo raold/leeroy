@@ -11,7 +11,7 @@ my way" unless the move was taken.
 - `[talk] invites = true` in `mind.toml` (the default; anything but `true` is off, logged once
   `talk_invites_invalid`). Read at each line, so it follows a reload at his login. Off, his lines
   are plain talk as before. On, nothing changes until he invites someone.
-- Native `Leeroy.Invites.Enable = 1` in `mod_leeroy.conf` (default 0, `.reload config`): every
+- Native `Leeroy.Invites.Enable = 1` in `mod_leeroy.conf` (default 1, `.reload config`): every
   string the mind sends for an invitation is marked `"via": "invite"` and answers to this key, not
   `Leeroy.Strings.Enable`. While it is 0 native refuses them `off`: the first invitation is
   answered honestly ("can't make it right now"), and his lines are plain talk again for 10

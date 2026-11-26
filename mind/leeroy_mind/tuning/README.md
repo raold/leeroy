@@ -104,7 +104,7 @@ on a free loopback port. It skips explicitly when Playwright or Chromium is abse
 
 ## Heat
 
-The heat dial (`[heat] enabled`, off by default) is stored here as `tuning_value` rows with dial
+The heat dial (`[heat] enabled`, on by default) is stored here as `tuning_value` rows with dial
 `heat` (a world value 0-10, a woman's or a group's offset -5..+5) and goes through the same `tune`
 op, change log, undo and revert. It is not a persona dial: nothing is folded into the effective
 persona, and it is in neither dial registry. See `mind/leeroy_mind/heat/README.md`.

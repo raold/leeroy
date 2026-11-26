@@ -17,6 +17,7 @@ from leeroy_mind.protocol import Chat
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.tuning.effective import effective, MemberTuning
+from shipped_off import merge, off
 
 
 def note(text='He keeps replies short and leaves room for the owner.',scope='guild',**over):
@@ -28,7 +29,7 @@ def answer(items=None,**over):
 
 
 def enabled(tmp_path,auto=False):
-    (tmp_path/'mind.toml').write_text('[learn]\nenabled=true\ncoach=true\nauto_lessons='+str(auto).lower()+'\n')
+    (tmp_path/'mind.toml').write_text(off('[learn]\nenabled=true\ncoach=true\nauto_lessons='+str(auto).lower()+'\n'))
 
 
 def exchanges(ctx,guid=101,channel='guild',n=10,offset=0):
@@ -134,8 +135,7 @@ def test_restricted_rooms_supply_no_coaching_content(context,tmp_path,channel):
 @pytest.mark.parametrize('apply', [False, True])
 def test_officer_coaching_keeps_main_behavior_with_apply_on_or_off(context,tmp_path,channel,apply):
     enabled(tmp_path,auto=True)
-    with (tmp_path/'mind.toml').open('a') as f:
-        f.write('\napply='+str(apply).lower()+'\n')
+    merge(tmp_path/'mind.toml',{'learn':{'apply':apply}})
     async def go():
         async with context(lambda *_:json.dumps(answer([note(scope='group')])),
                            learn_enabled=True,learn_coach=True) as (ctx,llm):

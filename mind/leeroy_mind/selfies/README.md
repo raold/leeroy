@@ -199,7 +199,7 @@ and delivery. It does not evaluate a classifier against real images or change th
 | Layer | Result |
 | --- | --- |
 | Model download (`selfie/leeroy_selfie/models.py`) | Keep the `nsfw` model pin, revision and file checks. A pin selects a reproducible download; it is not the acceptance threshold. |
-| Configuration and protocol | Keep the configured cutoff and numeric validation. `romance_styling` remains off by default. |
+| Configuration and protocol | Keep the configured cutoff and numeric validation. `romance_styling` is on by default (since 2026-11-25: shipped features default on). |
 | Persona eligibility (`style.py`, `romance_styling.py`) | Keep age 25+, age-coded appearance exclusions, fictional identity, romance controls and the actual private audience. |
 | Outfit and scene composition (`kind.py`, `scene_choices.py`, `words_scene.py`) | Expand the clothed catalogue (every template complete by `safe.is_complete`, none of the audit's triggers) and fixed expressions, respect the saved wardrobe and palette, and permit private mirror/timer swimwear at water settings. The indoor and bed pairings and the gym pairing apply to every styled woman. Work uniforms and current clothes remain specific choices. |
 | Free-text screens (`kind.py`, `scene.py`, `words_scene.py`) | Retain the age, explicit-content, undressing, real-name, likeness, other-person and prompt-syntax screens. Added clothes and expressions pass the existing screens. |

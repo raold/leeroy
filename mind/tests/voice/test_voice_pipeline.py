@@ -30,6 +30,7 @@ from leeroy_mind.voice import wire
 from leeroy_mind.voice.client import VoiceDown
 from leeroy_mind.voice.comms import AGE_OUT_S, SPOKEN_HINT
 from voice.conftest import status
+from shipped_off import off
 
 SECRET = "the line itself"
 
@@ -1124,7 +1125,7 @@ def test_attach_wires_the_engine(vapp):
 
 
 def test_voice_off_touches_nothing(tmp_path, clock, voice_data):
-    (tmp_path / "mind.toml").write_text("", encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off(""), encoding="utf-8")
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
     assert app.engine.comms is None and app.voice.comms is None
     assert app.world.room_audience is None and not app.voice.tickers

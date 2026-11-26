@@ -16,17 +16,19 @@ from leeroy_mind.testing.wire import port_mock
 
 from .test_tg_gate import _run_async, boss, run_for
 from .test_tg_ledger import header, member
+from shipped_off import off
 
 
 def enable(app):
-    (app.data_dir / "mind.toml").write_text("[training]\nenabled = true\n", encoding="utf-8")
+    (app.data_dir / "mind.toml").write_text(off("[training]\nenabled = true\n"), encoding="utf-8")
     app.skip_event_rows = set()
     app.hooks = []
     app.engine.add_instruction_hook = app.hooks.append
     return app
 
 
-def test_attach_off_by_default(app_stub):
+def test_attach_off(app_stub):
+    (app_stub.data_dir / "mind.toml").write_text("[training]\nenabled = false\n", encoding="utf-8")
     assert service.attach_training(app_stub) is None
     assert not app_stub.handlers and not app_stub.backgrounds and not app_stub.connections
 
