@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <list>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -95,6 +96,13 @@ struct OfflineFixture
     bool tankSwapForced = false;
     uint32 selfResSuppressed = 0;
     std::map<uint32, std::pair<uint64, uint64>> hits;
+    struct SpellDamageSample
+    {
+        uint64 sequence = 0;
+        uint32 atMs = 0, instance = 0, entry = 0, spell = 0, slot = 0, calculated = 0, healthBefore = 0;
+    };
+    std::array<SpellDamageSample, 32> spellDamage{};
+    uint64 spellDamageSequence = 0;
     std::map<ObjectGuid, SlimePool> slimePools;
     uint32 clockMs = 0, slimeGap = 0, slimeInside = 0, slimeEscapes = 0, slimeOutsideMs = 0;
     uint32 slimeHits = 0, slimeLateHits = 0, slimeUnknownHits = 0;
@@ -322,6 +330,7 @@ struct OfflineFixture
         }
         std::lock_guard<std::recursive_mutex> lock(mutex);
         token = id; state = "running"; error.clear(); samples = 0; hits.clear();
+        spellDamage = {}; spellDamageSequence = 0;
         naxxPass = {};
         naxxPass.state = naxxTrial ? "pending" : "none";
         naxxPass.control = scenario == "naxx-gothik-pass-control";
@@ -402,6 +411,7 @@ struct OfflineFixture
         if (!native.value("active", false)) naxxPass.Release(RaidActors());
         if (!native.value("active", false)) tocIntro.Release(RaidActors());
         json bodies = json::array(), damage = json::array(), pools = json::array();
+        json enemies = json::array(), spellSamples = json::array();
         for (std::size_t i = 1; i < actors.size(); ++i)
             if (auto* p = Actor(i))
             {
@@ -420,6 +430,33 @@ struct OfflineFixture
                     {"master", GET_PLAYERBOT_AI(p)->GetMaster() ? GET_PLAYERBOT_AI(p)->GetMaster()->GetGUID().GetCounter() : 0}});
             }
         for (auto const& [entry, value] : hits) damage.push_back({{"entry", entry}, {"hits", value.first}, {"requested", value.second}});
+        // Read only, bounded diagnostics for the actual Beasts actors. In
+        // particular, distinguish a surviving enraged worm from a cure stall.
+        if (auto* leader = Actor(1); leader && map == 649 && leader->GetMapId() == map)
+            for (uint32 entry : {34796u, 34799u, 35144u, 34797u})
+            {
+                std::list<Creature*> found;
+                leader->GetCreatureListWithEntryInGrid(found, entry, 200.f);
+                for (auto* creature : found)
+                    if (enemies.size() < 16)
+                    {
+                        auto* cast = creature->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+                        auto* victim = creature->GetVictim();
+                        enemies.push_back({{"entry", entry}, {"guid", creature->GetGUID().GetCounter()},
+                            {"instance", creature->GetInstanceId()}, {"alive", creature->IsAlive()},
+                            {"health", creature->GetHealth()}, {"max_health", creature->GetMaxHealth()},
+                            {"enraged", creature->HasAura(68335)},
+                            {"cast", cast ? cast->GetSpellInfo()->Id : 0u},
+                            {"target", victim ? victim->GetGUID().GetCounter() : 0u},
+                            {"x", creature->GetPositionX()}, {"y", creature->GetPositionY()},
+                            {"z", creature->GetPositionZ()}, {"facing", creature->GetOrientation()}});
+                    }
+            }
+        for (auto const& sample : spellDamage)
+            if (sample.sequence)
+                spellSamples.push_back({{"sequence", sample.sequence}, {"at_ms", sample.atMs},
+                    {"instance", sample.instance}, {"entry", sample.entry}, {"spell", sample.spell},
+                    {"slot", sample.slot}, {"calculated", sample.calculated}, {"health_before", sample.healthBefore}});
         for (auto const& [guid, pool] : slimePools)
             pools.push_back({{"guid", guid.GetCounter()}, {"casts", pool.casts},
                 {"age_ms", clockMs - pool.firstMs}, {"last_ms", clockMs - pool.lastMs},
@@ -427,6 +464,7 @@ struct OfflineFixture
         return {{"kind", "dojo-offline-observation"}, {"format", 1}, {"state", state}, {"error", error},
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
             {"native", native}, {"bodies", bodies}, {"damage", damage},
+            {"toc_enemies", enemies}, {"spell_damage_samples", spellSamples},
             {"naxx_pass", naxxPass.Snapshot()},
             {"toc_intro", tocIntro.Snapshot()},
             {"toc_worm_support", {{"requested", wormRequested}, {"active_samples", wormSamples}, {"restored", wormRestored}}},
@@ -482,7 +520,22 @@ public:
 class Damage : public UnitScript
 {
 public:
-    Damage() : UnitScript("DojoOfflineDamage", true, {UNITHOOK_ON_DAMAGE}) { }
+    Damage() : UnitScript("DojoOfflineDamage", true, {UNITHOOK_ON_DAMAGE, UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN}) { }
+    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, int32& calculated, SpellInfo const* info) override
+    {
+        if (!victim || !attacker || !info || calculated <= 0 || victim->GetMapId() != 649
+            || attacker->GetMap() != victim->GetMap()) return;
+        std::lock_guard<std::recursive_mutex> lock(fixture.mutex);
+        if (fixture.state != "running" || fixture.map != 649) return;
+        auto found = std::find(fixture.actors.begin() + 1, fixture.actors.begin() + 11, victim->GetGUID());
+        if (found == fixture.actors.begin() + 11) return;
+        // This hook precedes final damage application. These are diagnostic
+        // calculations, not landed-hit or lethal-damage assertions.
+        uint64 const sequence = ++fixture.spellDamageSequence;
+        fixture.spellDamage[(sequence - 1) % fixture.spellDamage.size()] =
+            {sequence, fixture.clockMs, victim->GetInstanceId(), attacker->GetEntry(), info->Id,
+                uint32(found - fixture.actors.begin()), uint32(calculated), victim->GetHealth()};
+    }
     void OnDamage(Unit* attacker, Unit* victim, uint32& amount) override
     {
         std::lock_guard<std::recursive_mutex> lock(fixture.mutex);

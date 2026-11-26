@@ -135,6 +135,14 @@ previous value during cleanup. Both the full Beasts target and the two Slime Poo
 cases accept the option. It never changes the runtime configuration files or a
 live feature switch.
 
+ToC observations include at most sixteen nearby Beasts actors with health, enrage,
+current spell, target and position, and a ring of the last thirty-two spell-damage
+calculations against the synthetic raid. Each calculation carries a sequence,
+run-relative time, instance, actor slot and spell ID. Sort by sequence and deduplicate
+across observations; the ring can overwrite events between polls. These calculations
+precede final damage application and are diagnostic evidence, not landed-hit or
+lethal-damage assertions. They do not change an acceptance verdict or any actor.
+
 `--target offline-reserves` starts with nine primary members and offers the
 fixed benched healer through the production reserve field. Its gate requires
 ten distinct owned members, including that reserve, alive in the same running
