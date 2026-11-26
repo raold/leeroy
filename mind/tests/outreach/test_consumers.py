@@ -27,6 +27,7 @@ from leeroy_mind.protocol import Chat, Group
 from leeroy_mind.selfies import files, snaps
 from leeroy_mind.talk.pipeline import ECHO_WAIT_S, TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
+from shipped_off import off
 
 
 TOPIC = 'I am planting rosemary in a blue pot this weekend.'
@@ -526,7 +527,7 @@ def test_off_keeps_seeded_game_topic_choices_with_retained_items(rig,tmp_path,mo
 
 @pytest.mark.parametrize('config',['[outreach]\nenabled=false\n','[outreach]\nenabled="invalid"\n'])
 def test_off_preserves_golden_prompts_and_golden_file(store,clock,tmp_path,config):
-    (tmp_path/'mind.toml').write_text(config,encoding='utf-8')
+    (tmp_path/'mind.toml').write_text(off(config),encoding='utf-8')
     assert attach(SimpleNamespace(data_dir=tmp_path)) is None
     before=hashlib.sha256(GOLDEN.read_bytes()).digest()
     assert record(store,clock,tmp_path)==golden()

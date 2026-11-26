@@ -204,6 +204,12 @@ FEED_DAYS = 3.0  # how far back a page's first feed goes
 KEY_HEADER = "x-console-key"
 TUNE_S = 10.0  # a dial change's answer
 SELFIE_S = 10.0  # a photo change's answer; the call waits this plus SELFIE_MARGIN_S
+VIDEO_READ_S = 300.0  # a video upload's body may take this long: a phone's upload over the tailnet
+# Each upload path's body types and the words for any other (every other POST takes JSON)
+UPLOAD_KINDS = {'/api/discord/upload': (('image/jpeg',), 'Send a JPEG photo.'),
+                '/api/discord/voice': (('audio/wav',), 'Send a WAV recording.'),
+                '/api/discord/video': (('video/mp4', 'video/webm', 'video/quicktime'),
+                                       'Send an mp4, webm or mov video.')}
 SELFIE_MARGIN_S = 5.0  # a held chosen.jpg retries for about 2 s inside the op
 RENDER_S = 90.0  # Render selfies: a stop waits up to 60 s for the worker tree inside the op
 RENDER_DOWN = "Start the mind to render selfies."
@@ -392,6 +398,13 @@ class ConsoleApp:
         self.server_enabled = load_server_config(settings.data_dir / 'mind.toml').enabled
         from ..photos.config import load_photos_config
         self.photos = load_photos_config(settings.data_dir / 'mind.toml')
+        from ..videos import files as video_files
+        from ..videos.config import load_videos_config
+        self.videos = load_videos_config(settings.data_dir / 'mind.toml')
+        # ffmpeg and ffprobe, looked for once at start (videos/README.md)
+        self._video_tools = video_files.tools() if self.videos.enabled else None
+        if self.videos.enabled and self._video_tools is None:
+            log.warning('videos_need_tools code=ffmpeg_not_on_path')
         from ..voice_notes.config import load_config as load_voice_notes
         self.voice_notes = load_voice_notes(settings.data_dir / 'mind.toml')
         from ..groups.config import load_groups_config
@@ -414,6 +427,10 @@ class ConsoleApp:
         self._photo_day = None
         self._photo_day_total = 0
         self._photo_upload_lock = asyncio.Lock()
+        self._video_uploads: list[float] = []
+        self._video_day = None
+        self._video_day_total = 0
+        self._video_upload_lock = asyncio.Lock()
         self.mind = mind
         self.controls = controls
         self.voice = voice
@@ -931,11 +948,12 @@ class ConsoleApp:
             if origins != [site]:
                 return text(403, "Forbidden: a change needs the console's own Origin.")
             kind = (req.one("content-type") or "").split(";")[0].strip().lower()
-            upload = req.path in ('/api/discord/upload','/api/discord/voice')
+            upload = req.path in UPLOAD_KINDS
             if upload and sites != ['same-origin']:
                 return text(403, "Forbidden: upload from the console's own page.")
-            if kind != ('audio/wav' if req.path=='/api/discord/voice' else 'image/jpeg' if upload else 'application/json'):
-                return text(415, 'Send a WAV recording.' if req.path=='/api/discord/voice' else 'Send a JPEG photo.' if upload else 'Send JSON.')
+            kinds, refusal = UPLOAD_KINDS.get(req.path, (('application/json',), 'Send JSON.'))
+            if kind not in kinds:
+                return text(415, refusal)
         elif req.method != "GET":
             return text(405, "Method not allowed.", [("Allow", "GET, POST")])
         if req.method == "GET" and (req.path == "/" or req.path.startswith("/static/")):
@@ -1001,6 +1019,8 @@ class ConsoleApp:
                   ("POST", "/api/discord/upload"): self._api_discord_upload,
                   ("GET", "/api/discord/image"): self._api_discord_image,
                   ("POST", "/api/discord/voice"): self._api_voice_upload,
+                  ("POST", "/api/discord/video"): self._api_video_upload,
+                  ("GET", "/api/discord/video"): self._api_video_file,
                   ("GET", "/api/discord/voice"): self._api_voice_audio,
                   ("GET", "/api/bank"): self._api_bank,
                   ("GET", "/api/tonight"): self._api_tonight,
@@ -2090,6 +2110,11 @@ class ConsoleApp:
             read_marks=read_marks, server=self.server_enabled, groups=self.groups.enabled,
             items=self.s.data_dir / 'library.db' if self.item_tooltips else None)
         view['photos'] = self.photos.enabled and self.controls.enabled
+        # his videos: offered only when an upload could be read (videos/README.md)
+        view['videos'] = view['photos'] and self.videos.enabled and self._video_tools is not None
+        if view['photos'] and self.videos.enabled and self._video_tools is None:
+            from ..videos.files import WORDS as VIDEO_WORDS
+            view['videos_off'] = VIDEO_WORDS['tools']
         view['voice_notes'] = self.voice_notes.enabled and self.controls.enabled
         if self.custom_emoji:
             view['custom_emoji'] = True
@@ -2272,6 +2297,74 @@ class ConsoleApp:
         return Response(200, data, 'image/jpeg', [('Cache-Control', 'private, max-age=3600'),
                         ('Cross-Origin-Resource-Policy', 'same-origin')])
 
+    async def _api_video_upload(self, req: Request):
+        """POST /api/discord/video: his video, staged and read once with ffmpeg (videos/files.py);
+        201 {video: token, ms, w, h, frames}. The post that names the token adopts it."""
+        from ..videos import files as vfiles
+        if not (self.photos.enabled and self.videos.enabled) or not self.controls.enabled:
+            return json_response(403, {'ok': False, 'error': 'Video uploads are off or this console is read-only.'})
+        if self._video_tools is None:
+            return json_response(503, {'ok': False, 'error': vfiles.WORDS['tools']})
+        problem = self._discord_problem()
+        if problem is not None:
+            return json_response(problem[0], {'ok': False, 'error': problem[1]})
+        mime = (req.one('content-type') or '').split(';')[0].strip().lower()
+        now = self._monotonic()
+        self._video_uploads = [t for t in self._video_uploads if now - t < 60]
+        if len(self._video_uploads) >= vfiles.MINUTE_MAX:
+            return json_response(429, {'ok': False, 'error': vfiles.WORDS['minute']})
+        self._video_uploads.append(now)  # reserved before worker I/O, as photos are
+        try:
+            async with self._video_upload_lock:
+                day = mind_clock.local_at(self._clock()).date().isoformat()
+                if self._video_day != day:
+                    count = await asyncio.to_thread(vfiles.staged_count, self.s.data_dir, day)
+                    self._video_day, self._video_day_total = day, count
+                if self._video_day_total >= vfiles.DAY_MAX:
+                    return json_response(429, {'ok': False, 'error': vfiles.WORDS['day']})
+                token, facts = await asyncio.to_thread(vfiles.stage, self.s.data_dir, req.body,
+                                                       mime, self._video_tools)
+                self._video_day_total += 1
+        except vfiles.VideoRefused as error:
+            log.info('discord_video_upload outcome=%s bytes=%d', error.code, len(req.body))
+            return json_response(413 if error.code == 'too_big' else 400,
+                                 {'ok': False, 'error': vfiles.WORDS.get(error.code, vfiles.WORDS['busy'])})
+        except Exception as error:
+            log.warning('discord_video_upload_failed code=%s', type(error).__name__)
+            return json_response(503, {'ok': False, 'error': 'The video could not be saved.'})
+        log.info('discord_video_upload outcome=ok bytes=%d ms=%s frames=%d', facts.bytes,
+                 facts.ms if facts.ms is not None else 'unknown', facts.frames)
+        return json_response(201, {'video': token, 'ms': facts.ms, 'w': facts.w, 'h': facts.h,
+                                   'frames': facts.frames})
+
+    async def _api_video_file(self, req: Request):
+        """GET /api/discord/video?id=: a message's video, bounded and identity-checked, for the
+        page to play from a blob (a <video src> cannot carry the key)."""
+        from ..videos import files as vfiles
+        if set(req.query) != {'id'} or len(req.query['id']) != 1:
+            return text(400, 'Choose one video message.')
+        mid = digits(req.query['id'][0], 19)
+        if mid is None or not 1 <= mid <= 2**63 - 1:
+            return text(400, 'Choose one video message.')
+        def read(conn):
+            if 'discord_attachment' not in views.tables(conn):
+                return None
+            if discord_store.attachments(conn, [mid]).get(mid) is None:  # gone with a delete
+                return None
+            clip = vfiles.by_messages(conn, [mid]).get(mid)
+            if clip is None:
+                return None
+            data = vfiles.read_video(self.s.data_dir / clip['path'], self.s.data_dir, clip['mime'])
+            return (data, clip['mime']) if data is not None else None
+        try:
+            found = await asyncio.to_thread(feed.read, self.s.data_dir / 'mind.db', read)
+        except Exception:
+            found = None
+        if found is None:
+            return text(404, 'No video.')
+        return Response(200, found[0], found[1], [('Cache-Control', 'private, max-age=3600'),
+                        ('Cross-Origin-Resource-Policy', 'same-origin')])
+
     async def _api_discord_action(self, req: Request):
         self._discord_seen = self._monotonic()
         try:
@@ -2413,9 +2506,12 @@ class ConsoleApp:
     async def start(self) -> None:
         from .httpd import Route, serve
         from ..photos.images import MAX_IMAGE_BYTES
-        self._server = await serve(self.handle, HOST, self.s.port, routes={
+        from ..videos.files import MAX_VIDEO_BYTES
+        # An upload's head passes the gate before its body is read (httpd.read_request)
+        self._server = await serve(self.handle, HOST, self.s.port, precheck=self.gate, routes={
             ('POST', '/api/discord/upload'): Route(MAX_IMAGE_BYTES, 60., True),
-            ('POST', '/api/discord/voice'): Route(2097152, 60., True)})
+            ('POST', '/api/discord/voice'): Route(2097152, 60., True),
+            ('POST', '/api/discord/video'): Route(MAX_VIDEO_BYTES, VIDEO_READ_S, True)})
         self.s.port = self._server.sockets[0].getsockname()[1]
         self.origin = f"http://{HOST}:{self.s.port}"
         await self.refresh(force=True)

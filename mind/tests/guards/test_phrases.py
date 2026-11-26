@@ -8,6 +8,7 @@ import pytest
 
 from leeroy_mind.guards import Draft, GuardsCfg, GuardStores, Verdict, parse_config, review
 from leeroy_mind.guards import phrases
+from leeroy_mind.guards.config import OFF as GUARDS_OFF
 from leeroy_mind.guards.review import Reader, rewrite_hint
 from leeroy_mind.talk import awareness as live
 from leeroy_mind.talk.pipeline import TurnMeta
@@ -216,7 +217,7 @@ def test_switch_off_and_config_parsing(store):
     assert review(GuardStores(store.conn, off), draft(MENACE, channel='whisper', to_guid=1)).action == 'send'
     assert parse_config({'enabled': True, 'phrase_cooldown': False}).phrase_cooldown is False
     assert parse_config({'enabled': True}).phrase_cooldown is True
-    assert parse_config({'enabled': True, 'phrase_cooldown': 1}) == GuardsCfg()
+    assert parse_config({'enabled': True, 'phrase_cooldown': 1}) == GUARDS_OFF
 
 
 def test_hint_names_her_words_in_quotes():

@@ -63,7 +63,7 @@ used as a substitute pool.
 
 This requires a native rebuild advertising `mechanics_cast_radius`. Older
 worldservers receive all their existing supported rules, with this one omitted.
-The existing default-off `[raidplay] respond` and `Leeroy.Mechanics.Enable`
+The existing `[raidplay] respond` and `Leeroy.Mechanics.Enable`
 switches still control it. No settings are activated by this change.
 
 The same audit found 37 Death and Decay hits across 18 members in one heroic 25
@@ -200,7 +200,7 @@ instance's difficulty). Everything returned is frozen; mappings are read-only.
 
 ## The responder
 
-`[raidplay] respond = true` in `mind.toml` (default false; read at mind start; an invalid table, or one with keys
+`[raidplay] respond = true` in `mind.toml` (default true; read at mind start; an invalid table, or one with keys
 other than `respond`, means off) sends native the playbooks' actionable mechanics; native's
 `Leeroy.Mechanics.Enable = 1` (`.reload config`) then moves the bodies at cast start
 (`modules/mod-leeroy/README.md`, "Boss mechanics at cast start"). It needs `[training] playbooks = true`: the
@@ -318,7 +318,7 @@ Unit tests and compilation do not establish that these encounters now clear safe
 the `since = 1` rows and the original no-behind bosses (gunship, Valithria, Faction Champions),
 so scoring is byte-for-byte what it was (`tests/raidplay/test_training_parity.py`).
 
-`[training] playbooks = true` in `mind.toml` (default false, read at mind start; also by
+`[training] playbooks = true` in `mind.toml` (default true, read at mind start; also by
 `training rescore` and `training spells check`) scores every check of every covered raid
 (checks version 2: the Naxxramas rows and the new no-behind bosses Heigan, Thaddius, Gothik and
 the Four Horsemen). Stored pulls checked under version 1 are rechecked once at the next mind

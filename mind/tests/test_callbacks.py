@@ -239,7 +239,7 @@ def test_record_rechecks_evidence_and_does_not_commit(db):
     assert not db.execute("SELECT * FROM callback_use").fetchall()
 
 
-@pytest.mark.parametrize("content,expected", [("", False), ("[callbacks]\nenabled=true", True),
+@pytest.mark.parametrize("content,expected", [("", True), ("[callbacks]\nenabled=true", True),
     ("[callbacks]\nenabled=false", False), ("[callbacks]\nenabled='true'", False),
     ("[callbacks]\nenabled=1", False), ("callbacks=true", False),
     ("[callbacks]\nenabled=true\nunknown=1", False), ("[[[", False)])

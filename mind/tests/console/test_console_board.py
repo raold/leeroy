@@ -100,7 +100,7 @@ def test_threads_letters_and_writeups(db, tmp_path):
 
 
 def test_the_board_says_when_the_realm_is_off(db, tmp_path):
-    assert boardview.board_view(db, now=NOW, data_dir=tmp_path)["realm_on"] is False
+    assert boardview.board_view(db, now=NOW, data_dir=tmp_path)["realm_on"] is True  # its default
     (tmp_path / "mind.toml").write_text("[realm]\nenabled = false\n")
     assert boardview.board_view(db, now=NOW, data_dir=tmp_path)["realm_on"] is False
     (tmp_path / "mind.toml").write_text("[realm]\nenabled = true\n")

@@ -11,6 +11,7 @@ from leeroy_mind.protocol import Member
 from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_llm import FakeLLM
+from shipped_off import off
 
 
 def member(guid, name, *, level=80, rank=4):
@@ -22,7 +23,7 @@ def member(guid, name, *, level=80, rank=4):
 def root(tmp_path, clock, monkeypatch):
     root = tmp_path / "mind-data"
     root.mkdir()
-    (root / "mind.toml").write_text("[bridge]\nport = 39001\n", encoding="utf-8")
+    (root / "mind.toml").write_text(off("[bridge]\nport = 39001\n"), encoding="utf-8")
     store = Store(open_migrated(root / "mind.db"), clock=clock)
     seed_test_cast(store)
     store.upsert_cast([member(1, "Testmage", rank=0)], 1000.0)

@@ -16,6 +16,7 @@ import pytest
 
 from conftest import HUMAN, seed_test_cast
 from engine_rig import save_member
+from shipped_off import off
 from leeroy_mind import clock as mind_clock
 from leeroy_mind.console import app as console_app, mindlink
 from leeroy_mind.console.control import Controls
@@ -40,7 +41,10 @@ def eastern_pc(monkeypatch):
 
 @pytest.fixture
 def data(store):
-    return Path(store.conn.execute("PRAGMA database_list").fetchone()["file"]).parent
+    """The data dir, its mind.toml with every switch that defaults on since 2026-11-25 off."""
+    root = Path(store.conn.execute("PRAGMA database_list").fetchone()["file"]).parent
+    (root / "mind.toml").write_text(off(), encoding="utf-8")
+    return root
 
 
 @pytest.fixture

@@ -16,7 +16,7 @@ from leeroy_mind.selfies.prompt import PromptSpec
 from leeroy_mind.selfies.render import render_candidates
 from leeroy_mind.selfies.worker import Detail, Rendered, SelfieWorker, detail_for
 
-from selfies.fakes import fake_command, request
+from selfies.fakes import fake_command, request, selfie_cfg
 from selfies.test_request_render import Room, Worker, plan, render
 from selfies.test_request_scene import app, save  # noqa: F401
 from selfies.test_selfie_cli import calls, llm, root, snap_llm, snaproot  # noqa: F401
@@ -24,11 +24,16 @@ from selfies.test_selfie_cli import calls, llm, root, snap_llm, snaproot  # noqa
 
 # -- the switch ---------------------------------------------------------------------------------
 
-def test_the_detailer_is_off_by_default_and_a_table_turns_it_on(tmp_path):
-    assert (SelfieCfg().detailer, SelfieCfg().detailer_hands) == (False, False)
+def test_the_detailer_is_on_by_default_and_a_table_turns_it_off(tmp_path):
+    assert (SelfieCfg().detailer, SelfieCfg().detailer_hands) == (True, True)  # since 2026-11-25
     (tmp_path / "mind.toml").write_text("[selfies]\ndetailer = true\n", encoding="utf-8")
     cfg = load_selfie_config(tmp_path / "mind.toml")
+    assert (cfg.detailer, cfg.detailer_hands) == (True, True)
+    (tmp_path / "mind.toml").write_text("[selfies]\ndetailer_hands = false\n", encoding="utf-8")
+    cfg = load_selfie_config(tmp_path / "mind.toml")
     assert (cfg.detailer, cfg.detailer_hands) == (True, False)
+    (tmp_path / "mind.toml").write_text("[selfies]\ndetailer = false\n", encoding="utf-8")
+    assert detail_for(load_selfie_config(tmp_path / "mind.toml")) is None
     (tmp_path / "mind.toml").write_text("[selfies]\ndetailer = true\ndetailer_hands = true\n",
                                         encoding="utf-8")
     cfg = load_selfie_config(tmp_path / "mind.toml")
@@ -50,12 +55,12 @@ def test_a_table_with_an_unknown_key_never_opts_in(tmp_path):
 
 
 def test_the_pass_follows_the_switches_and_leaves_a_rear_views_face_alone():
-    assert detail_for(SelfieCfg()) is None
-    assert detail_for(SelfieCfg(detailer_hands=True)) is None  # hands need the detailer
-    assert detail_for(SelfieCfg(detailer=True)) == Detail(True, False)
-    assert detail_for(SelfieCfg(detailer=True, detailer_hands=True)) == Detail(True, True)
-    assert detail_for(SelfieCfg(detailer=True), rear=True) is None
-    assert detail_for(SelfieCfg(detailer=True, detailer_hands=True), rear=True) == Detail(False, True)
+    assert detail_for(selfie_cfg()) is None
+    assert detail_for(selfie_cfg(detailer_hands=True)) is None  # hands need the detailer
+    assert detail_for(selfie_cfg(detailer=True)) == Detail(True, False)
+    assert detail_for(selfie_cfg(detailer=True, detailer_hands=True)) == Detail(True, True)
+    assert detail_for(selfie_cfg(detailer=True), rear=True) is None
+    assert detail_for(selfie_cfg(detailer=True, detailer_hands=True), rear=True) == Detail(False, True)
 
 
 # -- the wire -----------------------------------------------------------------------------------
@@ -183,23 +188,23 @@ def a_set(tmp_path, cfg, **kw):
 
 
 def test_a_set_renders_without_the_pass_by_default(tmp_path):
-    assert a_set(tmp_path, SelfieCfg()) == ["", "", "", ""]
+    assert a_set(tmp_path, selfie_cfg()) == ["", "", "", ""]
 
 
 def test_a_set_asks_for_the_faces_and_with_the_switch_the_hands(tmp_path):
-    assert a_set(tmp_path, SelfieCfg(detailer=True)) == ["faces"] * 4
+    assert a_set(tmp_path, selfie_cfg(detailer=True)) == ["faces"] * 4
     (tmp_path / "log").unlink()
-    assert a_set(tmp_path, SelfieCfg(detailer=True, detailer_hands=True)) == ["faces hands"] * 4
+    assert a_set(tmp_path, selfie_cfg(detailer=True, detailer_hands=True)) == ["faces hands"] * 4
 
 
 def test_a_slot_seen_from_behind_keeps_its_face_as_rendered(tmp_path):
     rear = (False, True, False, True)
-    assert a_set(tmp_path, SelfieCfg(detailer=True), rear=rear) == ["faces", "", "faces", ""]
+    assert a_set(tmp_path, selfie_cfg(detailer=True), rear=rear) == ["faces", "", "faces", ""]
     (tmp_path / "log").unlink()
-    assert a_set(tmp_path, SelfieCfg(detailer=True, detailer_hands=True), rear=rear) == [
+    assert a_set(tmp_path, selfie_cfg(detailer=True, detailer_hands=True), rear=rear) == [
         "faces hands", "hands", "faces hands", "hands"]
     with pytest.raises(ValueError):
-        a_set(tmp_path, SelfieCfg(detailer=True), rear=(True,))
+        a_set(tmp_path, selfie_cfg(detailer=True), rear=(True,))
 
 
 # -- request photos -----------------------------------------------------------------------------

@@ -60,8 +60,9 @@ def test_item_tooltips_resolve_exact_names_only(data, cast):
     assert items.tooltips(data / "missing.db", ["Invented Ring"]) == {}
 
 
-@pytest.mark.parametrize("toml,expected", [(LOOT_ON, True), ("[server]\nenabled=true\n[culture]\nenabled=true\n", False),
-                                           ("", False)])
+@pytest.mark.parametrize("toml,expected", [(LOOT_ON, True), ("[server]\nenabled=true\n[culture]\nenabled=true\n", True),
+                                           ("", True), ("[culture]\nloot=false\n", False),
+                                           ("[server]\nenabled=false\n", False)])
 def test_the_console_adds_items_only_with_the_loot_switch(data, cast, toml, expected):
     library(data)
     (data / "mind.toml").write_text(toml, encoding="utf-8")

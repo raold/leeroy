@@ -154,3 +154,26 @@ def test_a_give_the_bridge_refused_before_writing_goes_again_under_the_same_rule
             await asyncio.wait_for(task, 2.0)
             await bridge.stop()
     asyncio.run(go())
+
+
+def test_loot_call_is_window_exempt_and_a_replayed_drop_is_called_once(fake, clock):
+    """A loot call bypasses the guild-wide chat window (2026-11-25 13:45: dropped after a gz burst);
+    the same drop seen twice is still called once."""
+    async def go():
+        bridge = FakeBridge(human_guid=1)
+        client, task = await _wired(fake, bridge)
+        try:
+            armory, plan = _setup(fake)
+            session = await RaidSession.open(fake, GuildConfig(), armory, plan)
+            assert session.bind_instance(77)
+            drop = LootDrop(0, 631, 77, 36597, (LootItem(50001, "Testblade", 4, 0),))
+            await session.on_loot_drop(drop)
+            await session.on_loot_drop(drop)
+            calls = [text for _, _, text in fake.said if text.startswith("Testblade")]
+            assert len(calls) == 1
+            assert fake.exempt == calls
+        finally:
+            await client.close()
+            await asyncio.wait_for(task, 2.0)
+            await bridge.stop()
+    asyncio.run(go())

@@ -172,7 +172,7 @@ class Forbidden(BadRequest):
 class ControlCfg:
     enabled: bool = True
     port: int = 0  # 0: a free port the system picks (control.json names it)
-    ops_actions: bool = False
+    ops_actions: bool = True
 
 
 _RULES = {
@@ -694,7 +694,7 @@ def discord_args(args) -> dict:
     shape = DISCORD_SHAPES[action]
     if action=='post' and 'voice' in args:
         shape=shape-{'text'}
-    extra = {"reply_to", "thread", "image", "voice", "text"} if action == "post" else set()
+    extra = {"reply_to", "thread", "image", "video", "voice", "text"} if action == "post" else set()
     if not shape <= set(args) <= shape | extra:
         raise BadRequest(f"discord {action}: exactly " + ", ".join(sorted(shape - {"action"})))
     out = {"action": action}
@@ -704,6 +704,12 @@ def discord_args(args) -> dict:
         if not isinstance(token, str) or TOKEN_RE.fullmatch(token) is None:
             raise BadRequest('Choose the photo again: its upload token is invalid.')
         out['image'] = token
+    if 'video' in args:
+        from leeroy_mind.photos.images import TOKEN_RE
+        token = args['video']
+        if 'image' in args or not isinstance(token, str) or TOKEN_RE.fullmatch(token) is None:
+            raise BadRequest('Choose the video again: its upload token is invalid.')
+        out['video'] = token
     if "channel" in shape:
         ch = args["channel"]
         from leeroy_mind.groups.store import ident
@@ -712,7 +718,7 @@ def discord_args(args) -> dict:
         out["channel"] = ch
     if 'voice' in args:
         from leeroy_mind.photos.images import TOKEN_RE
-        if 'image' in args or layout.dm_peer(out.get('channel','')) is None or type(args['voice']) is not str or not TOKEN_RE.fullmatch(args['voice']):
+        if 'image' in args or 'video' in args or layout.dm_peer(out.get('channel','')) is None or type(args['voice']) is not str or not TOKEN_RE.fullmatch(args['voice']):
             raise BadRequest('Choose one voice recording in a direct message.')
         out['voice']=args['voice']
         out['text']='(voice message)'
@@ -727,7 +733,7 @@ def discord_args(args) -> dict:
         try:
             out["text"] = clean_text(args["text"])
         except TextRefused as e:
-            if e.code == 'empty' and 'image' in out:
+            if e.code == 'empty' and ('image' in out or 'video' in out):
                 out['text'] = ''
             else:
                 raise BadRequest(WORDS[e.code]) from None
@@ -1620,7 +1626,7 @@ def attach_control(app) -> ControlEndpoint | None:
         cfg = load_control_config(app.data_dir / "mind.toml")
     except ConfigError as e:
         log_event("control_config_invalid", level=logging.WARNING, reason=str(e))
-        cfg = ControlCfg()
+        cfg = ControlCfg(ops_actions=False)  # the endpoint on, as by default; its ops actions off
     if not cfg.enabled:
         log_event("control_off")
         return None

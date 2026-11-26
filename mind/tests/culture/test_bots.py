@@ -35,7 +35,8 @@ def make_app(h, tmp_path, *, emoji=False, window=(time(3), time(8)), birthdays=N
         store=h.store, clock=h.clock, human_guid=1, stopping=False, data_dir=tmp_path,
         engine=SimpleNamespace(human=IDENT), personas=personas,
         world=SimpleNamespace(discord_members=lambda: {g: None for g in (*TEST_CAST, 1)}),
-        culture_config=CultureConfig(enabled=True, bots=True, emoji=emoji),
+        culture_config=CultureConfig(enabled=True, bots=True, emoji=emoji, calendar=False, loot=False,
+                                     memes=False),
         server=SimpleNamespace(reactions=SimpleNamespace(
             after_post=lambda mid, **kw: reacted.append((mid, kw)))),
         reacted=reacted)
@@ -322,11 +323,13 @@ def test_culture_off_posts_nothing(tmp_path):
     path = tmp_path / "mind.toml"
     path.write_text("[server]\nenabled=true\n[culture]\nenabled=true\n")
     cfg = load_culture_config(path)
-    assert (cfg.bots, cfg.emoji, cfg.memes) == (False, False, False)  # each off by default
+    assert (cfg.bots, cfg.emoji, cfg.memes) == (True, True, True)  # each on by default (2026-11-25)
+    path.write_text("[server]\nenabled=true\n[culture]\nenabled=true\nbots=false\nemoji=false\nmemes=false\n")
+    cfg = load_culture_config(path)
     app = SimpleNamespace(culture_config=cfg, register_background=lambda f: pytest.fail("started"),
                           register_shutdown_drain=lambda f: pytest.fail("drained"))
     assert attach_part_c(app, ServerConfig(enabled=True)) is None
-    path.write_text("[server]\nenabled=true\n[culture]\nbots=true\n")  # culture itself off
+    path.write_text("[server]\nenabled=true\n[culture]\nenabled=false\nbots=true\n")  # culture itself off
     app.culture_config = load_culture_config(path)
     assert attach_part_c(app, ServerConfig(enabled=True)) is None
     path.write_text("[server]\nenabled=true\n[culture]\nenabled=true\nbots=1\n")  # a wrong type: all off

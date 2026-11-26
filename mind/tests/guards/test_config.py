@@ -14,10 +14,14 @@ def test_invalid_table_means_off(table):
 
 def test_defaults_overrides_and_extension_registration(tmp_path,caplog):
     path=tmp_path/'mind.toml'
-    assert not load_guards_config(path).enabled
+    cfg=load_guards_config(path)
+    assert cfg.enabled and cfg.semantic_enabled  # on by default (2026-11-25)
     path.write_text('[guards]\nenabled=true\nrepeat_overlap=0.8\n[guards.gag_caps]\n7=1\n')
     cfg=load_guards_config(path)
-    assert cfg.enabled and not cfg.semantic_enabled and cfg.repeat_overlap==.8 and cfg.gag_caps=={7:1}
+    assert cfg.enabled and cfg.semantic_enabled and cfg.repeat_overlap==.8 and cfg.gag_caps=={7:1}
+    path.write_text('[guards]\nsemantic_enabled=false\n')
+    cfg=load_guards_config(path)
+    assert cfg.enabled and not cfg.semantic_enabled
     load_config(path)
     assert 'unknown section' not in caplog.text
     path.write_text('NOT TOML [')

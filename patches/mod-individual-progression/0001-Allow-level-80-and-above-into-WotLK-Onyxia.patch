@@ -1,0 +1,22 @@
+From 287332af40f9457173a9e4aec67bd84e8aba0404 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 16:18:55 -0500
+Subject: [PATCH] Allow level 80 and above into WotLK Onyxia
+
+---
+ src/IndividualProgressionPlayer.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/IndividualProgressionPlayer.cpp b/src/IndividualProgressionPlayer.cpp
+index e3c5f17..f072353 100644
+--- a/src/IndividualProgressionPlayer.cpp
++++ b/src/IndividualProgressionPlayer.cpp
+@@ -609,7 +609,7 @@ public:
+             }
+  			else // WotLK
+             {
+-                if (player->GetLevel() != 80)
++                if (player->GetLevel() < 80)
+                     return false;
+             }
+         }

@@ -186,6 +186,44 @@ LEEROY_TEST(Decode_ExtensionCommand)   // registry is process-wide: use a name n
     CHECK_EQ(DecodeCommand(R"({"v":1,"type":"test_ext","size":10})").error, "missing id");
 }
 
+namespace
+{
+// Vault of Archavon 25 (map 624, difficulty 1): instance_encounters 773, 775, 777, 886 with their
+// DungeonEncounter.dbc bits, which match the instance script's EVENT_* data and the mind's (624, 0..3).
+std::vector<EncounterCredit> const kVault25 = {{0, 31125, 0}, {0, 33993, 1}, {0, 35013, 2}, {0, 38433, 3}};
+}
+
+LEEROY_TEST(Protocol_VaultKillsComeFromTheEncounterTable)   // 2026-11-25 raid 27: Emalon and Koralon, kills 0
+{
+    CHECK(CreditedKill(true, 0, true, 0, 33993, kVault25) == std::optional<std::size_t>(1));
+    CHECK(CreditedKill(true, 0, true, 0, 35013, kVault25) == std::optional<std::size_t>(2));
+    CHECK(CreditedKill(true, 0, true, 0, 31125, kVault25) == std::optional<std::size_t>(0));
+    CHECK(CreditedKill(true, 0, true, 0, 38433, kVault25) == std::optional<std::size_t>(3));
+    CHECK(!CreditedKill(true, 0, true, 0, 31263, kVault25));   // not a credited creature (trash)
+}
+
+LEEROY_TEST(Protocol_EncounterCreditReportsEachKillOnce)
+{
+    // Only the instance's first credit: a re-kill, a reload or a second hit of the same bit leaves the mask alone.
+    CHECK(!CreditedKill(true, 0, false, 0, 33993, kVault25));
+    // A script with boss states reports its own kills (SetBossState DONE): never a second report from the table.
+    CHECK(!CreditedKill(true, 4, true, 0, 33993, kVault25));
+    CHECK(!CreditedKill(true, 1, true, 0, 33993, kVault25));
+    // 5-man dungeons keep their own rules; a spell credit (creditType 1) is not a creature's death.
+    CHECK(!CreditedKill(false, 0, true, 0, 33993, kVault25));
+    CHECK(!CreditedKill(true, 0, true, 1, 33993, {{1, 33993, 1}}));
+    CHECK(!CreditedKill(true, 0, true, 0, 0, {{0, 0, 1}}));
+}
+
+LEEROY_TEST(Protocol_EncounterCreditNeedsOneSoundBossId)
+{
+    CHECK(!CreditedKill(true, 0, true, 0, 33993, {{0, 33993, 1}, {0, 33993, 2}}));   // one creature, two encounters
+    CHECK(!CreditedKill(true, 0, true, 0, 33993, {{0, 33993, 32}}));                 // no bit in the mask
+    CHECK(!CreditedKill(true, 0, true, 0, 33993, {}));
+    // A spell credit naming the same entry is another kind of row and does not make the kill ambiguous.
+    CHECK(CreditedKill(true, 0, true, 0, 33993, {{1, 33993, 0}, {0, 33993, 1}}) == std::optional<std::size_t>(1));
+}
+
 LEEROY_TEST(Protocol_IccGunshipPassNeverAnnouncesAKill)
 {
     CHECK(!ClassifyBossTransition(3, 0, 631, 2));

@@ -20,8 +20,8 @@ def test_godmode_edits_are_their_own_region_at_phone_width(tmp_path, theme):
                 pytest.skip("Install Chromium with python -m playwright install chromium")
             mind = _app(tmp_path, loaded=False)
             mind.godmode_config = SimpleNamespace(enabled=True)
-            with (tmp_path / "mind.toml").open("a", encoding="utf-8", newline="\n") as f:
-                f.write("\n[godmode]\nenabled = true\n")  # the console reads it at its start
+            from shipped_off import merge
+            merge(tmp_path / "mind.toml", {"godmode": {"enabled": True}})  # the console reads it at its start
             loop = asyncio.get_running_loop()
             class Link:
                 def locate(self, pids):

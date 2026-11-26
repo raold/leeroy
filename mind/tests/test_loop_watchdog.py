@@ -47,14 +47,14 @@ def rig(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("raw,on", [
-    ("", False), ("[watchdog]\nenabled=true", True), ("[watchdog]\nenabled=false", False),
+    ("", True), ("[watchdog]\nenabled=true", True), ("[watchdog]\nenabled=false", False),
     ('[watchdog]\nenabled="true"', False), ("[watchdog]\nenabled=1", False),
     ("[watchdog]\nenabled=true\nextra=1", False), ("watchdog=1", False),
     ("[watchdog", False),
 ])
-def test_config_is_opt_in_and_fail_closed(tmp_path, raw, on):
+def test_config_is_on_by_default_and_fail_closed(tmp_path, raw, on):
     path = tmp_path / "mind.toml"
-    assert not load(path).enabled
+    assert load(path).enabled  # on by default (2026-11-25)
     path.write_text(raw, encoding="utf-8")
     assert load(path).enabled is on
     if on:
@@ -153,6 +153,7 @@ def test_service_wrapper_closes_on_failure(tmp_path, monkeypatch):
 
 
 def test_disabled_monitor_opens_no_file_and_owns_no_timer(tmp_path):
+    (tmp_path / "mind.toml").write_text("[watchdog]\nenabled=false\n", encoding="utf-8")
     with W.monitor(tmp_path):
         assert W._owner is None
     assert not (tmp_path / "logs").exists()

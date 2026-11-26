@@ -10,13 +10,13 @@ promotes it live only through the weekly cycle's own gate. Spec: human-likeness 
 
 ```toml
 [lab]
-enabled = true     # default false: the night's lab stages (read at mind start)
+enabled = true     # the default: the night's lab stages (read at mind start)
 minutes = 40       # the hard budget of one night's lab (5-180)
 pairs = 12         # (script, member) pairs a night, each run once per arm (2-60)
 judge = 6          # pairs per arm the blind judge reads (0-60, never more than pairs)
 variants = 3       # prompt variants proposed a night (0-5; 0 only measures)
 grader = "rubric"  # what grades her answers: "tells" (lab/judge.py, live model) or "rubric"
-promote = false    # true: a winning variant becomes an arm of the learn bandit
+promote = false    # owner ruling 2026-11-25 (true: a winning variant becomes an arm of the learn bandit)
 ```
 
 An unknown key or a bad value reads the whole table as the defaults with the lab off. So does

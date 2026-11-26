@@ -72,7 +72,7 @@ export class Discord {
     });
     this.categories = []; this.dms = []; this.members = []; this.human = { guid: 0, name: "" };
     this.windows = new Map(); this.error = ""; this.loaded = false; this.missing = [];
-      this.photos = false;
+    this.photos = false; this.videos = false; this.videos_off = "";
     this.voice_notes = false;
     this.custom_emoji = false;
     this.groups = []; this.groups_enabled = false;
@@ -84,6 +84,8 @@ export class Discord {
   }
   adopt(data, thread) {
     this.photos = data.photos === true;
+    this.videos = this.photos && data.videos === true;
+    this.videos_off = this.photos ? str(data.videos_off) : "";
     this.voice_notes = data.voice_notes === true;
     this.custom_emoji = data.custom_emoji === true;
     this.groups_enabled = data.groups_enabled === true;

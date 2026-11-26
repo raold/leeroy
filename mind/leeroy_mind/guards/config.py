@@ -1,4 +1,4 @@
-"""Standalone guard settings; malformed input disables the entire package."""
+"""Standalone guard settings: on when missing; malformed input disables the entire package."""
 from dataclasses import dataclass, field, fields
 import math
 import logging
@@ -15,15 +15,15 @@ STOCK_DAILY_CAP = 3
 def _invalid(table):
     keys = ",".join(sorted(str(key) for key in table)) if isinstance(table,dict) else "guards"
     logging.getLogger("leeroy_mind").warning("guards_invalid keys=%s",keys)
-    return GuardsCfg()
+    return OFF
 
 
 @dataclass(frozen=True)
 class GuardsCfg:
-    enabled: bool = False
-    # The inherited relevance thresholds were measured with word-hash vectors.
-    # Semantic enforcement needs its own explicit opt-in after caller calibration.
-    semantic_enabled: bool = False
+    enabled: bool = True
+    # The inherited relevance thresholds were measured with word-hash vectors; semantic
+    # enforcement is its own switch (on since 2026-11-25: shipped features default on).
+    semantic_enabled: bool = True
     repeat_overlap: float = repetition.NGRAM_OVERLAP
     repeat_cosine: float = repetition.EMBEDDING_COSINE
     parent_cosine: float = nonsequitur.PARENT_COSINE
@@ -35,6 +35,9 @@ class GuardsCfg:
     gag_caps: dict[int, int] = field(default_factory=dict)
     # guards/phrases.py: 2-5 word phrases and the stock list, rationed (2026-11-15).
     phrase_cooldown: bool = True
+
+
+OFF = GuardsCfg(enabled=False, semantic_enabled=False)
 
 
 def parse_config(table) -> GuardsCfg:
@@ -71,5 +74,7 @@ def parse_config(table) -> GuardsCfg:
 def load_guards_config(path: Path) -> GuardsCfg:
     try:
         return parse_config(tomllib.loads(Path(path).read_text(encoding='utf-8-sig')).get('guards', {}))
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+    except FileNotFoundError:
         return GuardsCfg()
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+        return OFF

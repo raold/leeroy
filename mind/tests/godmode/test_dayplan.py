@@ -48,12 +48,13 @@ def test_raid_nights_always_win(store, night, start, end):
 
 def test_off_means_no_stage():
     from leeroy_mind.config import LifeCfg
-    assert LifeCfg().day_plans is False
+    assert LifeCfg().day_plans is True  # on by default (2026-11-25); switched off here
     runner = SimpleNamespace(add_stage=lambda *a, **kw: pytest.fail("disabled stage added"))
     plan.attach(runner, SimpleNamespace(day_plans=False), lambda: pytest.fail("places loaded"))
 
 
 from nightly.conftest import h  # the real night context, with a scripted reflection client
+from shipped_off import off
 
 
 def test_nightly_stage_commits_shared_enum_blocks_once(h):
@@ -183,7 +184,7 @@ def test_day_switch_reloads_in_both_directions_on_the_real_app(h):
     script = day_context(h)
     path = h.settings.data_dir / "mind.toml"
     def write(on):
-        path.write_text(f"[realm]\nenabled=true\n[life]\nday_plans={str(on).lower()}\n")
+        path.write_text(off(f"[realm]\nenabled=true\n[life]\nday_plans={str(on).lower()}\n"))
     def stages():
         return [s for s in app.night_runner.stages if s.name == "day_plans"]
     def context():

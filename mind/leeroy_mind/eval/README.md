@@ -188,3 +188,86 @@ marked by `common.mark_scratch`, which only the `eval talk` copy helper calls.
   recalibrated before any gate uses them.
 - A `--baseline` that is not a talk report (missing detector rates) is refused with
   `baseline_malformed`.
+
+## Frozen talk bank
+
+A fixed, versioned set of the guild's own turns with a locked test half, so a model or prompt
+change is chosen on held-out data and never tuned to the test set.
+
+```sh
+python -m leeroy_mind eval bank build --data-dir "$D" [--since 14] [--version V] [--force]
+python -m leeroy_mind eval bank stats --data-dir "$D" [--version V]
+python -m leeroy_mind eval bank run --data-dir "$D" --model M --split dev [--samples N] [--version V]
+python -m leeroy_mind eval bank run --data-dir "$D" --model M --split test --confirm-final
+```
+
+**What it freezes.** The bake-off's stored inputs (`bakeoff/README.md`): turns captured with
+`[bakeoff] capture = true` in the last `--since` days (default 14, the capture's own retention)
+whose every line is in the Turing corpus, chosen as `bakeoff run` chooses them, and kept where the
+turn answers his line (the line just before it in its conversation is his: the unit lab/judge.py
+compares). A case holds the generation's first request (messages and options, before any retry
+hint; a live beat is never stored), the live model's reply to that request (the **reference**,
+with its model's name), his line, up to five earlier lines of the conversation, the turn's kind
+(`whisper`, `dm`, `gdm`, `discord`, `guild`, `officer`, `party`, `raid`, `say`, `yell`) and what
+a beat needs (his name and possessive, her character name, whether she may flirt with him).
+Every case has `source = "turn"`: the mind keeps no structured misses log, so there are no miss
+cases yet; `kind` and `source` are where they would go. Build reads mind.db read-only and loads no
+model, so it is safe beside a running mind.
+
+**The split.** Whole conversations go to `dev` (70%) or `test` (30%) by a salted SHA-256 of the
+conversation id: a channel in one of his sessions, a Discord channel or group DM
+(`turing/corpus.py`), and a member's whispers and her Discord DMs with him as one private
+conversation (`private:<guid>`, as AGENTS.md treats them). The salt is made once per build and
+stored in the manifest, so a conversation is never in both splits and the split can be checked
+from the files.
+
+**Files.** Only `<data>/eval/bank/<version>/`: `manifest.json` (format, version, window, salt,
+counts per split, kind and reference model, the beat's num_predict and each split file's
+SHA-256), `dev.jsonl`, `test.jsonl`, and after the first test run `test-runs.log`. The version
+defaults to today's date (`YYYYMMDD`). Building a version that exists is refused; `--force`
+replaces it (a new salt and new cases) and keeps its `test-runs.log`, adding a `rebuilt` line. A
+split file that no longer matches its digest is refused by `run` and flagged by `stats`. **The
+files hold members' lines and his private ones, explicit DMs included**: they stay in the data
+directory, never go to git, chat or an artifact, and nothing prunes them; delete a version's
+folder when it is done with.
+
+**stats** prints counts per split, kind and reference model, whether the files are intact and how
+many test runs were logged. No text.
+
+**run** refuses while the mind runs (its instance lock is held for the whole run), WoW is open or
+the console's Free GPU is set, and when `--model` or the reflection model is not pulled (it never
+pulls). It makes room on the GPU (every loaded model but the embedding model), asks `--model`
+every case of the split with the case's request and options (think false, as live; a seed per
+case and sample, the same for every model; a turn that had a beat live first asks the model its
+own beat, bakeoff/beat.py), unloads it, then compares each answer with the reference through the
+lab judge's pairwise interface (`judge.prefer`, the reflection model, asked A/B and B/A so a judge
+that follows the position counts as no preference), and unloads that too. A reply not given (an
+error, an empty reply, a silence) loses to one given and ties with none; a comparison the judge
+answered neither way, or whose call failed, is undecided and left out. `--samples N` (1-5) asks
+each case N times with different seeds. It prints, numbers only:
+
+```
+bank run: version=20261125 split=dev model=M cases=290 conversations=41 samples=1
+answers: ok=285 silent=3 errors=2 median_words=14 reference_median_words=19
+win_rate=0.5310 ci95_low=0.4720 ci95_high=0.5890 decided=288 conversations=41 undecided=2 judge_errors=0
+kind=dm win_rate=... ci95_low=... ci95_high=... decided=... conversations=...
+```
+
+The **win rate** is the model's mean share against the reference (1 won, 0 lost, 0.5 a tie or a
+split verdict); 0.5 is no difference. Its **95% CI** is a percentile bootstrap (2000 rounds, a
+seed fixed by bank, split and model) that resamples conversations, not turns: turns of one
+conversation are correlated, and resampling them alone would understate the width.
+
+**The locked test half.** `--split test` is refused without `--confirm-final`. With it, a line
+`{"id", "model", "time"}` is appended to `test-runs.log` before a test case is read, and the run
+prints its id. Choose on dev; run test once, at the end.
+
+Limits:
+- The reference is whatever model was live when the turn was captured (stats lists them per
+  split); a bank that spans a model switch compares against a mix.
+- Both sides are compared as the model wrote them (cut back as a long Discord reply is): the live
+  pipeline's repairs, guards, retries and typing run on neither.
+- The judge is the local reflection model. Its same-line preference picked the better answer in
+  72% of decided gold pairs and "the shorter answer" alone did 77% (lab/README.md), so read the
+  win rate beside the median words: a terse model can win on length alone.
+- Only turns that became a line were captured, and only those that answer his line are banked.

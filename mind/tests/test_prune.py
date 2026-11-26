@@ -340,20 +340,22 @@ def test_the_night_takes_its_bounded_share_and_the_files(store, clock, tmp_path)
     assert [r[0] for r in store.conn.execute("SELECT type FROM game_event")] == ["boss"]
 
 
-def test_the_stage_is_off_unless_asked_and_off_for_a_bad_table(tmp_path):
+def test_the_stage_is_on_unless_switched_off_and_off_for_a_bad_table(tmp_path):
     from leeroy_mind.nightly import prune as stage
     path = tmp_path / "mind.toml"
-    assert stage.load(path) == stage.PruneCfg(False, 20_000)
+    assert stage.load(path) == stage.PruneCfg(True, 20_000)  # on by default (2026-11-25)
     for text, want in (("[prune]\nenabled = true\n", stage.PruneCfg(True, 20_000)),
+                       ("[prune]\nenabled = false\n", stage.PruneCfg(False, 20_000)),
                        ("[prune]\nenabled = true\nrows_per_night = 500\n", stage.PruneCfg(True, 500)),
-                       ("[prune]\nenabled = true\nrows_per_night = 0\n", stage.PruneCfg()),
-                       ("[prune]\nenabled = 1\n", stage.PruneCfg()),
-                       ("[prune]\nenabled = true\nbogus = 1\n", stage.PruneCfg()),
-                       ("prune = 3\n", stage.PruneCfg())):
+                       ("[prune]\nenabled = true\nrows_per_night = 0\n", stage.OFF),
+                       ("[prune]\nenabled = 1\n", stage.OFF),
+                       ("[prune]\nenabled = true\nbogus = 1\n", stage.OFF),
+                       ("prune = 3\n", stage.OFF)):
         path.write_text(text, encoding="utf-8")
         assert stage.load(path) == want, text
     added = []
     runner = type("R", (), {"add_stage": lambda self, name, fn, **kw: added.append((name, kw))})()
+    path.write_text("[prune]\nenabled = false\n", encoding="utf-8")
     stage.attach(runner, tmp_path)
     assert added == []
     path.write_text("[prune]\nenabled = true\n", encoding="utf-8")

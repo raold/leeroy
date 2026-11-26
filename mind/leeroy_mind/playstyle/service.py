@@ -47,12 +47,15 @@ def _outcome(job, guids):
 
 
 def enabled(path):
+    """[playstyle] enabled: on when missing; an invalid table or an unreadable file is off."""
     try:
         table = tomllib.loads(path.read_text(encoding='utf-8-sig')).get('playstyle', {})
+    except FileNotFoundError:
+        return True
     except (OSError, UnicodeError, tomllib.TOMLDecodeError):
         return False
     return (isinstance(table,dict) and not set(table)-{'enabled'}
-            and type(table.get('enabled',False)) is bool and table.get('enabled',False))
+            and type(table.get('enabled',True)) is bool and table.get('enabled',True))
 
 
 def _saved(store):

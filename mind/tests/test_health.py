@@ -30,6 +30,7 @@ from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing import control
 from leeroy_mind.testing.fake_clock import FakeClock
+from shipped_off import off
 
 NOW = 1_793_900_000.0  # 2026-11-05
 WORLD_START = NOW - 3600
@@ -168,7 +169,8 @@ class Rig:
             path.write_text(f"{pid}\n", encoding="ascii")
 
     def write_toml(self, extra: str = "") -> None:
-        (self.data / "mind.toml").write_text(self.toml + extra, encoding="utf-8")
+        # every switch that defaults on since 2026-11-25 off unless the test sets it
+        (self.data / "mind.toml").write_text(off(self.toml + extra), encoding="utf-8")
 
     def conf(self, text: str) -> None:
         (self.bin / "configs" / "modules" / "mod_leeroy.conf").write_text(text, encoding="utf-8")
@@ -717,11 +719,12 @@ def test_a_failed_or_unreadable_gate_records_nothing_and_is_a_note(rig):
 def test_telemetry_off_either_side_is_a_note(rig):
     rig.db("DELETE FROM tg_pull")
     rig.conf("Leeroy.Telemetry.Enable = 0\n")
-    assert rig.run()["telemetry"].status == NOTE
-    rig.conf("# no key: native's default, off\n")
-    assert rig.run()["telemetry"].status == NOTE
+    checks = rig.run()
+    assert checks["telemetry"].status == NOTE and "off in mod_leeroy.conf" in checks["telemetry"].text
+    rig.conf("# no key: native's default, on (2026-11-25)\n")
+    assert "off in mod_leeroy.conf" not in rig.run()["telemetry"].text
     rig.conf("Leeroy.Telemetry.Enable = 1\n")
-    rig.toml = "[voice]\nenabled = true\n"  # [training] is off by default
+    rig.toml = "[voice]\nenabled = true\n"  # [training] off: the rig writes the shipped switches off
     rig.write_toml()
     checks = rig.run()
     assert checks["telemetry"].status == NOTE and "off in mind.toml" in checks["telemetry"].text

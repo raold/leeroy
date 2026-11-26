@@ -38,7 +38,7 @@ void Refused(std::uint32_t guid, std::string const& reason)
 
 void ReloadDeathLoop()
 {
-    enabled = sConfigMgr->GetOption<bool>("Leeroy.CastDeathLoop.Enable", false);
+    enabled = sConfigMgr->GetOption<bool>("Leeroy.CastDeathLoop.Enable", true);
     // Reload never resets deaths, the rolling budget or per-member cooldowns.
     untilPass = 0;
 }

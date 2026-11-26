@@ -81,7 +81,7 @@ def test_upload_refusals(data, body, status):
 def test_upload_gates(data, mode):
     async def go():
         if mode == 'off':
-            (data/'mind.toml').write_text('')
+            (data/'mind.toml').write_text('[photos]\nenabled=false\n')
         app = build(data, link=FakeLink())
         if mode == 'control':
             app.controls.enabled = False

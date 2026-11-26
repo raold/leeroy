@@ -5,9 +5,11 @@ against this fixture's database. No real process/service or model endpoint is us
 """
 import asyncio
 import sys
+import tomllib
 from pathlib import Path
 
 from conftest import HUMAN, run
+from shipped_off import merge
 from console.e2e.harness import Rehearsal
 from console.rig import http
 from console.test_console_ops_actions import cli_process, post
@@ -21,10 +23,8 @@ from leeroy_mind.selfies.store import queue_more
 class OpsRehearsal(Rehearsal):
     async def start_mind(self):
         path = self.data/"mind.toml"
-        text = path.read_text()
-        if "ops_actions" not in text:
-            path.write_text(text.replace("[selfies]\nenabled = true", "[selfies]\nenabled = true\nbooth = true")+
-                            "\n[control]\nops_actions=true\n")
+        if not tomllib.loads(path.read_text()).get("control", {}).get("ops_actions"):
+            merge(path, {"selfies": {"booth": True}, "control": {"ops_actions": True}})
         await super().start_mind()
         await self.bridge.push({"type":"logout","guid":HUMAN,"human":True})
         await until(lambda: not self.app.world.human_online)

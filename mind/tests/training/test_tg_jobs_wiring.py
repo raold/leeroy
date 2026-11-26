@@ -34,7 +34,7 @@ from .test_tg_service import enable
 @pytest.fixture
 def jobs(fake):
     fake.clock = FakeClock(datetime(2026, 11, 4, 9, tzinfo=timezone.utc))
-    fake.cfg = TrainingConfig(enabled=True)
+    fake.cfg = TrainingConfig(enabled=True, playbooks=False)
     fake.connection_epoch = 1
     fake.feed = lambda ev: None
     fake.disconnect = AsyncMock()

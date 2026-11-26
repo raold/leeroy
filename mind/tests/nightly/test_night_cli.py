@@ -18,6 +18,7 @@ from leeroy_mind.nightly.store import ledger_add, log_grounding, run_begin, run_
 from leeroy_mind.testing.fake_llm import FakeLLM
 from nightly.conftest import scripted
 from nightly.test_night_enrich import APPEARANCE, ENRICHED
+from shipped_off import merge, off
 
 NIGHT = "2026-10-29"
 WEEK = "2026-W44"
@@ -26,7 +27,7 @@ WEEK = "2026-W44"
 @pytest.fixture
 def data(h, monkeypatch):
     root = h.settings.data_dir
-    (root / "mind.toml").write_text('[human]\nnickname="Testy"\nreal_name="Quillon"\npronouns="he"\n',
+    (root / "mind.toml").write_text(off('[human]\nnickname="Testy"\nreal_name="Quillon"\npronouns="he"\n'),
                                     encoding="utf-8")
     h.clock.set(datetime(2026, 11, 2, 12, tzinfo=timezone.utc).timestamp())
     monkeypatch.setattr(cli, "SystemClock", lambda: h.clock)
@@ -87,8 +88,7 @@ def test_standalone_runner_attaches_enabled_claims_after_notes(h, data, tiny_pip
         invoked.append(ctx.night)
     monkeypatch.setattr(claims_stage, "stage_claims", claims)
     monkeypatch.setattr(pipeline, "STAGES", (Stage("notes", pipeline.STAGES[0].fn, None),))
-    with (data / "mind.toml").open("a", encoding="utf-8") as config:
-        config.write("\n[claims]\nenabled=true\n")
+    merge(data / "mind.toml", {"claims": {"enabled": True}})
     assert cli.nightly_main(["run", "--night", NIGHT], make_llm=lambda: client(h)) == 0
     assert invoked == [NIGHT]
 
@@ -104,8 +104,7 @@ def test_manual_night_attaches_couples_and_restores_the_romance_pin(h, data, tin
     monkeypatch.setattr(couples, 'stage_couples', step)
     monkeypatch.setattr(drama_config, '_PINNED', not enabled)
     monkeypatch.setattr(pipeline, 'STAGES', (Stage('romance', pipeline.STAGES[0].fn, None),))
-    with (data / 'mind.toml').open('a', encoding='utf-8') as config:
-        config.write(f'\n[drama]\nmember_romance={str(enabled).lower()}\n')
+    merge(data / 'mind.toml', {'drama': {'member_romance': enabled}})
     assert cli.nightly_main(['run', '--night', NIGHT], make_llm=lambda: client(h)) == 0
     assert invoked == ([True] if enabled else [])
     assert drama_config.pinned() is not enabled
@@ -121,8 +120,7 @@ def test_standalone_runner_attaches_the_threads_recorder_after_encounters(
         invoked.append((ctx.night, ctx.settings.drama_threads))
     monkeypatch.setattr(pulls, "stage_pulls", record)
     monkeypatch.setattr(pipeline, "STAGES", (Stage("encounters", pipeline.STAGES[0].fn, None),))
-    with (data / "mind.toml").open("a", encoding="utf-8") as config:
-        config.write(f'\n[drama]\nthreads = "{mode}"\n')
+    merge(data / "mind.toml", {"drama": {"threads": mode}})
     assert cli.nightly_main(["run", "--night", NIGHT], make_llm=lambda: client(h)) == 0
     assert invoked == [(NIGHT, "record")] * runs
 

@@ -69,9 +69,11 @@ def sent_photos(app, guid):
         "WHERE m.channel=? AND m.author=? AND m.origin='mind'", (f'dm:{guid}', guid)).fetchall()
 
 
-def test_switch_defaults_off_and_needs_requests(tmp_path):
+def test_switch_defaults_on_and_needs_requests(tmp_path):
     path = tmp_path / 'mind.toml'
     path.write_text('[photos]\nsend=true\nrequests=true\n')
+    assert load_photos_config(path).unsolicited is True  # on by default (2026-11-25)
+    path.write_text('[photos]\nsend=true\nrequests=true\nunsolicited=false\n')
     assert load_photos_config(path).unsolicited is False
     path.write_text('[photos]\nsend=true\nrequests=true\nunsolicited=true\n')
     assert load_photos_config(path).unsolicited is True

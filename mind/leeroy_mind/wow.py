@@ -34,8 +34,9 @@ def class_roles(cls: int | str) -> frozenset[str]:
 # (SetBossState), which repeats across raids, so a boss is named by (map, boss_id).
 # Indexes are the BOSS_/DATA_ enums in the core's instance scripts; indexes that are not
 # a fight (ICC gauntlets, Halion's intro stages) are left out on purpose and listed in
-# NON_FIGHT_STEPS. Vault of Archavon never calls SetBossState (it uses SetData), so its
-# entries are kept for completeness but the bridge cannot reach them.
+# NON_FIGHT_STEPS. Vault of Archavon never calls SetBossState (it uses SetData): mod-leeroy
+# reports its kills from the encounter table instead (instance_encounters, boss_id the
+# DungeonEncounter.dbc bit, which is the script's own order), never an engage or a wipe.
 BOSS_NAMES: dict[tuple[int, int], str] = {
     # Icecrown Citadel
     **{(631, i): n for i, n in enumerate((

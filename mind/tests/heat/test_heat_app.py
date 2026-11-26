@@ -33,8 +33,8 @@ def _set(app, scope, target, value):
                  previewed=False)
 
 
-def test_off_by_default_nothing_is_attached_and_heat_is_refused_in_words(tmp_path):
-    app = _heat_app(tmp_path, TOML)
+def test_off_nothing_is_attached_and_heat_is_refused_in_words(tmp_path):
+    app = _heat_app(tmp_path, TOML + "[heat]\nenabled = false\n")
     try:
         assert app.heat is None and app.engine.heat is None and heat_live.current() is None
         out = _set(app, "world", "", 5)
