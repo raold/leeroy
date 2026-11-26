@@ -138,9 +138,10 @@ in the dream, time in reach and sight of her, effective healing on her from the
 core's `OnHeal`, mana cooldowns and potions, lowest mana, top Emerald Vigor and
 Twisted Nightmares stacks), the raid's damage taken by spell and each death's
 killer, and `report.json`. A run is `killed` only with her
-own `DONE` and full health. The live install has `Playerbots.BotCheats` `raid`
-(instant taunts); the dojo keeps stock rules, so its tanks hold adds less well
-than the live raid's.
+own `DONE` and full health. The live install runs `Playerbots.BotCheats` with
+`raid` (a taunt fixes the add on the tank); the dojo's configuration keeps stock
+rules, so the pull gives the ten fixtures that one cheat to match the live raid.
+It touches no healer's mana, health, cast or target.
 
 CI tests the verdict contract and the ordinary disabled build. A green unit test
 job is **not** a running-world acceptance receipt: the private extracted game

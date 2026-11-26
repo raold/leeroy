@@ -726,7 +726,8 @@ struct EncounterRun
         if (!script) { Fail("no native instance script"); return false; }
         instance = leader->GetInstanceId();
         mapDifficulty = uint32(leader->GetMap()->GetDifficulty());
-        if (leader->GetMap()->GetDifficulty() != Wanted()) { Fail("instance difficulty differs from the request"); return false; }
+        if (leader->GetMap()->GetDifficulty() != Wanted())
+        { Fail("instance difficulty differs from the request"); return false; }
         Creature* dragon = leader->GetMap()->GetCreature(script->GetGuidData(10));
         if (!dragon || !dragon->IsAlive() || !dragon->IsInWorld()) return false;
         valithria = dragon->GetGUID();
@@ -735,6 +736,10 @@ struct EncounterRun
         {
             PlayerbotAI* ai = GET_PLAYERBOT_AI(Actor(i));
             if (i != EncounterLeader) ai->SetMaster(leader);
+            // The live install runs Playerbots.BotCheats = "food,taxi,raid"; the dojo's config keeps stock
+            // rules, so the pull gives these ten the live raid cheat (a taunt fixes the add on the tank).
+            // It touches no healer's mana, health, cast or target.
+            ai->SetCheat(BotCheatMask::raid);
             ai->ResetStrategies(false);
             ai->ChangeStrategy("+icc", BOT_STATE_COMBAT);
             ai->ChangeStrategy("+icc", BOT_STATE_NON_COMBAT);
@@ -905,6 +910,7 @@ struct EncounterRun
                 if (Player* p = Actor(i))
                 {
                     p->CombatStop(true);
+                    GET_PLAYERBOT_AI(p)->SetCheat(BotCheatMask::none);
                     GET_PLAYERBOT_AI(p)->SetMaster(nullptr);
                     GET_PLAYERBOT_AI(p)->ChangeStrategy("+passive,+stay", BOT_STATE_NON_COMBAT);
                     if (Group* g = p->GetGroup()) g->Disband();
@@ -985,6 +991,7 @@ struct EncounterRun
         }
         json out = {{"format", 1}, {"kind", "dojo-valithria-encounter"}, {"token", token},
             {"difficulty", difficulty}, {"mode", mode}, {"focus", mode != "before"}, {"portals", mode != "noportals"},
+            {"raid_cheat", true},
             {"state", state},
             {"setup", setup}, {"cleanup", cleanup}, {"failure", failure}, {"outcome", outcome},
             {"instance", instance}, {"map_difficulty", mapDifficulty}, {"engaged", engaged},
