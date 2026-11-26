@@ -2,9 +2,9 @@
 
 Use this checklist in an authorized installation window. The owner must be known offline for the release. The later in-game acceptance pass starts after services are healthy. Keep the private log, backup locations and rollback line with the release owner.
 
-For bank decisions, day plans and member heroics, ship dormant first, then use
-the [staged rollout](ROLLOUT.md): one key change at a time, real behavior and
-return evidence before the next feature, and explicit stop/rollback criteria.
+Shipped features ship on. If one misbehaves after the release, switch it off
+with the [rollback guide](ROLLOUT.md): rollback order, what to check, and which
+switches need a restart or a reload.
 
 ## 1. Establish the release inputs
 
@@ -15,7 +15,7 @@ return evidence before the next feature, and explicit stop/rollback criteria.
   2. [0063](../storage/migrations/0063_decision_job_proof.sql) binds actor and expected result to the original command and repairs premature mail references. The guide's audit correction changes no DDL. A later bank reconciliation repairs a historical attachment label only from the exact positive mail receipt.
   3. [0064](../storage/migrations/0064_day_plans.sql) adds day plans, permits, steps and handoffs.
   4. [0065](../storage/migrations/0065_member_heroics.sql) adds member heroic runs, guarded posts and encounter evidence. Native creates its separate characters-database receipt table on the first admitted start. Its absence before then is expected.
-- [ ] Keep the feature switches at their approved values. All new heroic admission stays off by default. Deployment and a successful migration do not authorize enabling any feature.
+- [ ] Set the live config so every shipped feature's switches are on, except those the owner has explicitly ruled off (an explicit `false` with a comment). A merged feature's code default is on; do not leave a new key unset or false to flip later.
 
 ## 2. Preview and run the release
 
