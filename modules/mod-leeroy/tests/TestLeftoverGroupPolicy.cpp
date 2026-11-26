@@ -33,11 +33,16 @@ LEEROY_TEST(LeftoverGroup_AnyMemberInCombatKeepsIt)
     CHECK_EQ(std::string(LeftoverVerdictCode(LeftoverVerdict::KeepCombat)), std::string("combat"));
 }
 
-LEEROY_TEST(LeftoverGroup_AnyMemberOnInstanceMapKeepsIt)
+LEEROY_TEST(LeftoverGroup_IdleRaidInsideAnInstanceIsDisbanded)
 {
-    auto raid = Raid(); raid[9].inInstance = true;
-    CHECK(DecideLeftoverGroup(raid) == LeftoverVerdict::KeepInstance);
+    CHECK(DecideLeftoverGroup(Raid()) == LeftoverVerdict::Disband); // no map flag exists: an instance alone keeps nothing
+}
+
+LEEROY_TEST(LeftoverGroup_EncounterInProgressKeepsIt)
+{
+    auto raid = Raid(); raid[9].inEncounter = true;
+    CHECK(DecideLeftoverGroup(raid) == LeftoverVerdict::KeepEncounter);
     raid[0].inCombat = true; // combat is reported first when both hold
     CHECK(DecideLeftoverGroup(raid) == LeftoverVerdict::KeepCombat);
-    CHECK_EQ(std::string(LeftoverVerdictCode(LeftoverVerdict::KeepInstance)), std::string("instance"));
+    CHECK_EQ(std::string(LeftoverVerdictCode(LeftoverVerdict::KeepEncounter)), std::string("encounter"));
 }

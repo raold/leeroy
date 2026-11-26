@@ -12,36 +12,36 @@ struct LeftoverMember
     bool reserved = false;   // reserved by a DC test run
     bool driven = false;     // an active DcRun
     bool inCombat = false;
-    bool inInstance = false; // on a dungeon or raid map
+    bool inEncounter = false; // its instance has a boss encounter in progress
 };
 
-enum class LeftoverVerdict { Disband, KeepNotOwned, KeepCombat, KeepInstance };
+enum class LeftoverVerdict { Disband, KeepNotOwned, KeepCombat, KeepEncounter };
 
 inline char const* LeftoverVerdictCode(LeftoverVerdict verdict)
 {
     switch (verdict)
     {
         case LeftoverVerdict::KeepCombat: return "combat";
-        case LeftoverVerdict::KeepInstance: return "instance";
+        case LeftoverVerdict::KeepEncounter: return "encounter";
         default: return "owned";
     }
 }
 
 // A group is a restart leftover only when every member is cast, nobody drives or reserves it, and nobody is
-// fighting or standing in an instance: a leader handover mid-boss must not disband the raid.
+// fighting or in a boss encounter: a leader handover mid-boss must not disband the raid.
 template <class Range>
 LeftoverVerdict DecideLeftoverGroup(Range const& members)
 {
-    bool owned = true, combat = false, instance = false;
+    bool owned = true, combat = false, encounter = false;
     for (auto const& m : members)
     {
         if (m.human || !m.cast || m.reserved || m.driven) owned = false;
         if (m.inCombat) combat = true;
-        if (m.inInstance) instance = true;
+        if (m.inEncounter) encounter = true;
     }
     if (!owned) return LeftoverVerdict::KeepNotOwned;
     if (combat) return LeftoverVerdict::KeepCombat;
-    if (instance) return LeftoverVerdict::KeepInstance;
+    if (encounter) return LeftoverVerdict::KeepEncounter;
     return LeftoverVerdict::Disband;
 }
 }

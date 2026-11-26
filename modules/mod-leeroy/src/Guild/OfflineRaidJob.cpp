@@ -2611,7 +2611,8 @@ void SweepLeftoverGroups()
                 if (PlayerbotAI* ai = GET_PLAYERBOT_AI(member); ai && DcRun::Of(ai).enabled)
                     state.driven = true; // An actively driven raid is not a leftover group from a server restart.
                 state.inCombat = member->IsInCombat();
-                state.inInstance = member->IsInWorld() && member->GetMap() && member->GetMap()->IsDungeon();
+                { InstanceScript* script = member->IsInWorld() ? member->GetInstanceScript() : nullptr;
+                  state.inEncounter = script && script->IsEncounterInProgress(); }
             }
             members.push_back(state);
         }
