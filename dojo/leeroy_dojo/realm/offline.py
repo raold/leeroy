@@ -17,6 +17,7 @@ from .offline_fixture import FixtureCheckpoint
 TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
            "offline-native-stall": ("offline-native-stall", 649, None),
            "toc-anub-intro": ("toc-anub-intro", 649, None),
+           "toc-anub-pass": ("toc-anub-pass", 649, None),
            "naxx-gothik-pass": ("naxx-gothik-pass", 533, None),
            "naxx-gothik-pass-control": ("naxx-gothik-pass-control", 533, None),
            "toc-full": ("toc-full", 649, None), "ulduar-full": ("ulduar-full", 603, None),
@@ -60,6 +61,9 @@ def reached(observation, *, target, token):
     if target == "toc-anub-intro":
         from .offline_toc import reached_intro
         return reached_intro(observation)
+    if target == "toc-anub-pass":
+        from .offline_toc import reached_anub
+        return reached_anub(observation)
     if target == "offline-native-stall":
         from .offline_stall import reached_stall
         return reached_stall(observation)
@@ -342,14 +346,14 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                             raise world.WorldError("requested worm support was not active during measurement")
                         report["reached"] = True
                         report["milestone"] = observed
-                        if target not in FULL_ROUTES and target != "offline-native-stall":
+                        if target not in FULL_ROUTES and target not in {"offline-native-stall", "toc-anub-pass"}:
                             client.command("dojo offline stop")
                     if not native.get("active", True):
                         report["terminal"] = observed
                         report["cleanup"] = native.get("cleanup") is True
                         if target.startswith("naxx-gothik-pass"):
                             report["cleanup"] = report["cleanup"] and observed.get("naxx_pass", {}).get("strategies_restored") is True
-                        if target == "toc-anub-intro":
+                        if target in {"toc-anub-intro", "toc-anub-pass"}:
                             report["cleanup"] = report["cleanup"] and observed.get("toc_intro", {}).get("strategies_restored") is True
                         if target == "offline-native-stall":
                             report["cleanup"] = report["cleanup"] and observed.get("native_stall", {}).get("released") is True

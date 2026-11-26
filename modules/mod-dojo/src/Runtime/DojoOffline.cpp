@@ -427,7 +427,7 @@ struct OfflineFixture
         bool const fullRun = scenario == "toc-full" || scenario == "toc-full-worms" || scenario == "ulduar-full";
         bool const wormTrial = scenario == "toc-worms" || scenario == "toc-full-worms";
         bool const naxxTrial = scenario == "naxx-gothik-pass" || scenario == "naxx-gothik-pass-control";
-        bool const tocIntroTrial = scenario == "toc-anub-intro";
+        bool const tocIntroTrial = scenario == "toc-anub-intro" || scenario == "toc-anub-pass";
         bool const stallTrial = scenario == "offline-native-stall";
         bool const valithriaTrial = scenario == "icc-valithria-frontier";
         if (wormTrial && !DOJO_HAS_TOC_WORM_SUPPORT) return "toc_worm_feature_missing_from_candidate";
@@ -465,6 +465,7 @@ struct OfflineFixture
         naxxPass.control = scenario == "naxx-gothik-pass-control";
         tocIntro = {};
         tocIntro.state = tocIntroTrial ? "pending" : "none";
+        tocIntro.completeEncounter = scenario == "toc-anub-pass";
         stall = {};
         stall.state = stallTrial ? "pending" : "none";
         scriptedWipe = restartingSeen = false; restartsAtWipe = wipeBoss = mainTankAtWipe = 0;
@@ -551,7 +552,7 @@ struct OfflineFixture
             if (auto* p = Actor(i))
             {
                 json bosses = json::array(), auras = json::array();
-                for (uint32 spell : {66823u, 67618u, 67619u, 67620u, 66830u, 66869u})
+                for (uint32 spell : {66823u, 67618u, 67619u, 67620u, 66830u, 66869u, 67574u})
                     if (p->HasAura(spell)) auras.push_back(spell);
                 if (auto* script = p->GetInstanceScript())
                     for (uint32 b = 0; b < script->GetEncounterCount(); ++b) bosses.push_back(uint32(script->GetBossState(b)));
@@ -742,8 +743,10 @@ public:
         std::lock_guard<std::recursive_mutex> lock(fixture.mutex);
         auto* leader = fixture.Actor(1);
         if (fixture.state != "running" || fixture.map != 649 || !leader || !spell || !caster || !info
-            || caster->GetEntry() != 35176 || caster->GetMap() != leader->GetMap() || info->Id != 66881
+            || caster->GetMap() != leader->GetMap()
             || !Leeroy::Guild::OfflineRaidOwns(leader->GetGUID().GetCounter())) return;
+        if (completed) fixture.tocIntro.Cast(caster, info->Id);
+        if (caster->GetEntry() != 35176 || info->Id != 66881) return;
         float radius = 0.f;
         for (SpellEffectInfo const& effect : info->Effects)
             if (effect.IsTargetingArea())

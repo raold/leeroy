@@ -7,6 +7,7 @@
 #include "CharacterCache.h"
 #include "InstanceScript.h"
 #include "Map.h"
+#include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
@@ -16,6 +17,8 @@
 #include "Ai/Dungeon/DungeonClear/Data/Events/DungeonEventTables.h"
 #include <algorithm>
 #include <array>
+#include <set>
+#include <map>
 
 // Prepare the completed arena, then let the real floor-break scene, dungeon-clear
 // descent and chamber driver run. No player movement or boss action is supplied
@@ -25,10 +28,25 @@ struct DojoTocIntro
     std::string state = "none";
     uint32 setupMs = 0, measuredMs = 0, samples = 0, maxGap = 0, triggerSamples = 0, emergeMs = 0, engageMs = 0;
     bool initiallyBlocked = false, emerged = false, engaged = false, nativeSpawn = false;
+    bool completeEncounter = false;
+    uint32 instanceId = 0, bossStartHealth = 0, bossLeastHealth = 0;
+    std::set<uint64> groundedSpheres, stoppedSpikes;
+    std::set<ObjectGuid> pendingGrounds;
+    std::map<ObjectGuid, ObjectGuid> pendingStops;
     ObjectGuid bossGuid;
     std::array<bool, 10> held{};
     std::array<uint64, 10> epochs{};
     std::array<std::array<std::array<bool, 3>, 2>, 10> strategies{};
+
+    void Cast(Unit* caster, uint32 spell)
+    {
+        if (!completeEncounter || state != "ready" || !caster || caster->GetMapId() != 649
+            || caster->GetInstanceId() != instanceId) return;
+        if (caster->GetEntry() == 34606 && spell == 66193)
+            pendingGrounds.insert(caster->GetGUID());
+        if (caster->GetEntry() == 34660 && spell == 66181 && caster->GetVictim())
+            pendingStops[caster->GetGUID()] = caster->GetVictim()->GetGUID();
+    }
 
     bool Release(std::array<Player*, 10> const& actors)
     {
@@ -75,9 +93,24 @@ struct DojoTocIntro
         if (state == "ready")
         {
             measuredMs += diff; ++samples; maxGap = std::max(maxGap, diff);
+            for (auto guid : pendingGrounds)
+                if (auto* sphere = leader->GetMap()->GetCreature(guid); sphere && sphere->IsAlive()
+                    && sphere->HasAura(65882) && sphere->GetPositionZ() < 146.0f)
+                    groundedSpheres.insert(guid.GetRawValue());
+            for (auto const& [guid, victimGuid] : pendingStops)
+            {
+                auto* spike = leader->GetMap()->GetCreature(guid);
+                auto* victim = ObjectAccessor::GetPlayer(leader->GetMap(), victimGuid);
+                if (spike && spike->IsAlive() && !spike->HasAura(65921) && victim && victim->IsAlive()
+                    && !victim->HasAura(67574)
+                    && spike->GetMotionMaster()->GetCurrentMovementGeneratorType() == IDLE_MOTION_TYPE)
+                    stoppedSpikes.insert(guid.GetRawValue());
+            }
             auto* boss = instance->GetCreature(DATA_ANUBARAK);
-            if (!boss || boss->GetGUID() != bossGuid || !boss->IsAlive())
+            if (!boss || boss->GetGUID() != bossGuid
+                || (!boss->IsAlive() && !(completeEncounter && instance->GetBossState(BOSS_ANUBARAK) == DONE)))
             { error = "toc_intro_native_boss_lost"; return; }
+            bossLeastHealth = std::min(bossLeastHealth, boss->GetHealth());
             for (uint32 slot = 0; slot < BOSS_ANUBARAK; ++slot)
                 if (instance->GetBossState(slot) != DONE)
                 { error = "toc_intro_prerequisite_reactivated"; return; }
@@ -86,7 +119,8 @@ struct DojoTocIntro
             if (!emerged && leader->IsValidAttackTarget(boss)) { emerged = true; emergeMs = measuredMs; }
             if (!engaged && boss->IsInCombat() && instance->GetBossState(BOSS_ANUBARAK) == IN_PROGRESS)
             { engaged = true; engageMs = measuredMs; }
-            if (measuredMs > 120000) error = "toc_intro_surface_or_pull_timeout";
+            if (measuredMs > (completeEncounter ? 900000u : 120000u))
+                error = completeEncounter ? "toc_anub_kill_timeout" : "toc_intro_surface_or_pull_timeout";
             return;
         }
         setupMs += diff;
@@ -143,6 +177,8 @@ struct DojoTocIntro
         if (!boss || !boss->IsAlive() || !summon || !tirion || summon->GetSummonerGUID() != tirion->GetGUID())
         { error = "toc_intro_not_native_summon"; Release(actors); return; }
         nativeSpawn = true; bossGuid = boss->GetGUID();
+        instanceId = boss->GetInstanceId();
+        bossStartHealth = bossLeastHealth = boss->GetHealth();
         initiallyBlocked = !leader->IsValidAttackTarget(boss);
         if (!initiallyBlocked || !Release(actors)) { error = "toc_intro_setup_not_blocked_or_restored"; return; }
         state = "ready";
@@ -154,6 +190,9 @@ struct DojoTocIntro
             {"max_gap_ms", maxGap}, {"trigger_samples", triggerSamples}, {"initially_blocked", initiallyBlocked},
             {"native_spawn", nativeSpawn}, {"emerged", emerged}, {"emerge_ms", emergeMs},
             {"engaged", engaged}, {"engage_ms", engageMs}, {"setup_bosses", {0, 1, 2, 3}},
+            {"complete_encounter", completeEncounter}, {"boss_start_health", bossStartHealth},
+            {"boss_least_health", bossLeastHealth}, {"grounded_spheres", groundedSpheres.size()},
+            {"stopped_spikes", stoppedSpikes.size()},
             {"strategies_restored", std::none_of(held.begin(), held.end(), [](bool value) { return value; })}};
     }
 };
