@@ -767,12 +767,13 @@ struct EncounterRun
                 m.maxMana = p->getPowerType() == POWER_MANA ? p->GetMaxPower(POWER_MANA) : 0;
                 m.isHeal = PlayerbotAI::IsHeal(p);
             }
-        // A member close to an archmage may already have started it; then the core is pulling it.
+        // A member close to an archmage may already have started it; the trigger still zones the whole
+        // raid in, or a lone engagement can drop out of combat and reset her encounter.
         earlyPull = script->GetBossState(10) == IN_PROGRESS;
         // Belt and braces with the account's skip permission: the lower-spire states, set in the same tick
         // as the pull (a lower-spire boss that loads later resets its own state, as raid acceptance found).
         for (uint32 boss = 0; boss < 4; ++boss) script->SetBossState(boss, DONE);
-        if (!earlyPull) trigger->AI()->DoZoneInCombat();
+        trigger->AI()->DoZoneInCombat();
         Phase("observe");
     }
 
@@ -829,6 +830,10 @@ struct EncounterRun
             Sample(sampleMs, dragon);
             sampleMs = 0;
         }
+        // The core may refuse the first zone-in (a member still between maps); repeat it every 3 s.
+        if (!engaged && pullMs / 3000 != (pullMs - diff) / 3000)
+            if (Creature* trigger = map->GetCreature(script->GetGuidData(35)))
+                trigger->AI()->DoZoneInCombat();
         if (!engaged && pullMs > 60000) { Fail("the encounter never engaged"); return; }
         if (outcome.empty())
         {
