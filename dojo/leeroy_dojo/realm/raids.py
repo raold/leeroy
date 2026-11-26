@@ -175,12 +175,13 @@ def run(layout, *, log=print):
     return report
 
 
-ENCOUNTER_RUNS = ("10n:before", "10n:after", "10h:before", "10h:after")
-ENCOUNTER_EXTRA = ("10n:noportals", "10h:noportals")
+ENCOUNTER_RUNS = ("10n:after", "10n:adds", "10h:after", "10h:adds")
+ENCOUNTER_EXTRA = ("10n:before", "10h:before", "10n:noportals", "10h:noportals")
+TANK_SLOTS = (3, 4)
 ENCOUNTER_DEADLINE_S = 25 * 60
 
 
-def encounter_verdict(observation, *, token, difficulty, mode):
+def encounter_verdict(observation, *, token, difficulty, mode, owner_buffs=False):
     """A full Valithria pull: setup, real engagement and her own DONE state, or why it did not get there.
 
     `ok` means the harness ran and cleaned up; `killed` means she reached full health in that pull
@@ -189,7 +190,8 @@ def encounter_verdict(observation, *, token, difficulty, mode):
     problems = []
     for key, expected in (("format", 1), ("kind", "dojo-valithria-encounter"), ("token", token),
                           ("difficulty", difficulty), ("mode", mode), ("focus", mode != "before"),
-                          ("portals", mode != "noportals"),
+                          ("portals", mode != "noportals"), ("adds", mode == "adds"),
+                          ("owner_buffs", owner_buffs),
                           ("state", "done"), ("setup", True), ("cleanup", True), ("engaged", True)):
         if key not in o or type(o[key]) is not type(expected) or o[key] != expected:
             problems.append(f"{key}: expected {expected!r}")
@@ -215,6 +217,8 @@ def encounter_verdict(observation, *, token, difficulty, mode):
     killed = (not problems and o["outcome"] == "done" and type(o.get("peak_hp")) in (int, float)
               and o["peak_hp"] >= 99.5)
     healers = [m for m in members if m.get("healer")]
+    deaths = o.get("deaths") if type(o.get("deaths")) is list else []
+    tanks = {members[i].get("name") for i in TANK_SLOTS if i < len(members)}
     summary = dict(
         outcome=o.get("outcome"), pull_s=round(o.get("pull_ms", 0) / 1000, 1), start_hp=start,
         end_hp=o.get("hp"), peak_hp=o.get("peak_hp"),
@@ -226,7 +230,10 @@ def encounter_verdict(observation, *, token, difficulty, mode):
         mana_cooldowns=sum(m.get("mana_cooldowns", 0) for m in healers),
         mana_potions=sum(m.get("mana_potions", 0) for m in healers),
         max_twisted_nightmares=max((m.get("max_twisted_nightmares", 0) for m in healers), default=0),
-        max_emerald_vigor=max((m.get("max_emerald_vigor", 0) for m in healers), default=0))
+        max_emerald_vigor=max((m.get("max_emerald_vigor", 0) for m in healers), default=0),
+        first_death_s=round(deaths[0].get("ms", 0) / 1000, 1) if deaths else None,
+        tank_deaths=[[d.get("name"), round(d.get("ms", 0) / 1000, 1), d.get("killer")] for d in deaths
+                     if d.get("name") in tanks])
     return {"ok": not problems, "killed": killed, "problems": problems, "summary": summary}
 
 
@@ -237,8 +244,8 @@ def parse_encounter(text):
     return json.loads(rows[0])
 
 
-def encounter(layout, runs=ENCOUNTER_RUNS, *, item_level=245, log=print):
-    """Full Valithria pulls of one fixed ten-player bot raid, before and after the healer focus switch."""
+def encounter(layout, runs=ENCOUNTER_RUNS, *, item_level=245, owner_buffs=False, log=print):
+    """Full Valithria pulls of one fixed ten-player bot raid with the healer focus and adds switches."""
     for item in runs:
         if item not in ENCOUNTER_RUNS + ENCOUNTER_EXTRA:
             raise LayoutError(f"unknown encounter run {item!r}; use {', '.join(ENCOUNTER_RUNS + ENCOUNTER_EXTRA)}")
@@ -258,7 +265,7 @@ def encounter(layout, runs=ENCOUNTER_RUNS, *, item_level=245, log=print):
     out.mkdir(parents=True, exist_ok=False)
     results = []
     report = dict(kind="dojo-valithria-encounters", format=1, ok=False, source=source, preflight=preflight,
-                  item_level=item_level, runs=results, stopped=False, out=str(out))
+                  item_level=item_level, owner_buffs=owner_buffs, runs=results, stopped=False, out=str(out))
     started = False
     try:
         started = True
@@ -267,9 +274,10 @@ def encounter(layout, runs=ENCOUNTER_RUNS, *, item_level=245, log=print):
             for item in runs:
                 difficulty, mode = item.split(":")
                 token = uuid.uuid4().hex
-                name = f"{difficulty}-{mode}"
+                name = f"{difficulty}-{mode}" + ("-buffed" if owner_buffs else "")
                 log(f"valithria {name}: starting")
-                reply = client.command(f"dojo raid encounter start {token} {difficulty} {mode} {item_level}")
+                reply = client.command(f"dojo raid encounter start {token} {difficulty} {mode} {item_level}"
+                                       + (" buffed" if owner_buffs else ""))
                 if "dojo encounter: started" not in reply:
                     raise world.WorldError(f"native encounter start refused: {reply}")
                 deadline = time.monotonic() + ENCOUNTER_DEADLINE_S
@@ -295,7 +303,8 @@ def encounter(layout, runs=ENCOUNTER_RUNS, *, item_level=245, log=print):
                 final = parse_encounter(client.command("dojo raid encounter status full"))
                 (out / f"{name}.json").write_text(json.dumps(final, indent=2) + "\n", encoding="utf-8")
                 result = dict(name=name, observation=final,
-                              **encounter_verdict(final, token=token, difficulty=difficulty, mode=mode))
+                              **encounter_verdict(final, token=token, difficulty=difficulty, mode=mode,
+                                                  owner_buffs=owner_buffs))
                 results.append(result)
                 log(f"valithria {name}: {final.get('outcome')} peak={final.get('peak_hp')} "
                     f"{'killed' if result['killed'] else 'not killed'}{'' if result['ok'] else ' (problems)'}")
