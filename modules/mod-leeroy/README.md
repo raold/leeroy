@@ -1128,7 +1128,7 @@ its separate `[world]` opt-ins; world photos need `[selfies] enabled = true`.
 each, none in both; `until_ms`: Unix ms, at most 12 hours ahead, else `bad field: until_ms`). The
 mind sends it while a raid lineup the guild posted (its `[decisions]`) is at hand, and an empty one
 when that night ends. Native holds it in memory only: a worldserver start clears it and the mind
-sends it again on hello. With `Leeroy.GuildAdd.FollowRoster = 1` (default 0, `.reload config`) and
+sends it again on hello. With `Leeroy.GuildAdd.FollowRoster = 1` (default 1, `.reload config`) and
 the roster unexpired, the owner's `.playerbots bot addN` takes, within each role, the roster's
 members first and its bench only when no other free member fits; every existing fence, the size
 template and the buff and gear rules still order the members within each tier (pure policy:

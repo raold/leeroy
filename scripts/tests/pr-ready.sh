@@ -27,7 +27,7 @@ reset() {
     BASE=main DRAFT=false MERGE=CLEAN
     LEAVE_OUT="" FAIL_CHECK="" THREAD=true
     REVIEW_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb REVIEWER="chatgpt-codex-connector[bot]" LOCAL_BODY="" TOP_MERGE=false
-    ISSUE_BODY="" INLINE_SHA=""
+    ISSUE_BODY="" INLINE_SHA="" REVIEWER_TYPE=Bot LOCAL_ASSOC=OWNER LOCAL_USER=raold NO_REVIEW=false
 }
 
 write() {
@@ -43,10 +43,14 @@ write() {
 {"baseRefName":"$BASE","isDraft":$DRAFT,"mergeStateStatus":"$MERGE","headRefOid":"cccccccccccccccccccccccccccccccccccccccc",
  "statusCheckRollup":[$rollup]}
 JSON
-    echo "[[{\"user\":{\"login\":\"$REVIEWER\"},\"state\":\"COMMENTED\",\"commit_id\":\"$REVIEW_SHA\"}]]" >"$fix/reviews.json"
+    if [ "$NO_REVIEW" = true ]; then
+        echo '[[]]' >"$fix/reviews.json"
+    else
+        echo "[[{\"user\":{\"login\":\"$REVIEWER\",\"type\":\"$REVIEWER_TYPE\"},\"state\":\"COMMENTED\",\"commit_id\":\"$REVIEW_SHA\"}]]" >"$fix/reviews.json"
+    fi
     local ic="[]"
-    [ -n "$LOCAL_BODY" ] && ic="[{\"user\":{\"login\":\"raold\"},\"body\":\"$LOCAL_BODY\"}]"
-    [ -n "$ISSUE_BODY" ] && ic="[{\"user\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"body\":$ISSUE_BODY}]"
+    [ -n "$LOCAL_BODY" ] && ic="[{\"user\":{\"login\":\"$LOCAL_USER\"},\"author_association\":\"$LOCAL_ASSOC\",\"body\":\"$LOCAL_BODY\"}]"
+    [ -n "$ISSUE_BODY" ] && ic="[{\"user\":{\"login\":\"chatgpt-codex-connector[bot]\",\"type\":\"Bot\"},\"body\":$ISSUE_BODY}]"
     echo "[$ic]" >"$fix/icomments.json"
     cat >"$fix/ruleset.json" <<'JSON'
 {"id":26388753,"rules":[{"type":"deletion"},{"type":"required_status_checks","parameters":{"required_status_checks":[
@@ -97,7 +101,12 @@ reset; TOP_MERGE=true; run "merge of main after reviewed commit is ready" 0 ""
 reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; run "review of an older commit rejected" 1 "no review of that commit"
 reset; TOP_MERGE=true REVIEW_SHA=cccccccccccccccccccccccccccccccccccccccc; run "review of the merge head accepted" 0 ""
 reset; REVIEWER=someone-else; run "review by another account not accepted" 1 "no review of that commit"
-reset; REVIEWER="chatgpt-codex-connector"; run "login without bot suffix accepted" 0 ""
+reset; REVIEWER="chatgpt-codex-connector"; run "bare login typed Bot accepted" 0 ""
+reset; REVIEWER="chatgpt-codex-connector" REVIEWER_TYPE=User; run "human account named like the bot rejected" 1 "no review of that commit"
+reset; NO_REVIEW=true; run "no review at all rejected" 1 "no review of that commit"
+reset; NO_REVIEW=true TOP_MERGE=true; run "merge head with no review at all rejected" 1 "no review of that commit"
+reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa LOCAL_USER=stranger LOCAL_ASSOC=NONE LOCAL_BODY="claude-local reviewed bbbbbbb"; run "claude-local from a stranger rejected" 1 "no review of that commit"
+reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa LOCAL_USER=helper LOCAL_ASSOC=COLLABORATOR LOCAL_BODY="claude-local reviewed bbbbbbb"; run "claude-local from a collaborator accepted" 0 ""
 reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa LOCAL_BODY="claude-local reviewed bbbbbbb"; run "claude-local prefix accepted" 0 ""
 reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa LOCAL_BODY="claude-local reviewed aaaaaaa"; run "claude-local for another commit rejected" 1 "no review of that commit"
 reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa INLINE_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; run "inline comment on the commit accepted" 0 ""
