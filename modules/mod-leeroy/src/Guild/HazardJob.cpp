@@ -726,10 +726,15 @@ public:
             if (std::hypot(end.x - candidate.x, end.y - candidate.y) > 0.25f
                 || std::fabs(end.z - candidate.z) > 0.25f)
                 return false;
-            float x = candidate.x, y = candidate.y, z = candidate.z;
-            return bot->GetMap()->CheckCollisionAndGetValidCoords(bot, at.x, at.y, at.z, x, y, z, true)
-                && std::hypot(x - candidate.x, y - candidate.y) <= 0.25f
-                && std::fabs(z - candidate.z) <= 0.25f;
+            float const height = bot->GetCollisionHeight() * 0.5f;
+            // The route is already complete. Check collision trees directly;
+            // CheckCollisionAndGetValidCoords would build a second navmesh ray.
+            return bot->GetMap()->GetMapCollisionData().GetStaticTree().isInLineOfSight(
+                       at.x, at.y, at.z + height, candidate.x, candidate.y, candidate.z + height,
+                       VMAP::ModelIgnoreFlags::Nothing)
+                && bot->GetMap()->GetDynamicMapTree().isInLineOfSight(
+                       at.x, at.y, at.z + height, candidate.x, candidate.y, candidate.z + height,
+                       bot->GetPhaseMask(), VMAP::ModelIgnoreFlags::Nothing);
         };
         if (auto const leg = HazardMovingLeg(at, goal.answer, waypoint, *zones, reach, step, std::cref(reachable)))
         {
