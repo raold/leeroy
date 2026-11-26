@@ -1159,6 +1159,7 @@ struct EncounterRun
                 if (Engine* engine = ai->GetCurrentEngine())
                     row["last_action"] = std::string(engine->GetLastAction()).substr(0, 160);
                 row["icc"] = ai->HasStrategy("icc", BOT_STATE_COMBAT);
+                if (Unit* victim = p->GetVictim()) row["target"] = Label(victim);
             }
             roster.push_back(row);
         }
@@ -1179,7 +1180,19 @@ struct EncounterRun
                 if (Creature* trigger = map->GetCreature(script->GetGuidData(35)))
                     out["trigger_combat"] = trigger->IsInCombat();
                 if (Creature* dragon = map->GetCreature(valithria))
+                {
                     out["her_position"] = {dragon->GetPositionX(), dragon->GetPositionY(), dragon->GetPositionZ()};
+                    out["live_adds"] = LiveAdds(dragon);
+                }
+                if (Player* leader = Actor(EncounterLeader))
+                    if (Group* group = leader->GetGroup())
+                    {
+                        json marks = json::object();
+                        for (auto const& [icon, name] : {std::pair<uint8, char const*>{7, "skull"}, {6, "cross"}})
+                            if (Unit* marked = ObjectAccessor::GetUnit(*leader, group->GetTargetIcon(icon)))
+                                marks[name] = Label(marked);
+                        out["marks"] = marks;
+                    }
             }
         if (full)
         {
@@ -1198,6 +1211,34 @@ struct EncounterRun
             AddDetail(out);
         }
         return out;
+    }
+
+    // "<kind>#<counter>" for an add, "<name>" for a fixture, "her", or "c<entry>" for another creature.
+    std::string Label(Unit const* unit) const
+    {
+        if (!unit) return "-";
+        if (unit->GetGUID() == valithria) return "her";
+        if (int const slot = Slot(unit); slot >= 0) return Roster[slot].name;
+        if (unit->IsCreature())
+            return KindName(unit->GetEntry()) + "#" + std::to_string(unit->GetGUID().GetCounter());
+        return unit->IsPlayer() ? "player" : "unit";
+    }
+
+    // Every living add now: label, position, health and victim (the trace's per-poll positions).
+    json LiveAdds(Creature* dragon) const
+    {
+        json rows = json::array();
+        for (AddKind const& kind : AddKinds)
+        {
+            std::list<Creature*> found;
+            dragon->GetCreatureListWithEntryInGrid(found, kind.entry, 150.f);
+            for (Creature* c : found)
+                if (c && c->IsAlive() && !c->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
+                    rows.push_back(json::array({Label(c), std::round(c->GetPositionX() * 10.f) / 10.f,
+                        std::round(c->GetPositionY() * 10.f) / 10.f, std::round(c->GetHealthPct()),
+                        Label(c->GetVictim())}));
+        }
+        return rows;
     }
 
     template <typename Map, typename Name>
