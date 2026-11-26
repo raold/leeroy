@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import shutil
 import subprocess
 import time
 import uuid
@@ -206,6 +207,18 @@ def run(layout, *, scenarios=SCENARIOS, log=print):
             except (world.WorldError, RaError, OSError) as error:
                 report["shutdown_error"] = str(error)
         report["ok"] = report["ok"] and report["stopped"]
+        if started and report["stopped"]:
+            try:
+                report["logs"] = {}
+                for name in ("Server.log", "Playerbots.log"):
+                    path = layout.logs / name
+                    if path.is_file():
+                        saved = out / name
+                        shutil.copyfile(path, saved)
+                        report["logs"][name] = fingerprint(saved)
+            except OSError as error:
+                report["log_capture_error"] = type(error).__name__
+                report["ok"] = False
         (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report
 
