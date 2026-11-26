@@ -25,11 +25,13 @@
 #include "MotionMaster.h"
 #include "MoveSpline.h"
 #include "ObjectAccessor.h"
+#include "Opcodes.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
 #include "PlayerScript.h"
+#include "ServerScript.h"
 #include "Spell.h"
 #include "SpellMgr.h"
 #include "SpellAuras.h"
@@ -39,6 +41,8 @@
 #include "UnitScript.h"
 #include "Vehicle.h"
 #include "WorldScript.h"
+#include "WorldPacket.h"
+#include "WorldSession.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -133,6 +137,14 @@ struct Trial
         bool pending = false, observed = false, castAura = false, teleportAura = false;
     };
     std::array<SpellTeleport, Names.size()> spellTeleports{};
+    struct KnockbackPacket
+    {
+        Position origin;
+        uint32 when = 0;
+        float directionX = 0.f, directionY = 0.f, horizontal = 0.f, vertical = 0.f;
+        bool observed = false;
+    };
+    std::array<KnockbackPacket, Names.size()> knockbacks{};
     uint32 nativeSpellTeleports = 0;
     json failureFacts = json::object();
     std::array<uint32, Names.size()> portalCasts{}, exitCasts{}, minimumSanity{};
@@ -271,6 +283,7 @@ struct Trial
         observedConstrictors = {}; constrictorAttachments = 0;
         constrictorOrigins = {}; constrictorCastMs = {}; constrictorSeats = {};
         spellTeleports = {}; nativeSpellTeleports = 0;
+        knockbacks = {};
         portalCasts = {}; exitCasts = {}; minimumSanity.fill(100); influenceDeaths.clear();
         failureFacts = json::object();
         ready = cleanup = humanGone = false; active = true;
@@ -469,6 +482,12 @@ struct Trial
                             {"previous_motion", previousMotion[i]}, {"moving", p->isMoving()},
                             {"charge_expected_speed", chargeSpeed[i]}, {"charge_age_ms", elapsed - chargeMs[i]},
                             {"previous_moving", previousMoving[i]}, {"previous_vehicle_entry", previousVehicle[i]},
+                            {"knockback_packet", {{"observed", knockbacks[i].observed},
+                                {"age_ms", elapsed - knockbacks[i].when},
+                                {"origin", {knockbacks[i].origin.GetPositionX(),
+                                    knockbacks[i].origin.GetPositionY(), knockbacks[i].origin.GetPositionZ()}},
+                                {"direction_x", knockbacks[i].directionX}, {"direction_y", knockbacks[i].directionY},
+                                {"horizontal", knockbacks[i].horizontal}, {"vertical", knockbacks[i].vertical}}},
                             {"constrictor", ConstrictorFacts(p, i)},
                             {"spell_teleport", {{"spell", spellTeleports[i].spell},
                                 {"blink_radius", spellTeleports[i].blinkRadius}, {"observed", spellTeleports[i].observed},
@@ -674,6 +693,34 @@ public:
         if (player && std::find(trial.actors.begin(), trial.actors.end(), player->GetGUID()) != trial.actors.end()) trial.influenceDeaths.insert(unit->GetGUID());
     }
 };
+class Packets : public ServerScript
+{
+public:
+    Packets() : ServerScript("DojoYoggPackets", {SERVERHOOK_ON_PACKET_SENT}) { }
+    void OnPacketSent(WorldSession* session, WorldPacket const& packet) override
+    {
+        if (packet.GetOpcode() != SMSG_MOVE_KNOCK_BACK || !session || packet.size() < 21) return;
+        auto* player = session->GetPlayer();
+        if (!player || player->GetMapId() != 603) return;
+        std::lock_guard<std::recursive_mutex> lock(trial.mutex);
+        if (trial.state != "observe" && trial.state != "portals") return;
+        auto found = std::find(trial.actors.begin(), trial.actors.end(), player->GetGUID());
+        if (found == trial.actors.end()) return;
+        unsigned guidBytes = 0;
+        for (unsigned bit = 0; bit < 8; ++bit) guidBytes += (packet[0] >> bit) & 1;
+        if (packet.size() < 21 + guidBytes) return;
+        WorldPacket copy(packet);
+        copy.rpos(0);
+        ObjectGuid guid;
+        uint32 counter;
+        auto& proof = trial.knockbacks[std::size_t(found - trial.actors.begin())];
+        Trial::KnockbackPacket next;
+        copy >> guid.ReadAsPacked() >> counter >> next.directionX >> next.directionY >> next.horizontal >> next.vertical;
+        if (guid != player->GetGUID()) return;
+        next.origin = player->GetPosition(); next.when = trial.elapsed; next.observed = true;
+        proof = next;
+    }
+};
 class Casts : public PlayerScript
 {
 public:
@@ -768,7 +815,7 @@ public:
     }
 };
 }
-void AddSC_dojo_yogg() { new Commands(); new Ticks(); new MapTicks(); new Effects(); new Casts(); }
+void AddSC_dojo_yogg() { new Commands(); new Ticks(); new MapTicks(); new Effects(); new Casts(); new Packets(); }
 #else
 void AddSC_dojo_yogg() { }
 #endif
