@@ -587,10 +587,10 @@ struct OfflineFixture
                     {"master", GET_PLAYERBOT_AI(p)->GetMaster() ? GET_PLAYERBOT_AI(p)->GetMaster()->GetGUID().GetCounter() : 0}});
             }
         for (auto const& [entry, value] : hits) damage.push_back({{"entry", entry}, {"hits", value.first}, {"requested", value.second}});
-        // Read only, bounded diagnostics for the actual Beasts actors. In
-        // particular, distinguish a surviving enraged worm from a cure stall.
+        // Read only, bounded diagnostics for Beasts and Anub actors: distinguish
+        // a cure stall from an enraged worm, and spike routes from permafrost.
         if (auto* leader = Actor(1); leader && map == 649 && leader->GetMapId() == map)
-            for (uint32 entry : {34796u, 34799u, 35144u, 34797u, 35176u})
+            for (uint32 entry : {34660u, 34606u, 34564u, 34796u, 34799u, 35144u, 34797u, 35176u})
             {
                 std::list<Creature*> found;
                 leader->GetCreatureListWithEntryInGrid(found, entry, 200.f);
@@ -604,6 +604,9 @@ struct OfflineFixture
                             {"instance", creature->GetInstanceId()}, {"alive", creature->IsAlive()},
                             {"health", creature->GetHealth()}, {"max_health", creature->GetMaxHealth()},
                             {"enraged", creature->HasAura(68335)},
+                            {"spike_trail", creature->HasAura(65921)},
+                            {"permafrost", creature->HasAura(65882)},
+                            {"motion", uint32(creature->GetMotionMaster()->GetCurrentMovementGeneratorType())},
                             {"cast", cast ? cast->GetSpellInfo()->Id : 0u},
                             {"channel", channel ? channel->GetSpellInfo()->Id : 0u},
                             {"target", victim ? victim->GetGUID().GetCounter() : 0u},
