@@ -1,0 +1,142 @@
+From e42c00b690c7c0c599b7bc6614bd2b125b7e0642 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 03:08:25 -0500
+Subject: [PATCH 49/49] fix(Raid/Yogg): Keep rescued members and stage exit
+ routes
+
+Reserve a Constrictor victim in the frozen team so a brief attachment does not leave a portal unused. Actual use keeps the vehicle and movement guards. Route exits through the existing illusion doorway to avoid exhausting the bounded smooth-path point buffer from the far end of Stormwind.
+---
+ src/Ai/Raid/Uld/YoggBrainActions.cpp | 36 +++++++++++++++++++++-------
+ src/Ai/Raid/Uld/YoggBrainPolicy.h    | 12 ++++++++++
+ tests/yogg_brain_test.cpp            | 18 ++++++++++++++
+ 3 files changed, 58 insertions(+), 8 deletions(-)
+
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index 16f76c77..f059cc46 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -165,12 +165,15 @@ Creature* AssignedPortal(PlayerbotAI* ai, Creature* brain)
+                 continue;
+             PlayerbotAI* memberAI = GET_PLAYERBOT_AI(member);
+             bool const controlled = memberAI && !IsRealPlayer(member) && !IsSelfBot(member);
+-            bool const available = yogg && member->IsWithinDistInMap(yogg, 150.0f) && member->GetPositionZ() > 300.0f &&
+-                                   !member->GetVehicle() && !member->IsBeingTeleported() && !member->IsCharmed() &&
+-                                   !PortalLinkBlocked(member) && !member->HasAura(63830) &&
+-                                   (!controlled || (!memberAI->HasStrategy("stay", BOT_STATE_COMBAT) &&
+-                                                    !memberAI->HasStrategy("stay", BOT_STATE_NON_COMBAT) &&
+-                                                    !memberAI->HasStrategy("passive", BOT_STATE_COMBAT)));
++            Unit* vehicle = member->GetVehicleBase();
++            bool const available =
++                yogg && member->IsWithinDistInMap(yogg, 150.0f) && member->GetPositionZ() > 300.0f &&
++                YoggBrain::CanReservePortal(member->GetVehicle() != nullptr, vehicle ? vehicle->GetEntry() : 0) &&
++                !member->IsBeingTeleported() && !member->IsCharmed() && !PortalLinkBlocked(member) &&
++                !member->HasAura(63830) &&
++                (!controlled || (!memberAI->HasStrategy("stay", BOT_STATE_COMBAT) &&
++                                 !memberAI->HasStrategy("stay", BOT_STATE_NON_COMBAT) &&
++                                 !memberAI->HasStrategy("passive", BOT_STATE_COMBAT)));
+             members.push_back({member->GetGUID().GetRawValue(), controlled, PlayerbotAI::IsTank(member),
+                 PlayerbotAI::IsHeal(member), PlayerbotAI::IsMelee(member), available, Sanity(member)});
+         }
+@@ -288,6 +291,21 @@ bool AttackPoint(Player* bot, Unit* target, unsigned illusion, Position& best, b
+ }
+ 
+ enum class Mode { None, Portal, Exit, Route, Fight, Face, Wait };
++
++Position ThroughDoorway(Player* bot, Position const& destination, unsigned illusion)
++{
++    if (illusion < 1 || illusion > 3)
++        return destination;
++    Position const& entrance = illusion == 1   ? ULDUAR_YOGG_SARON_CHAMBER_OF_ASPECTS_ENTRANCE
++                               : illusion == 2 ? ULDUAR_YOGG_SARON_ICECROWN_CITADEL_ENTRANCE
++                                               : ULDUAR_YOGG_SARON_STORMWIND_KEEPER_ENTRANCE;
++    return YoggBrain::ViaDoorway(bot->GetExactDist2d(ULDUAR_YOGG_SARON_BRAIN_ROOM_MIDDLE),
++                                 bot->GetExactDist2d(entrance), bot->GetExactDist2d(destination),
++                                 entrance.GetExactDist2d(destination))
++               ? entrance
++               : destination;
++}
++
+ struct Plan
+ {
+     Mode mode = Mode::None;
+@@ -337,6 +355,7 @@ Plan Decide(PlayerbotAI* ai)
+     Spell* cast = brain ? brain->GetCurrentSpell(CURRENT_GENERIC_SPELL) : nullptr;
+     bool const inducing = cast && cast->GetSpellInfo()->Id == 64059;
+     unsigned const remaining = inducing ? std::max(0, cast->GetCastTimeRemaining()) : 0;
++    unsigned const illusion = brain && brain->IsAIEnabled ? brain->AI()->GetData(2) : 0;
+     // Walking closer reduces the calculated budget; it must not cancel an exit already begun.
+     bool const exitRequired =
+         !brain || !brain->IsAlive() ||
+@@ -346,9 +365,10 @@ Plan Decide(PlayerbotAI* ai)
+     {
+         ClaimInfluence(bot, nullptr);
+         plan.mode = Mode::Exit;
++        if (plan.exit)
++            plan.destination = ThroughDoorway(bot, plan.exit->GetPosition(), illusion);
+         return plan;
+     }
+-    unsigned const illusion = brain->IsAIEnabled ? brain->AI()->GetData(2) : 0;
+     GameObject* door = illusion >= 1 && illusion <= 3 ? bot->FindNearestGameObject(194634 + illusion, 250.0f) : nullptr;
+     if (YoggBrain::BrainAllowed(illusion, door && door->GetGoState() == GO_STATE_ACTIVE, inducing, remaining, brain->GetHealthPct()))
+     {
+@@ -632,7 +652,7 @@ bool YoggBrainAction::Execute(Event /*event*/)
+     {
+         if (!plan.exit || !plan.exit->isSpawned()) return false;
+         if (!plan.exit->IsWithinDistInMap(bot, plan.exit->GetInteractionDistance()))
+-            return Walk(plan.exit->GetPosition());
++            return Walk(plan.destination);
+         // Match the real client's range/ownership/use checks. The portal model
+         // can occlude its own origin even when the bot is standing at it; that
+         // extra LOS test kept walking to the same spot until Induce Madness.
+diff --git a/src/Ai/Raid/Uld/YoggBrainPolicy.h b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+index 23ee7a41..c98b2a17 100644
+--- a/src/Ai/Raid/Uld/YoggBrainPolicy.h
++++ b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+@@ -25,6 +25,18 @@ struct Member
+     unsigned sanity;
+ };
+ 
++inline bool CanReservePortal(bool riding, std::uint32_t vehicleEntry)
++{
++    // A Constrictor releases its passenger when killed. Reserve that member's
++    // place, but keep normal vehicle/movement guards on actual portal use.
++    return !riding || vehicleEntry == 33983;
++}
++
++inline bool ViaDoorway(float brainDistance, float entranceDistance, float goalDistance, float entranceToGoal)
++{
++    return brainDistance > 42.0f && entranceDistance > 8.0f && goalDistance > entranceToGoal;
++}
++
+ // Freeze this selection for a portal wave. Humans choose for themselves; reserve
+ // their slots without issuing them commands. Keep at least 1/2 healers upstairs.
+ inline std::vector<std::uint64_t> Team(std::vector<Member> members, bool large)
+diff --git a/tests/yogg_brain_test.cpp b/tests/yogg_brain_test.cpp
+index 9c3ac4ac..ca9a6079 100644
+--- a/tests/yogg_brain_test.cpp
++++ b/tests/yogg_brain_test.cpp
+@@ -25,6 +25,24 @@ int main()
+     CHECK(!InBrainArea(0, 0, 240));
+     CHECK(!InBrainArea(1980, 500, 240));
+     CHECK(Team({}, false).empty());
++    CHECK(CanReservePortal(false, 0));
++    CHECK(CanReservePortal(true, 33983));
++    CHECK(!CanReservePortal(true, 0));
++    CHECK(!CanReservePortal(true, 33109));
++    CHECK(!CanReservePortal(true, 28833));
++    std::vector<Member> constrictedRaid{
++        {17, true, false, true, false, true, 82},  {18, true, false, true, false, true, 91},
++        {20, true, false, false, false, true, 82}, {21, true, false, false, false, CanReservePortal(true, 33983), 89},
++        {23, true, false, false, true, false, 80}, {24, true, false, false, true, true, 100}};
++    CHECK((Team(constrictedRaid, false) == std::vector<std::uint64_t>{17, 24, 20, 21}));
++    constrictedRaid[3].available = CanReservePortal(true, 33109);
++    CHECK((Team(constrictedRaid, false) == std::vector<std::uint64_t>{17, 24, 20}));
++    // The far Stormwind exit route exhausted the smooth-path point limit.
++    // Its doorway is a nearer complete leg; never walk back out of the Brain.
++    CHECK(ViaDoorway(135.0f, 79.0f, 118.0f, 49.0f));
++    CHECK(!ViaDoorway(35.0f, 25.0f, 30.0f, 49.0f));
++    CHECK(!ViaDoorway(55.0f, 5.0f, 46.0f, 49.0f));
++    CHECK(!ViaDoorway(60.0f, 15.0f, 40.0f, 49.0f));
+     for (bool large : {false, true})
+         for (unsigned humans = 0; humans < 4; ++humans)
+             for (unsigned healers = 0; healers < 7; ++healers)
