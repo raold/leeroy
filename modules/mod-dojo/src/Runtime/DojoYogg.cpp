@@ -17,6 +17,7 @@
 #include "GameObject.h"
 #include "GroupMgr.h"
 #include "InstanceScript.h"
+#include "LastMovementValue.h"
 #include "Map.h"
 #include "MotionMaster.h"
 #include "MoveSpline.h"
@@ -31,6 +32,7 @@
 #include "SpellAuras.h"
 #include "SpellAuraEffects.h"
 #include "TemporarySummon.h"
+#include "Timer.h"
 #include "UnitScript.h"
 #include "Vehicle.h"
 #include "WorldScript.h"
@@ -89,6 +91,7 @@ struct Trial
     // A native grab emits spawn, lunge, squeeze and duplicate ride effects in
     // one update. Keep the spawn evidence until the seat position is sampled.
     std::array<std::array<uint32, 8>, Names.size()> recentSpells{}, recentSpellMs{};
+    std::array<std::array<uint64, 8>, Names.size()> recentSpellTargets{};
     struct SpellTeleport
     {
         ObjectGuid target;
@@ -119,7 +122,8 @@ struct Trial
     {
         json facts = json::array();
         for (std::size_t n = 0; n < recentSpells[i].size(); ++n)
-            if (recentSpells[i][n]) facts.push_back({{"spell", recentSpells[i][n]}, {"age_ms", elapsed - recentSpellMs[i][n]}});
+            if (recentSpells[i][n]) facts.push_back({{"spell", recentSpells[i][n]},
+                {"target_guid", recentSpellTargets[i][n]}, {"age_ms", elapsed - recentSpellMs[i][n]}});
         return facts;
     }
     json ConstrictorFacts(Player* p, std::size_t i) const
@@ -229,6 +233,7 @@ struct Trial
         maxBelow = maxHealersBelow = tanksBelow = 0; minHealersAbove = 100;
         entered = {}; exited = {}; healerEntrants = {}; positioned = {}; wasBelow = {};
         previousVehicle = {}; previousMotion = {}; previousMoving = {}; recentSpells = {}; recentSpellMs = {};
+        recentSpellTargets = {};
         previousSpeed = {}; chargeSpeed = {}; chargeMs = {}; nativeChargeSamples = 0;
         observedConstrictors = {}; constrictorAttachments = 0;
         constrictorOrigins = {}; constrictorCastMs = {}; constrictorSeats = {};
@@ -490,11 +495,26 @@ struct Trial
             for (std::size_t i = 0; i < actors.size(); ++i)
                 if (auto* p = Actor(i))
                 {
-                    auto* target = GET_PLAYERBOT_AI(p)->GetAiObjectContext()->GetValue<Unit*>("current target")->Get();
+                    auto* ai = GET_PLAYERBOT_AI(p);
+                    auto* target = ai->GetAiObjectContext()->GetValue<Unit*>("current target")->Get();
+                    auto const& movement = ai->GetAiObjectContext()->GetValue<LastMovement&>("last movement")->Get();
+                    auto* cast = p->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+                    auto* link = p->GetAura(63802);
+                    auto* sanity = p->GetAura(63050);
+                    auto* vehicle = p->GetVehicleBase();
                     auto* exit = Below(p) ? p->FindNearestGameObject(194625, 250.f) : nullptr;
-                    bodies.push_back({{"slot", i}, {"x", p->GetPositionX()}, {"y", p->GetPositionY()},
+                    bodies.push_back({{"slot", i}, {"guid", p->GetGUID().GetRawValue()},
+                        {"x", p->GetPositionX()}, {"y", p->GetPositionY()},
                         {"z", p->GetPositionZ()}, {"facing", p->GetOrientation()}, {"moving", p->isMoving()},
                         {"target_entry", target ? target->GetEntry() : 0u},
+                        {"cast", cast ? cast->GetSpellInfo()->Id : 0u}, {"brain_link_ms", link ? link->GetDuration() : 0},
+                        {"sanity", sanity ? uint32(sanity->GetStackAmount()) : 0u},
+                        {"ai_state", uint32(ai->GetState())}, {"can_move", ai->CanMove()}, {"rooted", p->IsRooted()},
+                        {"speed_run", p->GetSpeed(MOVE_RUN)}, {"vehicle_entry", vehicle ? vehicle->GetEntry() : 0u},
+                        {"last_move", {{"age_ms", GetMSTimeDiffToNow(movement.msTime)},
+                            {"priority", uint32(movement.priority)}, {"delay_ms", movement.lastdelayTime},
+                            {"x", movement.lastMoveShort.GetPositionX()}, {"y", movement.lastMoveShort.GetPositionY()},
+                            {"z", movement.lastMoveShort.GetPositionZ()}}},
                         {"exit_distance", exit ? p->GetExactDist(exit) : -1.f}, {"recent_casts", CastFacts(i)}});
                     if (!roomActor && Below(p)) roomActor = p;
                 }
@@ -617,8 +637,11 @@ public:
         {
             trial.recentSpells[i][n] = trial.recentSpells[i][n - 1];
             trial.recentSpellMs[i][n] = trial.recentSpellMs[i][n - 1];
+            trial.recentSpellTargets[i][n] = trial.recentSpellTargets[i][n - 1];
         }
         trial.recentSpells[i][0] = id; trial.recentSpellMs[i][0] = trial.elapsed;
+        auto* castTarget = spell->m_targets.GetUnitTarget();
+        trial.recentSpellTargets[i][0] = castTarget ? castTarget->GetGUID().GetRawValue() : 0;
         if (id == 63997 || id == 63998 || id == 63989) ++trial.portalCasts[i];
         if (id == 63992) ++trial.exitCasts[i];
         if (id == 64133)

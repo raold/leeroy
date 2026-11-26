@@ -252,6 +252,9 @@ modified radius, and arrival at that exact destination. Both witnesses expire
 after 200 ms, apply once and require continuity before the cast and the same
 floor afterward. A recent cast alone is insufficient. Room geometry,
 actor facing and targets are recorded to diagnose failed illusion clears.
+Each actor also reports Brain Link duration, sanity, movement/control state and
+the last movement request. The eight recent casts retain target GUIDs, allowing
+link partners and failed approaches to be checked without changing tactics.
 Sampling follows the actual map-update clock. Native Charge uses the core's
 ground speed cap only with a real charge spell, charge state and matching active spline;
 ordinary movement retains the original speed bound and distance margin.
