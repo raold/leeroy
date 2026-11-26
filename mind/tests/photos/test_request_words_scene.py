@@ -10,7 +10,7 @@ import pytest
 
 from conftest import run
 from leeroy_mind.photos import request_store as records
-from leeroy_mind.photos.config import PhotosConfig, load_photos_config
+from leeroy_mind.photos.config import OFF as PHOTOS_OFF, PhotosConfig, load_photos_config
 from leeroy_mind.photos.requests import CANT_NOW, SENT_LATER
 from leeroy_mind.selfies import files
 from leeroy_mind.selfies.render import scene_scale
@@ -220,10 +220,12 @@ def test_switch_off_never_reads_his_words_into_a_scene(tmp_path, monkeypatch):
 @pytest.mark.parametrize("text,expected", [
     ("", PhotosConfig()),
     ("[photos]\nsend=true\nrequests=true\n", PhotosConfig(send=True, requests=True)),
+    ("[photos]\nsend=true\nrequests=true\nscene_from_words=false\n",
+     PhotosConfig(send=True, requests=True, scene_from_words=False)),
     ("[photos]\nsend=true\nrequests=true\nscene_from_words=true\n",
      PhotosConfig(send=True, requests=True, scene_from_words=True)),
-    ('[photos]\nsend=true\nrequests=true\nscene_from_words="yes"\n', PhotosConfig()),
+    ('[photos]\nsend=true\nrequests=true\nscene_from_words="yes"\n', PHOTOS_OFF),
 ])
-def test_the_switch_defaults_off_and_an_invalid_value_turns_the_table_off(tmp_path, text, expected):
+def test_the_switch_defaults_on_and_an_invalid_value_turns_the_table_off(tmp_path, text, expected):
     (tmp_path / "mind.toml").write_text(text, encoding="utf-8")
     assert load_photos_config(tmp_path / "mind.toml") == expected

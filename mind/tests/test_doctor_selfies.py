@@ -2,10 +2,12 @@
 import pytest
 
 from leeroy_mind import __main__ as m
+from shipped_off import off
 
 
 def toml(tmp_path, body):
-    (tmp_path / "mind.toml").write_text(body, encoding="utf-8")
+    """`body` with every switch that defaults on since 2026-11-25 off unless it sets it."""
+    (tmp_path / "mind.toml").write_text(off(body), encoding="utf-8")
     return tmp_path
 
 

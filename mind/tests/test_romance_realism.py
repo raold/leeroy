@@ -67,8 +67,8 @@ def _filled(variants):
 
 # -- the switch -------------------------------------------------------------------------------
 
-def test_the_switch_is_off_by_default_and_reads_booleans_only(tmp_path):
-    assert load_config(tmp_path / "absent.toml").romance.realism is False
+def test_the_switch_is_on_by_default_and_reads_booleans_only(tmp_path):
+    assert load_config(tmp_path / "absent.toml").romance.realism is True  # since 2026-11-25
     (tmp_path / "on.toml").write_text("[romance]\nrealism = true\n", encoding="utf-8")
     assert load_config(tmp_path / "on.toml").romance.realism is True
     (tmp_path / "bad.toml").write_text('[romance]\nrealism = "yes"\n', encoding="utf-8")

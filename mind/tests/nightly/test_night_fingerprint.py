@@ -167,9 +167,9 @@ def test_failed_unit_rolls_back_phrases_and_sanitizes_error(h,monkeypatch,caplog
     assert 'fingerprint_unit_failed' in caplog.text and 'private' not in caplog.text
 
 
-@pytest.mark.parametrize('text', ['', '[fingerprint]\nenabled=false', '[fingerprint]\nenabled="true"',
+@pytest.mark.parametrize('text', ['[fingerprint]\nenabled=false', '[fingerprint]\nenabled="true"',
                                   '[fingerprint]\nenabled=true\nunknown=1', 'broken ['])
-def test_switch_missing_or_invalid_leaves_pipeline_identical(h,text):
+def test_switch_off_or_invalid_leaves_pipeline_identical(h,text):
     path = h.settings.data_dir/'mind.toml'
     path.write_text(text)
     runner = NightRunner(STAGES,lambda n,w:h.ctx())

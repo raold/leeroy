@@ -1,7 +1,7 @@
 # Persona play styles
 
 Enable both `[playstyle] enabled = true` in `mind.toml` and native
-`Leeroy.PlayStyle.Enable = 1`. Both default off; invalid mind tables are off.
+`Leeroy.PlayStyle.Enable = 1`. Both default on; invalid mind tables are off.
 Restart the mind to attach a newly enabled controller. Once attached it rereads
 the switch on hello/login, queuing restoration when off. Native reloads with
 `.reload config`, invalidating previously queued additions even on an off/on pair.

@@ -46,6 +46,7 @@ def test_waiting_groups_count_threads_and_obey_enabled_closed_and_owner_reply(st
         view=tv.tonight_view(store.conn,tmp_path,now=now,status=None,kit=None,kit_why=None)
         assert 'PRIVATE' not in json.dumps(view)
         return view['sections']['waiting']['dms']
+    (tmp_path/'mind.toml').write_text('[groups]\nenabled=false',encoding='utf-8')
     assert waiting()==0
     (tmp_path/'mind.toml').write_text('[groups]\nenabled=true',encoding='utf-8')
     assert waiting()==1
@@ -100,7 +101,8 @@ def test_api_tonight_needs_the_key_and_answers_json(store):
         async with served(make_app(data)) as app:
             assert (await http(app,'GET','/api/tonight',key=False)).status==403
             answer = await http(app,'GET','/api/tonight')
-            assert answer.status==200 and set(answer.json()['sections'])==set(tv.SECTIONS)
+            # outreach is on by default (2026-11-25): its section joins the others
+            assert answer.status==200 and set(answer.json()['sections'])==set(tv.SECTIONS)|{'outreach'}
     asyncio.run(go())
 
 
@@ -156,6 +158,7 @@ def test_waiting_never_carries_message_text(store,tmp_path,clock):
         store.conn.execute("INSERT INTO guild_poll(channel,question,options,voters,opened,closes,status) "
                            "VALUES ('officer-chat','PRIVATE POLL','[\"a\",\"b\"]','[1,102]',?,?,?)", (now-1, now+60, status))
     store.conn.execute("INSERT INTO guild_poll_vote(poll,member,option,ts) VALUES (2,1,'a',?)", (now,))
+    (tmp_path/'mind.toml').write_text('[decisions]\nenabled = false\n',encoding='utf-8')
     view = tv.tonight_view(store.conn,tmp_path,now=now,status=None,kit=None,kit_why=None)
     assert view['sections']['waiting']['letters']==2 and view['sections']['waiting']['polls'] is None  # [decisions] off
     (tmp_path/'mind.toml').write_text('[server]\nenabled = true\n[decisions]\nenabled = true\n',encoding='utf-8')

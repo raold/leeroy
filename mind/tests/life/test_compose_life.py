@@ -145,6 +145,9 @@ def test_switches_off_keep_the_beats_golden(store, clock, tmp_path):
 
 def test_switches_read_from_mind_toml_and_invalid_means_off(tmp_path, caplog):
     path = tmp_path / "mind.toml"
+    # on by default (2026-11-25)
+    assert (load_config(path).talk.intent, load_config(path).talk.situation) == (True, True)
+    path.write_text("[talk]\nintent = false\nsituation = false\n", encoding="utf-8")
     assert (load_config(path).talk.intent, load_config(path).talk.situation) == (False, False)
     path.write_text("[talk]\nintent = true\nsituation = true\n", encoding="utf-8")
     assert (load_config(path).talk.intent, load_config(path).talk.situation) == (True, True)
@@ -666,6 +669,7 @@ def test_the_recipe_versions_on_the_situation_templates():
     from leeroy_mind.talk import prompt
     p = make_persona(101, "Arkon")
     base = load_config(__import__("pathlib").Path("absent.toml"))
+    base = replace(base, talk=replace(base.talk, situation=False))  # on by default since 2026-11-25
     on = replace(base, talk=replace(base.talk, situation=True))
     reply = Turn(TurnKind.REPLY_HUMAN, 101, "guild")
     greet = Turn(TurnKind.GREET, 101, "guild")

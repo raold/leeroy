@@ -9,17 +9,19 @@ from leeroy_mind.claims.cli import claims_main
 from leeroy_mind.claims.store import live_claims
 from leeroy_mind.testing.fake_llm import FakeLLM
 from selfies.fakes import mind_app
+from shipped_off import keep_pins
 
 from .conftest import say
 from .test_store import put
 
 
-@pytest.mark.parametrize('toml,on', [('', False), ('[claims]\nenabled=false', False),
+@pytest.mark.parametrize('toml,on', [('', True), ('[claims]\nenabled=false', False),
     ('[claims]\nenabled=true', True), ('[claims]\nenabled="SECRET_NAME"', False),
     ('claims=[]', False), ('[claims]\nenabled=true\nunknown="SECRET_NAME"', False)])
-def test_attach(tmp_path, caplog, toml, on):
+def test_attach(tmp_path, caplog, monkeypatch, toml, on):
+    keep_pins(monkeypatch)  # '' starts a mind with every shipped feature on
     with caplog.at_level(logging.INFO, logger='leeroy_mind'):
-        app = mind_app(tmp_path, toml=toml)
+        app = mind_app(tmp_path, toml=toml, raw=True)
     try:
         names = [s.name for s in app.night_runner.stages]
         assert ('claims' in names) is on

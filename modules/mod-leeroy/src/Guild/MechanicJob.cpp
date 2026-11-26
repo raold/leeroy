@@ -823,7 +823,7 @@ void Summarise(std::size_t members, std::size_t instances, Collected const& last
 
 void ReloadMechanics()
 {
-    enabled.store(sConfigMgr->GetOption<bool>("Leeroy.Mechanics.Enable", false), std::memory_order_relaxed);
+    enabled.store(sConfigMgr->GetOption<bool>("Leeroy.Mechanics.Enable", true), std::memory_order_relaxed);
     untilPass = 0;
 }
 

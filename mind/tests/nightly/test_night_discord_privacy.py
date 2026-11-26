@@ -42,6 +42,7 @@ from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM, fake_embed
 from nightly.conftest import IDENT
 from tests.discord.test_discord_talk import FakeAdmin
+from shipped_off import off
 
 DM = "dm:102"
 OFFICERS = "discord:officer-chat"
@@ -366,8 +367,8 @@ def test_his_dm_asking_secrecy_makes_her_answer_secret_end_to_end(tmp_path, how)
                               "guild_id": GUILD_ID, "human_guid": 0}, CAST])
         port = await bridge.start()
         (data / "mind.toml").write_text(
-            f"[bridge]\nport = {port}\n[talk]\nchattiness = 0\n"
-            '[human]\nnickname = "Hero"\n', encoding="utf-8")
+            off(f"[bridge]\nport = {port}\n[talk]\nchattiness = 0\n"
+            '[human]\nnickname = "Hero"\n'), encoding="utf-8")
         store = Store(open_db(data / "mind.db"), clock=clock)
         try:
             seed_test_cast(store)

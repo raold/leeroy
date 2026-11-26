@@ -3,12 +3,12 @@ from datetime import time
 import pytest
 
 from leeroy_mind.config import load_config
-from leeroy_mind.server.config import ServerConfig, load_server_config
+from leeroy_mind.server.config import OFF, ServerConfig, load_server_config
 
 
-def test_missing_table_is_off(tmp_path):
+def test_missing_table_is_on(tmp_path):
     path = tmp_path / 'mind.toml'
-    assert load_server_config(path) == ServerConfig()
+    assert load_server_config(path) == ServerConfig() and ServerConfig().enabled  # since 2026-11-25
     path.write_text('[talk]\nchattiness=4\n')
     assert load_server_config(path) == ServerConfig()
 
@@ -37,7 +37,7 @@ def test_valid_table(tmp_path):
 def test_any_bad_key_turns_it_off(tmp_path, bad, key, caplog):
     path = tmp_path / 'mind.toml'
     path.write_text('[server]\nenabled=true\n' + bad)
-    assert load_server_config(path) == ServerConfig()
+    assert load_server_config(path) == OFF
     assert caplog.text.count('server_config_invalid') == 1
     assert f'key={key}' in caplog.text
     assert 'secret text' not in caplog.text
@@ -49,7 +49,7 @@ def test_any_bad_key_turns_it_off(tmp_path, bad, key, caplog):
 def test_bad_table_and_unreadable_file_are_off(tmp_path, text, caplog):
     path = tmp_path / 'mind.toml'
     path.write_text(text)
-    assert load_server_config(path) == ServerConfig()
+    assert load_server_config(path) == OFF
     assert caplog.text.count('server_config_invalid') == 1
 
 
@@ -60,4 +60,4 @@ def test_channel_topics_defaults_on_and_takes_a_boolean(tmp_path):
     path.write_text('[server]\nenabled=true\nchannel_topics=false\n')
     assert load_server_config(path).channel_topics is False
     path.write_text('[server]\nenabled=true\nchannel_topics=0\n')
-    assert load_server_config(path) == ServerConfig()  # a bad value turns the table off
+    assert load_server_config(path) == OFF  # a bad value turns the table off

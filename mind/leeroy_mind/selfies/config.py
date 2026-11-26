@@ -1,7 +1,7 @@
 """The [selfies] table of mind.toml, and the worker's command line and environment. config.py
-leaves the table alone (EXTENSION_SECTIONS); it is read here, and only here, so a mind without
-it behaves exactly as before. The worker is the selfie/ package in its own venv: the mind runs
-it as a subprocess and never imports it."""
+leaves the table alone (EXTENSION_SECTIONS); it is read here, and only here: a mind without it
+has selfies on, with every switch on (OFF is what an invalid table reads as). The worker is the
+selfie/ package in its own venv: the mind runs it as a subprocess and never imports it."""
 import os
 import tomllib
 from dataclasses import dataclass, fields
@@ -15,23 +15,23 @@ SIZES = (768, 896, 1024)
 
 @dataclass(frozen=True)
 class SelfieCfg:
-    enabled: bool = False
+    enabled: bool = True
     python: Path | None = None  # the worker's interpreter; None: <checkout>/selfie/.venv's
     data: Path | None = None  # its models; None: LEEROY_SELFIE_DATA, else <checkout>/selfie-data
     steps: int = 30
     guidance: float = 5.0  # the protocol's cfg; TOML defaults FLUX to native guidance 3.5
     size: int = 1024
     min_free_gib: float = 11.5  # the worker refuses to load with less VRAM free
-    snaps: bool = False  # situational photos and the guild photo (the identity worker)
-    booth: bool = False  # profile sets between nights, while the owner is offline
+    snaps: bool = True  # situational photos and the guild photo (the identity worker)
+    booth: bool = True  # profile sets between nights, while the owner is offline
     booth_wait_minutes: int = 10
     booth_sets_per_day: int = 6
     identity_scale: float = 0.6  # how strongly the adapter holds the reference face
     identity_min_free_gib: float = 13.5  # the identity worker loads the adapter too
-    variety: bool = False  # balanced lust choices and recent plain-photo observations
-    varied_sets: bool = False  # varied.py: four looks and poses in one set for the lust style
-    identity_sets: bool = False  # profile sets carry her chosen photo's face (the identity worker)
-    romance_styling: bool = False  # clothed wardrobe and expressions in private situational photos
+    variety: bool = True  # balanced lust choices and recent plain-photo observations
+    varied_sets: bool = True  # varied.py: four looks and poses in one set for the lust style
+    identity_sets: bool = True  # profile sets carry her chosen photo's face (the identity worker)
+    romance_styling: bool = True  # clothed wardrobe and expressions in private situational photos
     outfit_reveal: int | None = None  # optional beach/gym coverage, 1 (covered) to 5 (revealing)
     # The photo critic (critic.py): detectors and a vision judge measure every rendered
     # situational, request and profile-set photo; a defective situational or request photo is
@@ -46,18 +46,26 @@ class SelfieCfg:
     # the rest head and shoulders (29% of the waist-up ones defective, none of the closer ones).
     body_shot_share: float = 1.0
     snap_body_share: float = 0.5
-    critic: bool = False
+    critic: bool = True
     best_of: int = 1
     critic_model: str = "qwen2.5vl:7b"  # pulled by the operator; absent: detectors only
-    param_bandit: bool = False
+    param_bandit: bool = True
     # The detailer (the worker's detail.py): after a render, each small face is drawn again at
     # a higher resolution (crossed eyes), and with detailer_hands each hand too (six fingers;
     # needs the worker's palm and handpose models fetched). detailer_hands needs detailer.
-    detailer: bool = False
-    detailer_hands: bool = False
+    detailer: bool = True
+    detailer_hands: bool = True
     backend: str = "realvisxl"  # opt-in FLUX.1-dev; the existing renderer stays the default
     lora: Path | None = None  # an explicitly selected local FLUX SafeTensors adapter
     lora_scale: float = 1.0
+
+
+# every switch off: what selfies/attach.py reads an invalid table as
+OFF = SelfieCfg(enabled=False, snaps=False, booth=False, variety=False, varied_sets=False,
+                identity_sets=False, romance_styling=False, critic=False, param_bandit=False,
+                detailer=False, detailer_hands=False)
+# the switches an unknown key leaves off unless the table sets them (load_selfie_config)
+_SWITCHES_SET_ONLY = ("enabled", "snaps", "booth", "identity_sets")
 
 
 def _bool(v) -> bool:
@@ -122,8 +130,8 @@ _PATHS = {"python", "data", "lora"}
 
 def load_selfie_config(path: Path) -> SelfieCfg:
     """The [selfies] table of the mind.toml at `path`; a missing file or table means the
-    defaults (off). Raises ConfigError for a file it cannot read or a bad value, naming the
-    key."""
+    defaults (on). Raises ConfigError for a file it cannot read or a bad value, naming the
+    key. A table with an unknown key never opts into a switch it does not set."""
     path = Path(path)
     if not path.exists():
         return SelfieCfg()
@@ -155,6 +163,8 @@ def load_selfie_config(path: Path) -> SelfieCfg:
     if "lora_scale" in values and values.get("lora") is None:
         raise ConfigError("selfies.lora_scale: requires selfies.lora")
     if set(table) - _RULES.keys() - _RETIRED:
+        for key in _SWITCHES_SET_ONLY:
+            values.setdefault(key, False)
         values["variety"] = False  # an invalid/unknown table never opts into new behaviour
         values["varied_sets"] = False
         values["romance_styling"] = False

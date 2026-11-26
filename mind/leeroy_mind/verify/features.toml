@@ -127,7 +127,7 @@ key = "talk.invites"
 [[feature.switch]]
 source = "native"
 key = "Leeroy.Invites.Enable"
-default = false
+default = true
 
 [[feature.evidence]]
 id = "body_done"
@@ -175,7 +175,7 @@ key = "talk.lead"
 [[feature.switch]]
 source = "native"
 key = "Leeroy.Lead.Enable"
-default = false
+default = true
 
 [[feature.evidence]]
 id = "started"
@@ -270,6 +270,45 @@ what = "a Valithria pull ended in a wipe (tg_pull 631:10)"
 db = { from = "tg_pull", where = "map = 631 AND boss_id = 10 AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "kind" }
 
 [[feature]]
+id = "valithria_healer_focus"
+name = "Valithria: every healer but one on her, mana cooldowns spent, heroic cloud stacks capped"
+prs = [501]
+note = "Set `since` to the native release that carries playerbots patch 0021; older watch lines have no focus field."
+
+[[feature.switch]]
+source = "playerbots"
+key = "Playerbots.ValithriaHealerFocus"
+default = true
+
+[[feature.evidence]]
+id = "focused_pull"
+kind = "observed"
+what = "a watched Valithria pull ran with the healer focus on (valithria_watch focus=1)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ diff=\d+ focus=1 '
+example = "2026-11-26 21:04:05 valithria_watch instance=812 diff=2 focus=1 hp=71.2 healers=3 dragon=3 casts=11"
+
+# Patch 0016's end lines carry no focus field, so these match only pulls the focus ran.
+[[feature.evidence]]
+id = "watch_done"
+kind = "working"
+what = "a watched Valithria pull with the healer focus ended with her healed (end=done ... focus=1)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ end=done hp=[\d.]+ focus=1'
+example = "2026-11-26 21:09:40 valithria_watch instance=812 end=done hp=100.0 focus=1"
+
+[[feature.evidence]]
+id = "watch_reset"
+kind = "failed"
+what = "a watched Valithria pull with the healer focus reset (end=reset ... focus=1)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ end=reset hp=[\d.]+ focus=1'
+example = "2026-11-26 21:02:10 valithria_watch instance=812 end=reset hp=63.5 focus=1"
+
+[[feature]]
 id = "living_poison"
 name = "Naxxramas: his group keeps clear of the Living Poison slimes"
 prs = [424]
@@ -284,7 +323,7 @@ default = true
 [[feature.switch]]
 source = "native"
 key = "Leeroy.Hazards.Enable"
-default = false
+default = true
 
 [[feature.evidence]]
 id = "crossed"
@@ -312,7 +351,7 @@ default = true
 [[feature.switch]]
 source = "native"
 key = "Leeroy.Mechanics.Enable"
-default = false
+default = true
 
 [[feature.switch]]
 source = "mind"
@@ -360,7 +399,7 @@ default = true
 [[feature.switch]]
 source = "native"
 key = "Leeroy.Mechanics.Enable"
-default = false
+default = true
 
 [[feature.switch]]
 source = "mind"
@@ -411,7 +450,7 @@ default = true
 [[feature.switch]]
 source = "native"
 key = "Leeroy.Hazards.Enable"
-default = false
+default = true
 
 [[feature.evidence]]
 id = "moved"
@@ -463,7 +502,7 @@ default = true
 [[feature.switch]]
 source = "native"
 key = "Leeroy.CastDeathLoop.Enable"
-default = false
+default = true
 
 [[feature.switch]]
 source = "native"
@@ -817,7 +856,7 @@ key = "training.lab"
 [[feature.switch]]
 source = "native"
 key = "Leeroy.Training.Enable"
-default = false
+default = true
 
 [[feature.switch]]
 source = "native"
@@ -875,7 +914,7 @@ key = "life.day_plans"
 [[feature.switch]]
 source = "native"
 key = "Leeroy.DayPlans.Enable"
-default = false
+default = true
 
 [[feature.switch]]
 source = "mind"
@@ -884,7 +923,7 @@ key = "realm.enabled"
 [[feature.switch]]
 source = "native"
 key = "Leeroy.Realm.Enable"
-default = false
+default = true
 
 [[feature.evidence]]
 id = "done"
@@ -910,7 +949,7 @@ key = "life.dungeons"
 [[feature.switch]]
 source = "native"
 key = "Leeroy.MemberDungeon.Enable"
-default = false
+default = true
 
 [[feature.switch]]
 source = "mind"
@@ -1059,7 +1098,7 @@ key = "playstyle.enabled"
 [[feature.switch]]
 source = "native"
 key = "Leeroy.PlayStyle.Enable"
-default = false
+default = true
 
 [[feature.switch]]
 source = "native"

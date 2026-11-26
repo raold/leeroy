@@ -18,6 +18,7 @@ from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.tuning.lines import BUILTIN_LINES
 from leeroy_mind.tuning.preview import LEASE, REFUSE
+from shipped_off import off
 
 CLOCK = datetime(2026, 10, 29, 20, 0, tzinfo=timezone.utc)
 REAL = "Quillon"  # invented, as in the engine tests
@@ -40,7 +41,7 @@ class Admin:
 
 
 def _app(root, *, loaded=True, lines=None):
-    (root / "mind.toml").write_text(TOML, encoding="utf-8")
+    (root / "mind.toml").write_text(off(TOML), encoding="utf-8")
     s = Store(open_migrated(root / "mind.db"), clock=FakeClock(CLOCK))
     try:
         seed_test_cast(s)

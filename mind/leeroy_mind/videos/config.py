@@ -9,12 +9,15 @@ _warned: set[tuple[Path, str]] = set()
 
 @dataclass(frozen=True, slots=True)
 class VideosConfig:
-    enabled: bool = False  # his video uploads; needs [photos] enabled and ffmpeg/ffprobe on PATH
+    enabled: bool = True  # his video uploads; needs [photos] enabled and ffmpeg/ffprobe on PATH
+
+
+OFF = VideosConfig(enabled=False)
 
 
 def load_videos_config(path: Path) -> VideosConfig:
-    """[videos] in mind.toml. A missing file or table is off; a malformed one is off and warned
-    once (by key name, never a value)."""
+    """[videos] in mind.toml. A missing file, table or key is on; a malformed one is off and
+    warned once (by key name, never a value)."""
     path = Path(path)
     try:
         table = tomllib.loads(path.read_bytes().decode('utf-8-sig')).get('videos', {})
@@ -29,5 +32,5 @@ def load_videos_config(path: Path) -> VideosConfig:
         if (path, key) not in _warned:
             _warned.add((path, key))
             log.warning('videos_config_invalid key=%s', key)
-        return VideosConfig()
+        return OFF
     return VideosConfig(**table)

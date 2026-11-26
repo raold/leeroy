@@ -13,6 +13,7 @@ from leeroy_mind.server import engine as se, records, runtime
 from leeroy_mind.server.seeds import Seed, fresh
 from leeroy_mind.talk.raid import RaidPhase
 from leeroy_mind.talk.turns import Turn, TurnKind
+from shipped_off import merge
 
 
 @pytest.fixture
@@ -595,9 +596,8 @@ def test_a_fault_that_stays_is_counted_once_an_hour(app, monkeypatch, caplog):
 
 def test_captured_day_opener_rechecks_life_switch_before_posting(app):
     path = app.data_dir / "mind.toml"
-    config = path.read_text()
     def switch(on):
-        path.write_text(config + f"\n[life]\nday_plans={str(on).lower()}\n")
+        merge(path, {"life": {"day_plans": on}})
         app._reload_config()
     now = app.clock.now()
     with app.store.transaction():

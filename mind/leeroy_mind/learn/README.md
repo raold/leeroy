@@ -1,11 +1,11 @@
 # Numeric line rewards
 
 `[learn] enabled = true` enables recipe writes and the model-free `rewards` night
-stage. Missing, malformed, unknown or non-boolean settings mean off. Normal
+stage (the default). Malformed, unknown or non-boolean settings mean off. Normal
 application migration creates the empty tables; disabled learning writes no
 recipes, rewards, weights or reward plans and changes no prompt or send decision.
 The switch is read at startup (restart required), including the nightly settings.
-Signals are separately opt-in. Rewards screen eligible game lines themselves through the same historical screening
+Signals have their own switch. Rewards screen eligible game lines themselves through the same historical screening
 function as signals, including CLI nights and when signal capture is off. Failed
 screening stays pending for retry. Discord and voice rooms use measured numeric
 evidence without borrowing game quality or history. Empty voice transcripts are
@@ -148,7 +148,7 @@ cached per Store at attach; disabled learning writes nothing.
 Preference export, held-out evaluation, optional guard-evidence capture and the
 manual training outline are documented in [FINETUNE.md](FINETUNE.md). All export
 and scoring commands operate on a scratch backup without source writes or model
-calls; capture is separately opt-in and does not train or alter talk decisions.
+calls; capture has its own switch and does not train or alter talk decisions.
 Snapshots live in the data directory's scratch folder and are always removed.
 Guard pairs contain plain text on both sides; an owed fallback to the original
 is not a rewrite. Discord parent IDs are resolved before vector attribution.
@@ -158,9 +158,9 @@ the reward night, and capture errors cannot roll back recipes.
 
 ### Nightly talk coach
 
-`[learn] enabled = true` and `coach = true` opt into `talk_coach`, one reflection
+`[learn] enabled` and `coach` (both on by default) run `talk_coach`, one reflection
 JSON call per member with at least ten rewarded lines in the most recent day
-of the night's window, at most twenty members. Both switches default off;
+of the night's window, at most twenty members. Both switches default on;
 invalid settings disable learning. Planning reserves one JSON call per possible
 member before rewards run, so a first scoring night also budgets the coach.
 
@@ -240,8 +240,8 @@ with the recipe; subsequent burst fragments share the first line's attribution.
 
 ## Variant arms and the bandit
 
-`[learn] enabled = true` plus `bandit = true` opts into the model-free `bandit`
-night stage after rewards. Default false. `freeze = true`, `frozen_members = [101]`
+`[learn] enabled` plus `bandit` runs the model-free `bandit`
+night stage after rewards. Default true. `freeze = true`, `frozen_members = [101]`
 or `frozen_families = ["length"]` provides an owner veto. Invalid learn settings
 disable the entire table. Restart after configuration changes.
 
@@ -324,7 +324,7 @@ apply = false
 
 Set `apply = true` and restart to apply active arms and approved lessons to every
 model-generated pipeline turn: game chat, whispers, voice, banter, Discord answers,
-DMs and autonomous server conversations. It defaults to false; an invalid value
+DMs and autonomous server conversations. It defaults to true; an invalid value
 disables the learning table. Deterministic templates and tuning previews retain
 their existing behavior. Optional typing and callback arms also need
 `[fingerprint] enabled = true` and `[callbacks] enabled = true`, respectively.
@@ -459,7 +459,7 @@ coach = true
 cycle = false
 ```
 
-`cycle = true` (default false; an invalid table disables learning; restart the mind)
+`cycle = true` (the default; an invalid table disables learning; restart the mind)
 adds the model-free `learn_cycle` night stage after `bandit` (else after `talk_coach`
 or `rewards`). It runs once per ISO week, on the Monday night after the Sunday
 weekly evaluation; a later night of that week retries a failed or frozen run. Its

@@ -3,11 +3,12 @@ import asyncio
 from tests.claims.conftest import context
 from leeroy_mind.signals import stage
 from .test_signals import line, saved, worker
+from shipped_off import off
 
 
 def test_night_detects_repetition_and_filler_and_labels_guard_replay(context, store, clock, tmp_path):
     async def go():
-        (tmp_path / 'mind.toml').write_text('[guards]\nenabled=true\n', encoding='utf-8')
+        (tmp_path / 'mind.toml').write_text(off('[guards]\nenabled=true\n'), encoding='utf-8')
         async with context() as (ctx, llm):
             ctx.window = (clock.now() - 3600, clock.now() + 1)
             line(store, clock, text='the invented wheel rolls behind the stable')

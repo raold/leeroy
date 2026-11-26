@@ -28,7 +28,7 @@ guild_day = 12
 max_words = 40
 ```
 
-The feature defaults off. An invalid table also means off. Allowed ranges are share 0–0.5,
+The feature defaults on. An invalid table means off. Allowed ranges are share 0–0.5,
 member cap 0–10, guild cap 0–50 and word limit 5–60. The caps use the local calendar day,
 share the existing `server:day:<date>` record, and fail closed if its counters are malformed.
 The attachment and its counters commit with the message, including concurrent sends.

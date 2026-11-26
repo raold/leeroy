@@ -8,11 +8,15 @@ from leeroy_mind.bridge import TransportState
 from leeroy_mind.config import load_config
 from leeroy_mind.protocol import Ack, event_type
 from leeroy_mind.testing.wire import WireContract
+from shipped_off import off
 
 
 class RealmApp:
     def __init__(self, root, store, clock):
         self.data_dir, self.store, self.clock = root, store, clock
+        if not (root / "mind.toml").exists():  # the switches that default on, off unless asked
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "mind.toml").write_text(off(), encoding="utf-8")
         self.cfg = load_config(root / "mind.toml")
         self.human_guid = 1
         self._hello_ts = None
@@ -93,4 +97,4 @@ class RealmApp:
 
 def enabled(root, value):
     (root / "mind.toml").write_text(
-        "[realm]\nenabled = " + str(value).lower() + "\n", encoding="utf-8")
+        off("[realm]\nenabled = " + str(value).lower() + "\n"), encoding="utf-8")

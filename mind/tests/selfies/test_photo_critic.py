@@ -20,9 +20,10 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
 from selfies.fakes import CLOCK, JPEG, fake_worker, ready, renderable_cast
+from selfies.fakes import selfie_cfg
 
-ON = SelfieCfg(enabled=True, snaps=True, critic=True, best_of=3)
-BANDIT = SelfieCfg(enabled=True, snaps=True, critic=True, best_of=3, param_bandit=True)
+ON = selfie_cfg(enabled=True, snaps=True, critic=True, best_of=3)
+BANDIT = selfie_cfg(enabled=True, snaps=True, critic=True, best_of=3, param_bandit=True)
 CLEAN = {"limbs": "ok", "hands": "ok", "fingers_ok": True, "eyes_ok": True,
          "extra_people": False, "same_person": True, "overall": 3}
 
@@ -211,7 +212,7 @@ def test_the_report_counts_defect_rates_by_what_was_rendered(store, tmp_path):
 # -- the parameter bandit -----------------------------------------------------------------------
 
 def test_the_bandit_off_or_frozen_draws_nothing_and_writes_nothing(store, tmp_path, caplog):
-    for cfg in (SelfieCfg(), ON):
+    for cfg in (selfie_cfg(), ON):
         got = params.choose(store, cfg, tmp_path, shape="portrait", framing="upper_body",
                             control=(0.45, 30))
         assert got == params.Params(0.45, 30, False)
@@ -272,10 +273,13 @@ def test_his_pick_credits_the_picked_candidate_and_an_undo_takes_it_back(store, 
 
 # -- config ------------------------------------------------------------------------------------
 
-def test_the_critic_switches_default_off_and_an_invalid_table_keeps_them_off(tmp_path):
+def test_the_critic_switches_default_on_and_an_invalid_table_keeps_them_off(tmp_path):
     cfg = load_selfie_config(tmp_path / "missing.toml")
     assert (cfg.critic, cfg.best_of, cfg.critic_model, cfg.param_bandit) == (
-        False, 1, "qwen2.5vl:7b", False)
+        True, 1, "qwen2.5vl:7b", True)  # since 2026-11-25
+    (tmp_path / "mind.toml").write_text("[selfies]\ncritic = false\nparam_bandit = false\n")
+    cfg = load_selfie_config(tmp_path / "mind.toml")
+    assert (cfg.critic, cfg.param_bandit) == (False, False)
     (tmp_path / "mind.toml").write_text("[selfies]\nenabled = true\ncritic = true\nbest_of = 3\n"
                                         "param_bandit = true\ncritic_model = \"x-vl:3b\"\n")
     cfg = load_selfie_config(tmp_path / "mind.toml")

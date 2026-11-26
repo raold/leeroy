@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 import logging
 import random
+import sqlite3
 
 from leeroy_mind.llm.client import GpuPaused
 from leeroy_mind.protocol import Hello, Login, Logout
@@ -205,6 +206,8 @@ class GuildLife:
             if name == "hello":
                 self.ports.loot_receipts = "loot_receipts_v1" in ev.features
                 self.ports.loot_receipt_status = "loot_receipt_status_v1" in ev.features
+                if self.cfg.loot_receipts and not self.ports.loot_receipts:
+                    self._receipts_unavailable()
                 # First: the runner's raids must be known before any offline tick can plan one.
                 self._heroic_feature = "member_dungeon_v1" in ev.features
                 if self.heroics is not None:
@@ -343,6 +346,19 @@ class GuildLife:
         if not self._snapshot_valid:
             return
         await self.roster.tick()
+
+    def _receipts_unavailable(self):
+        """[guild] loot_receipts is on but this bridge's hello has no loot_receipts_v1 (native
+        Leeroy.LootReceipts.Enable off, or an older worldserver): new hand-outs go without receipts,
+        and an award already waiting on one stays held, never sent again. Once a connection, with
+        counts only."""
+        try:
+            held = self.ports.conn.execute(
+                "SELECT count(*) FROM meta WHERE key LIKE 'guild:loot:%' AND json_extract(value,'$.receipt')=1 "
+                "AND json_extract(value,'$.state') IN ('sending','uncertain')").fetchone()[0]
+        except sqlite3.Error:
+            held = "unknown"
+        log.warning("loot_receipts_unavailable feature=loot_receipts_v1 held=%s", held)
 
     async def loot_receipts_tick(self):
         # Settlements survive the raid, reconnects and turning new receipt awards off.

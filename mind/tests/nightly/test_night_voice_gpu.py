@@ -34,7 +34,7 @@ def rig(h, *, arbiter=True):
     admin = FakeAdmin([h.REFL, h.EMB])
     if arbiter:
         app.arbiter = GpuArbiter(admin, h.settings)
-    ext = VoiceExtension(app, VoiceCfg())
+    ext = VoiceExtension(app, VoiceCfg(enabled=False, autostart=False))
     ext.gpu_pins = Pins()
     return ext, admin
 

@@ -60,23 +60,25 @@ def test_life_values_read_and_an_invalid_one_reads_as_its_default(tmp_path, capl
     assert "chattiness" not in caplog.text
 
 
-def test_a_life_that_is_no_table_reads_as_empty(tmp_path, caplog, monkeypatch):
+def test_a_life_that_is_no_table_reads_as_its_defaults_with_its_switches_off(tmp_path, caplog,
+                                                                            monkeypatch):
     monkeypatch.setattr(config, "_WARNED", set())
+    off = config.LifeCfg(state=False, day_plans=False, dungeons=False)  # invalid means off
     p = tmp_path / "m.toml"
     p.write_bytes(b"life = 3\n[talk]\nchattiness = 7\n")
     cfg = config.load_config(p)
-    assert cfg.life == config.LifeCfg() and cfg.talk.chattiness == 7
+    assert cfg.life == off and cfg.talk.chattiness == 7
     config.load_config(p)
     assert caplog.text.count("life_invalid") == 1
     p.write_bytes(b'life = "x6"\n')
-    assert config.load_config(p).life == config.LifeCfg()
+    assert config.load_config(p).life == off
     assert caplog.text.count("life_invalid") == 2 and "x6" not in caplog.text
 
 
 def test_the_default_template_says_what_the_code_does(tmp_path):
     import tomllib
     life = tomllib.loads(config.DEFAULT_TOML)["life"]
-    assert life == {"day_plans": False, "dungeons": False, "availability": 0, "state": False,
+    assert life == {"day_plans": True, "dungeons": True, "availability": 0, "state": True,
                     "dm_wait_cap_s": 75, "wow_vs_life": 5}
     assert config.load_config(tmp_path / "absent.toml").life == config.LifeCfg()
 

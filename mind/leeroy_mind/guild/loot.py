@@ -18,7 +18,7 @@ from .ports import TransportUnavailable
 from .protocol import GiveLoot, GetLootReceipt
 from .roles import role_of, stat_family
 from .store import _insert_ledger, balances
-from .upgrades import upgrade_gain
+from .upgrades import can_use, upgrade_gain
 
 if TYPE_CHECKING:
     from .session import RaidContextInfo
@@ -256,6 +256,8 @@ class LootMaster:
                         member, persona = cast.get(guid), self.ports.persona(guid)
                         if member is None or not member.online or persona is None:
                             continue
+                        if not can_use(item, member.race, member.class_):
+                            continue
                         role = role_of(member.class_, member.spec_tab, persona.play.raid_role)
                         gain = upgrade_gain(item, member.class_, stat_family(member.class_, member.spec_tab, role),
                                             equipment.get(guid, {}), role=role)
@@ -371,8 +373,11 @@ class LootMaster:
                     continue
                 if not self._here(record):
                     continue
-                if self.cfg.loot_receipts and not getattr(self.ports, "loot_receipts", False):
-                    continue
+                # Receipts only where native proves them ([guild] loot_receipts and the hello's
+                # loot_receipts_v1); without it the give goes as with receipts off (GuildLife logs
+                # loot_receipts_unavailable at the hello). An award already waiting on a receipt is
+                # never sent again (above).
+                receipts = self.cfg.loot_receipts and getattr(self.ports, "loot_receipts", False)
                 current_balances = balances(self.ports.conn)
                 held = self._held()
                 cast = self.ports.cast()
@@ -405,7 +410,7 @@ class LootMaster:
                         # The intended award rides with the give, so an unknown outcome can be sent
                         # again; `award` is written only by a matching ack (the console's winner)
                         current.update(state="sending", intent=asdict(result), attempt=0)
-                        if self.cfg.loot_receipts:
+                        if receipts:
                             current.update(receipt=True, receipt_owner=self.ports.human_guid,
                                            receipt_guild=_get(self.ports.conn, "guild_id"))
                     _put(self.ports.conn, key, current)

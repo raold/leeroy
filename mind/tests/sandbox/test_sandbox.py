@@ -333,7 +333,7 @@ ops_actions = true
         assert not photos.send and not photos.requests
         server = load_server_config(path)
         assert server.conversations_per_hour == 0 and server.dms_per_day == 0
-        assert server.enabled == ("[server]\nenabled = true" in text)
+        assert server.enabled  # its knowledge stays: on as the live one is, or by default
         culture = load_culture_config(path)
         assert not (culture.calendar or culture.loot or culture.bots or culture.memes)
         guild = load_guild_config(path)

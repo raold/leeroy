@@ -6,7 +6,7 @@ few stills of it and is told it is a short video she cannot hear.
 
 ## Switch
 
-`[videos] enabled = true` in `mind.toml` (default false; a missing, unknown or non-boolean key
+`[videos] enabled = true` in `mind.toml` (default true; an unknown or non-boolean key
 reads as off and logs `videos_config_invalid key=...` once). It also needs `[photos] enabled`
 and `ffmpeg` and `ffprobe` on the PATH of the console's process (on this PC they come from
 Chocolatey, `C:\ProgramData\chocolatey\bin`). Restart the mind and the console after changing

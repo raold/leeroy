@@ -27,6 +27,7 @@ from selfies.fakes import fake_command, request, until
 from leeroy_mind.selfies.worker import SelfieWorker
 
 from .seed import members, seed
+from shipped_off import off
 
 
 def fake_ffmpeg(monkeypatch):
@@ -130,7 +131,7 @@ class Rehearsal:
         port = await self.bridge.start()
         self.ports.add(port)
         (self.data / "mind.toml").write_text(
-            f"[bridge]\nport = {port}\n[talk]\nchattiness = 0\n"
+            off(f"[bridge]\nport = {port}\n[talk]\nchattiness = 0\n"
             "[selfies]\nenabled = true\n[realm]\nenabled = true\n"
             "[guild]\noffline_raids_per_day = 0\n"
             f'worldserver_conf = "{(self.root / "absent.conf").as_posix()}"\n'
@@ -138,7 +139,7 @@ class Rehearsal:
             + ('[signals]\nenabled = true\n[learn]\nenabled = true\n' if learning else '')
             + ('[voice_notes]\nenabled = true\n' if voice_notes else '')
             + ('[godmode]\nenabled = true\n' if godmode else '')
-            + ('[videos]\nenabled = true\n' if videos else ''), encoding="utf-8")
+            + ('[videos]\nenabled = true\n' if videos else '')), encoding="utf-8")
         if videos:
             fake_ffmpeg(self.monkeypatch)
         seed(self.data)

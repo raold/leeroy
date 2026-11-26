@@ -7,6 +7,7 @@ from leeroy_mind.voice import rooms, wire
 from leeroy_mind.voice.comms import roll_on_comms
 from leeroy_mind.voice.rooms import ROOMS, RoomState
 from voice.conftest import CAST, HUMAN, OFFICERS
+from shipped_off import off
 
 OFF = {102, 104}
 
@@ -180,7 +181,7 @@ def test_spec_missing_is_counted(vapp, caplog):
 
 
 def test_disabled_does_nothing(tmp_path, clock):
-    (tmp_path / "mind.toml").write_text("", encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off(""), encoding="utf-8")
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
     assert app.voice.store is None and app.voice._on_login not in app._handlers.get("login", ())
     assert app._handlers.get("login")  # another extension may observe presence

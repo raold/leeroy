@@ -15,7 +15,7 @@ from leeroy_mind.nightly.gpu import LiveLeaseHeld
 from leeroy_mind.nightly.runner import NightRunner, Stage
 from leeroy_mind.nightly.store import run_begin, run_get
 from leeroy_mind.personas.io import load_persona, save_persona
-from leeroy_mind.selfies.config import SelfieCfg
+from selfies.fakes import selfie_cfg
 from leeroy_mind.selfies.files import guild_photo, guild_tiles, history, snap, sync_chosen
 from leeroy_mind.selfies.job import pid_alive
 from leeroy_mind.selfies.scene import build_scene_prompt, build_tile_prompt, ref_crop, scene_from
@@ -30,7 +30,7 @@ from nightly.conftest import FakeAdmin
 from nightly.test_night_enrich import APPEARANCE
 from selfies.fakes import JPEG, fake_command, fake_worker, planned_snap, ready, renderable_cast, until
 
-SNAPS_CFG = SelfieCfg(enabled=True, snaps=True)
+SNAPS_CFG = selfie_cfg(enabled=True, snaps=True)
 from leeroy_mind.selfies.scene import scene_json
 from leeroy_mind.selfies.scene_choices import compose_choices
 from selfies.test_scene_choices import PICKS
