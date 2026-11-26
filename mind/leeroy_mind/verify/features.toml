@@ -271,7 +271,7 @@ db = { from = "tg_pull", where = "map = 631 AND boss_id = 10 AND outcome = 'wipe
 
 [[feature]]
 id = "valithria_healer_focus"
-name = "Valithria: every healer but one on her, none in the portals, mana cooldowns spent"
+name = "Valithria: every healer but one on her, mana cooldowns spent, heroic cloud stacks capped"
 prs = [497]
 note = "Set `since` to the native release that carries playerbots patch 0021; older watch lines have no focus field."
 

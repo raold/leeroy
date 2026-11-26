@@ -122,20 +122,22 @@ spire, the synthetic account gets the core's permission to skip an instance's
 required bosses (RBAC 13, isolated auth database only; without it an archmage
 that sees a raider before the pull starts the fight as a sequence break and
 ports everyone out), and the lower-spire states are also set in the tick of the
-pull. The raid zones in beside her. After up to 15 s out of combat there (the
-first heal on her
-ends the wait, as it starts the fight in a real raid), the real combat trigger
-pulls the encounter. Nothing then heals, damages, moves, casts or writes health for
-anyone: the run ends at her own `DONE` (healed to full), a reset or wipe, or a
-15-minute cap. `before` pulls with `Playerbots.ValithriaHealerFocus` off,
-`after` with it on; the switch is restored at cleanup. The default runs all
-four: 10-player normal and heroic, each before and after.
+pull. The raid zones in beside her and waits up to 15 s out of combat (the first
+heal on her ends the wait, as it starts the fight in a real raid); then the real
+combat trigger zones the raid in, every 3 s until the encounter is in progress.
+Nothing then heals, damages, moves, casts or writes health for anyone: the run
+ends at her own `DONE` (healed to full), a reset or wipe, or a 15-minute cap.
+`before` pulls with `Playerbots.ValithriaHealerFocus` off, `after` with it on,
+and `noportals` with it on and `Playerbots.ValithriaPortals` off; both switches
+are restored at cleanup. The default runs four: 10-player normal and heroic,
+each before and after.
 
 Each pull's `<data>/runs/*-valithria-*/` holds the polled trace, the final
 observation (her health every 10 s, deaths, and per healer: portal trips, time
 in the dream, time in reach and sight of her, effective healing on her from the
 core's `OnHeal`, mana cooldowns and potions, lowest mana, top Emerald Vigor and
-Twisted Nightmares stacks) and `report.json`. A run is `killed` only with her
+Twisted Nightmares stacks), the raid's damage taken by spell and each death's
+killer, and `report.json`. A run is `killed` only with her
 own `DONE` and full health. The live install has `Playerbots.BotCheats` `raid`
 (instant taunts); the dojo keeps stock rules, so its tanks hold adds less well
 than the live raid's.

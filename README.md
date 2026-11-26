@@ -430,15 +430,20 @@ output in `patches/`:
   with one `valithria_healer` line per bot healer (duty, `icc` strategy, health,
   mana, range, heals cast on her, mana cooldowns, last spell and target).
   `Playerbots.ValithriaHealerFocus` (playerbots patch 0021, default `1`) keeps
-  every healer but one on her at any size and difficulty, sends no bot healer
-  into a Dream or Nightmare portal (bots cannot collect the clouds, and the
-  heroic clouds' Twisted Nightmares killed both portal healers on 2026-11-25),
-  keeps healers at her side while portals are up, and has each spend its mana
-  cooldown before running dry (Divine Plea below 65% mana, Shadowfiend below
-  60% and Hymn of Hope below 25%, Mana Tide Totem and Innervate below 50%).
-  `0` restores the earlier allocation and portal use. The dojo's
+  every healer but one on her at any size and difficulty, brings a healer who
+  does not portal back to her side while portals are up, has each healer spend
+  its mana cooldown before running dry (Divine Plea below 65% mana,
+  Shadowfiend below 60% and Hymn of Hope below 25%, Mana Tide Totem and
+  Innervate below 50%), and on heroic stops a portal healer taking Nightmare
+  clouds at 6 stacks of Twisted Nightmares, after which it heals itself (each
+  stack is 200 Nature damage a second for 40 s; both portal healers died of it
+  on 2026-11-25). `Playerbots.ValithriaPortals` (default `1`) has the healers on
+  her take the portals and collect the clouds: their stacks are the mana and
+  healing the fight is built on, and on heroic each cloud left hurts her for
+  1,000 a second. `0` keeps every healer out of the dream. `ValithriaHealerFocus
+  = 0` restores the earlier allocation and portal handling. The dojo's
   `valithria-encounter` pulls her with a fixed ten-player bot raid on 10-player
-  normal and heroic, with the switch off and on ([dojo](dojo/README.md)).
+  normal and heroic with the switches off and on ([dojo](dojo/README.md)).
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.
@@ -449,8 +454,7 @@ output in `patches/`:
   `DungeonClear.OfflineValithria = 1` adds her missing healing objective before
   Sindragosa. The default is off. After arrival and the normal raid muster, an
   idle autonomous raid with a healer pulls a nearby Risen Archmage. Playerbots'
-  Valithria strategy supplies the actual heals (and, only with
-  `Playerbots.ValithriaHealerFocus = 0`, the portal work); the objective
+  Valithria strategy supplies the actual heals and portal work; the objective
   waits for the core's `DONE` and remusters after a wipe. There is no fake kill,
   healing, loot or achievement credit. A human anywhere in the instance,
   absent/dead/remote members, missing healer or pending loot prevents the pull.
