@@ -154,6 +154,40 @@ def test_offline_reservations_survive_detachment_and_corrupt_acceptance(app, pha
         ports.offline_raid_members()
 
 
+def test_offline_reservations_accept_bench_reserves(app, caplog):
+    controller = guild(app).offline
+    plan = dict(members=[11, 12])
+    controller._owned = dict(id="op", raid_id=32, phase="accepted", plan=plan, reserves=[13, 14],
+                             accepted=[11, 13], actual_plan=dict(members=[11, 13]))
+    ports = LivePorts(app)
+    with caplog.at_level("WARNING"):
+        assert ports.offline_raid_members() == {11, 13}
+        controller._owned["accepted"] = None  # pending: planned and reserves are all possible members
+        assert ports.offline_raid_members() == {11, 12, 13, 14}
+    assert "realm_offline_reservations_corrupt" not in caplog.text
+    controller._owned.update(phase="complete", accepted=[11, 13])
+    assert ports.offline_raid_members() == set()
+    with caplog.at_level("WARNING"):
+        assert ports.offline_raid_members() == set()
+    assert "realm_offline_reservations_corrupt" not in caplog.text
+
+
+def test_offline_reservations_real_corruption_warns_once_per_record(app, caplog):
+    controller = guild(app).offline
+    controller._owned = dict(id="op", raid_id=32, phase="accepted", plan=dict(members=[11, 12]),
+                             reserves=[13], accepted=[11, 99])
+    ports = LivePorts(app)
+    with caplog.at_level("WARNING"):
+        for _ in range(5):
+            assert ports.offline_raid_members() == {11, 12}
+    assert caplog.text.count("realm_offline_reservations_corrupt") == 1
+    controller._owned.update(id="op2", raid_id=33)
+    with caplog.at_level("WARNING"):
+        ports.offline_raid_members()
+        ports.offline_raid_members()
+    assert caplog.text.count("realm_offline_reservations_corrupt") == 2
+
+
 def test_retained_matching_offline_session_only_and_terminal_barrier(app):
     controller = guild(app).offline
     current = raid(app, offline=True)
