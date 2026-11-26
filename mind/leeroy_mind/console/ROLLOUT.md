@@ -26,7 +26,7 @@ with a comment saying who ruled it and when. Never leave it unset.
 
 | Switch | Applied by |
 |---|---|
-| Native `Leeroy.*` keys | `.reload config` in the worldserver, then a fresh capability/greeting check |
+| Native `Leeroy.*` keys | `.reload config` in the worldserver, then restart the mind so it reconnects and reads the new bridge hello (the native hello is sent only on a new connection), then check the hello and the Ops tab |
 | `[decisions]` and `[server]` | Restart mind and console in the agreed window |
 | `[life]` | Read on session or night reload; record the reload that consumed it |
 | Most other `mind.toml` sections | Read at mind start; restart the mind |
@@ -50,7 +50,8 @@ Stop new admission first, let in-flight work settle, then close the native gate.
    its combat fences.
 4. Inspect what is outstanding, then switch off the native gate
    (`Leeroy.DayPlans.Enable`, `Leeroy.MemberDungeon.Enable`,
-   `Leeroy.Decisions.BankMail.Enable` and the like) and `.reload config`.
+   `Leeroy.Decisions.BankMail.Enable` and the like) and `.reload config`, then restart the mind so it reconnects and reads the new
+   hello.
 5. Observe one normal scheduled cycle and a reconnect before calling it done.
 
 Never kill the server to clear ownership, clear a journal, delete permits,
