@@ -45,7 +45,8 @@ class Guards:
         return len(self._window)
 
     def allow(self, guid: int, kind: TurnKind, now: float, *, continuation: bool = False,
-              reply: bool = False, pushback: bool = False) -> bool:
+              reply: bool = False, pushback: bool = False,
+              window_exempt: bool = False) -> bool:
         """`reply` marks an answer to the human's whisper, or a whisper to him that starts a
         conversation (TurnMeta.initiates): it always may go out (rehearsal 3, check 4: her
         reply to his whisper was dropped 4 s after a guild bit of hers). Her lines
@@ -55,6 +56,9 @@ class Guards:
         "are you drunk?" comes seconds after their line; the guild's pace still does."""
         if continuation or reply:
             return True
+        # the loot master's and DKP officer's lines (TurnMeta.window_exempt) pass the guild-wide
+        # window: a gz burst must not silence a loot call (2026-11-25 13:45); the per-person
+        # interval still holds
         n = self._in_window(now, answers=kind in _ANSWERS)
         if kind not in _NO_PERSON_LIMIT and not pushback:
             interval = REPLY_S if kind is TurnKind.REPLY_HUMAN else self.per_person_s
@@ -63,6 +67,8 @@ class Guards:
             opened = kind in _ANSWERS and last is not None and self._started.get(guid) == last
             if last is not None and now - last < interval and not opened:
                 return False
+        if window_exempt:
+            return True
         if kind in _NO_PERSON_LIMIT or kind in _FULL_WINDOW:
             return n < self.guild_per_min
         return n < min(self.social_ceiling, self.guild_per_min)

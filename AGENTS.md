@@ -96,6 +96,21 @@ install.
   ancestry or stable patch id; a changed one is a new patch). The dojo's series
   (`patches/dojo/mod-playerbots`) applies on top of the local playerbots series.
 
+### Feature switches
+
+- **Shipped means on** (owner rule, 2026-11-25). A merged feature ships enabled: its code default
+  is on and the live config is set to match at release. Nothing is merged dark to be flipped
+  later, and there is no staged one-key-at-a-time enable. A feature that is not ready to run is
+  not merged. Flag a new `mind.toml` key, `Leeroy.*` key or persona switch that defaults to off,
+  a PR that says "dormant", "dark" or "enable after release", and a release step that leaves a
+  new switch off.
+- A switch is off only by an explicit owner ruling, recorded as an explicit `false` (or `0`) in
+  the live config with a comment, and in the PR that adds it. Current rulings: `[heat]
+  public_cap`, `[talk] coherence_length`, `[talk] dm_own_time`, `[lab] promote`.
+- Every switch is still a safe off: it must stop new work without losing in-flight state (see
+  `mind/leeroy_mind/console/ROLLOUT.md`). An invalid value means off, and the console's Ops tab
+  shows each switch's state; keep both true for a new switch.
+
 ### Checks that judge a pull request
 
 - Never let a PR weaken the check that judges it. A change to `.github/workflows/`,
@@ -113,6 +128,20 @@ install.
 - Local notes (`CLAUDE.md`, `docs/`, `private/`) are git-ignored on purpose; flag a PR that adds
   them or un-ignores them.
 - Commits carry no `Co-Authored-By` or other attribution trailers.
+
+### How to report findings
+
+- Report a bug class once: one finding listing every affected `file:line`, not one finding per
+  site or per round.
+- Tag a finding about code the PR did not change as **Pre-existing**; never block on it.
+- On a re-review, look only at commits after the last commit you already reviewed.
+- Start the summary with a count line: `N findings (P1 a, P2 b)`.
+- No style or naming nits. Report only correctness, security, data loss, release safety and
+  privacy.
+
+### Maintainer rule
+
+- After 3 review rounds on one PR, split or rethink the PR instead of starting a 4th round.
 
 <!-- review-outcomes:start -->
 ## Checks learned from released misses

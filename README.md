@@ -95,8 +95,13 @@ flowchart LR
   database and ports, for training combat policies, never touching the live
   realm.
 
-Nothing new is on by default: each optional feature sits behind a switch in
-`mind.toml` or the module config, and an invalid setting means off.
+A shipped feature is on: each one sits behind a switch in `mind.toml` or the
+module config so it can be turned off safely, but a merged feature defaults to
+on and the live config is set to match at release. A feature that is not ready
+to run is not merged. A switch is off only by an explicit owner ruling, kept as
+an explicit `false` with a comment (today `[heat] public_cap`,
+`[talk] coherence_length`, `[talk] dm_own_time` and `[lab] promote`). An invalid
+setting still means off, and the console's Ops tab shows each switch's state.
 Personas, memories, prompts, photos and logs stay in the ignored `mind-data/`.
 
 ## The mind
@@ -179,7 +184,7 @@ audience, and a group DM is shared only with those who were in it.
 ### Learning
 
 A self-improvement loop in which the guild learns from how the player
-responds. Each piece is off by default, and none writes chat text to its logs.
+responds. Each piece is on by default, and none writes chat text to its logs.
 
 - **Member claims** (`[claims]`): a night stage remembers each member's own
   facts, opinions and plans, with a model-free contradiction check. See the
@@ -304,7 +309,7 @@ raid. Requested damage counters cannot establish actual boss DPS, and dummy
 results cannot establish a field rotation win. Voice send records do not prove
 audible playback or complete callouts.
 
-Training is disabled by default. Private records live in the mind data
+Training is enabled by default. Private records live in the mind data
 directory's `mind.db` (`tg_` tables and scoped receipts). Use `python -m
 leeroy_mind training status`, `training report --week YYYY-Www` and `training
 trials` to inspect them. With the mind stopped, `training rollback --context
@@ -428,7 +433,25 @@ output in `patches/`:
   outranked the dragon heal), and Beacon of Light is not tried on her. While
   her encounter runs, `Playerbots.log` gets a `valithria_watch` line every 5 s
   with one `valithria_healer` line per bot healer (duty, `icc` strategy, health,
-  mana, range, heals cast on her, last spell and target).
+  mana, range, heals cast on her, mana cooldowns, last spell and target).
+  `Playerbots.ValithriaHealerFocus` (playerbots patch 0021, default `1`) keeps
+  every healer but one on her at any size and difficulty, brings a healer who
+  does not portal back to her side while portals are up, steps a healer on her
+  out of a Column of Frost or Mana Void (her heal outranked the sidestep), stops
+  any raider's step out of a void, column or worm being replaced by its next
+  move, has each healer spend
+  its mana cooldown before running dry (Divine Plea below 65% mana,
+  Shadowfiend below 60% and Hymn of Hope below 25%, Mana Tide Totem and
+  Innervate below 50%), and on heroic stops a portal healer taking Nightmare
+  clouds at 6 stacks of Twisted Nightmares, after which it heals itself (each
+  stack is 200 Nature damage a second for 40 s; both portal healers died of it
+  on 2026-11-25). `Playerbots.ValithriaPortals` (default `1`) has the healers on
+  her take the portals and collect the clouds: their stacks are the mana and
+  healing the fight is built on, and on heroic each cloud left hurts her for
+  1,000 a second. `0` keeps every healer out of the dream. `ValithriaHealerFocus
+  = 0` restores the earlier allocation and portal handling. The dojo's
+  `valithria-encounter` pulls her with a fixed ten-player bot raid on 10-player
+  normal and heroic with the switches off and on ([dojo](dojo/README.md)).
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.
@@ -470,6 +493,7 @@ Apply them to a checkout of each module with
 | `patches/mod-playerbots/` | Local playerbots commits, as `git format-patch` output |
 | `patches/mod-ollama-chat/` | Local mod-ollama-chat commits, same format |
 | `patches/mod-dungeon-clear/` | Local mod-dungeon-clear commits, same format |
+| `patches/mod-individual-progression/` | Local mod-individual-progression commit (level 80 and above enter WotLK Onyxia), same format |
 | `patches/dojo/mod-playerbots/` | The dojo's own playerbots commit (an external-controller hook), applied on top of the local commits in the dojo's isolated checkout only |
 | `modules/mod-leeroy/` | The guild module and its bridge, with unit tests and a smoke test in `tools/` |
 | `modules/mod-dojo/` | The dojo's native module, built only into the dojo's isolated core (the CI build compiles its disabled variant) |
@@ -551,11 +575,21 @@ a separate native build.
 Commits already in the live branch and confirmed empty cherry-picks are skipped,
 including merge commits whose constituent changes were already released.
 
-For a native release, numbered `.patch` files in `patches/mod-playerbots/` and
-`patches/mod-dungeon-clear/` are checked against each module's Git history.
+For a native release, numbered `.patch` files in `patches/mod-playerbots/`,
+`patches/mod-dungeon-clear/` and `patches/mod-individual-progression/` are checked against each module's Git history.
 Missing patches are rehearsed, then applied with `git am` in filename order
 before the build. Original commit ancestry or an equivalent stable patch ID
 counts as installed, preserving later local edits and intentional reverts.
+So does a history commit with the patch's subject that the patch reproduces
+exactly from its parent, since a re-export with other context changes the
+patch ID. Otherwise, in series order on the rehearsed tip, a patch is already
+installed when undoing and redoing it gives back exactly that tree; one that
+would also still change the tree when applied is ambiguous and refuses the
+release.
+The release runner freezes the installed helpers before cherry-picking, so the first
+release that adds a module to the planner's list (mod-individual-progression, this
+change) must first copy the updated `scripts/ac-release-patches.py` onto the live
+branch by hand (`scripts/` is not releasable); otherwise the old list skips the new series.
 Reapplying a reverted change requires a new patch entry. The playerbot pin guard
 is checked before services stop and again before building. Dirty module repos,
 unfinished Git operations and failed rehearsal refuse the release. Even if all

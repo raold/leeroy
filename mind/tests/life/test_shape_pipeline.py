@@ -182,7 +182,10 @@ def test_shape_off_and_dm_mirror_zero_change_nothing(store, clock, tmp_path):
 
 def test_shape_and_dm_mirror_are_read_from_mind_toml_and_invalid_means_default(tmp_path, caplog):
     path = tmp_path / "mind.toml"
-    assert (load_config(path).talk.shape, load_config(path).talk.dm_mirror) == (False, 5)
+    # shape on by default (2026-11-25)
+    assert (load_config(path).talk.shape, load_config(path).talk.dm_mirror) == (True, 5)
+    path.write_bytes(b"[talk]\nshape = false\n")
+    assert load_config(path).talk.shape is False
     path.write_bytes(b"[talk]\nshape = true\ndm_mirror = 8\n")
     assert (load_config(path).talk.shape, load_config(path).talk.dm_mirror) == (True, 8)
     caplog.set_level(logging.WARNING)

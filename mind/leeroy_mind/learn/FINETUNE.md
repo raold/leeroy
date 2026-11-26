@@ -42,8 +42,8 @@ Sources, in precedence order when the same pair qualifies twice:
   Stored vectors must match both the text hash and embedding-model fingerprint.
 
 No original draft or embedding is reconstructed. To retain future evidence,
-explicitly set `[learn] enabled = true` and `capture_preferences = true`, then
-restart the mind. Capture defaults off. It records acknowledged rewrites and
+keep `[learn] enabled` and `capture_preferences` on (both default true), then
+restart the mind. Capture defaults on. It records acknowledged rewrites and
 reuses parent/context embeddings already computed by enabled semantic guards;
 it makes no extra model request. Plain lexical guards provide no vectors.
 Discord parent vectors resolve through the desk's message-to-chat mapping;

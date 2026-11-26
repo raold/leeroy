@@ -20,7 +20,6 @@ from leeroy_mind.personas.io import PersonaCache, load_persona, save_persona
 from leeroy_mind.personas.looks_edit import (RECEIPT, STYLE, LooksError, LooksService,
                                              set_looks)
 from leeroy_mind.selfies import files, kind, varied
-from leeroy_mind.selfies.config import SelfieCfg
 from leeroy_mind.selfies.prompt import build_prompt
 from leeroy_mind.selfies.service import SelfieService
 from leeroy_mind.selfies.store import VARIED_SET_KEY, queued_sets, ready_set
@@ -30,6 +29,7 @@ from nightly.test_night_enrich import APPEARANCE
 
 from .fakes import OWNER, PHOTO, mind_app, ready, renderable_cast
 from .test_selfie_prompt import LUST_PHOTO
+from .fakes import selfie_cfg
 
 KEY = "K" * 43
 KEEP = "with her new looks; pick one as her photo to keep it."
@@ -49,7 +49,7 @@ def save_woman(store, guid: int, *, lust: bool = False, **looks) -> None:
         kind._record(store, guid, LUST, p.photo)
 
 
-def app_for(store, clock, data, cfg=SelfieCfg(enabled=True)):
+def app_for(store, clock, data, cfg=selfie_cfg(enabled=True)):
     from conftest import seed_test_cast
     from leeroy_mind.protocol import Member
     seed_test_cast(store)
@@ -231,7 +231,7 @@ def test_a_change_queues_a_fresh_set_and_its_render_says_the_new_looks(store, cl
 
 def test_the_words_name_the_booth_when_it_applies(store, clock, tmp_path):
     from leeroy_mind.selfies.store import pick
-    app = app_for(store, clock, tmp_path, SelfieCfg(enabled=True, booth=True, identity_sets=True))
+    app = app_for(store, clock, tmp_path, selfie_cfg(enabled=True, booth=True, identity_sets=True))
     save_woman(store, 102)
     ready(store, tmp_path, 102, 1)
     pick(store, 102, 1, 0, source="console", now=2.0)
@@ -241,7 +241,7 @@ def test_the_words_name_the_booth_when_it_applies(store, clock, tmp_path):
 
 
 def test_a_lust_style_woman_gets_a_varied_set_even_after_one_today(store, clock, tmp_path):
-    app = app_for(store, clock, tmp_path, SelfieCfg(enabled=True, varied_sets=True))
+    app = app_for(store, clock, tmp_path, selfie_cfg(enabled=True, varied_sets=True))
     save_woman(store, 102, lust=True, build="voluptuous")
     day = clock.local().date().isoformat()
     store.set_meta(varied.DAY_KEY.format(guid=102), day)  # "selfies vary" ran for her today
@@ -261,7 +261,7 @@ def test_with_varied_sets_off_a_lust_woman_gets_an_ordinary_set(store, clock, tm
 
 
 def test_with_rendering_off_the_looks_save_and_no_set_is_queued(store, clock, tmp_path):
-    app = app_for(store, clock, tmp_path, SelfieCfg(enabled=False))
+    app = app_for(store, clock, tmp_path, selfie_cfg(enabled=False))
     save_woman(store, 102)
     reply = run(LooksService(app).handle(looks()))
     assert reply["ok"] and reply["set"] is None and load_persona(store, 102).appearance.bust == "large"
@@ -420,7 +420,7 @@ def test_an_ordinary_set_of_a_member_without_an_edit_keeps_the_full_face(h, tmp_
     lust(h, 101)
     _cover(h)
     queue_more(h.store, 101, now=h.T)
-    cfg = SelfieCfg(enabled=True, identity_sets=True)
+    cfg = selfie_cfg(enabled=True, identity_sets=True)
     log = tmp_path / "requests.log"
     run(make_stage_for(cfg, tmp_path, FAKE_SELFIE_IDENTITY="1", FAKE_SELFIE_LOG=str(log))(h.ctx()))
     rows = [r for r in _logged(log) if r[0].startswith("101:2:")]
@@ -485,7 +485,7 @@ def test_a_set_whose_render_an_edit_overtook_is_stamped_old_and_a_fresh_one_queu
             edits.append(set_looks(h.store, 101, weight_kg=96, bust="very_large", now=h.T + 5))
         return await real(*a, **kw)
     monkeypatch.setattr(render, "render_candidates", edit_midway)
-    cfg = SelfieCfg(enabled=True, identity_sets=True)
+    cfg = selfie_cfg(enabled=True, identity_sets=True)
     run(make_stage_for(cfg, tmp_path, FAKE_SELFIE_IDENTITY="1")(h.ctx()))
     assert edits and edits[0].version == built + 1
     stamped = h.store.conn.execute("SELECT persona_version FROM selfie_set WHERE guid=101 AND "
@@ -510,13 +510,13 @@ def test_queue_looks_set_marks_a_queued_set_whether_or_not_it_renders(store, clo
     queue_more(store, 102, now=5.0)
     staging = files.staging_dir(tmp_path, 102, 1)
     staging.mkdir(parents=True)
-    assert queue_looks_set(store, SelfieCfg(enabled=True), p, 102, **args) == (1, False,
+    assert queue_looks_set(store, selfie_cfg(enabled=True), p, 102, **args) == (1, False,
                                                                                "rendering")
     assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=1)) == "1"
     store.conn.execute("DELETE FROM meta WHERE key=?", (LOOKS_EDIT_SET_KEY.format(guid=102,
                                                                                   set_no=1),))
     staging.rmdir()  # a set not started yet takes the mark the same way
-    assert queue_looks_set(store, SelfieCfg(enabled=True), p, 102, **args) == (1, False, "queued")
+    assert queue_looks_set(store, selfie_cfg(enabled=True), p, 102, **args) == (1, False, "queued")
     assert store.get_meta(LOOKS_EDIT_SET_KEY.format(guid=102, set_no=1)) == "1"
 
 
@@ -532,12 +532,12 @@ def test_a_marked_set_whose_render_was_cancelled_renders_again_under_the_light_f
     queue_more(h.store, 101, now=h.T)  # set 2
     files.staging_dir(h.settings.data_dir, 101, 2).mkdir(parents=True)  # rendering when he edits
     set_looks(h.store, 101, weight_kg=96, bust="very_large", now=h.T + 1)
-    state = queue_looks_set(h.store, SelfieCfg(enabled=True), load_persona(h.store, 101), 101,
+    state = queue_looks_set(h.store, selfie_cfg(enabled=True), load_persona(h.store, 101), 101,
                             human=1, now=h.T + 1, day="2026-10-29",
                             data_dir=h.settings.data_dir)
     assert state == (2, False, "rendering")
     log = tmp_path / "requests.log"
-    cfg = SelfieCfg(enabled=True, identity_sets=True)
+    cfg = selfie_cfg(enabled=True, identity_sets=True)
     run(make_stage_for(cfg, tmp_path, FAKE_SELFIE_IDENTITY="1", FAKE_SELFIE_LOG=str(log))(h.ctx()))
     rows = [r for r in _logged(log) if r[0].startswith("101:2:")]
     assert len(rows) == 4 and all(float(r[3]) == 0.3 for r in rows)
@@ -560,7 +560,7 @@ def test_a_failed_stale_check_is_logged_and_the_stage_goes_on(h, tmp_path, monke
         raise RuntimeError("a stale check that fails")
     monkeypatch.setattr(render, "_stale", broken)
     with caplog.at_level(logging.INFO, logger="leeroy_mind"):
-        run(make_stage_for(SelfieCfg(enabled=True), tmp_path)(h.ctx()))
+        run(make_stage_for(selfie_cfg(enabled=True), tmp_path)(h.ctx()))
     assert ready_set(h.store, 101, 2) is not None and ready_set(h.store, 102, 2) is not None
     failed = [r for r in caplog.records
               if getattr(r, "leeroy_event", None) == "selfies_stale_check_failed"]
@@ -789,7 +789,7 @@ def test_a_wardrobe_change_waits_for_the_photo_pass_to_choose_the_kind_again(sto
     from leeroy_mind.selfies.kind import needs_rechoice, wardrobe_pending
     from leeroy_mind.selfies.style import PLAIN
     from leeroy_mind.selfies.wardrobe import WARDROBE_HELD
-    app = app_for(store, clock, tmp_path, SelfieCfg(enabled=True, booth=True))
+    app = app_for(store, clock, tmp_path, selfie_cfg(enabled=True, booth=True))
     save_woman(store, 102)
     ctx = SimpleNamespace(store=store)
     hand = run(LooksService(app).handle({**looks(weight_kg=64, bust=None), "wardrobe": ["cosy"]}))
@@ -823,7 +823,7 @@ def test_a_varied_set_never_waits_for_a_kind_it_does_not_use(store, clock, tmp_p
     from leeroy_mind.selfies import render
     from leeroy_mind.selfies.kind import wardrobe_pending
     from leeroy_mind.selfies.wardrobe import LUST_TAGS, WARDROBE_HELD
-    cfg = SelfieCfg(enabled=True, varied_sets=True)
+    cfg = selfie_cfg(enabled=True, varied_sets=True)
     app = app_for(store, clock, tmp_path, cfg)
     save_woman(store, 102, lust=True, build="curvy")  # the pass chose her lust kind
     reply = run(LooksService(app).handle({**looks(weight_kg=64, bust=None),

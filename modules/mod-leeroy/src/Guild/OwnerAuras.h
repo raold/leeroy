@@ -4,7 +4,8 @@
 #include <cstdint>
 namespace Leeroy::Guild
 {
-// Leeroy.OwnerAuras: the owner's character keeps the listed auras (pure policy: LeeroyOwnerAuras).
+// Leeroy.OwnerAuras: the owner's character keeps the listed auras; Leeroy.OwnerPetAuras: his pet and his
+// guardians keep theirs (pure policy: LeeroyOwnerAuras).
 void ReloadOwnerAuras();
 void TickOwnerAuras(std::uint32_t diffMs);
 void AddOwnerAuraScripts();

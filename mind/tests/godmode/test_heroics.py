@@ -7,6 +7,7 @@ import pytest
 from leeroy_mind.godmode import heroics
 from leeroy_mind.protocol import Member
 from leeroy_mind.testing.wire import bridge_send
+from shipped_off import off
 
 NOW = 1780000000
 
@@ -114,7 +115,7 @@ def test_results_become_memories_and_seeds(store):
 def test_dungeons_off_means_no_proposal(store):
     from leeroy_mind.config import LifeCfg
 
-    assert LifeCfg().dungeons is False
+    assert LifeCfg().dungeons is True  # on by default (2026-11-25); the seeds below need it set
     assert list(heroics.seeds(store.conn, NOW, 3, 1)) == []
 
 
@@ -567,7 +568,7 @@ def test_dungeons_reloads_nightly_and_session_both_directions(tmp_path):
     app = mind_app(tmp_path, toml="[life]\ndungeons=false\n")
 
     def toggle(enabled):
-        (tmp_path / "mind.toml").write_text(f"[life]\ndungeons={str(enabled).lower()}\n")
+        (tmp_path / "mind.toml").write_text(off(f"[life]\ndungeons={str(enabled).lower()}\n"))
 
     async def go():
         try:

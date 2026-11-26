@@ -348,6 +348,26 @@ std::optional<BossState> ClassifyBossTransition(std::uint8_t newState, std::uint
     return std::nullopt;
 }
 
+std::optional<std::size_t> CreditedKill(bool raid, std::uint32_t scriptBossStates, bool updated,
+    std::uint32_t creditType, std::uint32_t creditEntry, std::vector<EncounterCredit> const& encounters)
+{
+    constexpr std::uint32_t kKillCredit = 0;   // ENCOUNTER_CREDIT_KILL_CREATURE
+    constexpr std::uint32_t kMaskBits = 32;    // InstanceScript's completed-encounter mask
+    if (!raid || scriptBossStates != 0 || !updated || creditType != kKillCredit || creditEntry == 0)
+        return std::nullopt;
+    std::optional<std::size_t> found;
+    for (std::size_t row = 0; row < encounters.size(); ++row)
+    {
+        EncounterCredit const& encounter = encounters[row];
+        if (encounter.creditType != creditType || encounter.creditEntry != creditEntry)
+            continue;
+        if (found || encounter.bit >= kMaskBits)
+            return std::nullopt;   // two encounters for one creature, or no bit: no sound boss id
+        found = row;
+    }
+    return found;
+}
+
 std::string DumpLine(json const& j)
 {
     return j.dump(-1, ' ', false, json::error_handler_t::replace);

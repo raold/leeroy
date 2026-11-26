@@ -51,9 +51,9 @@ def test_strict_ops_arguments(body):
         arguments(body)
 
 
-@pytest.mark.parametrize("content", ["", "[control]\nops_actions=false", "[control]\nops_actions='yes'",
+@pytest.mark.parametrize("content", ["[control]\nops_actions=false", "[control]\nops_actions='yes'",
     "control=4", "[control]\nops_actions=true\nport='bad'", "[control]\nenabled=false\nops_actions=true"])
-def test_missing_disabled_invalid_control_is_off(tmp_path, content):
+def test_disabled_invalid_control_is_off(tmp_path, content):
     (tmp_path/"mind.toml").write_text(content)
     assert not settings_from(tmp_path,tmp_path,1234,"k").ops_actions
 
@@ -62,7 +62,9 @@ def test_valid_config_and_endpoint_default(tmp_path):
     (tmp_path/"mind.toml").write_text("[control]\nops_actions=true")
     assert load_control_config(tmp_path/"mind.toml").ops_actions is True
     assert settings_from(tmp_path,tmp_path,1234,"k").ops_actions is True
-    assert ControlCfg().ops_actions is False
+    assert ControlCfg().ops_actions is True  # on by default (2026-11-25)
+    (tmp_path/"mind.toml").write_text("")
+    assert settings_from(tmp_path,tmp_path,1234,"k").ops_actions is True
 
 
 @pytest.mark.parametrize("action,args", [("release",{"id":ROOT_ID}), ("offline_stop",{"id":ROOT_ID}),

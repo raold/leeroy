@@ -11,7 +11,7 @@ answer says exactly what happened: never "I'm leading" unless she is.
 - `[talk] lead = true` in `mind.toml` (the default; anything but `true` is off, logged once
   `talk_lead_invalid`). Read at each line. Off, his lines are plain talk (and the raid lead's
   designations) as before. On, nothing changes until he asks someone to lead.
-- Native `Leeroy.Lead.Enable = 1` in `mod_leeroy.conf` (default 0, `.reload config`; see
+- Native `Leeroy.Lead.Enable = 1` in `mod_leeroy.conf` (default 1, `.reload config`; see
   `modules/mod-leeroy/README.md`). While it is 0 native refuses `off` and she says she can't take
   the lead right now; setting it to 0 ends the lead in force.
 - A worldserver whose hello lacks the `lead` feature (before this release) is never sent a

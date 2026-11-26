@@ -209,11 +209,12 @@ def test_an_icc_pull_scores_the_same_with_playbooks_on():
     assert off.failures and off.version == 1 and on.version == 2
 
 
-def test_the_switch_is_off_by_default():
-    assert TrainingConfig().playbooks is False
+def test_the_switch_is_on_by_default():
+    assert TrainingConfig().playbooks is True  # since 2026-11-25
     assert playbooks_on(object()) is False
     assert playbooks_on(type("P", (), {"cfg": TrainingConfig(playbooks=True)})()) is True
-    assert playbooks_on(type("P", (), {"cfg": TrainingConfig()})()) is False
+    assert playbooks_on(type("P", (), {"cfg": TrainingConfig()})()) is True
+    assert playbooks_on(type("P", (), {"cfg": TrainingConfig(playbooks=False)})()) is False
 
 
 def test_calls_fall_back_to_the_old_values_when_the_data_cannot_load(monkeypatch, caplog):

@@ -126,30 +126,56 @@ std::string DcRosterRefusal(std::size_t bosses);
 // blocked path with no door object) or, once the Training Ground acts (`[training] act` and 28 days
 // of pulls), its boss hold: the training listener sets WaitAtBoss on every offline run's tank and
 // releases each hold, native resuming it after 20 s. Nobody types `dc pause` in an offline raid.
-enum class DcPhase { Unknown, Off, On, Paused, Door };
-DcPhase ReadDcPhase(bool leaderPresent, bool enabled, bool paused, bool pausedAtDoor);
-char const* DcPhaseCode(DcPhase phase); // The heartbeat's dc_state: unknown, off, on, paused, door.
+// Stalled is an unpaused run whose leader carries a stall reason that is not a door's: dungeon-clear
+// gave up on its route ("Can't path to <boss>", "Stuck near <boss>", ...) and waits for a `dc skip`.
+// It used to read as on: 2026-11-23, Naxx 10 sat 24 minutes before Gothik with dc_state=on until the
+// mind's 30-minute watchdog stopped it.
+enum class DcPhase { Unknown, Off, On, Paused, Door, Stalled };
+DcPhase ReadDcPhase(bool leaderPresent, bool enabled, bool paused, bool pausedAtDoor, bool routeStalled = false);
+char const* DcPhaseCode(DcPhase phase); // The heartbeat's dc_state: unknown, off, on, paused, door, stalled.
 
-// A hold out of every boss fight ends the run after this long, naming it (dc_door_blocked or
-// dc_paused). Nothing in an offline raid opens such a door: on 2026-11-13 Ulduar's Flame Leviathan
+// A hold out of every boss fight ends the run after this long, naming it (dc_door_blocked, dc_paused
+// or dc_unreachable). Nothing in an offline raid opens such a door: on 2026-11-13 Ulduar's Flame Leviathan
 // gate, which only the siege-vehicle event opens, held a 25-man run until the mind's 30-minute
 // watchdog stopped it. A training boss hold resumes within 20 s, so only a stuck one stops as
-// dc_paused. An engaged or unreadable encounter, or any other phase, resets the clock.
+// dc_paused; dungeon-clear clears a route stall itself as soon as it moves again. An engaged or
+// unreadable encounter, or any other phase, resets the clock.
 inline constexpr std::uint32_t OfflineDcHoldStopMs = 300000;
+inline constexpr char const* OfflineDcUnreachable = "dc_unreachable";
 struct DcHold
 {
     std::uint32_t heldMs = 0;
     std::string Observe(DcPhase phase, std::optional<bool> bossEngaged, std::uint32_t diffMs);
 };
 
-// Instance-script boss indices dungeon-clear cannot reach on a map. Naxxramas (533): Sapphiron (13)
-// and Kel'Thuzad (14) are reached only by the hub's teleporter after the four wings, and dungeon-clear
-// does not use teleporters (its route stalls there with the run still enabled). Ulduar (603), with the
-// Leviathan pass (patches/mod-dungeon-clear): Flame Leviathan (0) is passed, never fought; the Assembly
-// of Iron (4), Hodir (7), Thorim (8), Freya (9) and Algalon (13) are spell-credit encounters its roster
-// never lists; Mimiron (10) is on the far side of the tram, Vezax (11) behind the Keepers' gate and
-// Yogg-Saron (12) below him. What it clears is Ignis, Razorscale, XT-002, Kologarn and Auriaya.
+// Instance-script boss indices dungeon-clear cannot reach on a map. Naxxramas (533): Gothik the
+// Harvester (11) waits on his balcony (2642, -3387, z 285.5, 18 yards above his room's floor), passive
+// until struck, and the navmesh has no route up to him (2026-11-23: "UNREACHABLE: no navigable route");
+// the Four Horsemen (12) are a spell-credit encounter its roster never lists, behind the two gates that
+// only Gothik's death opens; Sapphiron (13) and Kel'Thuzad (14) are reached only by the hub's teleporter
+// after the four wings, and dungeon-clear does not use teleporters (its route stalls there with the run
+// still enabled). Ulduar (603), with the Leviathan pass (patches/mod-dungeon-clear): Flame Leviathan (0)
+// is passed, never fought; the Assembly of Iron (4), Hodir (7), Thorim (8), Freya (9) and Algalon (13)
+// are spell-credit encounters its roster never lists; Mimiron (10) is on the far side of the tram,
+// Vezax (11) behind the Keepers' gate and Yogg-Saron (12) below him. What it clears is Ignis,
+// Razorscale, XT-002, Kologarn and Auriaya.
 std::vector<std::uint32_t> DcUnreachableBosses(std::uint32_t mapId);
+
+// An unreachable boss dungeon-clear's roster still lists blocks every boss after it in its order: it heads
+// there, stalls, and waits for a `dc skip` nobody types. The offline job types it for these (creature
+// entry, as the roster keys them): Naxxramas' Gothik (16060), the Military Quarter's middle boss, so the
+// run goes on to the Construct Quarter (Patchwerk, Grobbulus, Gluth, Thaddius) and ends cleared_reachable.
+// Only for a run dungeon-clear is driving out of every fight (no boss engaged, leader out of combat), at
+// most OfflineDcPassLimit times a job: each `dc on` (a restart) forgets the skips.
+inline constexpr std::uint32_t OfflineDcPassLimit = 16;
+std::vector<std::uint32_t> OfflineDcPassEntries(std::uint32_t mapId);
+struct OfflineDcPassFacts
+{
+    std::uint32_t mapId = 0, targetEntry = 0, passes = 0;
+    bool enabled = false, paused = false, leaderCombat = false;
+    std::optional<bool> bossEngaged;
+};
+bool OfflineDcPassDue(OfflineDcPassFacts const& facts);
 
 // The hello features (dc_toc, dc_ulduar) for the raids the dungeon-clear this build carries can run for an
 // offline raid beyond its baseline: Trial of the Crusader, whose bosses its baseline roster cannot find (all are

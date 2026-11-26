@@ -1,6 +1,6 @@
 # World personas
 
-All switches default off. An invalid `[world]` table disables the extension.
+All switches default on. An invalid `[world]` table disables the extension.
 
 ```toml
 [world]
@@ -13,7 +13,7 @@ world_selfies_per_night = 10
 
 A native rebuild is required. `get_world_roster` and `world_say` both refuse
 `realm_off` unless `Leeroy.Realm.Enable = 1` and `Leeroy.World.Enable = 1`.
-World defaults to 0, and `.reload config` changes admission immediately. The mind
+World defaults to 1, and `.reload config` changes admission immediately. The mind
 logs a refused roster ACK once per process, with a fixed code. Read polls carry
 a separate request token and never reserve bridge command IDs permanently.
 

@@ -8,7 +8,7 @@ refused lines are dropped, never queued to flood chat when combat ends. Direct
 answers to him, raid callouts and urgent turns retain their existing rules.
 Discord and voice are unchanged.
 
-The default is false, and a malformed value leaves it off. It is available in
+The default is true, and a malformed value leaves it off. It is available in
 Ops as **Quiet ambient game chat during combat**. Read at mind start and each
 login. It requires a native rebuild advertising `combat_quiet` in `hello`.
 If enabled with an older native, ambient game lines are refused with
@@ -27,7 +27,7 @@ Run `python -m pytest -q tests/test_combat_quiet.py` for the fake-only checks.
 # Optional typing cadence
 
 `[talk] realism = true` enables bounded cadence for generated typed member turns.
-The default is false; a malformed realism value leaves this feature off. Other
+The default is true; a malformed realism value leaves this feature off. Other
 keys in the shared talk table do not disable it. Read at mind start and each login;
 no migration or native rebuild is needed.
 Templates, signed text, raid callouts, urgent turns, kill/wipe reactions, hotmic and external transports
@@ -92,7 +92,7 @@ with no slip of their own.
 
 # Typing texture
 
-`[talk] texture = true` (default false; anything but a boolean is off; read at mind start and
+`[talk] texture = true` (default true; anything but a boolean is off; read at mind start and
 each login; no migration or native rebuild) types each member's lines the way people type in
 chat, around her declared typing (`persona_core.json` `typing`), with nothing new in the
 persona. `talk/style.py` `texture_of` fixes her habits from her character name and her declared
@@ -603,7 +603,7 @@ only with `[talk] situation` (core plan Task 8; below), so with it off every liv
 
 # Her state, want and situation in every prompt (core plan Task 8, 2026-11-16)
 
-Three switches, each `false` by default (invalid means false, logged once by code:
+Three switches, each `true` by default since 2026-11-25 (invalid means false, logged once by code:
 `talk_intent_invalid`, `talk_situation_invalid`, `life_state_invalid`), read at mind start and
 at each login: `[talk] intent`, `[talk] situation`
 and `[life] state` (with `[life] availability` above 0 for where she is). With all of them off
@@ -819,7 +819,7 @@ dodged, the same week-old plan (a "tonight ... tomorrow" intention of hers) in m
 answers, and every draft rewritten by the phrase cooldown. Her romance text told her to escalate on
 every turn (her heat, the stage's passage, her own recent moves, a rival, "Bring want, longing, a
 tease", a game hook), his card's note carried that week-old plan with no age, and recall brought
-back one of seven nightly copies of it each turn. With `[romance] realism = true` (default false;
+back one of seven nightly copies of it each turn. With `[romance] realism = true` (default true;
 read at mind start and at each login's reload, like `dial`):
 
 - **Her romance text** (`romance.romance_instruction`'s `realism`): her heat line and the stage's
@@ -1079,8 +1079,8 @@ writes no ledger row: use `voices` for sheets.
 
 ## Conversations that hold together (`[talk] coherence`, 2026-11-17)
 
-`[talk] coherence` (a boolean, default **false**: the owner turns it on at a release; anything
-but `true` is off) holds the fixes the
+`[talk] coherence` (a boolean, default **true** since 2026-11-25; anything but a boolean is
+off) holds the fixes the
 2026-11-17 self-play audits asked for (100 graded whisper turns, 67 explicit DM turns, 197
 hard-case turns). **It is read with the rest of `mind.toml`: at the mind's start and at each of
 his logins, not per turn**; a change mid-session takes effect when he next logs in or the mind
@@ -1088,10 +1088,10 @@ restarts. With it off every rule below is exactly as before, the job shapes, the
 reading and the "tell X he" pronoun reading included (their pure modules carry a `COHERENT`
 switch that `LifeService.configure` sets). The rules that change a prompt also need a core
 switch on (`[talk] intent`, `[talk] situation` or `[life] availability`/`state`), so
-no golden prompt changes: with the switch off (the default) every golden file is main's.
+no golden prompt changes: with the switch off every golden file is main's.
 
 **The length rule has its own switch, `[talk] coherence_length`** (a boolean, default
-**false**; anything but `true` is off; read at the mind's start and at his logins, as
+**false**, owner ruling 2026-11-25; anything but `true` is off; read at the mind's start and at his logins, as
 `coherence` is; 2026-11-20). A blind sandbox test of `coherence` found Discord DMs better (time
 and place errors 21 to 11) and game whispers worse (12 of 16 conversations preferred it off):
 the rule's "kept" path never shortens an answer to his question, so whisper lines grew from a

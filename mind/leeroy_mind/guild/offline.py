@@ -35,9 +35,11 @@ NO_FRESH_RAID = "setup:starting:no_fresh_encounters"
 # Setup proved, before anyone fought, that this raid has nothing the runner can kill today: its copy
 # has no fresh boss, or dungeon-clear finds no boss on the map. The raid is passed over for the day.
 NOTHING_TO_KILL = frozenset({NO_FRESH_RAID, "setup:starting:dc_no_bosses"})
-# Native stopped a run that reached Running at a door dungeon-clear cannot open. With no kill and no
-# wipe nobody fought a boss: the run is voided like NOTHING_TO_KILL (its attendance taken back).
+# Native stopped a run that reached Running at a door dungeon-clear cannot open, or before a boss it has
+# no route to. With no kill and no wipe nobody fought a boss: the run is voided like NOTHING_TO_KILL (its
+# attendance taken back).
 DOOR_BLOCKED = "dc_door_blocked"
+ROUTE_BLOCKED = "dc_unreachable"
 # Raids the offline runner (dungeon-clear driving the tank bot) cannot run on a stock dungeon-clear,
 # with the code naming why. toc: the herald's event summons every boss, none has a static spawn, so
 # dungeon-clear's roster is empty and `dc on` is refused (2026-11-11: setup:starting:timeout).
@@ -50,7 +52,7 @@ UNSUPPORTED = {"toc": "dc_no_bosses", "ulduar": "dc_gate"}
 # with advertises the raid in its DcCapabilities.h (leeroy patches/mod-dungeon-clear): ToC run stage
 # by stage from Barrett Ramsey's gossip; Ulduar with Flame Leviathan passed, never fought.
 RUNNABLE_WITH = {"toc": "dc_toc", "ulduar": "dc_ulduar"}
-DC_STATES = frozenset({"unknown", "off", "on", "paused", "door"})
+DC_STATES = frozenset({"unknown", "off", "on", "paused", "door", "stalled"})
 CLEANUP_GRACE_S = 60
 # Native stops a run at its own timeout and then tears down (setup, return and cleanup waits are
 # a minute each). A terminal that has not come this long after the deadline is not coming: the
@@ -217,6 +219,8 @@ def stall_cause(progress, members: int) -> str:
         return "dc_door_blocked"
     if dc == "paused":
         return "dc_paused"
+    if dc == "stalled":
+        return ROUTE_BLOCKED
     if dc == "off":
         return "dc_off"
     if progress["inside"] < members:
@@ -993,8 +997,9 @@ class OfflineRaids:
                 and not terminal.get("kills") and not terminal.get("wipes"))
 
     def _door_void(self, terminal):
-        """Native stopped the run at a door before any boss was fought: nothing it can kill there."""
-        return (terminal["state"] == "done" and terminal["reason"] == DOOR_BLOCKED
+        """Native stopped the run at a door or a dead-end route before any boss was fought: nothing it
+        can kill there."""
+        return (terminal["state"] == "done" and terminal["reason"] in {DOOR_BLOCKED, ROUTE_BLOCKED}
                 and not terminal.get("kills") and not terminal.get("wipes"))
 
     async def _attend(self):

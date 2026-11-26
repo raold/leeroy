@@ -42,6 +42,13 @@
 {"name":"guild_add_roster_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"guild_add_roster","id":"t14","ts":0,"members":[1101,1102],"bench":[1103],"until_ms":1700000000000}}
 {"name":"guild_add_roster_clear","kind":"command","valid":true,"msg":{"v":1,"type":"guild_add_roster","id":"t15","ts":0,"members":[],"bench":[],"until_ms":0}}
 {"name":"guild_add_roster_bench_overlap","kind":"command","valid":false,"error":"bad field: bench","msg":{"v":1,"type":"guild_add_roster","id":"t16","ts":0,"members":[1101],"bench":[1101],"until_ms":1}}
+{"name":"playstyle_table_ok","kind":"command","valid":true,"full":true,"msg":{"v":1,"type":"playstyle_table","id":"ps1","ts":0,"styles":[{"guid":1101,"param":"4:1"},{"guid":1102,"param":"0:0"}]}}
+{"name":"playstyle_table_empty","kind":"command","valid":true,"msg":{"v":1,"type":"playstyle_table","id":"ps2","ts":0,"styles":[]}}
+{"name":"playstyle_table_missing","kind":"command","valid":false,"error":"bad field: styles","msg":{"v":1,"type":"playstyle_table","id":"ps3","ts":0}}
+{"name":"playstyle_table_bad_param","kind":"command","valid":false,"error":"bad field: styles","msg":{"v":1,"type":"playstyle_table","id":"ps4","ts":0,"styles":[{"guid":1101,"param":"7:1"}]}}
+{"name":"playstyle_table_duplicate","kind":"command","valid":false,"error":"bad field: styles","msg":{"v":1,"type":"playstyle_table","id":"ps5","ts":0,"styles":[{"guid":1101,"param":"4:1"},{"guid":1101,"param":"2:0"}]}}
+{"name":"playstyle_table_guid_zero","kind":"command","valid":false,"error":"bad field: styles","msg":{"v":1,"type":"playstyle_table","id":"ps6","ts":0,"styles":[{"guid":0,"param":"4:1"}]}}
+{"name":"playstyle_table_pair","kind":"command","valid":false,"error":"bad field: styles","msg":{"v":1,"type":"playstyle_table","id":"ps7","ts":0,"styles":[[1101,"4:1"]]}}
 {"name":"missing_id","kind":"command","valid":false,"error":"missing id","msg":{"v":1,"type":"remove_friend","ts":0,"guid":1101}}
 {"name":"job_form_raid_done","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"t1","kind":"form_raid","state":"done","reason":"","stage":"","guids":[1101,1102],"skipped":[{"guid":1103,"reason":"in_bg"}],"kills":0,"wipes":0,"instance_id":0,"guid":0,"level":0,"avg_ilvl":0,"training_run":""}}
 {"name":"job_bot_do_done","kind":"event","valid":true,"msg":{"v":1,"type":"job","ts":0,"id":"t11","kind":"bot_do","state":"done","reason":"","stage":"","guids":[1101],"skipped":[{"guid":1102,"reason":"offline"}],"kills":0,"wipes":0,"instance_id":0,"guid":0,"level":0,"avg_ilvl":0,"training_run":""}}

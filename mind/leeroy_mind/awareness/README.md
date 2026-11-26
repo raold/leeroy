@@ -3,7 +3,7 @@
 `card(app_or_stores, guid, *, context=CardContext())` returns a structured `Card`.
 `Card.render(budget_tokens=600)` returns deterministic plain text. This package
 is read-only. The talk adapter includes one delimited card when `[talk] aware =
-true`; it is off by default. The card never calls a model, probes a server,
+true`; it is on by default. The card never calls a model, probes a server,
 migrates a database, commits, or logs.
 
 ```python

@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -501,7 +502,8 @@ public:
 class LeeroyEventsGlobalScript : public GlobalScript
 {
 public:
-    LeeroyEventsGlobalScript() : GlobalScript("LeeroyEventsGlobalScript", { GLOBALHOOK_ON_BEFORE_SET_BOSS_STATE })
+    LeeroyEventsGlobalScript() : GlobalScript("LeeroyEventsGlobalScript",
+        { GLOBALHOOK_ON_BEFORE_SET_BOSS_STATE, GLOBALHOOK_ON_AFTER_UPDATE_ENCOUNTER_STATE })
     {
     }
 
@@ -512,7 +514,47 @@ public:
         std::optional<Leeroy::BossState> const state = Leeroy::ClassifyBossTransition(newState, oldState, instance ? instance->GetId() : 0, id);
         if (!state || !instance)
             return;
+        // boss_name stays "": script boss ids do not follow DungeonEncounter.dbc order, so no core lookup is sound.
+        PublishBoss(instance, id, std::string(), *state);
+    }
 
+    // Map::UpdateEncounterState (Map.cpp:2967): KillRewarder::Reward credits a dungeon boss's death inside Unit::Kill,
+    // on the kill's map thread, before the victim's JustDied and before its loot_drop. `updated`: this instance's
+    // completed-encounter mask, saved with the instance, gained the encounter just now. A raid whose script keeps no
+    // boss states (Vault of Archavon) has no other kill report (CreditedKill); its encounter's DBC bit is the boss id
+    // and the DBC names it.
+    void OnAfterUpdateEncounterState(Map* map, EncounterCreditType type, uint32 creditEntry, Unit* /*source*/,
+        Difficulty /*difficulty*/, DungeonEncounterList const* encounters, uint32 /*dungeonCompleted*/,
+        bool updated) override
+    {
+        if (!updated || !map || !encounters)
+            return;
+        InstanceMap* instance = map->ToInstanceMap();
+        InstanceScript* script = instance ? instance->GetInstanceScript() : nullptr;
+        if (!script)
+            return;
+        std::vector<Leeroy::EncounterCredit> rows;
+        std::vector<DungeonEncounterEntry const*> entries;
+        for (DungeonEncounter const* encounter : *encounters)
+        {
+            if (!encounter || !encounter->dbcEntry)
+                continue;
+            rows.push_back({ static_cast<std::uint32_t>(encounter->creditType), encounter->creditEntry,
+                encounter->dbcEntry->encounterIndex });
+            entries.push_back(encounter->dbcEntry);
+        }
+        std::optional<std::size_t> const row = Leeroy::CreditedKill(map->IsRaid(), script->GetEncounterCount(), updated,
+            static_cast<std::uint32_t>(type), creditEntry, rows);
+        if (!row)
+            return;
+        DungeonEncounterEntry const* entry = entries[*row];
+        PublishBoss(map, entry->encounterIndex, std::string(DbcText(entry->encounterName[DbcLocale()])),
+            Leeroy::BossState::Killed);
+    }
+
+private:
+    static void PublishBoss(Map* instance, uint32 bossId, std::string name, Leeroy::BossState state)
+    {
         LeeroyModule& module = LeeroyModule::Instance();
         Leeroy::BossEvent e;
         bool tracked = false;
@@ -530,9 +572,9 @@ public:
 
         e.map = instance->GetId();
         e.instanceId = instance->GetInstanceId();
-        e.bossId = id;
-        // boss_name stays "": script boss ids do not follow DungeonEncounter.dbc order, so no core lookup is sound.
-        e.state = *state;
+        e.bossId = bossId;
+        e.bossName = std::move(name);
+        e.state = state;
         module.Publish(Leeroy::EncodeBoss(Leeroy::NowUnixMs(), e), false);
     }
 };

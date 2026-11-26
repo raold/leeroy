@@ -8,7 +8,7 @@ shape) can be measured against a "before". Two parts, one night stage, one CLI, 
 
 ```toml
 [turing]
-enabled = true   # default false: no stage, no writes
+enabled = true   # the default; false: no stage, no writes
 windows = 8      # blind-judge windows a night, 0-60 (0: stylometry only)
 days = 14        # the stylometric window, 1-90 days back from the night's end
 ```

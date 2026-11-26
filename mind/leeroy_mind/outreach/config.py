@@ -9,11 +9,14 @@ _warned: set[tuple[Path, str]] = set()
 
 @dataclass(frozen=True, slots=True)
 class OutreachConfig:
-    enabled: bool = False
+    enabled: bool = True
+
+
+OFF = OutreachConfig(enabled=False)
 
 
 def load_outreach_config(path: Path) -> OutreachConfig:
-    """Read once on startup; an invalid table disables outreach as a whole."""
+    """Read once on startup; missing means on, an invalid table disables outreach as a whole."""
     path = Path(path)
     key = None
     try:
@@ -32,5 +35,5 @@ def load_outreach_config(path: Path) -> OutreachConfig:
         if (path, key) not in _warned:
             _warned.add((path, key))
             log.warning('outreach_config_invalid key=%s', key)
-        return OutreachConfig()
+        return OFF
     return OutreachConfig(**table)

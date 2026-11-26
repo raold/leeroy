@@ -510,7 +510,7 @@ void TickActive()
 }
 }
 
-void ReloadLead() { enabled = sConfigMgr->GetOption<bool>("Leeroy.Lead.Enable", false); }
+void ReloadLead() { enabled = sConfigMgr->GetOption<bool>("Leeroy.Lead.Enable", true); }
 
 void RegisterLeadHandler() { RegisterCommand(std::string(kLeadDoType), HandleLeadDo); }
 

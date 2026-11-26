@@ -16,7 +16,7 @@ from leeroy_mind.logs import log
 from leeroy_mind.protocol import Chat
 from leeroy_mind.tuning.effective import dials_of
 from leeroy_mind.voice import wire
-from .config import load_config, VoiceNotesConfig
+from .config import OFF as VOICE_NOTES_OFF, load_config
 from . import files
 
 TIMEOUT=20.0
@@ -63,7 +63,7 @@ def counts(store,day):
 class VoiceNotes:
     def __init__(self,app,config=None):
         self.app=app
-        self.config=config or (load_config(Path(app.data_dir)/'mind.toml') if getattr(app,'data_dir',None) else VoiceNotesConfig())
+        self.config=config or (load_config(Path(app.data_dir)/'mind.toml') if getattr(app,'data_dir',None) else VOICE_NOTES_OFF)
         self._pending={}
         self._tasks=set()
         self._active=set()

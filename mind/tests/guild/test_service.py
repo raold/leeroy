@@ -84,6 +84,27 @@ def test_receipt_recovery_lane_runs_for_debts_even_after_disabling_new_awards(ap
     asyncio.run(go())
 
 
+def test_a_hello_without_native_receipts_says_so_once_a_connection(app, caplog):
+    from leeroy_mind.guild.loot import _put
+    service = install(app, armory=armory())  # [guild] loot_receipts: on by default
+    assert service.cfg.loot_receipts is True
+    with app.store.conn:
+        _put(app.store.conn, "guild:loot:1:synthetic", {"state": "uncertain", "receipt": True})
+
+    def hello(*features):
+        return Hello(ts=1, server="mod-leeroy", version="0.1.0", guild_id=21, human_guid=0,
+                     features=features)
+    with caplog.at_level("WARNING", logger="leeroy_mind.guild.service"):
+        asyncio.run(service.event(hello(), "hello"))
+        lines = [r.getMessage() for r in caplog.records if "loot_receipts_unavailable" in r.getMessage()]
+        assert lines == ["loot_receipts_unavailable feature=loot_receipts_v1 held=1"]
+        assert service.ports.loot_receipts is False
+        asyncio.run(service.event(hello("loot_receipts_v1", "loot_receipt_status_v1"), "hello"))
+        asyncio.run(service.event(hello(), "hello"))  # the next connection's hello
+    lines = [r.getMessage() for r in caplog.records if "loot_receipts_unavailable" in r.getMessage()]
+    assert len(lines) == 2
+
+
 def test_install_only_registers_shared_ordered_listeners(app, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("construction must not create tasks")

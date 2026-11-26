@@ -2,7 +2,7 @@
 pins it into every night's settings, as `learn_enabled` is, and here for live talk's cards);
 an invalid table turns it all off.
 
-`threads` is the romantic-threads switch (drama/pulls.py): "off" (the default) or "record" (the
+`threads` is the romantic-threads switch (drama/pulls.py): "off" or "record" (the default: the
 night records what would pull members together and changes nothing). "on" is reserved for the
 release that acts on it and is refused here; a refused or unknown value turns only `threads`
 off (logged once), never `member_romance`."""
@@ -15,18 +15,23 @@ log = logging.getLogger(__name__)
 _warned: set[tuple[Path, str]] = set()
 _PINNED = False  # the startup value (pin), for readers without a night context
 THREADS_MODES = ("off", "record")
+THREADS_DEFAULT = "record"
 THREADS_RESERVED = ("on",)  # the release that acts on threads; refused until then
 
 
 @dataclass(frozen=True, slots=True)
 class DramaConfig:
-    member_romance: bool = False
-    threads: str = "off"  # THREADS_MODES
+    member_romance: bool = True
+    threads: str = THREADS_DEFAULT  # THREADS_MODES
+
+
+OFF = DramaConfig(member_romance=False, threads="off")  # an invalid table or an unreadable file
 
 
 def load_drama_config(path: Path) -> DramaConfig:
-    """The [drama] table. A missing file or table is the default (off); an unknown key or a
-    value that is not a bool is logged once by code and turns the whole table off."""
+    """The [drama] table. A missing file or table is the default (on, threads "record"); an
+    unknown key or a value that is not a bool is logged once by code and turns the whole table
+    off."""
     path = Path(path)
     key = None
     try:
@@ -44,8 +49,8 @@ def load_drama_config(path: Path) -> DramaConfig:
             key = "value"
     if key is not None:
         _warn(path, key)
-        return DramaConfig()
-    threads = table.get("threads", "off")
+        return OFF
+    threads = table.get("threads", THREADS_DEFAULT)
     if type(threads) is not str or threads not in THREADS_MODES:
         _warn(path, "threads_on" if threads in THREADS_RESERVED else "threads")
         threads = "off"

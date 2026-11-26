@@ -7,7 +7,8 @@ import { currentView, openView } from "./feedview.mjs";
 import { botName, channelOf, groupMessages, memberGroups, memberStatus, mentionsHim, presenceDot, quoteOf, reactionBar, viewOfChannel, voiceSeats } from "./discord.mjs";
 import { DISCORD, discordBusy, discordReason, mutateDiscord, refreshDiscord, saveDiscordRead, watchDiscord } from "./discordstate.mjs";
 import { CUSTOM_PICKER, PICKER, customSegments, customUrl, isCustom, isOneEmoji } from "./emoji.mjs";
-import { photoBox, photoDraft, photoPreparing, clearPhoto, preparePhoto, renderPhotoDraft, setupPhotoComposer } from "./photoview.mjs";
+import { photoBox, photoDraft, photoPreparing, clearPhoto, preparePhoto, renderPhotoDraft, retainVideos, setupPhotoComposer, videoBox } from "./photoview.mjs";
+import { setupDropZone } from "./dropzone.mjs";
 import { voiceBox, retainVoicePlayers } from "./voiceplayer.mjs";
 import { voiceDraft, voicePreparing, clearVoice, prepareVoice, renderVoiceDraft, setupVoiceComposer } from "./voicerecorder.mjs";
 import { groupList, groupPanel, groupReason, currentGroup } from "./groups.mjs";
@@ -174,7 +175,8 @@ function messageRow(item, data) {
   if (quote) { var q = el("blockquote", "dc-quote"); q.appendChild(el("b", "", quote.name)); q.appendChild(el("span", "", quote.text)); content.appendChild(q); }
   if (!deleted && m.voice_note && privateDm()) { content.appendChild(voiceBox(m, mine ? 'you' : name(m.author), mine)); }
   else { content.appendChild(deleted ? el("div", "body", "Message deleted") : messageBody(m)); }
-  if (!deleted && m.image) { content.appendChild(photoBox(m, author(m))); }
+  if (!deleted && m.video) { content.appendChild(videoBox(m, mine ? "you" : author(m))); }
+  else if (!deleted && m.image) { content.appendChild(photoBox(m, author(m))); }
   if (!deleted && m.poll) { content.appendChild(pollCard(m.poll, discordReason(), discordBusy)); }
   if (!deleted && !mine && m.origin==='mind') {
     var feedback = feedbackButtons(m,name(m.author));
@@ -229,6 +231,7 @@ function renderMessages(data) {
   var signature = JSON.stringify([shown, thread, data, entryMark, discordBusy, discordReason(), DISCORD.human]);
   if (signature === drawing) { return; }
   retainVoicePlayers(privateDm() && data ? data.messages.filter(m => m.voice_note && m.deleted === null).map(m => m.id) : []);
+  retainVideos(data ? data.messages.filter(m => m.video && m.deleted === null).map(m => m.id) : []);
   var key = focusKey(box), top = box.scrollTop, bottom = box.scrollHeight - top - box.clientHeight < 40;
   var newView = !drawing; drawing = signature; clear(box);
   if (!data) { box.appendChild(el("p", "empty muted", DISCORD.error || "Loading messages…")); return; }
@@ -255,18 +258,19 @@ function renderComposer() {
   var preparing = photoPreparing(routeKey());
   $("dc-send").disabled = !!reason || discordBusy || photoBusy || preparing || recording ||
     (!input.value.trim() && !attached && !note) || (!note && count > 2000);
-  renderPhotoDraft(routeKey(), DISCORD.photos, !!reason || discordBusy || photoBusy || preparing || recording || !!note);
+  renderPhotoDraft(routeKey(), DISCORD.photos, !!reason || discordBusy || photoBusy || preparing || recording || !!note, DISCORD.videos);
   renderVoiceDraft(routeKey(), DISCORD.voice_notes && privateDm(), !!reason || discordBusy || photoBusy || preparing || !!attached);
   $("dc-emoji").disabled = !!reason || discordBusy || recording || !!note;
   $("dc-count").textContent = count + " / 2000"; $("dc-count").classList.toggle("bad", count > 2000);
   $("dc-to").textContent = DISCORD.title(currentView()) + (thread ? " thread" : "");
-  $("dc-why").textContent = reason || (preparing ? "Your photo is being prepared…" : failure || (discordBusy ? "Saving…" : "Enter sends · Shift+Enter starts a new line"));
+  var uploading = photoBusy && attached && attached.kind === "video";
+  $("dc-why").textContent = reason || (preparing ? "Your photo is being prepared…" : failure || (uploading ? "Uploading your video…" : discordBusy ? "Saving…" : "Enter sends · Shift+Enter starts a new line"));
   $("dc-reply").hidden = !reply;
   $("dc-reply-name").textContent = reply ? "Replying to " + name(reply.author) + ": " + str(reply.text).slice(0, 100) : "";
 }
 function render() {
   var yes = active(); $("dc-tools").hidden = !yes; $("dc-composer").hidden = !yes; $("composer").hidden = yes;
-  if (!yes) { $("dc-panel").hidden = true; retainVoicePlayers([]); renderVoiceDraft(routeKey(), false, true); renderMembers(); return; }
+  if (!yes) { $("dc-panel").hidden = true; retainVoicePlayers([]); retainVideos([]); drops.hide(); renderVoiceDraft(routeKey(), false, true); renderMembers(); return; }
   var data = windowData(), t = data && (data.threads || []).find(function (x) { return x.id === thread; });
   $("feed-title").textContent = DISCORD.title(currentView()) + (t ? " / " + t.name : "");
   var channel = DISCORD.channels().find(function (c) { return c.id === channelOf(currentView()); });
@@ -294,7 +298,7 @@ function send() {
   photoBusy = !!photo || !!note; renderComposer();
   (note ? prepareVoice(note) : preparePhoto(photo)).then(function (token) {
     if (note) { body.voice = token; delete body.text; }
-    else if (token) { body.image = token; }
+    else if (token) { body[photo.kind === "video" ? "video" : "image"] = token; }
     return mutateDiscord(body);
   }).then(function () {
     clearPhoto(key, photo);
@@ -309,8 +313,24 @@ function send() {
     fail(error);
   }).finally(function () { photoBusy = false; renderComposer(); });
 }
-setupPhotoComposer({ key:routeKey, enabled:() => active() && DISCORD.photos && !discordBusy && !photoBusy && !discordReason() && !voicePreparing(routeKey()) && !voiceDraft(routeKey()),
-  changed:renderComposer, failed:fail });
+// Why he cannot attach a photo or video to the open conversation now ('' when he can): the
+// Attach button, a drop and a paste all ask this one rule.
+function attachRefusal() {
+  if (!active()) { return "Open a channel or DM to attach a photo or video."; }
+  if (!DISCORD.photos) { return "Photo uploads are off in this mind."; }
+  var reason = groupReason(currentView()) || discordReason();
+  if (reason) { return reason; }
+  if (discordBusy || photoBusy) { return "Wait until the message on its way is saved."; }
+  if (voicePreparing(routeKey()) || voiceDraft(routeKey())) { return "Send or discard the voice note first."; }
+  return "";
+}
+function note(words) { failure = words; renderComposer(); }
+var attachments = setupPhotoComposer({ key:routeKey, refusal:attachRefusal,
+  videos:() => ({ on:DISCORD.videos, off:DISCORD.videos_off }), changed:renderComposer, failed:fail, noted:note });
+var drops = setupDropZone({ zone:$("feed").closest(".feedpanel"), overlay:$("dc-drop"), title:$("dc-drop-title"),
+  hint:$("dc-drop-hint"), open:active, drop:function (files) { if (attachments.attach(files)) { input.focus(); } },
+  state:function () { return { why:attachRefusal(), hint:DISCORD.videos
+    ? "A photo, or an mp4, webm or mov video up to 50 MiB" : "A photo" }; } });
 setupVoiceComposer({ key:routeKey, enabled:() => active() && DISCORD.voice_notes && privateDm() &&
   !discordBusy && !photoBusy && !discordReason() && !photoPreparing(routeKey()) && !photoDraft(routeKey()),
   changed:renderComposer, failed:fail });

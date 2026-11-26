@@ -10,13 +10,13 @@ import pytest
 
 import leeroy_mind
 from conftest import run
-from leeroy_mind.selfies.config import SelfieCfg
 from leeroy_mind.selfies.files import candidate, chosen, history, staging_dir
 from leeroy_mind.selfies.service import SelfieService
 from leeroy_mind.selfies.stage import wants_gpu as stage_wants_gpu
 from leeroy_mind.selfies.store import pick
 
 from .fakes import JPEG, mind_app, ready, tagged_jpeg
+from .fakes import selfie_cfg
 
 ON = "[selfies]\nenabled = true\n"
 
@@ -41,8 +41,8 @@ def test_attach_adds_both_stages_only_when_enabled(tmp_path, enabled):
     app.store.close()
 
 
-@pytest.mark.parametrize("toml,cfg,said", [(ON, SelfieCfg(enabled=True), "selfies_on"),
-                                            ("", SelfieCfg(), "selfies_off")], ids=["on", "off"])
+@pytest.mark.parametrize("toml,cfg,said", [(ON, selfie_cfg(enabled=True), "selfies_on"),
+                                            ("", selfie_cfg(), "selfies_off")], ids=["on", "off"])
 def test_the_attach_repairs_then_logs_whether_photos_render(tmp_path, caplog, toml, cfg, said):
     with caplog.at_level(logging.INFO, logger="leeroy_mind"):
         app = mind_app(tmp_path, toml=toml)
@@ -59,7 +59,7 @@ def test_an_invalid_selfies_table_is_logged_and_treated_as_off(tmp_path, caplog)
     with caplog.at_level(logging.INFO, logger="leeroy_mind"):
         app = mind_app(tmp_path, toml='[selfies]\nenabled = "yes"\n')
     try:
-        assert app.selfies is not None and app.selfies.cfg == SelfieCfg()
+        assert app.selfies is not None and app.selfies.cfg == selfie_cfg()
         names = [s.name for s in app.night_runner.stages]
         assert "photo" not in names and "selfies" not in names
         invalid = [r for r in caplog.records

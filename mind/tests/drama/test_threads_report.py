@@ -181,10 +181,11 @@ def check(h, text):
 
 
 RECORD = b'[drama]\nthreads = "record"\n'
+OFF = b'[drama]\nthreads = "off"\n'
 
 
 def test_health_is_quiet_while_off_and_while_recording_finds_events(h):
-    off = check(h, b"")
+    off = check(h, OFF)
     assert off.status == health.OK and off.text.startswith("romantic threads: off")
     cast(h)
     young = check(h, RECORD)
@@ -208,7 +209,7 @@ def test_health_notes_three_nights_without_an_event(h):
     note = check(h, RECORD)
     assert note.status == health.NOTE and note.text == (
         "romantic threads: recording is on but the last 3 nights recorded no events")
-    assert check(h, b"").status == health.OK         # off: no note
+    assert check(h, OFF).status == health.OK         # off: no note
 
 
 def test_health_notes_finished_nights_the_recorder_missed(h):

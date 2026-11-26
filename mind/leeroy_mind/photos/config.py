@@ -9,11 +9,17 @@ _warned: set[tuple[Path, str]] = set()
 
 @dataclass(frozen=True, slots=True)
 class PhotosConfig:
-    enabled: bool = False
-    send: bool = False
-    requests: bool = False
-    scene_from_words: bool = False  # a requested photo read from his words (photos/README.md)
-    request_priority: bool = False  # requested renders may borrow while he plays
+    enabled: bool = True
+    send: bool = True
+    requests: bool = True
+    scene_from_words: bool = True  # a requested photo read from his words (photos/README.md)
+    request_priority: bool = True  # requested renders may borrow while he plays
+    unsolicited: bool = True  # romantic members DM him a fresh selfie while the GPU is idle
+
+
+# an invalid table or an unreadable file
+OFF = PhotosConfig(enabled=False, send=False, requests=False, scene_from_words=False,
+                   request_priority=False, unsolicited=False)
 
 
 def load_photos_config(path: Path) -> PhotosConfig:
@@ -27,7 +33,8 @@ def load_photos_config(path: Path) -> PhotosConfig:
         table, key = {}, 'file'
     if not isinstance(table, dict):
         key = 'photos'
-    elif set(table) - {'enabled', 'send', 'requests', 'request_priority', 'scene_from_words'}:
+    elif set(table) - {'enabled', 'send', 'requests', 'request_priority', 'scene_from_words',
+                       'unsolicited'}:
         key = 'unknown'
     else:
         key = key or next((k for k, v in table.items() if type(v) is not bool), None)
@@ -35,5 +42,5 @@ def load_photos_config(path: Path) -> PhotosConfig:
         if (path, key) not in _warned:
             _warned.add((path, key))
             log.warning('photos_config_invalid key=%s', key)
-        return PhotosConfig()
+        return OFF
     return PhotosConfig(**table)

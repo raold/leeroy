@@ -26,6 +26,7 @@ from leeroy_mind.testing.fake_bridge import FakeBridge, load_fixture
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
 from tests.discord.test_discord_talk import FakeAdmin
+from shipped_off import off
 
 CAST = load_fixture(Path(__file__).parents[1] / "fixtures" / "session_basic.jsonl")[1]
 
@@ -68,8 +69,8 @@ def test_discord_out_of_game_end_to_end(tmp_path, cold):
                                 "guild_id": GUILD_ID, "human_guid": 0 if cold else HUMAN}, CAST])
         ports.append(await bridge.start())
         (data / "mind.toml").write_text(
-            f"[bridge]\nport = {ports[0]}\n[talk]\nchattiness = 0\n"
-            '[human]\nnickname = "Hero"\n', encoding="utf-8")
+            off(f"[bridge]\nport = {ports[0]}\n[talk]\nchattiness = 0\n"
+            '[human]\nnickname = "Hero"\n'), encoding="utf-8")
         store = Store(open_db(data / "mind.db"), clock=clock)
         try:
             seed_test_cast(store)

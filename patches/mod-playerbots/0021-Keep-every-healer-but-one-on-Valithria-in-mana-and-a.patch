@@ -1,0 +1,738 @@
+From 5535dc32aaddf0c038907d94dd7f06084cf20fa3 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 20:36:19 -0500
+Subject: [PATCH] Keep every healer but one on Valithria, in mana, and alive in
+ the dream
+
+Playerbots.ValithriaHealerFocus (default 1) and Playerbots.ValithriaPortals (default 1).
+
+In the 2026-11-25 10-heroic wipe the two dragon healers spent every 45 s portal cycle in the
+dream and died after their third trip; the same pull in the dojo gave them 14 and 19 stacks of
+Twisted Nightmares (200 Nature damage a second per stack, 40 s) and killed both. The paladin ran
+dry in 50 s because her heal (ACTION_RAID + 2) outranks every class mana cooldown.
+
+- One raid healer at any size and difficulty; every other healer heals her.
+- icc valithria mana (ACTION_RAID + 3): Divine Plea below 65% mana, Shadowfiend below 60% and
+  Hymn of Hope below 25%, Mana Tide Totem and Innervate below 50%.
+- The healers on her keep taking the portals (Emerald Vigor and Twisted Nightmares are the
+  fight's mana and healing, and on heroic an uncollected cloud hurts her); on heroic a bot stops
+  taking clouds at 6 stacks and heals itself. ValithriaPortals = 0 keeps every healer out.
+- A healer who does not portal comes back to her side while portals are up; a healer on her steps
+  out of a Column of Frost or Mana Void first (both dragon healers died to one column in a dojo
+  pull), and a raider's step out of a void, column or worm ends the group action's tick instead of
+  being replaced by its leash or attack move.
+- valithria_watch gains focus= (also on its end line), valithria_healer gains mana_cd=.
+- ValithriaHealerFocus = 0 restores the earlier allocation, portal handling and movement.
+---
+ conf/playerbots.conf.dist                |  13 +++
+ src/Ai/Raid/ICC/Action/ICCActions.h      |   8 ++
+ src/Ai/Raid/ICC/Action/ICCActions_VT.cpp |  60 +++++++++++--
+ src/Ai/Raid/ICC/ICCActionContext.h       |   2 +
+ src/Ai/Raid/ICC/ICCMultipliers.cpp       |   3 +-
+ src/Ai/Raid/ICC/ICCScripts.h             |   1 +
+ src/Ai/Raid/ICC/ICCShared.cpp            | 100 ++++++++++++++++++++--
+ src/Ai/Raid/ICC/ICCShared.h              |   6 ++
+ src/Ai/Raid/ICC/ICCStrategy.cpp          |   4 +
+ src/Ai/Raid/ICC/ICCTriggerContext.h      |   2 +
+ src/Ai/Raid/ICC/ICCTriggers.cpp          |   8 +-
+ src/Ai/Raid/ICC/ICCTriggers.h            |   7 ++
+ src/Ai/Raid/RaidInteractionPolicy.h      |  86 +++++++++++++++++--
+ src/PlayerbotAIConfig.cpp                |   2 +
+ src/PlayerbotAIConfig.h                  |   2 +
+ tests/raid_interactions_test.cpp         | 103 +++++++++++++++++++++++
+ 16 files changed, 384 insertions(+), 23 deletions(-)
+
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index 12609d05..c8838cf8 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -490,6 +490,19 @@ Playerbots.ApplyInstanceStrategies = 1
+ # Requires ApplyInstanceStrategies (or the toc strategy added explicitly). Default: 0.
+ Playerbots.TwinValkyrInteractions = 0
+ 
++# Icecrown Citadel, Valithria Dreamwalker: every healer but one heals her (the one left keeps the
++# raid up and tops her up while the raid is healthy), healers who do not portal stay at her side and
++# step out of Columns of Frost and Mana Voids, each healer spends its mana cooldown before running
++# dry, on heroic a portal healer stops taking Nightmare clouds at 6 stacks of Twisted Nightmares and
++# heals itself, and a raider's step out of a void, column or worm is no longer overridden by its next
++# move. 0 restores the earlier allocation, portal handling and movement. Default: 1.
++Playerbots.ValithriaHealerFocus = 1
++
++# With ValithriaHealerFocus: the healers on her take the Dream (normal) or Nightmare (heroic) portals
++# and collect the clouds, whose stacks give mana and healing, and on heroic stop an uncollected cloud
++# hurting her. 0 keeps every healer out of the dream. Default: 1.
++Playerbots.ValithriaPortals = 1
++
+ # Opt-in Malygos drake positioning/rotation and human-led Flame Leviathan vehicles.
+ # Uses normal boarding and spell costs; never moves the human or skips a boss.
+ Playerbots.RaidVehicleSupport = 0
+diff --git a/src/Ai/Raid/ICC/Action/ICCActions.h b/src/Ai/Raid/ICC/Action/ICCActions.h
+index 2d11a86a..7dcad11e 100644
+--- a/src/Ai/Raid/ICC/Action/ICCActions.h
++++ b/src/Ai/Raid/ICC/Action/ICCActions.h
+@@ -653,6 +653,14 @@ public:
+     bool Execute(Event event) override;
+ };
+ 
++// A Valithria healer's mana cooldown (Playerbots.ValithriaHealerFocus), ahead of her heal.
++class IccValithriaManaAction : public Action
++{
++public:
++    IccValithriaManaAction(PlayerbotAI* botAI) : Action(botAI, "icc valithria mana") {}
++    bool Execute(Event event) override;
++};
++
+ class IccValithriaDreamCloudAction : public MovementAction
+ {
+ public:
+diff --git a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
+index 952b7afe..cf351a9d 100644
+--- a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
++++ b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
+@@ -102,20 +102,27 @@ bool IccValithriaGroupAction::Execute(Event /*event*/)
+         }
+     }
+ 
+-    // Healers move toward the heal position when no portal is active
+-    if (PlayerbotAI::IsHeal(bot) && !portal && bot->GetExactDist2d(ICC_VDW_HEAL_POSITION) > 30.0f)
++    // Healers move toward the heal position when no portal is active; with ValithriaHealerFocus a healer
++    // who does not portal comes back even while portals are up.
++    if (PlayerbotAI::IsHeal(bot) &&
++        (!portal || (sPlayerbotAIConfig.ValithriaHealerFocus && !IccValithriaCanUsePortal(bot))) &&
++        bot->GetExactDist2d(ICC_VDW_HEAL_POSITION) > 30.0f)
+     {
+         return MoveTo(bot->GetMapId(), ICC_VDW_HEAL_POSITION.GetPositionX(), ICC_VDW_HEAL_POSITION.GetPositionY(),
+                       ICC_VDW_HEAL_POSITION.GetPositionZ(), false, false, false, false,
+                       MovementPriority::MOVEMENT_NORMAL);
+     }
+ 
+-    // Avoidance
++    // Avoidance. Without ValithriaHealerFocus the rest of this action then ran on and its leash or attack move
++    // replaced the step out (raiders died in Columns of Frost); with it the step out ends this tick.
++    bool const focus = sPlayerbotAIConfig.ValithriaHealerFocus;
+     if (manaVoid && bot->GetExactDist2d(manaVoid) < 10.0f && !botAI->GetAura("Twisted Nightmares", bot) &&
+         !botAI->GetAura("Emerald Vigor", bot))
+     {
+         botAI->Reset();
+-        FleePosition(manaVoid->GetPosition(), 11.0f, 250U);
++        bool const fled = FleePosition(manaVoid->GetPosition(), 11.0f, 250U);
++        if (focus)
++            return fled || bot->isMoving();
+     }
+ 
+     for (Unit* column : frostColumns)
+@@ -123,14 +130,18 @@ bool IccValithriaGroupAction::Execute(Event /*event*/)
+         if (column && bot->GetExactDist2d(column) < 7.0f)
+         {
+             botAI->Reset();
+-            FleePosition(column->GetPosition(), 8.0f, 250U);
++            bool const fled = FleePosition(column->GetPosition(), 8.0f, 250U);
++            if (focus)
++                return fled || bot->isMoving();
+         }
+     }
+ 
+     if (worm && worm->IsAlive() && worm->GetVictim() == bot && !PlayerbotAI::IsTank(bot))
+     {
+         botAI->Reset();
+-        FleePosition(worm->GetPosition(), 10.0f, 250U);
++        bool const fled = FleePosition(worm->GetPosition(), 10.0f, 250U);
++        if (focus)
++            return fled || bot->isMoving();
+     }
+ 
+     // Zombie handling: only exploding-zombie flee here (any non-tank within 20f).
+@@ -855,6 +866,28 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+         return false;
+     }
+ 
++    // Her heal outranks the group action's sidestep, so a healer on her stood in a Column of Frost (both
++    // dragon healers died to one in a 10-normal dojo pull) and in Mana Voids. Step out first, a few yards,
++    // still in reach of her (ValithriaHealerFocus).
++    if (sPlayerbotAIConfig.ValithriaHealerFocus)
++    {
++        std::list<Creature*> columns;
++        bot->GetCreatureListWithEntryInGrid(columns, NPC_COLUMN_OF_FROST, 10.0f);
++        for (Creature* column : columns)
++            if (column && column->IsAlive() && bot->GetExactDist2d(column) < 7.0f)
++            {
++                IccValithriaNoteHeal(bot, "hazard", false);
++                return FleePosition(column->GetPosition(), 8.0f, 250U);
++            }
++        Creature* manaVoid = bot->FindNearestCreature(NPC_MANA_VOID, 12.0f);
++        if (manaVoid && bot->GetExactDist2d(manaVoid) < 10.0f && !botAI->GetAura("Twisted Nightmares", bot) &&
++            !botAI->GetAura("Emerald Vigor", bot))
++        {
++            IccValithriaNoteHeal(bot, "hazard", false);
++            return FleePosition(manaVoid->GetPosition(), 11.0f, 250U);
++        }
++    }
++
+     if (!bot->HasAura(SPELL_DREAM_STATE))
+     {
+         constexpr float NORMAL_SPEED = 1.0f;
+@@ -936,6 +969,21 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+     return cast;
+ }
+ 
++bool IccValithriaManaAction::Execute(Event /*event*/)
++{
++    Unit* target = nullptr;
++    uint32 const spell = IccValithriaManaCooldown(bot, botAI, target);
++    if (!spell || !target)
++        return false;
++    // Hymn of Hope channels: a step would break it.
++    if (spell == RaidInteractions::HymnOfHope && bot->isMoving())
++        bot->StopMoving();
++    bool const cast = botAI->CastSpell(spell, target);
++    if (cast)
++        IccValithriaNoteManaCooldown(bot);
++    return cast;
++}
++
+ bool IccValithriaDreamCloudAction::Execute(Event /*event*/)
+ {
+     if (!bot->HasAura(SPELL_DREAM_STATE))
+diff --git a/src/Ai/Raid/ICC/ICCActionContext.h b/src/Ai/Raid/ICC/ICCActionContext.h
+index cdc1d13e..c898ae9b 100644
+--- a/src/Ai/Raid/ICC/ICCActionContext.h
++++ b/src/Ai/Raid/ICC/ICCActionContext.h
+@@ -68,6 +68,7 @@ public:
+         creators["icc valithria portal"] = &RaidIccActionContext::icc_valithria_portal;
+         creators["icc valithria heal"] = &RaidIccActionContext::icc_valithria_heal;
+         creators["icc valithria dream cloud"] = &RaidIccActionContext::icc_valithria_dream_cloud;
++        creators["icc valithria mana"] = &RaidIccActionContext::icc_valithria_mana;
+         creators["icc valithria zombie kite"] = &RaidIccActionContext::icc_valithria_zombie_kite;
+ 
+         creators["icc sindragosa group position"] = &RaidIccActionContext::icc_sindragosa_group_position;
+@@ -140,6 +141,7 @@ private:
+     static Action* icc_valithria_portal(PlayerbotAI* botAI) { return new IccValithriaPortalAction(botAI); }
+     static Action* icc_valithria_heal(PlayerbotAI* botAI) { return new IccValithriaHealAction(botAI); }
+     static Action* icc_valithria_dream_cloud(PlayerbotAI* botAI) { return new IccValithriaDreamCloudAction(botAI); }
++    static Action* icc_valithria_mana(PlayerbotAI* botAI) { return new IccValithriaManaAction(botAI); }
+     static Action* icc_valithria_zombie_kite(PlayerbotAI* botAI) { return new IccValithriaZombieKiteAction(botAI); }
+ 
+     static Action* icc_sindragosa_group_position(PlayerbotAI* botAI) { return new IccSindragosaGroupPositionAction(botAI); }
+diff --git a/src/Ai/Raid/ICC/ICCMultipliers.cpp b/src/Ai/Raid/ICC/ICCMultipliers.cpp
+index b4c58e22..2343102d 100644
+--- a/src/Ai/Raid/ICC/ICCMultipliers.cpp
++++ b/src/Ai/Raid/ICC/ICCMultipliers.cpp
+@@ -788,7 +788,8 @@ float IccValithriaDreamCloudMultiplier::GetValue(Action* action)
+     if (boss && dynamic_cast<ReachPartyMemberToHealAction*>(action) && IccValithriaOnDragon(bot))
+         return 0.0f;
+ 
+-    if (bot->HasAura(SPELL_DREAM_STATE) && !bot->HealthBelowPct(50))
++    // A capped heroic cloud taker leaves the cloud run and heals itself (ValithriaHealerFocus).
++    if (bot->HasAura(SPELL_DREAM_STATE) && !bot->HealthBelowPct(50) && IccValithriaTakesCloud(bot))
+     {
+         if (dynamic_cast<IccValithriaDreamCloudAction*>(action))
+             return 1.0f; // Allow Dream Cloud action
+diff --git a/src/Ai/Raid/ICC/ICCScripts.h b/src/Ai/Raid/ICC/ICCScripts.h
+index c4bfac25..60eef5c3 100644
+--- a/src/Ai/Raid/ICC/ICCScripts.h
++++ b/src/Ai/Raid/ICC/ICCScripts.h
+@@ -64,6 +64,7 @@ namespace IcecrownHelpers
+     {
+         uint32 casts = 0;           // dragon heals cast since the last watch line
+         char const* outcome = "-";  // the heal action's last result
++        uint32 manaCooldowns = 0;   // mana cooldowns cast since the last watch line
+     };
+ 
+     struct ValithriaWatch
+diff --git a/src/Ai/Raid/ICC/ICCShared.cpp b/src/Ai/Raid/ICC/ICCShared.cpp
+index 956e12c7..b08011d7 100644
+--- a/src/Ai/Raid/ICC/ICCShared.cpp
++++ b/src/Ai/Raid/ICC/ICCShared.cpp
+@@ -294,7 +294,8 @@ bool ValithriaChasedBy(Player* bot, uint32 entry)
+ 
+ std::optional<bool> IccValithriaShouldHealRaid(Player* bot)
+ {
+-    return RaidInteractions::HealRaid(bot->GetGUID().GetRawValue(), ValithriaHealers(bot));
++    return RaidInteractions::HealRaid(bot->GetGUID().GetRawValue(), ValithriaHealers(bot),
++                                      sPlayerbotAIConfig.ValithriaHealerFocus);
+ }
+ 
+ std::optional<bool> IccValithriaHealsDragon(Player* bot)
+@@ -327,7 +328,85 @@ void IccValithriaNoteHeal(Player* bot, char const* outcome, bool cast)
+ 
+ bool IccValithriaCanUsePortal(Player* bot)
+ {
+-    return RaidInteractions::CanUsePortal(bot->GetGUID().GetRawValue(), ValithriaHealers(bot));
++    return RaidInteractions::CanUsePortal(bot->GetGUID().GetRawValue(), ValithriaHealers(bot),
++                                          sPlayerbotAIConfig.ValithriaHealerFocus, sPlayerbotAIConfig.ValithriaPortals);
++}
++
++bool IccValithriaTakesCloud(Player* bot)
++{
++    Difficulty const difficulty = bot->GetMap()->GetDifficulty();
++    bool const heroic = difficulty == RAID_DIFFICULTY_10MAN_HEROIC || difficulty == RAID_DIFFICULTY_25MAN_HEROIC;
++    Aura* twisted = bot->GetAura(RaidInteractions::TwistedNightmares);
++    return RaidInteractions::TakesCloud(sPlayerbotAIConfig.ValithriaHealerFocus, heroic,
++                                        twisted ? twisted->GetStackAmount() : 0);
++}
++
++namespace
++{
++RaidInteractions::HealerClass ValithriaHealerKind(uint8 playerClass)
++{
++    switch (playerClass)
++    {
++        case CLASS_PALADIN:
++            return RaidInteractions::HealerClass::Paladin;
++        case CLASS_PRIEST:
++            return RaidInteractions::HealerClass::Priest;
++        case CLASS_SHAMAN:
++            return RaidInteractions::HealerClass::Shaman;
++        case CLASS_DRUID:
++            return RaidInteractions::HealerClass::Druid;
++        default:
++            return RaidInteractions::HealerClass::Other;
++    }
++}
++
++// Shadowfiend attacks: the nearest living add in sight within its 30-yard range.
++Unit* ValithriaFiendTarget(Player* bot, PlayerbotAI* botAI)
++{
++    Unit* best = nullptr;
++    float bestDistance = 30.0f;
++    for (ObjectGuid const& guid : botAI->GetAiObjectContext()->GetValue<GuidVector>("possible targets")->Get())
++    {
++        Unit* unit = botAI->GetUnit(guid);
++        if (!unit || !unit->IsAlive() || !bot->IsValidAttackTarget(unit) || !bot->IsWithinLOSInMap(unit))
++            continue;
++        float const distance = bot->GetDistance(unit);
++        if (distance <= bestDistance)
++        {
++            bestDistance = distance;
++            best = unit;
++        }
++    }
++    return best;
++}
++}  // namespace
++
++uint32 IccValithriaManaCooldown(Player* bot, PlayerbotAI* botAI, Unit*& target)
++{
++    target = nullptr;
++    // Cheapest checks first: the trigger asks every tick, and most bots are not low-mana healers.
++    if (!sPlayerbotAIConfig.ValithriaHealerFocus || bot->GetMapId() != 631 || !bot->IsAlive() ||
++        bot->getPowerType() != POWER_MANA || bot->GetPowerPct(POWER_MANA) >= 65.0f || !PlayerbotAI::IsHeal(bot) ||
++        bot->HasAura(SPELL_DREAM_STATE) || bot->IsNonMeleeSpellCast(false) ||
++        !bot->FindNearestCreature(NPC_VALITHRIA_DREAMWALKER, 100.0f))
++        return 0;
++    return RaidInteractions::PickManaCooldown(
++        ValithriaHealerKind(bot->getClass()), bot->GetPowerPct(POWER_MANA),
++        [&](uint32 spell)
++        {
++            if (!bot->HasSpell(spell) || bot->HasSpellCooldown(spell) || bot->HasAura(spell))
++                return false;
++            Unit* const candidate = spell == RaidInteractions::Shadowfiend ? ValithriaFiendTarget(bot, botAI) : bot;
++            if (!candidate || !botAI->CanCastSpell(spell, candidate, true))
++                return false;
++            target = candidate;
++            return true;
++        });
++}
++
++void IccValithriaNoteManaCooldown(Player* bot)
++{
++    ++IcecrownHelpers::IccState(bot->GetMap()->GetInstanceId()).vtHealNotes[bot->GetGUID()].manaCooldowns;
+ }
+ 
+ namespace
+@@ -395,8 +474,9 @@ void IccValithriaWatch(Creature* valithria)
+     if (encounter != IN_PROGRESS || !valithria->IsAlive())
+     {
+         if (watch.engaged)
+-            LOG_INFO("playerbots", "valithria_watch instance={} end={} hp={:.1f}", instanceId,
+-                     encounter == DONE ? "done" : "reset", valithria->GetHealthPct());
++            LOG_INFO("playerbots", "valithria_watch instance={} end={} hp={:.1f} focus={}", instanceId,
++                     encounter == DONE ? "done" : "reset", valithria->GetHealthPct(),
++                     sPlayerbotAIConfig.ValithriaHealerFocus ? 1 : 0);
+         watch = IcecrownHelpers::ValithriaWatch{};
+         state.vtHealNotes.clear();
+         return;
+@@ -457,20 +537,22 @@ void IccValithriaWatch(Creature* valithria)
+         std::string const did(RaidInteractions::LastExecutedAction(trace));
+         lines.push_back(Acore::StringFormat(
+             "valithria_healer instance={} guid={} name={} class={} alloc={} now={} icc={} hp={:.0f} mana={:.0f} "
+-            "dist={:.1f} los={} casts={} heal={} last={} did=\"{}\"",
++            "dist={:.1f} los={} casts={} heal={} mana_cd={} last={} did=\"{}\"",
+             instanceId, member->GetGUID().GetCounter(), member->GetName(), ValithriaHealerClass(member->getClass()),
+             !raidHealer.has_value() ? "-" : (*raidHealer ? "raid" : "boss"), duty, ValithriaStrategyFlag(ai),
+             member->GetHealthPct(), member->GetPowerPct(POWER_MANA), member->GetDistance(valithria),
+-            member->IsWithinLOSInMap(valithria) ? 1 : 0, note.casts, note.outcome, ValithriaLastCast(ai, valithria),
+-            did.empty() ? "-" : did));
++            member->IsWithinLOSInMap(valithria) ? 1 : 0, note.casts, note.outcome, note.manaCooldowns,
++            ValithriaLastCast(ai, valithria), did.empty() ? "-" : did));
+         note.casts = 0;
++        note.manaCooldowns = 0;
+     }
+ 
+     std::string summary;
+     for (auto const& [duty, count] : duties)
+         summary += " " + duty + "=" + std::to_string(count);
+-    LOG_INFO("playerbots", "valithria_watch instance={} diff={} hp={:.1f} healers={}{} casts={}", instanceId,
+-             uint32(map->GetDifficulty()), valithria->GetHealthPct(), healers.size(), summary, casts);
++    LOG_INFO("playerbots", "valithria_watch instance={} diff={} focus={} hp={:.1f} healers={}{} casts={}", instanceId,
++             uint32(map->GetDifficulty()), sPlayerbotAIConfig.ValithriaHealerFocus ? 1 : 0, valithria->GetHealthPct(),
++             healers.size(), summary, casts);
+     for (std::string const& line : lines)
+         LOG_INFO("playerbots", "{}", line);
+ }
+diff --git a/src/Ai/Raid/ICC/ICCShared.h b/src/Ai/Raid/ICC/ICCShared.h
+index bf158381..5d87b023 100644
+--- a/src/Ai/Raid/ICC/ICCShared.h
++++ b/src/Ai/Raid/ICC/ICCShared.h
+@@ -100,7 +100,13 @@ std::optional<bool> IccValithriaHealsDragon(Player* bot);
+ // The dragon heal trigger's whole condition: a living, healthy healer outside the dream, not chased.
+ bool IccValithriaOnDragon(Player* bot);
+ bool IccValithriaCanUsePortal(Player* bot);
++// False once a heroic portal healer holds the stack cap of Twisted Nightmares (ValithriaHealerFocus).
++bool IccValithriaTakesCloud(Player* bot);
+ void IccValithriaNoteHeal(Player* bot, char const* outcome, bool cast);
++// With Playerbots.ValithriaHealerFocus: the mana cooldown a Valithria healer should cast now and its
++// target (itself, or an add for Shadowfiend), or 0.
++uint32 IccValithriaManaCooldown(Player* bot, PlayerbotAI* botAI, Unit*& target);
++void IccValithriaNoteManaCooldown(Player* bot);
+ // Playerbots.log every 5 s while her encounter is in progress (ICCScripts.cpp calls it from her update).
+ void IccValithriaWatch(Creature* valithria);
+ std::vector<Creature*> IccGetCreaturesByEntries(WorldObject* searcher, std::initializer_list<uint32> entries,
+diff --git a/src/Ai/Raid/ICC/ICCStrategy.cpp b/src/Ai/Raid/ICC/ICCStrategy.cpp
+index 304b920a..2f6b8d0b 100644
+--- a/src/Ai/Raid/ICC/ICCStrategy.cpp
++++ b/src/Ai/Raid/ICC/ICCStrategy.cpp
+@@ -140,6 +140,10 @@ void RaidIccStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+     triggers.push_back(new TriggerNode("icc valithria dream cloud",
+         { NextAction("icc valithria dream cloud", ACTION_RAID + 4) }));
+ 
++    // Above her heal: a healer spends its mana cooldown before running dry (ValithriaHealerFocus).
++    triggers.push_back(new TriggerNode("icc valithria mana",
++        { NextAction("icc valithria mana", ACTION_RAID + 3) }));
++
+     //SINDRAGOSA
+     triggers.push_back(new TriggerNode("icc sindragosa group position",
+         { NextAction("icc sindragosa group position", ACTION_RAID + 1) }));
+diff --git a/src/Ai/Raid/ICC/ICCTriggerContext.h b/src/Ai/Raid/ICC/ICCTriggerContext.h
+index 8aa5dc20..1b3867d8 100644
+--- a/src/Ai/Raid/ICC/ICCTriggerContext.h
++++ b/src/Ai/Raid/ICC/ICCTriggerContext.h
+@@ -64,6 +64,7 @@ public:
+         creators["icc valithria portal"] = &RaidIccTriggerContext::icc_valithria_portal;
+         creators["icc valithria heal"] = &RaidIccTriggerContext::icc_valithria_heal;
+         creators["icc valithria dream cloud"] = &RaidIccTriggerContext::icc_valithria_dream_cloud;
++        creators["icc valithria mana"] = &RaidIccTriggerContext::icc_valithria_mana;
+         creators["icc valithria zombie kite"] = &RaidIccTriggerContext::icc_valithria_zombie_kite;
+ 
+         creators["icc sindragosa group position"] = &RaidIccTriggerContext::icc_sindragosa_group_position;
+@@ -135,6 +136,7 @@ private:
+     static Trigger* icc_valithria_heal(PlayerbotAI* botAI) { return new IccValithriaHealTrigger(botAI); }
+     static Trigger* icc_valithria_zombie_kite(PlayerbotAI* botAI) { return new IccValithriaZombieKiteTrigger(botAI); }
+     static Trigger* icc_valithria_dream_cloud(PlayerbotAI* botAI) { return new IccValithriaDreamCloudTrigger(botAI); }
++    static Trigger* icc_valithria_mana(PlayerbotAI* botAI) { return new IccValithriaManaTrigger(botAI); }
+ 
+     static Trigger* icc_sindragosa_group_position(PlayerbotAI* botAI) { return new IccSindragosaGroupPositionTrigger(botAI); }
+     static Trigger* icc_sindragosa_frost_beacon(PlayerbotAI* botAI) { return new IccSindragosaFrostBeaconTrigger(botAI); }
+diff --git a/src/Ai/Raid/ICC/ICCTriggers.cpp b/src/Ai/Raid/ICC/ICCTriggers.cpp
+index ddd07958..a801b405 100644
+--- a/src/Ai/Raid/ICC/ICCTriggers.cpp
++++ b/src/Ai/Raid/ICC/ICCTriggers.cpp
+@@ -732,9 +732,15 @@ bool IccValithriaHealTrigger::IsActive()
+     return IccValithriaOnDragon(bot);
+ }
+ 
++bool IccValithriaManaTrigger::IsActive()
++{
++    Unit* target = nullptr;
++    return IccValithriaManaCooldown(bot, botAI, target) != 0;
++}
++
+ bool IccValithriaDreamCloudTrigger::IsActive()
+ {
+-    if (!bot->HasAura(SPELL_DREAM_STATE) || bot->HealthBelowPct(50))
++    if (!bot->HasAura(SPELL_DREAM_STATE) || bot->HealthBelowPct(50) || !IccValithriaTakesCloud(bot))
+         return false;
+ 
+     return true;
+diff --git a/src/Ai/Raid/ICC/ICCTriggers.h b/src/Ai/Raid/ICC/ICCTriggers.h
+index 47bd97c5..508d7a5c 100644
+--- a/src/Ai/Raid/ICC/ICCTriggers.h
++++ b/src/Ai/Raid/ICC/ICCTriggers.h
+@@ -578,6 +578,13 @@ public:
+     bool IsActive() override;
+ };
+ 
++class IccValithriaManaTrigger : public Trigger
++{
++public:
++    IccValithriaManaTrigger(PlayerbotAI* botAI) : Trigger(botAI, "icc valithria mana") {}
++    bool IsActive() override;
++};
++
+ //SINDRAGOSA
+ class IccSindragosaGroupPositionTrigger : public Trigger
+ {
+diff --git a/src/Ai/Raid/RaidInteractionPolicy.h b/src/Ai/Raid/RaidInteractionPolicy.h
+index 848b47dd..f4cea035 100644
+--- a/src/Ai/Raid/RaidInteractionPolicy.h
++++ b/src/Ai/Raid/RaidInteractionPolicy.h
+@@ -69,9 +69,11 @@ struct Healer
+     bool druid;
+ };
+ 
+-// Whether this healer is one of Valithria's reserved raid healers (the first one or two,
+-// druids first). A lone healer is reserved; the rest are dragon healers who may portal.
+-inline std::optional<bool> HealRaid(std::uint64_t guid, std::vector<Healer> healers)
++// Whether this healer is one of Valithria's reserved raid healers (druids first). A lone healer is
++// reserved. Without focus the first one (two healers or three) or two (four or more) are reserved and
++// the rest are dragon healers who may portal. With focus (Playerbots.ValithriaHealerFocus) exactly one
++// is reserved at any size and difficulty, so every healer but one heals her, and nobody portals.
++inline std::optional<bool> HealRaid(std::uint64_t guid, std::vector<Healer> healers, bool focus = false)
+ {
+     std::sort(healers.begin(), healers.end(), [](Healer const& left, Healer const& right)
+               { return left.druid != right.druid ? left.druid : left.guid < right.guid; });
+@@ -81,7 +83,9 @@ inline std::optional<bool> HealRaid(std::uint64_t guid, std::vector<Healer> heal
+         return std::nullopt;
+     if (healers.size() == 1)
+         return true;
+-    std::size_t const reserve = std::min(healers.size() - 1, healers.size() > 3 ? std::size_t{2} : std::size_t{1});
++    std::size_t const reserve =
++        focus ? std::size_t{1}
++              : std::min(healers.size() - 1, healers.size() > 3 ? std::size_t{2} : std::size_t{1});
+     return static_cast<std::size_t>(found - healers.begin()) < reserve;
+ }
+ 
+@@ -148,12 +152,82 @@ inline std::string_view LastExecutedAction(std::string_view trace)
+     return {};
+ }
+ 
+-inline bool CanUsePortal(std::uint64_t guid, std::vector<Healer> const& healers)
++// Whether this healer takes a Dream or Nightmare portal: the dragon healers do, the raid healer stays.
++// With focus, `portals` false (Playerbots.ValithriaPortals = 0) keeps every healer out of the dream.
++inline bool CanUsePortal(std::uint64_t guid, std::vector<Healer> const& healers, bool focus = false,
++                         bool portals = true)
+ {
+-    auto const raidHealer = HealRaid(guid, healers);
++    if (focus && !portals)
++        return false;
++    auto const raidHealer = HealRaid(guid, healers, focus);
+     return healers.size() > 1 && raidHealer.has_value() && !*raidHealer;
+ }
+ 
++// Heroic Nightmare clouds: each one taken stacks Twisted Nightmares for 40 s (+10% healing, 200 mana every
++// 3 s, and 200 Nature damage a second, stacking); each one left hurts her for 1,000 a second until taken.
++// Bots took 14 and 19 stacks in the 10-heroic dojo pull and died of the damage, as both portal healers did
++// in the 2026-11-25 live wipe. With focus a bot stops taking clouds at this many stacks and heals itself.
++inline constexpr std::uint32_t NightmareStackCap = 6;
++inline constexpr std::uint32_t TwistedNightmares = 71941;
++
++inline bool TakesCloud(bool focus, bool heroic, std::uint32_t twistedStacks)
++{
++    return !focus || !heroic || twistedStacks < NightmareStackCap;
++}
++
++// A Valithria healer's own mana cooldown, spent before it runs dry. Her heal outranks the stock class
++// triggers for these (Divine Plea at ACTION_HIGH, Mana Tide and Innervate at ACTION_HIGH + 5), so
++// without this they never fire while she is hurt. Each fires at the mana its payoff suits: Divine Plea
++// halves the paladin's heals for 15 s and returns 25% mana on a 1-minute cooldown, so early and often;
++// Hymn of Hope channels for 8 s, so last. Highest WotLK ranks.
++enum class HealerClass
++{
++    Other,
++    Paladin,
++    Priest,
++    Shaman,
++    Druid
++};
++
++inline constexpr std::uint32_t DivinePlea = 54428;
++inline constexpr std::uint32_t ManaTideTotem = 16190;
++inline constexpr std::uint32_t Innervate = 29166;
++inline constexpr std::uint32_t Shadowfiend = 34433;
++inline constexpr std::uint32_t HymnOfHope = 64901;
++
++struct ManaCooldown
++{
++    std::uint32_t spell;
++    float belowPct;
++};
++
++inline std::vector<ManaCooldown> ManaCooldowns(HealerClass healer)
++{
++    switch (healer)
++    {
++        case HealerClass::Paladin:
++            return {{DivinePlea, 65.0f}};
++        case HealerClass::Priest:
++            return {{Shadowfiend, 60.0f}, {HymnOfHope, 25.0f}};
++        case HealerClass::Shaman:
++            return {{ManaTideTotem, 50.0f}};
++        case HealerClass::Druid:
++            return {{Innervate, 50.0f}};
++        default:
++            return {};
++    }
++}
++
++// The first of this class's cooldowns whose mana threshold is crossed and that `ready` accepts, or 0.
++template <class Ready>
++std::uint32_t PickManaCooldown(HealerClass healer, float manaPct, Ready ready)
++{
++    for (ManaCooldown const& cooldown : ManaCooldowns(healer))
++        if (manaPct < cooldown.belowPct && ready(cooldown.spell))
++            return cooldown.spell;
++    return 0;
++}
++
+ inline bool AffordableHeal(std::int32_t cost, std::uint32_t mana)
+ {
+     return cost >= 0 && static_cast<std::uint32_t>(cost) <= mana;
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index ca223417..094411aa 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -312,6 +312,8 @@ bool PlayerbotAIConfig::Initialize()
+ 
+     EnableICCBuffs = sConfigMgr->GetOption<bool>("Playerbots.EnableICCBuffs", true);
+     TwinValkyrInteractions = sConfigMgr->GetOption<bool>("Playerbots.TwinValkyrInteractions", false);
++    ValithriaHealerFocus = sConfigMgr->GetOption<bool>("Playerbots.ValithriaHealerFocus", true);
++    ValithriaPortals = sConfigMgr->GetOption<bool>("Playerbots.ValithriaPortals", true);
+     RaidVehicleSupport = sConfigMgr->GetOption<bool>("Playerbots.RaidVehicleSupport", false);
+     LichKingMechanics = sConfigMgr->GetOption<bool>("Playerbots.LichKingMechanics", false);
+ 
+diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
+index 6a133676..953970e1 100644
+--- a/src/PlayerbotAIConfig.h
++++ b/src/PlayerbotAIConfig.h
+@@ -108,6 +108,8 @@ public:
+     bool DisabledWithoutRealPlayer;
+     bool EnableICCBuffs;
+     bool TwinValkyrInteractions;
++    bool ValithriaHealerFocus;
++    bool ValithriaPortals;
+     bool RaidVehicleSupport;
+     bool LichKingMechanics;
+     bool AllowAccountBots, AllowGuildBots, AllowTrustedAccountBots;
+diff --git a/tests/raid_interactions_test.cpp b/tests/raid_interactions_test.cpp
+index b07014c0..c671372b 100644
+--- a/tests/raid_interactions_test.cpp
++++ b/tests/raid_interactions_test.cpp
+@@ -4,8 +4,10 @@
+  * or (at your option) any later version.
+  */
+ 
++#include <algorithm>
+ #include <iostream>
+ #include <string_view>
++#include <vector>
+ 
+ #include "../src/Ai/Raid/RaidInteractionPolicy.h"
+ 
+@@ -85,6 +87,107 @@ int main()
+             CHECK(!CanUsePortal(1, roster));
+         }
+ 
++    // Healer focus (Playerbots.ValithriaHealerFocus): exactly one raid healer at every size, druids
++    // first, so every healer but one heals her. The healers on her take the portals unless
++    // Playerbots.ValithriaPortals is off; the raid healer never does.
++    for (std::uint64_t count = 1; count <= 10; ++count)
++        for (std::uint32_t druids : {0u, 1u, 2u, (1u << count) - 1})
++        {
++            std::vector<Healer> roster;
++            for (std::uint64_t index = 0; index < count; ++index)
++                roster.push_back({201 + index, (druids & (1u << index)) != 0});
++            std::size_t surface = 0;
++            for (Healer const& healer : roster)
++            {
++                auto const assignment = HealRaid(healer.guid, roster, true);
++                CHECK(assignment.has_value());
++                surface += *assignment;
++                CHECK(!CanUsePortal(healer.guid, roster, true, false));
++                CHECK(CanUsePortal(healer.guid, roster, true, true) == (count > 1 && !*assignment));
++                auto reversed = roster;
++                std::reverse(reversed.begin(), reversed.end());
++                CHECK(HealRaid(healer.guid, reversed, true) == assignment);
++            }
++            CHECK(surface == 1u);
++            CHECK(!HealRaid(1, roster, true).has_value());
++        }
++    // The live 10-heroic roster: priest 1146, paladin 1903, shaman 3008, no druid. The priest is the
++    // raid's either way; the paladin and shaman portal unless portals are off.
++    {
++        std::vector<Healer> const live = {{1146, false}, {1903, false}, {3008, false}};
++        CHECK(HealRaid(1146, live, true) == true);
++        CHECK(HealRaid(1903, live, true) == false);
++        CHECK(HealRaid(3008, live, true) == false);
++        CHECK(CanUsePortal(1903, live) && CanUsePortal(3008, live) && !CanUsePortal(1146, live));
++        CHECK(!CanUsePortal(1903, live, true, false) && !CanUsePortal(3008, live, true, false));
++        CHECK(CanUsePortal(1903, live, true, true) && CanUsePortal(3008, live, true, true));
++        CHECK(!CanUsePortal(1146, live, true, true));
++    }
++    // 25-man with six healers: focus moves the second raid healer onto her (five on her, not four).
++    {
++        std::vector<Healer> const six = {{106, false}, {105, false}, {104, true}, {103, false}, {102, false},
++                                         {101, false}};
++        std::size_t onHer = 0;
++        for (Healer const& healer : six)
++        {
++            bool const raid = *HealRaid(healer.guid, six, true);
++            CHECK(raid == (healer.guid == 104));
++            onHer += HealsDragon(raid, 50.0f, 100.0f);
++        }
++        CHECK(onHer == 5);
++    }
++
++    // Heroic cloud taking stops at the stack cap with focus; normal clouds (no damage) and the old
++    // behaviour have no cap.
++    for (std::uint32_t stacks = 0; stacks < 30; ++stacks)
++    {
++        CHECK(TakesCloud(true, true, stacks) == (stacks < NightmareStackCap));
++        CHECK(TakesCloud(true, false, stacks));
++        CHECK(TakesCloud(false, true, stacks));
++    }
++    CHECK(NightmareStackCap > 0 && NightmareStackCap < 25);  // below the old 25-stack portal refusal
++
++    // Mana cooldowns: each class's own, below its threshold, only when ready; the first that fits wins.
++    {
++        auto always = [](std::uint32_t) { return true; };
++        auto never = [](std::uint32_t) { return false; };
++        CHECK(PickManaCooldown(HealerClass::Paladin, 64.9f, always) == DivinePlea);
++        CHECK(PickManaCooldown(HealerClass::Paladin, 65.0f, always) == 0);
++        CHECK(PickManaCooldown(HealerClass::Paladin, 5.0f, never) == 0);
++        CHECK(PickManaCooldown(HealerClass::Shaman, 49.9f, always) == ManaTideTotem);
++        CHECK(PickManaCooldown(HealerClass::Shaman, 50.0f, always) == 0);
++        CHECK(PickManaCooldown(HealerClass::Druid, 49.9f, always) == Innervate);
++        CHECK(PickManaCooldown(HealerClass::Druid, 60.0f, always) == 0);
++        CHECK(PickManaCooldown(HealerClass::Priest, 59.9f, always) == Shadowfiend);
++        CHECK(PickManaCooldown(HealerClass::Priest, 60.0f, always) == 0);
++        // Hymn of Hope only once mana is low, and only after Shadowfiend is spent or has no target.
++        CHECK(PickManaCooldown(HealerClass::Priest, 30.0f, [](std::uint32_t spell) { return spell == HymnOfHope; }) ==
++              0);
++        CHECK(PickManaCooldown(HealerClass::Priest, 24.9f, [](std::uint32_t spell) { return spell == HymnOfHope; }) ==
++              HymnOfHope);
++        CHECK(PickManaCooldown(HealerClass::Priest, 10.0f, always) == Shadowfiend);
++        CHECK(PickManaCooldown(HealerClass::Other, 0.0f, always) == 0);
++        // Every threshold sits above the stock mana potion's 40%, below which the potion (ACTION_EMERGENCY)
++        // also fires, except Hymn of Hope, the last resort.
++        for (HealerClass healer : {HealerClass::Paladin, HealerClass::Shaman, HealerClass::Druid})
++            for (ManaCooldown const& cooldown : ManaCooldowns(healer))
++                CHECK(cooldown.belowPct > 40.0f);
++        // The readiness probe is asked only below a threshold, never for another class's spell.
++        std::vector<std::uint32_t> asked;
++        auto ask = [&asked](bool answer)
++        {
++            return [&asked, answer](std::uint32_t spell)
++            {
++                asked.push_back(spell);
++                return answer;
++            };
++        };
++        PickManaCooldown(HealerClass::Shaman, 70.0f, ask(true));
++        CHECK(asked.empty());
++        PickManaCooldown(HealerClass::Shaman, 10.0f, ask(false));
++        CHECK(asked == std::vector<std::uint32_t>{ManaTideTotem});
++    }
++
+     // Dragon healers always heal her; raid healers only while nobody they could heal is hurt
+     // and they keep mana for the raid.
+     for (float lowest : {0.0f, 25.0f, 79.9f, 80.0f, 100.0f})

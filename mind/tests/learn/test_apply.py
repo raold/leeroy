@@ -10,7 +10,7 @@ from engine_rig import make_rig
 from leeroy_mind.discord import store as discord
 from leeroy_mind.discord.channels import channel_id, is_discord
 from leeroy_mind.learn import apply, arms, audience, bandit, control, lessons, recipe
-from leeroy_mind.learn.config import LearnCfg, load_learn_config
+from leeroy_mind.learn.config import OFF as LEARN_OFF, LearnCfg, load_learn_config
 from leeroy_mind.protocol import Chat, Group
 from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
@@ -62,14 +62,14 @@ def compose(rig, channel='guild', guid=101):
 
 
 @pytest.mark.parametrize('setting', ['apply=true','apply=false','apply=1','apply="true"'])
-def test_apply_config_is_boolean_and_off_by_default(tmp_path, setting):
+def test_apply_config_is_boolean_and_on_by_default(tmp_path, setting):
     path=tmp_path/'mind.toml'
     path.write_text('[learn]\nenabled=true\n'+setting)
     cfg=load_learn_config(path)
     assert cfg.apply is (setting == 'apply=true')
     if setting in ('apply=1','apply="true"'):
-        assert cfg == LearnCfg()
-    assert load_learn_config(tmp_path/'absent') == LearnCfg()
+        assert cfg == LEARN_OFF
+    assert load_learn_config(tmp_path/'absent') == LearnCfg() and LearnCfg().apply is True
 
 
 @pytest.mark.parametrize('family,params', [(family,p) for family,values in arms.PRESETS.items() for p in values])

@@ -175,3 +175,145 @@ def run(layout, *, log=print):
         report["ok"] = report["ok"] and report["stopped"]
         (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report
+
+
+ENCOUNTER_RUNS = ("10n:before", "10n:after", "10h:before", "10h:after")
+ENCOUNTER_EXTRA = ("10n:noportals", "10h:noportals")
+ENCOUNTER_DEADLINE_S = 25 * 60
+
+
+def encounter_verdict(observation, *, token, difficulty, mode):
+    """A full Valithria pull: setup, real engagement and her own DONE state, or why it did not get there.
+
+    `ok` means the harness ran and cleaned up; `killed` means she reached full health in that pull
+    (the core's boss state DONE). Missing evidence is never a kill."""
+    o = observation
+    problems = []
+    for key, expected in (("format", 1), ("kind", "dojo-valithria-encounter"), ("token", token),
+                          ("difficulty", difficulty), ("mode", mode), ("focus", mode != "before"),
+                          ("portals", mode != "noportals"),
+                          ("state", "done"), ("setup", True), ("cleanup", True), ("engaged", True)):
+        if key not in o or type(o[key]) is not type(expected) or o[key] != expected:
+            problems.append(f"{key}: expected {expected!r}")
+    if o.get("failure") != "":
+        problems.append("native failure or absent failure field")
+    wanted = {"10n": 0, "10h": 2}[difficulty]
+    if o.get("map_difficulty") != wanted or type(o.get("instance")) is not int or o["instance"] <= 0:
+        problems.append("wrong or absent raid instance or difficulty")
+    members = o.get("members")
+    if type(members) is not list or len(members) != 10 or sum(1 for m in members if m.get("healer")) != 3:
+        problems.append("the fixed ten-player roster with three healers was not reported")
+        members = []
+    for m in members:
+        if m.get("level") != 80 or (m.get("healer") and m.get("is_heal") is not True):
+            problems.append(f"{m.get('name')}: wrong level or role")
+    if o.get("outcome") not in {"done", "wipe", "reset", "timeout"}:
+        problems.append("no encounter outcome")
+    if type(o.get("samples")) is not int or o["samples"] < 20:
+        problems.append("insufficient runtime observations")
+    start = o.get("start_hp")
+    if type(start) not in (int, float) or not 49.0 <= start <= 60.0:
+        problems.append("she did not start near 50%")
+    killed = (not problems and o["outcome"] == "done" and type(o.get("peak_hp")) in (int, float)
+              and o["peak_hp"] >= 99.5)
+    healers = [m for m in members if m.get("healer")]
+    summary = dict(
+        outcome=o.get("outcome"), pull_s=round(o.get("pull_ms", 0) / 1000, 1), start_hp=start,
+        end_hp=o.get("hp"), peak_hp=o.get("peak_hp"),
+        deaths=sum(m.get("deaths", 0) for m in members),
+        healer_deaths=sum(m.get("deaths", 0) for m in healers),
+        portal_entries=sum(m.get("dream_entries", 0) for m in healers),
+        dream_s=round(sum(m.get("dream_ms", 0) for m in healers) / 1000, 1),
+        healing_on_her=sum(m.get("healing_on_her", 0) for m in healers),
+        mana_cooldowns=sum(m.get("mana_cooldowns", 0) for m in healers),
+        mana_potions=sum(m.get("mana_potions", 0) for m in healers),
+        max_twisted_nightmares=max((m.get("max_twisted_nightmares", 0) for m in healers), default=0),
+        max_emerald_vigor=max((m.get("max_emerald_vigor", 0) for m in healers), default=0))
+    return {"ok": not problems, "killed": killed, "problems": problems, "summary": summary}
+
+
+def parse_encounter(text):
+    rows = [line[len("dojo-encounter "):] for line in text.splitlines() if line.startswith("dojo-encounter ")]
+    if len(rows) != 1:
+        raise world.WorldError("native encounter observer missing or ambiguous (build with RaidAcceptance)")
+    return json.loads(rows[0])
+
+
+def encounter(layout, runs=ENCOUNTER_RUNS, *, item_level=245, log=print):
+    """Full Valithria pulls of one fixed ten-player bot raid, before and after the healer focus switch."""
+    for item in runs:
+        if item not in ENCOUNTER_RUNS + ENCOUNTER_EXTRA:
+            raise LayoutError(f"unknown encounter run {item!r}; use {', '.join(ENCOUNTER_RUNS + ENCOUNTER_EXTRA)}")
+    if type(item_level) is not int or not 200 <= item_level <= 284:
+        raise LayoutError("item level must be 200-284")
+    if world.running(layout):
+        raise world.WorldError("the encounter needs a stopped dedicated dojo instance")
+    preflight = world.preflight(layout)
+    mysql.verify_identity(layout, mysql.Client(layout, layout.server.root_cnf))
+    source = provenance(layout)
+    dojo = read_conf(layout.configs / "modules/mod_dojo.conf")
+    leeroy = read_conf(layout.configs / "modules/mod_leeroy.conf")
+    if dojo.get("Dojo.Scenario.Manifest") or any(leeroy.get(key) != "0" for key in (
+            "Leeroy.Enable", "Leeroy.HumanGuid", "Leeroy.GuildId")):
+        raise LayoutError("raid realm needs no arena manifest and Leeroy Enable/HumanGuid/GuildId = 0")
+    out = layout.data / "runs" / (time.strftime("%Y%m%d_%H%M%S") + "-valithria-" + uuid.uuid4().hex[:8])
+    out.mkdir(parents=True, exist_ok=False)
+    results = []
+    report = dict(kind="dojo-valithria-encounters", format=1, ok=False, source=source, preflight=preflight,
+                  item_level=item_level, runs=results, stopped=False, out=str(out))
+    started = False
+    try:
+        started = True
+        world.start(layout, log=log)
+        with world.ra(layout) as client:
+            for item in runs:
+                difficulty, mode = item.split(":")
+                token = uuid.uuid4().hex
+                name = f"{difficulty}-{mode}"
+                log(f"valithria {name}: starting")
+                reply = client.command(f"dojo raid encounter start {token} {difficulty} {mode} {item_level}")
+                if "dojo encounter: started" not in reply:
+                    raise world.WorldError(f"native encounter start refused: {reply}")
+                deadline = time.monotonic() + ENCOUNTER_DEADLINE_S
+                last = None
+                with (out / f"{name}.jsonl").open("w", encoding="utf-8") as trace:
+                    while True:
+                        state = parse_encounter(client.command("dojo raid encounter status"))
+                        trace.write(json.dumps(state, sort_keys=True) + "\n")
+                        trace.flush()
+                        if state.get("token") != token:
+                            raise world.WorldError("run token changed while observing")
+                        if state.get("state") in {"done", "cleanup_failed"}:
+                            break
+                        progress = (state.get("state"), round(state.get("hp", 0)))
+                        if progress != last:
+                            last = progress
+                            log(f"valithria {name}: {state.get('state')} hp={state.get('hp', 0):.1f} "
+                                f"t={state.get('pull_ms', 0) // 1000}s")
+                        if time.monotonic() >= deadline:
+                            client.command("dojo raid encounter abort")
+                            raise world.WorldError("native encounter/cleanup deadline exceeded")
+                        time.sleep(1.0)
+                final = parse_encounter(client.command("dojo raid encounter status full"))
+                (out / f"{name}.json").write_text(json.dumps(final, indent=2) + "\n", encoding="utf-8")
+                result = dict(name=name, observation=final,
+                              **encounter_verdict(final, token=token, difficulty=difficulty, mode=mode))
+                results.append(result)
+                log(f"valithria {name}: {final.get('outcome')} peak={final.get('peak_hp')} "
+                    f"{'killed' if result['killed'] else 'not killed'}{'' if result['ok'] else ' (problems)'}")
+                if not final.get("cleanup"):
+                    raise world.WorldError("fixture cleanup unproved; refusing the next pull")
+        report["ok"] = len(results) == len(runs) and all(r["ok"] for r in results)
+    except (world.WorldError, RaError, OSError, ValueError) as error:
+        report["error"] = str(error)
+    finally:
+        if started:
+            try:
+                if world.running(layout):
+                    world.stop(layout, log=log)
+                report["stopped"] = not world.running(layout)
+            except (world.WorldError, RaError, OSError) as error:
+                report["shutdown_error"] = str(error)
+        report["ok"] = report["ok"] and report["stopped"]
+        (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return report
