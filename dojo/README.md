@@ -246,6 +246,20 @@ boarding and combat retain the same cadence and effect requirements.
 
 ### Yogg brain teams
 
+`realm --layout <layout> gate-campaign --gate yogg --runs 3` requires consecutive
+complete control/enabled pairs on the same committed source, built and staged
+binary, layout and configuration. It stops at the first failed pair, including
+an infrastructure failure; it never retries or replaces a failed receipt.
+The campaign retains and hashes each fresh child report and rechecks its native
+observations, cleanup and shutdown. Reports separate infrastructure and behavior
+failures; either fails the campaign. A run count of 3-100 can be selected.
+Yogg additionally requires all three actual native rooms within that fixed run
+budget and reports their individual counts. Repeating only one room cannot pass;
+one exposure per room is not a claim of repeated coverage of every room.
+The same command accepts `valithria`, `twins`, `poison`, `lich-king`,
+`leviathan-reset` and `malygos`; Lich King includes both Terenas and Defile pairs
+in every repetition. A campaign never changes feature switches.
+
 `realm --layout <layout> yogg-acceptance` observes one native portal wave with
 nine synthetic bots and a scripted player outside portal-selection range. Setup
 selects Sara's phase boundary and kills a real guardian whose native death nova

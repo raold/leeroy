@@ -12,46 +12,53 @@ from .ra import RaError
 
 
 def verdict(o, *, token, negative=False, scenario="leviathan"):
-    problems = []
+    plumbing, behavior = [], []
+
+    def result():
+        return dict(ok=not plumbing and not behavior, problems=plumbing + behavior,
+                    plumbing_problems=plumbing, behavior_problems=behavior)
+
     expected = dict(kind="dojo-vehicle-observation", format=1, scenario=scenario, token=token,
                     state="done", negative=negative, ready=True, human_boarded=True, cleanup=True,
                     observation_clock="map_update")
     for key, value in expected.items():
         if type(o.get(key)) is not type(value) or o[key] != value:
-            problems.append(f"invalid {key}")
+            plumbing.append(f"invalid {key}")
     allowed_failures = {""}
     if negative and scenario == "malygos":
         allowed_failures |= {"drake_driver_or_mount_lost", "drake_encounter_lost"}
     if not isinstance(o.get("failure"), str) or o["failure"] not in allowed_failures:
-        problems.append("invalid failure")
+        (behavior if isinstance(o.get("failure"), str) else plumbing).append("invalid failure")
     if scenario not in {"malygos", "leviathan", "leviathan-reset"}:
-        problems.append("unsupported scenario")
+        plumbing.append("unsupported scenario")
     for key in ("samples", "max_gap_ms", "human_death_ms", "boss_start_health", "boss_least_health"):
         if type(o.get(key)) is not int or o[key] < 0:
-            problems.append(f"invalid {key}")
+            plumbing.append(f"invalid {key}")
     for key in ("driver_entries", "damage_hits", "moving_hits", "after_death_hits", "distance"):
         rows = o.get(key)
         if not isinstance(rows, list) or len(rows) != 2 or any(
             type(v) not in ((int, float) if key == "distance" else (int,)) or not math.isfinite(v) or v < 0 for v in rows
         ):
-            problems.append(f"invalid {key}")
-    if problems:
-        return dict(ok=False, problems=problems)
+            plumbing.append(f"invalid {key}")
+    if plumbing:
+        return result()
+    problems = behavior
     if o["samples"] < 20 or o["max_gap_ms"] > 200:
-        problems.append("continuous fixture observation missing")
+        plumbing.append("continuous fixture observation missing")
     if scenario == "malygos":
+        schema_problems = len(plumbing)
         for key in ("setup_add_kills", "heal_events", "effective_healing", "dot_samples", "field_samples"):
             if type(o.get(key)) is not int or o[key] < 0:
-                problems.append(f"invalid {key}")
+                plumbing.append(f"invalid {key}")
         for key in ("surge_samples", "shield_samples", "safe_ring_samples", "field_escapes", "longest_field_ms"):
             if not isinstance(o.get(key), list) or len(o[key]) != 2 or any(type(v) is not int or v < 0 for v in o[key]):
-                problems.append(f"invalid {key}")
-        if problems:
-            return dict(ok=False, problems=problems)
+                plumbing.append(f"invalid {key}")
+        if len(plumbing) != schema_problems:
+            return result()
         if o["driver_entries"] != [30161, 30161] or o["setup_add_kills"] != 6:
             problems.append("native phase-three drakes were not established")
         if o["field_samples"] < 1 or sum(o["surge_samples"]) < 1:
-            problems.append("actual static fields and surge exposure missing")
+            plumbing.append("actual static fields and surge exposure missing")
         if negative:
             if o["heal_events"] or o["dot_samples"] or any(o["damage_hits"]) or any(o["shield_samples"]):
                 problems.append("strategy-disabled drakes still caused vehicle effects")
@@ -71,21 +78,24 @@ def verdict(o, *, token, negative=False, scenario="leviathan"):
         if o["driver_entries"] != [33060, 33109]:
             problems.append("melee siege driver and ranged demolisher driver were not observed")
         if o["samples"] < 20 or o["max_gap_ms"] > 200 or o["human_death_ms"] < 20000:
-            problems.append("continuous combat and human death stimulus were not observed")
+            plumbing.append("continuous combat and human death stimulus were not observed")
         if o["boss_start_health"] <= 0 or o["boss_least_health"] >= o["boss_start_health"]:
             problems.append("native boss health did not decrease")
         for key, minimum in (("distance", 20), ("damage_hits", 2), ("moving_hits", 1), ("after_death_hits", 2)):
             if any(value < minimum for value in o[key]):
                 problems.append(f"both actual vehicles require {key}")
     if scenario == "leviathan-reset":
+        schema_problems = len(plumbing)
         for key in ("reset_requested", "reset_ready", "reset_reengaged"):
-            if type(o.get(key)) is not bool or o[key] is negative:
-                problems.append(f"invalid {key}")
+            if type(o.get(key)) is not bool:
+                plumbing.append(f"invalid {key}")
+            elif o[key] is negative:
+                behavior.append(f"invalid {key}")
         for key in ("reset_old_accessories", "reset_removed_accessories", "reset_fresh_accessories"):
             if type(o.get(key)) is not int or not 0 <= o[key] <= 64:
-                problems.append(f"invalid {key}")
-        if problems:
-            return dict(ok=False, problems=problems)
+                plumbing.append(f"invalid {key}")
+        if len(plumbing) != schema_problems:
+            return result()
         if o["driver_entries"] != [33060, 33109] or o["reset_old_accessories"] < 1:
             problems.append("initial native vehicle and accessory exposure missing")
         if negative and o["human_death_ms"]:
@@ -93,7 +103,7 @@ def verdict(o, *, token, negative=False, scenario="leviathan"):
         expected_count = 0 if negative else o["reset_old_accessories"]
         if o["reset_removed_accessories"] != expected_count or o["reset_fresh_accessories"] != expected_count:
             problems.append("native nested accessory replacement was not proved")
-    return dict(ok=not problems, problems=problems)
+    return result()
 
 
 def parse_status(reply):

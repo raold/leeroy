@@ -22,26 +22,34 @@ ALL_SCENARIOS = SCENARIOS + LICH_KING_SCENARIOS
 def verdict(observation, *, scenario, token, negative=False):
     """An action result is deliberately not an input. Missing evidence always fails."""
     o = observation
-    problems = []
+    plumbing, behavior = [], []
+
+    def result():
+        return dict(ok=not plumbing and not behavior, problems=plumbing + behavior,
+                    plumbing_problems=plumbing, behavior_problems=behavior)
+
     for key, expected in (("format", 1), ("kind", "dojo-raid-observation"), ("scenario", scenario),
                           ("token", token), ("control", negative), ("state", "done"), ("setup", True), ("cleanup", True)):
         if key not in o or type(o[key]) is not type(expected) or o[key] != expected:
-            problems.append(f"{key}: expected {expected!r}")
+            plumbing.append(f"{key}: expected {expected!r}")
     if o.get("failure") != "":
-        problems.append("native failure or absent failure field")
+        (behavior if isinstance(o.get("failure"), str) else plumbing).append("native failure or absent failure field")
     counts = ("instance", "samples", "max_gap_ms", "heal_events", "effective_healing", "light_samples",
               "dark_samples", "switch_ms", "crossings", "hazard_samples", "poison_hits")
     if any(type(o.get(key)) is not int or o[key] < 0 for key in counts):
-        return {"ok": False, "problems": problems + ["missing, negative or non-integer observation counter"]}
+        plumbing.append("missing, negative or non-integer observation counter")
+        return result()
     if type(o.get("minimum_clearance")) not in (float, int) or not math.isfinite(o["minimum_clearance"]) or o["minimum_clearance"] < 0:
-        return {"ok": False, "problems": problems + ["invalid clearance"]}
+        plumbing.append("invalid clearance")
+        return result()
     if o.get("map") != {"valithria": 631, "twins": 649, "poison": 533, "lk-terenas": 631, "lk-defile": 631}.get(scenario) or o.get("instance", 0) <= 0:
-        problems.append("wrong or absent raid instance")
+        plumbing.append("wrong or absent raid instance")
     if o.get("samples", 0) < 10:
-        problems.append("insufficient runtime observations")
+        plumbing.append("insufficient runtime observations")
+    problems = behavior
     if scenario == "valithria":
         if not o.get("reach_competitor") or not o.get("combat_observed"):
-            problems.append("stock reach-to-heal competitor or combat was not exercised")
+            plumbing.append("stock reach-to-heal competitor or combat was not exercised")
         if negative and (o["heal_events"] > 0 or o["effective_healing"] > 0):
             problems.append("negative control healed Valithria")
         elif not negative and (o["heal_events"] < 2 or o["effective_healing"] <= 0):
@@ -56,14 +64,15 @@ def verdict(observation, *, scenario, token, negative=False):
     elif scenario in LICH_KING_SCENARIOS:
         lk_counts = ("room_samples", "escape_ms", "outside_samples", "inside_samples", "late_hits", "encounter_samples", "defile_hits")
         if any(type(o.get(k)) is not int or o[k] < 0 for k in lk_counts):
-            return {"ok": False, "problems": problems + ["invalid Lich King observation counter"]}
+            plumbing.append("invalid Lich King observation counter")
+            return result()
         if o["encounter_samples"] < 10:
-            problems.append("native Lich King encounter was not active")
+            plumbing.append("native Lich King encounter was not active")
         if scenario == "lk-terenas":
             if any(type(o.get(k)) is not int or o[k] < 1 for k in ("harvest_samples", "strangulate_samples")):
-                problems.append("native Harvest Soul and strangulate vehicle were not observed")
+                plumbing.append("native Harvest Soul and strangulate vehicle were not observed")
             if o["room_samples"] < 10 or o.get("reach_competitor") is not True:
-                problems.append("Frostmourne room or outside follow competitor was not exercised")
+                plumbing.append("Frostmourne room or outside follow competitor was not exercised")
             if negative and (o["heal_events"] > 0 or o["effective_healing"] > 0):
                 problems.append("disabled Lich King strategy still healed Terenas")
             elif not negative and (o["heal_events"] < 2 or o["effective_healing"] <= 0):
@@ -71,28 +80,28 @@ def verdict(observation, *, scenario, token, negative=False):
         else:
             clearance = o.get("final_hazard_clearance")
             if type(clearance) not in (int, float) or not math.isfinite(clearance):
-                problems.append("invalid Defile clearance")
+                plumbing.append("invalid Defile clearance")
             elif not negative and clearance <= 0:
                 problems.append("still inside the scaled Defile hazard")
             if o["hazard_samples"] < 20 or o["inside_samples"] < 1 or o["max_gap_ms"] > 200:
-                problems.append("Defile exposure or observation cadence not proved")
+                plumbing.append("Defile exposure or observation cadence not proved")
             if negative and o["defile_hits"] < 1:
                 problems.append("disabled Defile control did not take real damage")
             elif not negative and (not 0 < o["escape_ms"] <= 4000 or o["outside_samples"] < 20 or o["late_hits"] != 0):
                 problems.append("Defile escape was late, unstable, or followed by further damage")
     elif scenario == "poison":
         if o.get("hazard_samples", 0) < 20:
-            problems.append("Living Poison was not present long enough")
+            plumbing.append("Living Poison was not present long enough")
         if o.get("max_gap_ms", 100000) > 200:
-            problems.append("sampling gap too large to certify a poison crossing")
+            plumbing.append("sampling gap too large to certify a poison crossing")
         if negative:
             if o.get("poison_hits", 0) < 1:
                 problems.append("negative control did not demonstrate a real poison hit")
         elif o.get("crossings", 0) < 2 or o.get("minimum_clearance", 0) <= 1.5 or o.get("poison_hits", -1) != 0:
             problems.append("crossing stalled, entered the trigger radius, or took poison damage")
     else:
-        problems.append("unknown scenario")
-    return {"ok": not problems, "problems": problems}
+        plumbing.append("unknown scenario")
+    return result()
 
 
 def parse_status(text):

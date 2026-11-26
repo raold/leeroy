@@ -36,6 +36,10 @@ def add_parser(sub) -> None:
     vehicles.add_argument("--scenario", action="append", choices=("leviathan", "leviathan-reset", "malygos"))
     yogg = cmds.add_parser("yogg-acceptance", help="observe one real Yogg brain-team wave and its actual illusion")
     yogg.add_argument("--profile", action="store_true", help="capture isolated native bot timings without changing verdict limits")
+    from .campaign import GATES
+    campaign = cmds.add_parser("gate-campaign", help="require consecutive complete gate pairs on one candidate")
+    campaign.add_argument("--gate", required=True, choices=tuple(GATES))
+    campaign.add_argument("--runs", type=int, default=3, help="3-100 consecutive pairs; any failure stops the campaign")
     vt = cmds.add_parser("valithria-encounter",
                          help="full Valithria pulls of a fixed ten-player bot raid, healer focus off and on")
     vt.add_argument("--run", action="append", dest="runs",
@@ -178,6 +182,11 @@ def run(args: argparse.Namespace) -> int:
             from .yogg import run as run_yogg
             report = run_yogg(layout, profile=args.profile)
             print(f"Yogg wave: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
+            return 0 if report["ok"] else 1
+        elif command == "gate-campaign":
+            from .campaign import run as run_campaign
+            report = run_campaign(layout, gate=args.gate, runs=args.runs)
+            print(f"Gate campaign: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "valithria-encounter":
             from .raids import ENCOUNTER_RUNS, encounter
