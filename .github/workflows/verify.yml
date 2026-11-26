@@ -1,9 +1,9 @@
 name: verify
 
-# The portable parts of scripts/verify/run.sh on every pull request, in observe mode: each check
-# reports in the job summary and as annotations, and none fails the build yet. To enforce one,
-# delete its step's `continue-on-error: true` (and, for the workflow split, set
-# VERIFY_STRICT_WORKFLOWS: "1" on that step), then make `verify-observe` a required check.
+# The portable parts of scripts/verify/run.sh on every pull request, enforcing: each check reports
+# in the job summary and as annotations, and a FAIL fails the build (run.sh exits 1). Warnings, such
+# as the workflow split, stay non-fatal (set VERIFY_STRICT_WORKFLOWS: "1" on that step to enforce it).
+# The job id `verify-observe` is the required check name; keep it.
 
 on:
   pull_request:
@@ -42,7 +42,6 @@ jobs:
 
       - name: Plan
         id: plan
-        continue-on-error: true
         run: |
           plan=$(bash "$RUNNER" --ci --plan "$BASE")
           echo "$plan" | tee -a "$RUNNER_TEMP/verify.txt"
@@ -62,33 +61,29 @@ jobs:
 
       - name: Workflows changed together with code (warning)
         if: contains(steps.plan.outputs.checks, 'workflows')
-        continue-on-error: true
         run: bash "$RUNNER" --ci --only workflows "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
 
       - name: Windows macro identifiers
         if: contains(steps.plan.outputs.checks, 'identifiers')
-        continue-on-error: true
         run: bash "$RUNNER" --ci --only identifiers "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
 
       - name: Patch series on upstream, with the pin guard
         if: contains(steps.plan.outputs.checks, 'patches')
-        continue-on-error: true
         run: bash "$RUNNER" --ci --only patches "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
 
       - name: Migrations on a fixture database at the base's schema
         if: contains(steps.plan.outputs.checks, 'numbering') || contains(steps.plan.outputs.checks, 'migrate')
-        continue-on-error: true
         run: bash "$RUNNER" --ci --only numbering,migrate "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
 
       - name: Summary
         if: always()
         run: |
           {
-            echo "### verify (observe mode)"
+            echo "### verify"
             echo
             echo '```'
             grep -v '^::' "$RUNNER_TEMP/verify.txt" 2>/dev/null || echo "no report"
             echo '```'
             echo
-            echo "Observe mode: nothing here fails the build. The MSVC syntax check, the live patch rehearsal and the live database copy run only on the server's machine: \`scripts/verify/run.sh\`."
+            echo "A FAIL above fails the build; warnings do not. The MSVC syntax check, the live patch rehearsal and the live database copy run only on the server's machine: \`scripts/verify/run.sh\`."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -19,6 +19,8 @@ class ItemInfo:
     stats: frozenset[int]
     bonding: int | None = None
     bag_family: int = 0
+    allowable_race: int = -1
+    flags_extra: int = 0
 
 
 _ARMOUR = {1: 4, 2: 4, 3: 3, 4: 2, 5: 1, 6: 4, 7: 3, 8: 1, 9: 1, 11: 2}
@@ -83,6 +85,27 @@ def suits(item: ItemInfo, family: str, role: str | None, *, cls: int | None = No
     if role == "healer" and item.stats & _NOT_HEALING:
         return False
     if item.item_class == 4 and item.inventory_type == _TRINKET and not item.stats & mine:
+        return False
+    return True
+
+
+_ALLIANCE_RACES = frozenset({1, 3, 4, 7, 11})
+_HORDE_RACES = frozenset({2, 5, 6, 8, 10})
+_FACTION_HORDE, _FACTION_ALLIANCE = 0x1, 0x2  # item_template FlagsExtra (ITEM_FLAG2_FACTION_*)
+
+
+def can_use(item: ItemInfo, race: int, cls: int) -> bool:
+    """False when the item shuts out a member of this race and class: its AllowableRace or
+    AllowableClass mask (-1 or 0: everyone), or a faction bit in FlagsExtra, which the core
+    enforces separately (the faction tier pieces carry every race in the mask). A tier token is
+    judged by its own fields: the piece it buys is her faction's, since each side's vendor sells
+    its own."""
+    for mask, bit in ((item.allowable_race, race), (item.allowable_class, cls)):
+        if mask > 0 and type(bit) is int and bit > 0 and not mask & (1 << (bit - 1)):
+            return False
+    if item.flags_extra & _FACTION_HORDE and race in _ALLIANCE_RACES:
+        return False
+    if item.flags_extra & _FACTION_ALLIANCE and race in _HORDE_RACES:
         return False
     return True
 

@@ -9,7 +9,7 @@ sets 6, the design point) moves Discord presence and the replies on her own time
 "Presence on Discord"), who answers him in game and how soon (below, "In game: who answers and
 how soon") and her stepping away mid-conversation (below, "Interruptions and coming back").
 **`[life] state`**
-(default false; the release sets true) records each member's feeling through the day (below, "Her
+(default true) records each member's feeling through the day (below, "Her
 feeling right now"); nothing reads it in a prompt yet. There is no migration and no native change.
 
 The day, presence, state and interruption models (`day.py`, `presence.py`, `state.py`,
@@ -21,7 +21,7 @@ life thread, night_owl) and the date, so an edited persona gets a fresh plan. Dr
 `seeded(what, night, guid, minute, extra)` for a generator of its own), never the talk engine's
 shared rng, so a switch that is off draws nothing and moves no other draw.
 
-Guild members can plan shared in-game blocks with `[life] day_plans` and agree on five-member heroics with `[life] dungeons`. Both default off. The guild-life controller coordinates the party, GPU lease and native receipts. His validated request for a participant takes priority. [In-game activities and members’ heroics](../godmode/README.md)
+Guild members can plan shared in-game blocks with `[life] day_plans` and agree on five-member heroics with `[life] dungeons`. Both default on. The guild-life controller coordinates the party, GPU lease and native receipts. His validated request for a participant takes priority. [In-game activities and members’ heroics](../godmode/README.md)
 
 ## Her day plan (`life/day.py`)
 
@@ -35,7 +35,7 @@ member without a home keeps US Eastern, as Discord presence has it (`local_time`
 
 ### Job shape
 
-From `job + " " + rhythm`, case-folded. With `[talk] coherence` on (default off; read at the
+From `job + " " + rhythm`, case-folded. With `[talk] coherence` on (default on; read at the
 mind's start and at his login; off, a card reads exactly as the table reads it and the rows
 marked "coherence" below do not exist) three readings come around the table (2026-11-17, the
 self-play audit: a bartender, a trainer with early clients, a half-day worker and a paralegal on
@@ -437,8 +437,7 @@ whisper or her Discord DM her day can call her away mid-conversation (spec secti
 
 ## Her feeling right now (`life/state.py`, `life/statebook.py`)
 
-Section 3 of the human-likeness design. **`[life] state`** (default false; the release sets
-true): while it is on, `LifeService.state` is a `StateBook` and each member carries five numbers,
+Section 3 of the human-likeness design. **`[life] state`** (default true): while it is on, `LifeService.state` is a `StateBook` and each member carries five numbers,
 each in [-1, 1], that move through her day. While it is off, `LifeService.state` is None and
 nothing is read or written. Game latency and who answers read her energy, stress and social (above,
 "In game"); no prompt, intent or shape reads it yet (later tasks: her mood line, "It lands", and

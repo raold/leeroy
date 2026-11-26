@@ -124,8 +124,8 @@ def test_enabled_empty_table_is_zero_and_off_skips_outreach_reads(store,tmp_path
         store.conn.set_authorizer(None)
 
 
-@pytest.mark.parametrize('text,enabled', [('',False),('[outreach]\nenabled="yes"',False),
-                                        ('[outreach]\nenabled=true',True)])
+@pytest.mark.parametrize('text,enabled', [('',True),('[outreach]\nenabled="yes"',False),
+                                        ('[outreach]\nenabled=false',False),('[outreach]\nenabled=true',True)])
 def test_console_uses_startup_switch_and_keeps_existing_key_gates(store,text,enabled):
     seed_test_cast(store)
     store.set_meta('human_guid','1')

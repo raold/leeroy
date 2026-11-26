@@ -2,6 +2,7 @@
 by its loader's rules (a table without a rule reads unknown, never invalid)."""
 import dataclasses
 import importlib
+import tempfile
 import time
 import tomllib
 from pathlib import Path
@@ -18,10 +19,26 @@ PACKAGE = Path(leeroy_mind.__file__).parent
 # Dataclasses in a */config.py that are not a mind.toml table.
 NOT_TABLES = {("bakeoff", "Candidate"), ("guild", "DkpConfig"), ("guild", "GuildConfig"),
               ("realm", "RealmLimits")}
-# Tables whose loader is a function, not a dataclass or a rule table: their boolean keys by hand.
-BY_HAND = {"fingerprint": {"enabled": False}, "callbacks": {"enabled": False},
-           "looks": {"diversity": False}, "playstyle": {"enabled": False},
-           "raidplay": {"respond": False}, "prune": {"enabled": False}, "tuning": {"nudge_memories": True}}
+
+
+def by_hand() -> dict:
+    """Tables whose loader is a function, not a dataclass or a rule table: their boolean keys, as
+    each reader reads an empty mind.toml (every key missing)."""
+    from leeroy_mind.fingerprint.config import enabled as fingerprint
+    from leeroy_mind.memory.callbacks import load_callbacks_config
+    from leeroy_mind.nightly.prune import load as prune
+    from leeroy_mind.personas.looks_diversity import enabled as looks
+    from leeroy_mind.playstyle.service import enabled as playstyle
+    from leeroy_mind.raidplay.respond import settings as raidplay
+    from leeroy_mind.tuning.nudge_memories import enabled as nudge_memories
+    with tempfile.TemporaryDirectory() as root:
+        path = Path(root) / "mind.toml"
+        path.write_text("", encoding="utf-8")
+        return {"fingerprint": {"enabled": fingerprint(path)},
+                "callbacks": {"enabled": load_callbacks_config(path)},
+                "looks": {"diversity": looks(root)}, "playstyle": {"enabled": playstyle(path)},
+                "raidplay": {"respond": raidplay(path)[0]}, "prune": {"enabled": prune(path).enabled},
+                "tuning": {"nudge_memories": nudge_memories(root)}}
 
 
 def deadline():
@@ -52,7 +69,7 @@ def loader_booleans():
         out[table] = {k: defaults[table][k] for k, (check, _) in core._RULES[table].items() if _is_bool_rule(check)}
     from leeroy_mind.endpoint import ControlCfg, _RULES as control
     out["control"] = {k: getattr(ControlCfg(), k) for k, (check, _) in control.items() if _is_bool_rule(check)}
-    for table, keys in BY_HAND.items():
+    for table, keys in by_hand().items():
         assert table not in out
         out[table] = dict(keys)
     return out
@@ -117,10 +134,10 @@ def test_decisions_reads_on_with_its_live_keys(tmp_path):
                                   "[decisions]\nbank_items_per_day=51", "[decisions]\nsurprise=true",
                                   "[decisions]\nbank_restock_per_week=true"])
 def test_decisions_invalid_as_its_loader_says(tmp_path, text):
-    from leeroy_mind.decisions.config import DecisionsConfig, load_decisions_config
+    from leeroy_mind.decisions.config import OFF, load_decisions_config
     (tmp_path / "mind.toml").write_text("[server]\nenabled=true\n" + text.replace("[decisions]", "[decisions]\nenabled=true", 1)
                                         if "enabled" not in text else text)
-    assert load_decisions_config(tmp_path / "mind.toml") == DecisionsConfig()
+    assert load_decisions_config(tmp_path / "mind.toml") == OFF
     rows = ops.switches_view(tmp_path, deadline(), mind_started=None)["rows"]
     assert next(r for r in rows if r["table"] == "decisions")["state"] == "invalid"
 
@@ -149,7 +166,7 @@ def test_live_shaped_config_has_no_invalid_or_unknown_row(tmp_path):
         "[outreach]\nenabled=true\n[godmode]\nenabled=true\n[turing]\nenabled=true\nwindows=8\n"
         "[lab]\nenabled=true\n[bakeoff]\ncapture=true\n[romance]\nrealism=true\n"
         "[selfies]\nenabled=true\nvariety=true\nvaried_sets=true\nidentity_sets=true\n"
-        "[photos]\nenabled=true\nsend=true\nrequests=true\nscene_from_words=true\n"
+        "[photos]\nenabled=true\nsend=true\nrequests=true\nscene_from_words=true\nunsolicited=true\n"
         "[training]\nenabled=true\nlab=false\nplaybooks=true\n"
         "[guards]\nenabled=true\nsemantic_enabled=true\nphrase_cooldown=true\n"
         + LIVE_DECISIONS.split("[server]\nenabled=true\n")[1])
@@ -161,8 +178,8 @@ def test_live_shaped_config_has_no_invalid_or_unknown_row(tmp_path):
           ("culture", "enabled"), ("culture", "memes"), ("outreach", "enabled"), ("godmode", "enabled"),
           ("turing", "enabled"), ("lab", "enabled"), ("bakeoff", "capture"), ("romance", "realism"),
           ("life", "state"), ("selfies", "variety"), ("selfies", "varied_sets"), ("selfies", "identity_sets"),
-          ("photos", "scene_from_words"), ("guards", "semantic_enabled"), ("guards", "phrase_cooldown"),
-          ("decisions", "enabled")]
+          ("photos", "scene_from_words"), ("photos", "unsolicited"), ("guards", "semantic_enabled"),
+          ("guards", "phrase_cooldown"), ("decisions", "enabled")]
     assert [k for k in on if by[k]["state"] != "on"] == []
     assert by["training", "lab"]["state"] == "off" and by["learn", "auto_lessons"]["state"] == "off"
     assert by["life", "availability"]["state"] == "number" and by["life", "availability"]["value"] == 6
@@ -174,7 +191,11 @@ def test_defaults_show_when_a_key_is_absent(tmp_path):
     by = {(r["table"], r["key"]): r for r in rows}
     assert by["guards", "phrase_cooldown"]["state"] == "on" and by["talk", "think_private"]["state"] == "on"
     assert by["talk", "dm_mirror"]["value"] == 5 and by["life", "availability"]["value"] == 0
-    assert by["training", "lab"]["state"] == "on" and by["decisions", "enabled"]["state"] == "off"
+    assert by["training", "lab"]["state"] == "on" and by["decisions", "enabled"]["state"] == "on"
+    # shipped features default on (2026-11-25); the owner's explicit offs stay off
+    assert all(by[k]["state"] == "on" for k in by if S.default(next(r for r in S.SWITCHES if r[:2] == k)) is True)
+    assert [k for k in (("talk", "coherence_length"), ("talk", "dm_own_time"), ("heat", "public_cap"),
+                        ("lab", "promote")) if by[k]["state"] != "off"] == []
     assert all("blocklist" in r for r in rows if (r["table"], r["key"]) == ("realm", "enabled"))
     assert sum("blocklist" in r for r in rows) == 1
 

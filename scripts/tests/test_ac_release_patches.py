@@ -102,11 +102,11 @@ class PatchTests(unittest.TestCase):
             self.series_for(name)
         before = {name: (repo / ".git/index").read_bytes() for name, repo in self.repos.items()}
         journal = self.prepare()
-        self.assertEqual(release.summary(journal), {"modules": 2, "missing": 4, "applied": 0})
+        self.assertEqual(release.summary(journal), {"modules": 3, "missing": 6, "applied": 0})
         self.assert_original()
         self.assertEqual(before, {name: (repo / ".git/index").read_bytes() for name, repo in self.repos.items()})
         applied = release.apply(self.journal)
-        self.assertEqual(release.summary(applied)["applied"], 4)
+        self.assertEqual(release.summary(applied)["applied"], 6)
         for repo in self.repos.values():
             self.assertEqual((repo / "engine.cpp").read_text(), "two\n")
             self.assertEqual(self.git(repo, "log", "-2", "--format=%s").splitlines(), ["Patch 2", "Patch 1"])
@@ -114,6 +114,18 @@ class PatchTests(unittest.TestCase):
         self.assert_original()
         release.rollback(self.journal)  # recovery is idempotent
         self.assert_original()
+
+    def test_individual_progression_one_missing_patch_then_none_after_applying(self):
+        name = "mod-individual-progression"
+        self.assertIn(name, release.MODULES)
+        _, entries = self.series_for(name, ("one\n",))
+        journal = self.prepare()
+        self.assertEqual(release.summary(journal), {"modules": 1, "missing": 1, "applied": 0})
+        release.apply(self.journal)
+        self.assertEqual(self.git(self.repos[name], "log", "-1", "--format=%s"), "Patch 1")
+        self.journal.unlink()
+        again = self.prepare()
+        self.assertEqual(release.summary(again), {"modules": 1, "missing": 0, "applied": 0})
 
     def test_patch_equivalence_and_partial_prefix_skip_different_commit_hash(self):
         author, entries = self.series_for("mod-playerbots")

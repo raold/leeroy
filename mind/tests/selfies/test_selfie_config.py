@@ -1,22 +1,26 @@
 """[selfies] in mind.toml and the worker's command line (P2 Task 7)."""
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 import leeroy_mind
 from leeroy_mind.config import ConfigError, load_config
-from leeroy_mind.selfies.config import (SelfieCfg, load_selfie_config, worker_command,
+from leeroy_mind.selfies.config import (OFF, SelfieCfg, load_selfie_config, worker_command,
                                         worker_data, worker_env, worker_python)
 
 CHECKOUT = Path(leeroy_mind.__file__).resolve().parents[2]
 VENV = CHECKOUT / "selfie" / ".venv"
 
 
-def test_selfies_are_off_by_default_and_paths_follow_the_checkout(tmp_path, monkeypatch):
+def test_selfies_are_on_by_default_and_paths_follow_the_checkout(tmp_path, monkeypatch):
     monkeypatch.delenv("LEEROY_SELFIE_DATA", raising=False)
     cfg = load_selfie_config(tmp_path / "missing.toml")
-    assert cfg == SelfieCfg() and cfg.enabled is False
+    assert cfg == SelfieCfg() and cfg.enabled is True  # since 2026-11-25
+    assert all(getattr(cfg, k) for k in ("snaps", "booth", "variety", "varied_sets", "identity_sets",
+                                         "romance_styling", "critic", "param_bandit", "detailer",
+                                         "detailer_hands"))
     (tmp_path / "mind.toml").write_text("[talk]\nchattiness = 4\n")
     assert load_selfie_config(tmp_path / "mind.toml") == SelfieCfg()
     assert (cfg.steps, cfg.guidance, cfg.size, cfg.min_free_gib) == (30, 5.0, 1024, 11.5)
@@ -56,7 +60,10 @@ def test_a_bad_value_names_the_key(tmp_path, line, key):
 
 def test_an_unknown_key_warns_and_a_bad_file_is_a_config_error(tmp_path, caplog):
     (tmp_path / "mind.toml").write_text("[selfies]\nstepz = 20\n")
-    assert load_selfie_config(tmp_path / "mind.toml") == SelfieCfg()
+    # a table with an unknown key never opts into a switch it does not set
+    assert load_selfie_config(tmp_path / "mind.toml") == OFF
+    (tmp_path / "mind.toml").write_text("[selfies]\nstepz = 20\nenabled = true\nsnaps = true\n")
+    assert load_selfie_config(tmp_path / "mind.toml") == replace(OFF, enabled=True, snaps=True)
     assert "selfies.stepz" in caplog.text
     (tmp_path / "mind.toml").write_text("[selfies\n")
     with pytest.raises(ConfigError):
@@ -121,9 +128,9 @@ def test_the_identity_command_starts_the_adapter_with_its_own_headroom(tmp_path)
     assert "--identity" not in worker_command(cfg)
 
 
-def test_snaps_are_off_by_default_and_a_bad_scale_names_the_key(tmp_path):
+def test_snaps_are_on_by_default_and_a_bad_scale_names_the_key(tmp_path):
     cfg = SelfieCfg()
-    assert (cfg.snaps, cfg.identity_scale, cfg.identity_min_free_gib) == (False, 0.6, 13.5)
+    assert (cfg.snaps, cfg.identity_scale, cfg.identity_min_free_gib) == (True, 0.6, 13.5)
     path = tmp_path / "mind.toml"
     path.write_text("[selfies]\nsnaps = true\nidentity_scale = 0.5\n")
     got = load_selfie_config(path)

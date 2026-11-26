@@ -1,6 +1,6 @@
 # Private relationship activities
 
-`[romance] activities = true` opts in (default false; a non-boolean value disables it).
+`[romance] activities` (default true; a non-boolean value disables it).
 Nightly moments and moods need no model. Invitations also require `[realm] enabled = true`
 and a native rebuild with Realm support, followed by a mind restart. Older native cannot answer the
 read-only `realm_visit` probe, so it cannot cause an invitation or move.
@@ -48,4 +48,4 @@ Restarts
 never repeat an invitation, move or emote. Unknown dispatched moves retain their existing
 Realm journal holds until native proof or the normal operator release workflow; closing an
 invitation does not release an uncertain native operation. No live data or settings change
-when this feature is installed with its default switch off.
+when this feature is installed with its switch off.

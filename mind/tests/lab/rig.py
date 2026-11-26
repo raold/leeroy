@@ -22,6 +22,7 @@ from leeroy_mind.storage.db import checkpoint, open_db
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
+from shipped_off import off
 
 LIVE_TOML = """\
 [talk]
@@ -52,7 +53,7 @@ NIGHT = "2026-11-16"
 def make_live(tmp_path: Path, toml: str = LIVE_TOML) -> Path:
     live = tmp_path / "live"
     live.mkdir()
-    (live / "mind.toml").write_bytes(toml.encode())
+    (live / "mind.toml").write_bytes(off(toml).encode())  # every other shipped switch off
     store = Store(open_db(live / "mind.db"), clock=SystemClock())
     try:
         seed_test_cast(store)

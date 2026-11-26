@@ -117,7 +117,7 @@ def test_light_invalidates_on_hand_edit_and_is_name_screened(h):
         assert photo_extra.choose_light(p,seed,ident=IDENT) not in (0,1)
 
 
-@pytest.mark.parametrize("text,expected",[("",False),("[selfies]\nvariety=true",True),
+@pytest.mark.parametrize("text,expected",[("",True),("[selfies]\nvariety=true",True),
     ("[selfies]\nvariety=false",False),("[selfies]\nvariety=true\noops=true",False)])
 def test_switch_default_and_unknown_off(tmp_path,text,expected):
     path = tmp_path / "mind.toml"

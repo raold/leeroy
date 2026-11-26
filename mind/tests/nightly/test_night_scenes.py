@@ -8,16 +8,15 @@ import pytest
 from conftest import run
 from leeroy_mind.nightly import budget
 from leeroy_mind.selfies import files
-from leeroy_mind.selfies.config import SelfieCfg
 from leeroy_mind.selfies.scenes import (GUILD_GAP_S, GUILD_MAX, GUILD_MIN, STAGE, candidates,
                                         make_scenes_stage)
 from leeroy_mind.selfies.snaps import last_sent, mark_sent, planned, plan_snap
 from leeroy_mind.selfies.store import pick as pick_photo
 from leeroy_mind.selfies.scene import PHASES
 from nightly.test_night_enrich import APPEARANCE
-from selfies.fakes import JPEG, ready, ready_snap, renderable_cast, planned_snap, sent_snap
+from selfies.fakes import JPEG, ready, ready_snap, renderable_cast, planned_snap, selfie_cfg, sent_snap
 
-SNAPS_CFG = SelfieCfg(enabled=True, snaps=True)
+SNAPS_CFG = selfie_cfg(enabled=True, snaps=True)
 from selfies.test_scene_choices import PICKS as SCENE_REPLY
 
 DAY = 86400.0

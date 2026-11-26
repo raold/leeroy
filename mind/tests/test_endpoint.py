@@ -30,6 +30,7 @@ from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_llm import FakeLLM
 from test_app_lifecycle import (CAST, LIVE, App, chat, fake_clock, hello, presence, reopen, reply,
                                 seed_db, toml)
+from shipped_off import off
 
 KEY = "K" * 43  # the shape of secrets.token_urlsafe(32)
 
@@ -65,8 +66,9 @@ def test_turned_off_it_registers_nothing(tmp_path, caplog):
         assert attach_control(app) is None
     assert registered == [] and "control_off" in caplog.text
     (tmp_path / "mind.toml").write_text("[control]\nport = 'x'\n", encoding="utf-8")
-    ep = attach_control(app)  # a bad table: the defaults, and a warning
-    assert ep is not None and ep.cfg == ControlCfg() and registered == [ep.serve]
+    ep = attach_control(app)  # a bad table: the defaults but its ops actions off, and a warning
+    assert ep is not None and ep.cfg == ControlCfg(ops_actions=False) and registered == [ep.serve]
+    assert ControlCfg().ops_actions is True  # shipped features default on (2026-11-25)
 
 
 # -- the key file --------------------------------------------------------------------------------
@@ -724,7 +726,7 @@ async def _live_mind(tmp_path: Path, how: str):
     events = [hello(0), CAST, presence("login"), chat("evening all"), chat("who is around")]
     bridge = FakeBridge(events)
     port = await bridge.start()
-    (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off(toml(port)), encoding="utf-8")
     seed_db(tmp_path / "mind.db", clock)
     llm = FakeLLM(reply, models={LIVE})
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=llm, clock=clock, rng_seed=1)
@@ -809,7 +811,7 @@ def test_run_returns_0_when_the_endpoint_stops_it(tmp_path):
     async def go():
         bridge = FakeBridge([hello(0), CAST, presence("login")])
         port = await bridge.start()
-        (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+        (tmp_path / "mind.toml").write_text(off(toml(port)), encoding="utf-8")
         seed_db(tmp_path / "mind.db", fake_clock())
         apps = []
         task = asyncio.create_task(serve(tmp_path, make_llm=lambda cfg: FakeLLM(reply, models={LIVE}),
@@ -840,7 +842,7 @@ def test_the_running_minds_status_says_its_bridge_cast_and_schema(tmp_path):
     async def go():
         bridge = FakeBridge([hello(0), CAST])
         port = await bridge.start()
-        (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+        (tmp_path / "mind.toml").write_text(off(toml(port)), encoding="utf-8")
         seed_db(tmp_path / "mind.db", fake_clock())
         apps = []
         task = asyncio.create_task(serve(tmp_path, make_llm=lambda cfg: FakeLLM(reply, models={LIVE}),
@@ -875,7 +877,7 @@ def test_the_running_minds_board_op_answers_from_its_store(tmp_path):
     async def go():
         bridge = FakeBridge([hello(0), CAST])
         port = await bridge.start()
-        (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+        (tmp_path / "mind.toml").write_text(off(toml(port)), encoding="utf-8")
         seed_db(tmp_path / "mind.db", fake_clock())
         apps = []
         task = asyncio.create_task(serve(tmp_path, make_llm=lambda cfg: FakeLLM(reply, models={LIVE}),

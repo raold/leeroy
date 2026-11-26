@@ -1,8 +1,7 @@
 # Event-loop stall recorder
 
-Enable `[watchdog] enabled = true` in `mind.toml` and restart the mind. Ops lists
-**Capture event-loop stalls**. The default is off; missing, malformed or unknown
-settings leave it off. No migration or native rebuild is needed. This does not
+`[watchdog] enabled` is on by default (`false` in `mind.toml` and a mind restart turn it off).
+Ops lists **Capture event-loop stalls**. Malformed or unknown settings leave it off. No migration or native rebuild is needed. This does not
 restart services, interrupt a call, use a model, or turn other features on.
 
 The `run` service arms faulthandler's native one-shot timer for two seconds and

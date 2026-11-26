@@ -26,7 +26,7 @@ def draft(text='A fresh thought about the invented ferry', **kw):
 
 
 def sources(store, **kw):
-    return GuardStores(store.conn,config=kw.pop('config',GuardsCfg(enabled=True)),**kw)
+    return GuardStores(store.conn,config=kw.pop('config',GuardsCfg(enabled=True,semantic_enabled=False)),**kw)
 
 
 def line(store,text,*,key=1,guid=101,channel='guild',to=0,ts=NOW-1,audience=None):
@@ -143,7 +143,7 @@ def test_short_own_repeat_window_preserves_other_guard_windows(store,kind):
     assert expected in result.codes
 
 
-def test_semantic_repeat_needs_separate_opt_in_and_honors_threshold_boundary(store):
+def test_semantic_repeat_has_its_own_switch_and_honors_threshold_boundary(store):
     line(store,'The small vessel arrived at the harbour')
     vec=pack_vec(unit(0))
     d=draft('A tiny boat reached its final destination',embedding=vec)

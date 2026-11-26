@@ -1,5 +1,5 @@
 """Conservative contextual Thompson sampling and replaceable, split reward credit."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import json
 import random
 import time
@@ -8,7 +8,7 @@ import math
 from leeroy_mind.discord.channels import is_discord, is_private, channel_id
 from leeroy_mind.logs import log
 from . import arms
-from .config import LearnCfg
+from .config import OFF as LEARN_OFF, LearnCfg
 from .control import effective
 from .reward import channel_kind, decayed
 
@@ -18,7 +18,7 @@ class Context:
     channel: str
     stance: str = "none"
     talkative: int = 5
-    settings: LearnCfg = field(default_factory=LearnCfg)
+    settings: LearnCfg = LEARN_OFF  # none given: learning off
     female: bool = False
     humour: int = 0
     forward: int = 0
@@ -204,7 +204,7 @@ def choose_pieces(conn, guid, context, families, *, rng=None, now=None):
     return result
 
 
-def update(conn, line_id, *, settings=LearnCfg(), now=None):
+def update(conn, line_id, *, settings=LEARN_OFF, now=None):
     """One reward observation, divided equally among recipe families; revisions replace it."""
     settings = effective(conn, settings)
     if not settings.enabled or not settings.bandit or not arms.available(conn):
@@ -242,7 +242,7 @@ def update(conn, line_id, *, settings=LearnCfg(), now=None):
     return True
 
 
-def retirement_candidates(conn, *, settings=LearnCfg()):
+def retirement_candidates(conn, *, settings=LEARN_OFF):
     """Night's worker-owned read: pool screened attempts across members and contexts."""
     settings = effective(conn, settings)
     if not settings.enabled or not settings.bandit or settings.freeze:

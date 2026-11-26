@@ -773,7 +773,7 @@ std::vector<HazardZone> ScanHazardZones(Player* reference, std::vector<HazardPoi
 
 void ReloadHazards()
 {
-    enabled.store(sConfigMgr->GetOption<bool>("Leeroy.Hazards.Enable", false), std::memory_order_relaxed);
+    enabled.store(sConfigMgr->GetOption<bool>("Leeroy.Hazards.Enable", true), std::memory_order_relaxed);
     untilPass = 0;
 }
 

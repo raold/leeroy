@@ -184,6 +184,10 @@ def test_invalid_switch_turns_all_culture_off(tmp_path, table):
     assert not load_culture_config(path).enabled
     path.write_text("[server]\nenabled=true\n[culture]\nenabled=true\n", encoding="utf-8")
     cfg = load_culture_config(path)
+    assert cfg.enabled and cfg.calendar and cfg.loot  # on by default (2026-11-25)
+    path.write_text("[server]\nenabled=true\n[culture]\nenabled=true\ncalendar=false\nloot=false\n",
+                    encoding="utf-8")
+    cfg = load_culture_config(path)
     assert cfg.enabled and not cfg.calendar and not cfg.loot
 
 

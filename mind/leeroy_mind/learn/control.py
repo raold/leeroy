@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 from . import arms, lessons, weights
-from .config import LearnCfg
+from .config import OFF
 
 PREFIX = 'learn:control:'
 REPORT_KEY = 'learn:weekly-report'  # Task 43 publishes its numeric report here.
@@ -22,7 +22,7 @@ def overrides(conn):
 def effective(conn, cfg=None):
     """The learning switches in force: mind.toml's, plus the Lab's overrides. The Lab can freeze
     more and lift its own freezes, never one mind.toml sets (owner ruling 2026-11-12)."""
-    cfg = cfg or LearnCfg()
+    cfg = cfg or OFF  # none given: learning off
     saved = overrides(conn)
     families = set(cfg.frozen_families)
     for family in arms.all_families():

@@ -150,11 +150,13 @@ def test_boss_questions_keep_the_other_readings():
 # -- the switch -------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("text, enabled, briefs", [
-    ("[raidlead]\nenabled = true\n", True, False),
+    ("", True, True),  # both on by default (2026-11-25)
+    ("[raidlead]\nenabled = true\n", True, True),
+    ("[raidlead]\nenabled = true\nbriefs = false\n", True, False),
     ("[raidlead]\nenabled = true\nbriefs = true\n", True, True),
     ("[raidlead]\nenabled = false\nbriefs = true\n", False, False),
     ('[raidlead]\nenabled = true\nbriefs = "yes"\n', False, False),
-    ("[raidlead]\nbriefs = true\n", False, False),
+    ("[raidlead]\nbriefs = true\n", True, True),
 ])
 def test_the_briefs_switch(tmp_path, text, enabled, briefs):
     (tmp_path / "mind.toml").write_text(text, encoding="utf-8")
@@ -165,7 +167,7 @@ def test_the_briefs_switch(tmp_path, text, enabled, briefs):
 def test_attach_turns_on_the_pre_pull_brief_only_with_the_switch(store, clock, tmp_path):
     from types import SimpleNamespace
     from leeroy_mind.raidlead.service import attach
-    for text, on in (("[raidlead]\nenabled = true\n", False),
+    for text, on in (("[raidlead]\nenabled = true\nbriefs = false\n", False),
                      ("[raidlead]\nenabled = true\nbriefs = true\n", True)):
         app = make_app(store, clock, tmp_path)
         app.guild.calls = SimpleNamespace(briefs=False)

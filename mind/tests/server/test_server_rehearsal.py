@@ -42,6 +42,7 @@ from leeroy_mind.tuning.effective import effective, MemberTuning
 from nightly.conftest import FakeAdmin
 from selfies.fakes import until
 from guards.test_review import sources, NOW
+from shipped_off import off
 
 
 START = datetime(2026,11,12,7,30,tzinfo=timezone.utc)
@@ -186,9 +187,9 @@ def test_whole_server_day(tmp_path, monkeypatch):
         conf = tmp_path/'mind.toml'
         # [server] channel_topics off: its daily room per channel would end the starts this
         # measures once the three stocked channels fill (test_channel_topics_* cover the switch)
-        conf.write_text(f'[bridge]\nport={port}\n[server]\nenabled=true\nchannel_topics=false\n'
+        conf.write_text(off(f'[bridge]\nport={port}\n[server]\nenabled=true\nchannel_topics=false\n'
                         '[guards]\nenabled=true\n[claims]\nenabled=true\n'
-                        '[talk]\nchattiness=4\nopeners_per_hour=0\n', encoding='utf-8')
+                        '[talk]\nchattiness=4\nopeners_per_hour=0\n'), encoding='utf-8')
         store = Store(open_migrated(tmp_path/'mind.db'),clock=clock)
         people = seed_test_cast(store)
         for guid in OFFICERS:

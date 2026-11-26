@@ -21,7 +21,7 @@ def test_the_tuning_route_carries_the_heat_view_and_leaves_the_tuning_view_alone
             return r.json()
         finally:
             await app.close()
-    off = asyncio.run(go(b"[talk]\nchattiness = 4\n[romance]\ndial = 9\n"))
+    off = asyncio.run(go(b"[talk]\nchattiness = 4\n[romance]\ndial = 9\n[heat]\nenabled = false\n"))
     assert off["heat"]["enabled"] is False and "romance dial is in force" in off["heat"]["note"]
     assert [d["name"] for d in off["view"]["dials"]][:2] == ["talkative", "argumentative"]
     assert "heat" not in {d["name"] for d in off["view"]["dials"] + off["view"]["world_dials"]}

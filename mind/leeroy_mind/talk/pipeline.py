@@ -587,6 +587,9 @@ class TurnMeta:
     # a line of hers in her whisper or DM with him that answers nothing (her brb and her back,
     # life/interrupt.py): read by no one else, so the guild's pace never holds it back (_blocked)
     pair_line: bool = False
+    # a guild loot master or DKP officer line: the guild-wide per-minute window never drops it
+    # (Guards.allow); the person interval, de-duplication, privacy and channel rules still apply
+    window_exempt: bool = False
     # the console's tuning preview (Pipeline.preview_line): the Ollama seed both of its
     # requests carry, so before and after differ by the dial and not the sampler
     seed: int | None = None
@@ -3542,19 +3545,20 @@ class Pipeline:
                      still_valid: Callable[[], bool] | None = None,
                      before_transport: Callable[[], bool] | None = None,
                      on_recorded: Callable[[int, Ack], None] | None = None,
-                     pair_line: bool = False) -> bool:
+                     pair_line: bool = False, window_exempt: bool = False) -> bool:
         """The template path (P1d): guards, raid rules and the member's typing apply, the text
         is used as given and no model is asked. True when a line really went out, to the game
         or to the voice service: one left in a room he is not in did not. A sender's
         before_transport barrier makes the turn one typed line, sent unstyled (TurnMeta).
-        `pair_line`: a line in her whisper or DM with him that answers nothing (TurnMeta)."""
+        `pair_line`: a line in her whisper or DM with him that answers nothing (TurnMeta).
+        `window_exempt`: the loot master's and DKP officer's lines (TurnMeta)."""
         turn = Turn(kind=TurnKind(kind), speaker=guid, channel=channel, to_guid=to_guid,
                     template=text)
         if before_transport is not None:
             turn.max_lines = 1
         meta = TurnMeta(self._new_id(), why="say_as", still_valid=still_valid,
                         before_transport=before_transport, on_recorded=on_recorded,
-                        pair_line=pair_line)
+                        pair_line=pair_line, window_exempt=window_exempt)
         said = await self._speak(turn, meta)
         return bool(said) and not (self.comms is not None and self._comms_says(
             "unheard", False, turn.channel, meta))
@@ -4486,7 +4490,8 @@ class Pipeline:
                   or (turn.channel == "whisper" and turn.to_guid == self.human.guid
                       and turn.kind in REPLY_KINDS))
         if not guards.allow(g, turn.kind, now, continuation=not first,
-                            reply=unread, pushback=bool(meta.pushback)):
+                            reply=unread, pushback=bool(meta.pushback),
+                            window_exempt=meta.window_exempt):
             return "guards"
         if (turn.kind in CHAINED and not (meta.answers_human or meta.initiates)
                 and not guards.chain_open(self._chain_key(self._turn_base(turn), now))):

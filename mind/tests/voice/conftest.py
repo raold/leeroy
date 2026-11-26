@@ -16,6 +16,7 @@ from leeroy_mind.protocol import Hello, Login, Logout, Member
 from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.testing.fake_voice import FakeVoiceClient
 from leeroy_mind.wow import CLASSES, RACES
+from shipped_off import off
 
 
 def write_spec(data_dir: Path, guid: int, name: str, **extra) -> None:
@@ -78,7 +79,7 @@ class VApp:
 
 @pytest.fixture
 def vapp(tmp_path, clock, voice_data):
-    (tmp_path / "mind.toml").write_text("[voice]\nenabled = true\nport = 7999\n",
+    (tmp_path / "mind.toml").write_text(off("[voice]\nenabled = true\nport = 7999\n"),
                                         encoding="utf-8")
     open_migrated(tmp_path / "mind.db").close()
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)

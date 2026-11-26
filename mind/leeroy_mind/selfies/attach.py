@@ -17,7 +17,7 @@ from leeroy_mind.config import ConfigError
 from leeroy_mind.logs import log
 
 from . import kind, snapstage, stage
-from .config import SelfieCfg, load_selfie_config
+from .config import OFF as SELFIES_OFF, load_selfie_config
 from .booth import PhotoBooth
 from .manual import ManualRender
 from .scenes import make_scenes_stage
@@ -30,7 +30,7 @@ def attach_selfies(app) -> SelfieService:
         cfg = load_selfie_config(app.data_dir / "mind.toml")
     except ConfigError as e:
         log("selfies_config_invalid", level=logging.WARNING, reason=str(e))
-        cfg = SelfieCfg()
+        cfg = SELFIES_OFF
     service = SelfieService(app, cfg)
     if cfg.enabled:
         runner = app.night_runner

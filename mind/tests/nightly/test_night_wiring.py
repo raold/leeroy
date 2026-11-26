@@ -15,6 +15,7 @@ from leeroy_mind.protocol import Hello, Login, Logout
 from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.llm.scheduler import Expired
 from leeroy_mind.talk.turns import Turn, TurnKind
+from shipped_off import off
 
 
 def app_for(h):
@@ -29,10 +30,10 @@ def context(app):
 @pytest.mark.parametrize("enabled",[False,True])
 def test_learning_flag_remains_the_startup_choice_on_night_reload(h,enabled):
     path = h.settings.data_dir / "mind.toml"
-    path.write_text(f"[learn]\nenabled={str(enabled).lower()}\n")
+    path.write_text(off(f"[learn]\nenabled={str(enabled).lower()}\n"))
     app = app_for(h)
     try:
-        path.write_text(f"[learn]\nenabled={str(not enabled).lower()}\n")
+        path.write_text(off(f"[learn]\nenabled={str(not enabled).lower()}\n"))
         assert context(app).settings.learn_enabled is enabled
         assert app.engine.learn_enabled is enabled
         assert ("rewards" in {s.name for s in app.night_runner.stages}) is enabled
@@ -140,8 +141,9 @@ def test_context_reload_updates_dials_and_extract_model_keeps_last_good(h, caplo
 @pytest.mark.parametrize("life", ["[life]\nwow_vs_life = 11\navailability = true\n",
                                   "[life]\nstate = 2\n"])
 def test_a_bad_life_key_never_blocks_the_login_reload(h, caplog, monkeypatch, life):
-    """His login reads mind.toml again: an invalid [life] key reads as its default with one
-    log line, and every other edit still applies (only the night refuses a bad theme)."""
+    """His login reads mind.toml again: an invalid [life] key reads as its default (a switch as
+    off) with one log line, and every other edit still applies (only the night refuses a bad
+    theme)."""
     from leeroy_mind import config
     from leeroy_mind.life import config as life_config
     monkeypatch.setattr(config, "_WARNED", set())
@@ -151,7 +153,8 @@ def test_a_bad_life_key_never_blocks_the_login_reload(h, caplog, monkeypatch, li
                                                 encoding="utf-8")
         app._reload_config()
         assert app.cfg.talk.chattiness == app.engine.cfg.talk.chattiness == 7
-        assert app.cfg.life == config.LifeCfg() and life_config.availability() == 0
+        expected = config.LifeCfg(state=False) if "state" in life else config.LifeCfg()
+        assert app.cfg.life == expected and life_config.availability() == 0
         assert "config_invalid" not in caplog.text and "_invalid key=" in caplog.text
     finally:
         run(app.stop())

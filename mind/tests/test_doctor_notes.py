@@ -19,6 +19,7 @@ from leeroy_mind.storage.rows import Relationship
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
+from shipped_off import off
 
 ME = HumanIdentity(HUMAN, "Testmage", "Testy", "", True, pronouns="he")
 WOMEN = {  # guid: (name, stance, note in her persona, note on her row toward him)
@@ -48,8 +49,8 @@ def _cast(store: Store) -> None:
 
 
 def _setup(root: Path, port: int, women: bool = True) -> Path:
-    (root / "mind.toml").write_text(f'[bridge]\nport = {port}\n\n[human]\nnickname = "Testy"\n'
-                                    'pronouns = "he"\n', encoding="utf-8")
+    (root / "mind.toml").write_text(off(f'[bridge]\nport = {port}\n\n[human]\nnickname = "Testy"\n'
+                                    'pronouns = "he"\n'), encoding="utf-8")
     s = Store(open_migrated(root / "mind.db"), clock=FakeClock(datetime(2026, 10, 29,
                                                                  tzinfo=timezone.utc)))
     try:

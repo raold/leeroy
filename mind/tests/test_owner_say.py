@@ -26,6 +26,7 @@ from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.testing.wire import bridge_method
 from test_app_lifecycle import CAST, LIVE, App, fake_clock, hello, presence, reply, seed_db, toml
+from shipped_off import off
 
 FIXTURES = Path(__file__).resolve().parents[2] / "modules/mod-leeroy/tests/fixtures"
 HUMAN, BRISA, CORWEN, DALLA = 1, 1101, 1102, 1103
@@ -260,7 +261,7 @@ def test_the_running_mind_sends_it_as_the_console_asks(tmp_path, server):
         bridge = FakeBridge([hello(0), CAST, presence("login")],
                             known_types=OldServer() if server == "older" else None)
         port = await bridge.start()
-        (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+        (tmp_path / "mind.toml").write_text(off(toml(port)), encoding="utf-8")
         seed_db(tmp_path / "mind.db", clock)
         app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path,
                       llm=FakeLLM(reply, models={LIVE}), clock=clock, rng_seed=1)

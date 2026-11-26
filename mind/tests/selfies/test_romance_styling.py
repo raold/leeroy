@@ -73,6 +73,8 @@ def enable(app, stance="drawn", dial=6):
 
 def test_configuration_is_explicit_boolean_and_unknown_tables_do_not_enable(tmp_path):
     path = tmp_path / "mind.toml"
+    assert load_selfie_config(path).romance_styling  # on by default (2026-11-25)
+    path.write_text('[selfies]\nromance_styling=false\n')
     assert not load_selfie_config(path).romance_styling
     path.write_text('[selfies]\nromance_styling=true\n')
     assert load_selfie_config(path).romance_styling

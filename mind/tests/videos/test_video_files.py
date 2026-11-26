@@ -212,14 +212,14 @@ def test_duration_words(ms, words):
 
 
 @pytest.mark.parametrize('text,want', [
-    ('', VideosConfig()), ('[videos]\nenabled = true', VideosConfig(True)),
-    ('[videos]\nenabled = false', VideosConfig()), ('[videos]\nenabled = 1', VideosConfig()),
-    ('[videos]\nenabled = true\nsize = 5', VideosConfig()), ('videos = 1', VideosConfig()),
-    ('[videos\n', VideosConfig())])
-def test_the_switch_is_off_unless_exactly_true(tmp_path, text, want):
+    ('', VideosConfig(True)), ('[videos]\nenabled = true', VideosConfig(True)),
+    ('[videos]\nenabled = false', VideosConfig(False)), ('[videos]\nenabled = 1', VideosConfig(False)),
+    ('[videos]\nenabled = true\nsize = 5', VideosConfig(False)), ('videos = 1', VideosConfig(False)),
+    ('[videos\n', VideosConfig(False))])
+def test_the_switch_is_on_unless_false_or_invalid(tmp_path, text, want):
     (tmp_path / 'mind.toml').write_text(text)
     assert load_videos_config(tmp_path / 'mind.toml') == want
-    assert load_videos_config(tmp_path / 'absent.toml') == VideosConfig()
+    assert load_videos_config(tmp_path / 'absent.toml') == VideosConfig() == VideosConfig(True)
 
 
 @pytest.mark.skipif(files.tools() is None, reason='ffmpeg and ffprobe are not on PATH')

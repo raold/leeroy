@@ -2,9 +2,9 @@
 
 Use this checklist in an authorized installation window. The owner must be known offline for the release. The later in-game acceptance pass starts after services are healthy. Keep the private log, backup locations and rollback line with the release owner.
 
-For bank decisions, day plans and member heroics, ship dormant first, then use
-the [staged rollout](ROLLOUT.md): one key change at a time, real behavior and
-return evidence before the next feature, and explicit stop/rollback criteria.
+Shipped features ship on. If one misbehaves after the release, switch it off
+with the [rollback guide](ROLLOUT.md): rollback order, what to check, and which
+switches need a restart or a reload.
 
 ## 1. Establish the release inputs
 
@@ -15,7 +15,7 @@ return evidence before the next feature, and explicit stop/rollback criteria.
   2. [0063](../storage/migrations/0063_decision_job_proof.sql) binds actor and expected result to the original command and repairs premature mail references. The guide's audit correction changes no DDL. A later bank reconciliation repairs a historical attachment label only from the exact positive mail receipt.
   3. [0064](../storage/migrations/0064_day_plans.sql) adds day plans, permits, steps and handoffs.
   4. [0065](../storage/migrations/0065_member_heroics.sql) adds member heroic runs, guarded posts and encounter evidence. Native creates its separate characters-database receipt table on the first admitted start. Its absence before then is expected.
-- [ ] Keep the feature switches at their approved values. All new heroic admission stays off by default. Deployment and a successful migration do not authorize enabling any feature.
+- [ ] Set the live config so every shipped feature's switches are on, except those the owner has explicitly ruled off (an explicit `false` with a comment). A merged feature's code default is on; do not leave a new key unset or false to flip later.
 
 ## 2. Preview and run the release
 
@@ -87,9 +87,9 @@ Start with known logout, then repeat the second column of observations after a f
 | Mind | Verify process family/lock, bridge and game/voice links, positively known absence, filtered logs and resident models. | Confirm a fresh owner session and voice-to-mind link separately. Stop/restart requests must show the in-game confirmation. |
 
 - [ ] On each tab open **?**, check its heading and About version/source, then close it and verify focus returns. Check nested Personas and both header GPU controls. Check that losing a source produces a reason or stale timestamp and that new observations clear it. Use a rehearsal for disruptive mind-down, no-control, missing-schema, timeout and rotation fault cases.
-- [ ] For an approved Decisions rollout, verify `[server]` and `[decisions]` enablement after restarting mind and console. Apply the intended roster/mail/restock native keys with `.reload config`, reconnect, and check `member_bank_mail`. Separate private officer posts, one withdrawal, in-flight mail and confirmed posting. A late job repairs only the exact original reference. Inspect strategy/roster restoration at its safe point. [Decision rollout](../decisions/README.md#release-and-switches)
-- [ ] For approved day plans, verify both planning and Realm physical switches, a fresh `day_plan_handoff_v1` greeting and the relevant day's schedule. Check arrival and activity separately from planning. Login can coexist with day activity. A validated add, raid or string can yield it. Check deadline, native cleanup and the original request's result. Preserve any dispatched unknown across reboot. [Day plans](../godmode/README.md)
-- [ ] For approved heroics, verify both heroic switches, guarded Discord posts, valid DungeonClear driver/strategies and `member_dungeon_v1`. Observe proposal, final-roster consent, the original start, the bound map 602 copy and fresh five-member progress before crediting play. Login alone keeps an accepted run. Confirm encounter facts only for their witnesses; split witnesses can yield separate results without a party-wide speaker. Verify the original native terminal and matching later returned status separately.
+- [ ] For a Decisions release, verify `[server]` and `[decisions]` are on (both default on) after restarting mind and console. Apply the intended roster/mail/restock native keys with `.reload config`, reconnect, and check `member_bank_mail`. Separate private officer posts, one withdrawal, in-flight mail and confirmed posting. A late job repairs only the exact original reference. Inspect strategy/roster restoration at its safe point. [Decision rollout](../decisions/README.md#release-and-switches)
+- [ ] For a day plans release, verify both planning and Realm physical switches (all default on), a fresh `day_plan_handoff_v1` greeting and the relevant day's schedule. Check arrival and activity separately from planning. Login can coexist with day activity. A validated add, raid or string can yield it. Check deadline, native cleanup and the original request's result. Preserve any dispatched unknown across reboot. [Day plans](../godmode/README.md)
+- [ ] For a heroics release, verify both heroic switches (both default on), guarded Discord posts, valid DungeonClear driver/strategies and `member_dungeon_v1`. Observe proposal, final-roster consent, the original start, the bound map 602 copy and fresh five-member progress before crediting play. Login alone keeps an accepted run. Confirm encounter facts only for their witnesses; split witnesses can yield separate results without a party-wide speaker. Verify the original native terminal and matching later returned status separately.
 - [ ] A shared slot released after a verified cleanup failure and 600 seconds can admit disjoint members. Inspect the original roster's exact handback before reuse. A crash before initial group creation can clear with matching current and persisted origin/difficulty/leader proof for the leader and verified receipt revision. A missing session, independent owner or group, changed state, or unverified readback leaves the hold pending. Preserve the receipt and escalate contradictory evidence; Ops Realm release cannot clear it. [Heroic receipt inspection](../godmode/README.md#inspecting-an-unresolved-return)
 
 ## 5. Handle failure or roll back

@@ -56,6 +56,7 @@ class FakePorts:
         self.proposed = []
         self.said = []
         self.exact = []
+        self.exempt = []
         self.memories = []
         self.lost = []
         self.leads = []
@@ -114,12 +115,14 @@ class FakePorts:
     def propose(self, guid, channel, instruction, *, kind=TurnKind.CALLOUT):
         self.proposed.append((guid, channel, instruction, kind))
 
-    async def say(self, guid, channel, text, *, before_transport=None):
+    async def say(self, guid, channel, text, *, before_transport=None, window_exempt=False):
         if before_transport is not None:  # an exact line (the boss briefs): its barrier decides
             self.exact.append(text)
             if before_transport() is not True:
                 return False
         self.said.append((guid, channel, text))
+        if window_exempt:
+            self.exempt.append(text)
         return True
 
     def set_lead(self, guid):

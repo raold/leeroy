@@ -247,7 +247,7 @@ with its `OFL.txt`), each block sized to the width; the text is never part of a 
 prompt. The captioned image goes through the NSFW gate like every render and is written
 only when it passes (`flagged: true` writes nothing); a base that is missing
 or not a JPEG answers `missing_base`. The mind's `[selfies]` table in `mind.toml` turns
-rendering on (off by default) and sets steps, guidance, size and the VRAM floor.
+rendering on (on by default) and sets steps, guidance, size and the VRAM floor.
 
 Licences: this package is GPL-3.0-or-later (see `LICENSE`); RealVisXL is openrail++, the
 classifier Apache-2.0, diffusers Apache-2.0, IP-Adapter Apache-2.0 (its image encoder, OpenCLIP

@@ -96,6 +96,21 @@ install.
   ancestry or stable patch id; a changed one is a new patch). The dojo's series
   (`patches/dojo/mod-playerbots`) applies on top of the local playerbots series.
 
+### Feature switches
+
+- **Shipped means on** (owner rule, 2026-11-25). A merged feature ships enabled: its code default
+  is on and the live config is set to match at release. Nothing is merged dark to be flipped
+  later, and there is no staged one-key-at-a-time enable. A feature that is not ready to run is
+  not merged. Flag a new `mind.toml` key, `Leeroy.*` key or persona switch that defaults to off,
+  a PR that says "dormant", "dark" or "enable after release", and a release step that leaves a
+  new switch off.
+- A switch is off only by an explicit owner ruling, recorded as an explicit `false` (or `0`) in
+  the live config with a comment, and in the PR that adds it. Current rulings: `[heat]
+  public_cap`, `[talk] coherence_length`, `[talk] dm_own_time`, `[lab] promote`.
+- Every switch is still a safe off: it must stop new work without losing in-flight state (see
+  `mind/leeroy_mind/console/ROLLOUT.md`). An invalid value means off, and the console's Ops tab
+  shows each switch's state; keep both true for a new switch.
+
 ### Checks that judge a pull request
 
 - Never let a PR weaken the check that judges it. A change to `.github/workflows/`,

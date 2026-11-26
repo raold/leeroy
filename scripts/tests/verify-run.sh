@@ -358,4 +358,32 @@ has 'FAIL patches: release rehearsal refused: mod-playerbots: 0002-Extend-notes-
 leftovers
 g "$leeroy" checkout --quiet main
 
+# mod-individual-progression: its series applies to the upstream clone, and a conflicting one fails.
+ip="$scratch/ip-work"
+git init --quiet --initial-branch=master "$ip"
+printf 'one
+' > "$ip/Onyxia.txt"
+commit "$ip" upstream
+git clone --quiet --bare "$ip" "$scratch/upstream-ip.git"
+g "$leeroy" checkout --quiet -b ip-series
+mkdir -p "$leeroy/patches/mod-individual-progression"
+printf 'two
+' >> "$ip/Onyxia.txt"
+commit "$ip" "Extend the Onyxia notes"
+g "$ip" format-patch --quiet -1 -o "$leeroy/patches/mod-individual-progression" HEAD
+commit "$leeroy" "Add an individual-progression patch"
+export VERIFY_UPSTREAM_PLAYERBOTS="$scratch/upstream-playerbots.git"
+VERIFY_UPSTREAM_INDIVIDUAL_PROGRESSION="$scratch/upstream-ip.git" run --ci --only patches main; expect 0
+has 'ok   patches: mod-individual-progression: 1 patch(es) apply to upstream master'
+g "$ip" reset --quiet --hard HEAD~1
+printf 'other
+' > "$ip/Onyxia.txt"
+commit "$ip" "Rewrite the Onyxia notes"
+git -C "$ip" push --quiet "$scratch/upstream-ip.git" master:master --force
+VERIFY_UPSTREAM_INDIVIDUAL_PROGRESSION="$scratch/upstream-ip.git" run --ci --only patches main; expect 1
+has 'FAIL patches: mod-individual-progression: the series (1) no longer applies to upstream master'
+unset VERIFY_UPSTREAM_PLAYERBOTS
+leftovers
+g "$leeroy" checkout --quiet main
+
 printf 'verify runner self-test: %d checks passed\n' "$checks"

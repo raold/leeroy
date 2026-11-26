@@ -9,8 +9,14 @@
 # Master switch for the module (1 = on, 0 = off).
 Leeroy.Enable = 1
 
-# Optional persona play styles: outdoor quiet cast only; reloadable. RaidHabits win.
-Leeroy.PlayStyle.Enable = 0
+# The training ground's kill switches (the mind's [training]). 0 for Telemetry stops recording his
+# raids and the offline raids; 0 for Training stops additions and requests verified cleanup, which
+# may remain pending (keep its journals until it is verified). Reloadable with .reload config.
+Leeroy.Telemetry.Enable = 1
+Leeroy.Training.Enable = 1
+
+# Persona play styles: outdoor quiet cast only; reloadable. RaidHabits win.
+Leeroy.PlayStyle.Enable = 1
 # The mind sends its whole play-style table once (playstyle_table) and native styles each member whenever she is free,
 # again after a battleground, instance or other owner took the style back. 0 refuses the table: the mind falls back to
 # one bot_do a member, and the styles the table added are taken back. Reloadable with .reload config.
@@ -22,14 +28,14 @@ Leeroy.PlayStyle.Table = 1
 # Reloadable with .reload config.
 Leeroy.GuildAdd.FollowRoster = 0
 # Permit guild bank deliveries to cast members through mail_send.
-Leeroy.Decisions.BankMail.Enable = 0
+Leeroy.Decisions.BankMail.Enable = 1
 # Allow targeted weekly top-ups by a guild maker. Bootstrap stock is independent.
-Leeroy.Decisions.BankRestock.Enable = 0
+Leeroy.Decisions.BankRestock.Enable = 1
 
 # The raid lead (mind [raidlead]): his orders to his own group's bots (bot_do "order", Bloodlust included)
 # and the raid icon of the member he names to lead on his target (raid_lead). No assistant flag is set.
 # 0 refuses all of it (raidlead_off) and lifts any hold at once. Reloadable with .reload config.
-Leeroy.RaidLead.Enable = 0
+Leeroy.RaidLead.Enable = 1
 
 # Guild id of the cast's guild.
 Leeroy.GuildId = 21
@@ -49,7 +55,7 @@ Leeroy.KeepCast = 1
 # Rescue solo pinned cast members after three deaths in fifteen minutes, once alive
 # and out of combat. Honors Realm/training ownership; at most once an hour per member.
 # Reloadable with .reload config. Does not resurrect bots itself.
-Leeroy.CastDeathLoop.Enable = 0
+Leeroy.CastDeathLoop.Enable = 1
 
 # Dead members of the owner's group. With no fight near the body (no member of his group
 # engaged with a living enemy within 100 yards of it), the nearest free paladin, priest, shaman
@@ -92,7 +98,7 @@ Leeroy.OwnerPetAuras = ""
 # 35 yards).
 # Random bots and anyone outside his group are never touched; Realm and training ownership is honoured.
 # Reloadable with .reload config; 0 takes back the avoid aoe it added.
-Leeroy.Hazards.Enable = 0
+Leeroy.Hazards.Enable = 1
 
 # Boss mechanics at cast start (the mind's [raidplay] respond sends each covered raid's table at hello). When a boss
 # starts casting a spell the raid playbooks list and stock playerbots does not handle, the cast bots of the owner's
@@ -103,7 +109,7 @@ Leeroy.Hazards.Enable = 0
 # bots a stock raid strategy moves with forced moves or the raid lead's orders move, and Realm and training
 # ownership (but an offline raid's own) are left alone.
 # Reloadable with .reload config; 0 moves nobody.
-Leeroy.Mechanics.Enable = 0
+Leeroy.Mechanics.Enable = 1
 
 # The owner's strings in game, sent from the guild console by the mind (string_do): one pinned cast member comes
 # to him (only while he is in a city or a rest area; one outside his group then stays there 10 minutes), joins the
@@ -113,11 +119,11 @@ Leeroy.Mechanics.Enable = 0
 # instance, in a battleground or a queue. A come_to_me stay fences her (busy:string) from the Realm, training and
 # offline raids for its 10 minutes. Reloadable with .reload config; 0 refuses new strings and takes back the stays
 # and seats it added.
-Leeroy.Strings.Enable = 0
+Leeroy.Strings.Enable = 1
 
 # Allow five consenting members to run a level-80 heroic while their owner is away.
 # .reload config applies the switch. Exact-start cleanup continues while starts are off.
-Leeroy.MemberDungeon.Enable = 0
+Leeroy.MemberDungeon.Enable = 1
 
 # The owner's invitations in game ("come to the inn", "meet me at the bank", "let's go fishing in Dalaran"), read by
 # the mind ([talk] invites) and sent as string_do marked "via": "invite": come_to_me, join_group, follow and sit as
@@ -127,7 +133,7 @@ Leeroy.MemberDungeon.Enable = 0
 # or until he has come and gone again). Every fence of the strings holds. This key, not Leeroy.Strings.Enable, answers
 # for an invitation. Reloadable with .reload config; 0 refuses new invitations and takes back the stays and fishing
 # they added.
-Leeroy.Invites.Enable = 0
+Leeroy.Invites.Enable = 1
 
 # The owner's "you lead" in the open world ("take the lead", "take us questing", "go grind", "lead us to the inn"),
 # read by the mind ([talk] lead) and sent as lead_do: one cast member of his group takes its lead and runs
@@ -137,7 +143,7 @@ Leeroy.Invites.Enable = 0
 # his group breaks, she dies or is teleported, either of them enters an instance (where dungeon-clear leads) or a
 # battleground, he logs out or stays behind 10 minutes. Everything it changed is given back. Reloadable with
 # .reload config; 0 refuses new leads and ends the one in force.
-Leeroy.Lead.Enable = 0
+Leeroy.Lead.Enable = 1
 
 # Pin every cast member as an online random bot.
 Leeroy.BringCastOnline = 1
@@ -154,21 +160,21 @@ Leeroy.QueueFence.Enable = 1
 # Applies on .reload config.
 Leeroy.CastArenaTeams.Leave = 1
 
-# Realm actors and cast protection stay off until separately accepted.
-Leeroy.Realm.Enable = 0
+# Realm actors and cast protection. 0 turns the Realm off.
+Leeroy.Realm.Enable = 1
 
 # Durable give_loot reservations and inventory receipts. Also needs [guild] loot_receipts=true.
 # Status remains readable when disabled, to settle awards made before disabling.
-Leeroy.LootReceipts.Enable = 0
-Leeroy.DayPlans.Enable = 0
+Leeroy.LootReceipts.Enable = 1
+Leeroy.DayPlans.Enable = 1
 Leeroy.CastGuard = 0
 # Bounded world-thread body steps per tick, clamped to 1-20.
 Leeroy.Realm.MaxActionsPerTick = 5
 Leeroy.Realm.Announce = 1
 
-# Optional world persona roster and speech. Both this and Realm.Enable must be on.
-# Default off; .reload config applies the switch to subsequent commands.
-Leeroy.World.Enable = 0
+# World persona roster and speech. Both this and Realm.Enable must be on.
+# Default on; .reload config applies the switch to subsequent commands.
+Leeroy.World.Enable = 1
 
 # Strict local CSV whitelists; missing/invalid files leave the respective list empty.
 # A relative path resolves against the module config directory (configs/modules, where

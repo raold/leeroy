@@ -11,7 +11,7 @@ from leeroy_mind.config import ConfigError
 
 @dataclass(frozen=True)
 class RealmConfig:
-    enabled: bool = False
+    enabled: bool = True
     gank_human: bool = True
     trial_rank: int = 4
     member_cap: int = 120

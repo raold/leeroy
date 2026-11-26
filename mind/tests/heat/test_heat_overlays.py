@@ -174,7 +174,7 @@ def test_the_console_view_is_built_from_the_codes_own_words(cast, data, clock):
 
 
 def test_the_console_view_with_heat_off_says_so_and_still_lists_the_files(cast, data, clock):
-    view = heat_view(cast.conn, config=HeatConfig(), data_dir=data, romance_file=9,
+    view = heat_view(cast.conn, config=HeatConfig(enabled=False), data_dir=data, romance_file=9,
                      now=clock.now())
     assert not view["enabled"] and view["note"] == OFF_NOTE
     assert {o["name"] for o in view["overlays"]} == set(overlays.FILES)

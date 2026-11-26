@@ -1,6 +1,7 @@
 """[bakeoff] in mind.toml (the capture switch, read once at the mind's start) and the run's own
-candidate file (`bakeoff run --config`). A missing, invalid or unknown [bakeoff] key means capture
-off; a candidate file with a mistake is refused with the key named, never its value."""
+candidate file (`bakeoff run --config`). A missing [bakeoff] key means capture on; an invalid or
+unknown one, or an unreadable file, means capture off; a candidate file with a mistake is refused
+with the key named, never its value."""
 import re
 import tomllib
 from dataclasses import dataclass
@@ -19,18 +20,23 @@ CTX_STEP = 1024
 
 @dataclass(frozen=True)
 class BakeoffCfg:
-    capture: bool = False
+    capture: bool = True
+
+
+OFF = BakeoffCfg(capture=False)
 
 
 def load(path: Path) -> BakeoffCfg:
     try:
         table = tomllib.loads(Path(path).read_text(encoding="utf-8-sig")).get("bakeoff", {})
+    except FileNotFoundError:
+        return BakeoffCfg()
     except (OSError, UnicodeError, tomllib.TOMLDecodeError):
-        return BakeoffCfg()
+        return OFF
     if not isinstance(table, dict) or set(table) - {"capture"}:
-        return BakeoffCfg()
-    capture = table.get("capture", False)
-    return BakeoffCfg(capture) if type(capture) is bool else BakeoffCfg()
+        return OFF
+    capture = table.get("capture", True)
+    return BakeoffCfg(capture) if type(capture) is bool else OFF
 
 
 @dataclass(frozen=True)

@@ -27,8 +27,11 @@ def test_root_loader_accepts_realm_extension_without_warning(tmp_path, caplog):
     assert not any("unknown" in row.message and "realm" in row.message for row in caplog.records)
 
 
-def test_real_mindapp_always_attaches_realm_last_and_default_off(tmp_path, clock):
-    app = MindApp(load_config(tmp_path / "absent.toml"), tmp_path, llm=FakeLLM(), clock=clock)
+def test_real_mindapp_always_attaches_realm_last_and_switched_off(tmp_path, clock):
+    from shipped_off import off
+    # every switch that defaults on (2026-11-25) off: the server, which attaches after it, too
+    (tmp_path / "mind.toml").write_text(off(), encoding="utf-8")
+    app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
     try:
         assert app.realm is not None and not app.realm.enabled
         assert app._background[-1] == app.realm.run

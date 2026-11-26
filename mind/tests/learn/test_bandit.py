@@ -10,10 +10,11 @@ from tests.claims.conftest import context
 from .test_reward import line
 from leeroy_mind.learn import arms, bandit, bandit_night
 from leeroy_mind.learn.cli import learn_main, arms_report
-from leeroy_mind.learn.config import LearnCfg, load_learn_config
+from leeroy_mind.learn.config import OFF as LEARN_OFF, LearnCfg, load_learn_config
 from leeroy_mind.learn.weights import ensure as weights
 from leeroy_mind.nightly.pipeline import STAGES
 from leeroy_mind.nightly.runner import NightRunner
+from shipped_off import off
 
 ON = LearnCfg(enabled=True,bandit=True)
 
@@ -228,7 +229,7 @@ def test_dial_bounds():
 
 def test_night_attach_resume_revisions_no_model(context,store,clock,tmp_path,caplog):
     caplog.set_level('INFO',logger='leeroy_mind')
-    (tmp_path/"mind.toml").write_text("[learn]\nenabled=true\nbandit=true\n")
+    (tmp_path/"mind.toml").write_text(off("[learn]\nenabled=true\nbandit=true\n"))
     async def run():
         async with context(learn_enabled=True,learn_bandit=True) as (ctx,llm):
             lid,key = reward_line(store,clock,["length.0.v1"])
@@ -251,7 +252,7 @@ def test_night_attach_resume_revisions_no_model(context,store,clock,tmp_path,cap
 
 
 def test_night_seeds_inspectable_registry_without_live_selection(context,store,tmp_path):
-    (tmp_path/'mind.toml').write_text('[learn]\nenabled=true\nbandit=true\n')
+    (tmp_path/'mind.toml').write_text(off('[learn]\nenabled=true\nbandit=true\n'))
     async def run():
         async with context(learn_enabled=True,learn_bandit=True) as (ctx,llm):
             assert not arms.read(store.conn)
@@ -286,4 +287,4 @@ def test_cli_arms_read_only_and_old_schema(store,clock,tmp_path,capsys):
 def test_invalid_config_disables_all_learning(tmp_path,extra):
     path = tmp_path/"mind.toml"
     path.write_text("[learn]\nenabled=true\n"+extra)
-    assert load_learn_config(path) == LearnCfg()
+    assert load_learn_config(path) == LEARN_OFF

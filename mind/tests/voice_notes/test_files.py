@@ -57,8 +57,8 @@ def test_audio_identity_and_symlink_checks(tmp_path):
     assert files.read_audio(path,tmp_path)==wav()
 
 
-@pytest.mark.parametrize('table',['','enabled=true','enabled=true\nshare=.9','enabled=true\nmax_words=4',
+@pytest.mark.parametrize('table',['','enabled=true','enabled=false','enabled=true\nshare=.9','enabled=true\nmax_words=4',
     'enabled=true\nper_member_day=11','enabled=true\nguild_day=true','enabled=true\nextra=1'])
 def test_startup_config_fails_closed(tmp_path,table):
     path=tmp_path/'mind.toml';path.write_text('[voice_notes]\n'+table)
-    assert load_config(path).enabled is (table=='enabled=true')
+    assert load_config(path).enabled is (table in ('','enabled=true'))  # on by default (2026-11-25)
