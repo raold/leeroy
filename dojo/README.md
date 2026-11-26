@@ -258,7 +258,8 @@ budget and reports their individual counts. Repeating only one room cannot pass;
 one exposure per room is not a claim of repeated coverage of every room.
 The same command accepts `valithria`, `twins`, `poison`, `lich-king`,
 `leviathan-reset` and `malygos`; Lich King includes both Terenas and Defile pairs
-in every repetition. A campaign never changes feature switches.
+in every repetition. Use campaign receipts for release acceptance; individual
+commands retain their focused diagnostic reports. A campaign never changes feature switches.
 
 `realm --layout <layout> yogg-acceptance` observes one native portal wave with
 nine synthetic bots and a scripted player outside portal-selection range. Setup
@@ -289,8 +290,14 @@ boarding destination because the base can turn before the next sample without
 relocating its passenger. The existing arrival tolerance and single-use limit
 remain unchanged.
 
-The negative control disables the raid strategy while leaving the same real
-encounter stimulus. Both cases require cleanup and shutdown. Reports separate
+Both cases keep the Ulduar strategy, including ordinary Brain Link handling.
+The negative control blocks execution of only `yogg brain support`, through an
+engine-owned fixture listener; it never changes an action's result to success.
+The listener becomes inert before cleanup and is freed with the logged-out bot's
+engine. Both cases count actual attempts; the negative case must block every
+attempt and the enabled case must block none. The same real encounter stimulus,
+sanity, survival, portal-effect and timing requirements remain. Both cases require
+cleanup and shutdown. Reports separate
 `plumbing_problems` (receipt, exposure or observation failures)
 from `behavior_problems`; either list makes the case fail. A native encounter
 failure does not hide an observation gap in the same run. All original limits
@@ -364,7 +371,7 @@ an arena manifest; it disables `Leeroy.Enable` so no guild bridge starts.
 | Scenario | Actual runtime assertion | Negative control |
 |---|---|---|
 | Valithria | At least two effective heals on her GUID, with stock healer strategies and a distant injured raid member competing for heal reach | Remove the ICC strategy; no effective dragon heals |
-| Twin Val'kyr | Light Essence acquired from real gossip, then Dark Essence acquired in response to the core's Dark Touch spell | Disable Twin interactions; no essence acquired |
+| Twin Val'kyr | Light Essence acquired through the core interaction (SpellClick, or gossip on older cores), then Dark Essence in response to the core's Dark Touch spell | Disable Twin interactions; no essence acquired |
 | Living Poison | At least two completed hall crossings, real moving slimes present, no damage from them, sampled clearance above their 1.5-yard trigger radius | Disable the hazard group context; require a real poison hit |
 | Lich King: Terenas | At least two effective heals on the real Terenas in Frostmourne, with ordinary follow targeting a leader outside the room | Disable `LichKingMechanics`; require no effective Terenas healing |
 | Lich King: Defile | Actual exposure to a real Defile cast; leave its scaled radius within four seconds, remain outside and take no damage after a one-second escape grace | Disable `LichKingMechanics`; require real Defile damage |
@@ -377,9 +384,9 @@ Both controls must then supply the existing room-exposure evidence; a direct
 teleport or manually summoned Terenas cannot establish this entry.
 Each selected scenario always runs both controls. These probes establish specific
 mechanics only; they do not certify an entire Lich King kill, heroic Frostmourne,
-Val'kyr rescue or spirit handling. Keep the feature off until the required
-encounter coverage has passing runtime evidence. Merely adding these gates or
-passing their verdict tests is not an enablement receipt.
+Val'kyr rescue or spirit handling. Release acceptance requires passing campaign
+receipts for the intended encounter scope. Existing live enablement, adding these
+gates or passing their verdict tests does not establish that runtime evidence.
 
 Every normal case and negative control must pass. A missing boss, stalled bot,
 absent slimes, insufficient samples, login failure or unproved cleanup fails the

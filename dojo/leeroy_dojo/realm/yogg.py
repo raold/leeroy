@@ -27,7 +27,8 @@ def verdict(o, *, token, negative=False):
         plumbing.append("invalid failure")
     counts = ("samples", "max_gap_ms", "illusion", "max_below", "max_healers_below", "healer_entrants", "min_healers_above",
               "tank_below_samples", "influence_deaths", "brain_hits", "brain_start_health", "brain_least_health",
-              "exit_remaining_ms", "native_spell_teleports", "native_charge_samples", "native_constrictor_attachments")
+              "exit_remaining_ms", "native_spell_teleports", "native_charge_samples", "native_constrictor_attachments",
+              "brain_action_attempts", "brain_action_blocks")
     for key in counts:
         if type(o.get(key)) is not int or o[key] < 0:
             plumbing.append(f"invalid {key}")
@@ -46,9 +47,11 @@ def verdict(o, *, token, negative=False):
         plumbing.append("continuous observation missing")
     if any(n < 1 or n > 100 for n in o["minimum_sanity"]):
         behavior.append("every actor must retain sanity")
+    if not o["brain_action_attempts"] or o["brain_action_blocks"] != (o["brain_action_attempts"] if negative else 0):
+        plumbing.append("brain action control was not exercised correctly")
     if negative:
         if any(o["entered"]) or any(o["portal_casts"]) or o["brain_hits"] or o["influence_deaths"]:
-            behavior.append("strategy-disabled control entered or affected the brain room")
+            behavior.append("brain-action-disabled control entered or affected the brain room")
     else:
         if sum(o["entered"]) != 4 or o["entered"] != o["exited"]:
             behavior.append("exactly four actual entrants must return alive")

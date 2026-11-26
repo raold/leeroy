@@ -8,6 +8,7 @@ def observed(negative=False):
     return dict(kind="dojo-yogg-observation", format=1, token="test", state="done", failure="",
                 negative=negative, ready=True, cleanup=True, portals=4, initial_sanity_members=9,
                 samples=500, max_gap_ms=60, native_spell_teleports=0, native_charge_samples=0, native_constrictor_attachments=0,
+                brain_action_attempts=20, brain_action_blocks=20 if negative else 0,
                 observation_clock="map_update", illusion=1, max_below=0 if negative else 4,
                 max_healers_below=0 if negative else 1, healer_entrants=0 if negative else 1, min_healers_above=2, tank_below_samples=0,
                 influence_deaths=0 if negative else 8, brain_hits=0 if negative else 10,
@@ -61,3 +62,10 @@ class YoggGateTest(unittest.TestCase):
                            ("native_constrictor_attachments", -1), ("observation_clock", "world_update")):
             sample = observed(True); sample[key] = value
             self.assertFalse(verdict(sample, token="test", negative=True)["ok"], key)
+
+    def test_control_must_block_actual_attempts_without_affecting_enabled_case(self):
+        for negative in (True, False):
+            for attempts, blocks in ((0, 0), (True, 0), (20, 19), (20, 21)):
+                sample = observed(negative)
+                sample.update(brain_action_attempts=attempts, brain_action_blocks=blocks)
+                self.assertFalse(verdict(sample, token="test", negative=negative)["ok"])

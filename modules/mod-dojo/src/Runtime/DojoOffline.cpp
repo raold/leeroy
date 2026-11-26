@@ -29,6 +29,7 @@
 #include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellInfo.h"
+#include "ThreatManager.h"
 #include "Timer.h"
 #include "UnitScript.h"
 #include "World.h"
@@ -574,6 +575,7 @@ struct OfflineFixture
                     {"target_entry", victim ? victim->GetEntry() : 0u},
                     {"ai_target_entry", selected ? selected->GetEntry() : 0u},
                     {"ai_state", uint32(ai->GetState())}, {"can_move", ai->CanMove()},
+                    {"threat_strategy", ai->HasStrategy("threat", BOT_STATE_COMBAT)},
                     {"moving", p->isMoving()}, {"rooted", p->IsRooted()},
                     {"motion", uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType())},
                     {"spline_active", p->movespline && !p->movespline->Finalized()},
@@ -602,6 +604,13 @@ struct OfflineFixture
                         auto* cast = creature->GetCurrentSpell(CURRENT_GENERIC_SPELL);
                         auto* channel = creature->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
                         auto* victim = creature->GetVictim();
+                        json threat = json::array();
+                        if (entry == 34564)
+                            for (std::size_t slot = 1; slot <= 10; ++slot)
+                                if (auto* member = Actor(slot); member && member->GetMap() == creature->GetMap())
+                                    threat.push_back({{"guid", member->GetGUID().GetCounter()},
+                                        {"amount", creature->GetThreatMgr().GetThreat(member, true)},
+                                        {"in_melee_range", creature->IsWithinMeleeRange(member)}});
                         enemies.push_back({{"entry", entry}, {"guid", creature->GetGUID().GetCounter()},
                             {"instance", creature->GetInstanceId()}, {"alive", creature->IsAlive()},
                             {"health", creature->GetHealth()}, {"max_health", creature->GetMaxHealth()},
@@ -614,6 +623,7 @@ struct OfflineFixture
                             {"cast", cast ? cast->GetSpellInfo()->Id : 0u},
                             {"channel", channel ? channel->GetSpellInfo()->Id : 0u},
                             {"target", victim ? victim->GetGUID().GetCounter() : 0u},
+                            {"threat", threat},
                             {"x", creature->GetPositionX()}, {"y", creature->GetPositionY()},
                             {"z", creature->GetPositionZ()}, {"facing", creature->GetOrientation()}});
                     }

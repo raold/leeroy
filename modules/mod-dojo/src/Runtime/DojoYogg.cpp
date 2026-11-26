@@ -6,6 +6,9 @@
 #include "DojoRaid.h"
 #include "DojoRuntime.h"
 #include "DojoMotion.h"
+#include "Action.h"
+#include "Engine.h"
+#include "Event.h"
 #include "AccountMgr.h"
 #include "AllMapScript.h"
 #include "CharacterCache.h"
@@ -38,9 +41,11 @@
 #include "WorldScript.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <list>
 #include <mutex>
+#include <memory>
 #include <set>
 #include <sstream>
 
@@ -50,6 +55,31 @@ namespace
 {
 constexpr std::array<char const*, 9> Names{"Dojotank", "Dojoguard", "Dojoheala", "Dojohealb", "Dojohealc",
     "Dojodpsa", "Dojodpsb", "Dojodpsd", "Dojodpse"};
+struct BrainControl
+{
+    explicit BrainControl(bool disabled) : negative(disabled) { }
+    bool const negative;
+    std::atomic<bool> active{true};
+    std::atomic<uint32> attempts{0}, blocks{0};
+};
+class BrainActionControl final : public ActionExecutionListener
+{
+public:
+    explicit BrainActionControl(std::shared_ptr<BrainControl> const& state) : control(state) { }
+    bool Before(Action* action, Event) override
+    {
+        if (!control->active || !action || action->getName() != "yogg brain support") return true;
+        ++control->attempts;
+        if (!control->negative) return true;
+        ++control->blocks;
+        return false;
+    }
+    bool AllowExecution(Action*, Event) override { return true; }
+    void After(Action*, bool, Event) override { }
+    bool OverrideResult(Action*, bool executed, Event) override { return executed; }
+private:
+    std::shared_ptr<BrainControl> control;
+};
 bool Below(Player* p)
 {
     return p && p->GetMapId() == 603 && p->GetPositionX() > 1830.f && p->GetPositionX() < 2160.f &&
@@ -69,6 +99,8 @@ struct Trial
 {
     std::recursive_mutex mutex;
     std::array<ObjectGuid, Names.size()> actors{};
+    std::shared_ptr<BrainControl> brainControl;
+    std::array<std::array<bool, BOT_STATE_MAX>, Names.size()> controlledEngines{};
     std::array<bool, Names.size()> entered{}, exited{}, healerEntrants{};
     std::array<bool, Names.size()> positioned{}, wasBelow{};
     std::array<Position, Names.size()> previous{};
@@ -229,6 +261,7 @@ struct Trial
         auto why = Dojo::BeginHumanFixture(id);
         if (!why.empty()) return why;
         token = id; negative = control; failure.clear(); group.Clear(); brainGuid.Clear(); saraGuid.Clear();
+        brainControl = std::make_shared<BrainControl>(control); controlledEngines = {};
         elapsed = samples = maxGap = illusion = portals = brainStart = brainLeast = brainHits = exitRemaining = initialSanity = 0;
         maxBelow = maxHealersBelow = tanksBelow = 0; minHealersAbove = 100;
         entered = {}; exited = {}; healerEntrants = {}; positioned = {}; wasBelow = {};
@@ -269,6 +302,20 @@ struct Trial
     void Update(uint32 diff)
     {
         phaseMs += diff;
+        // Engines own their listeners until fixture logout. The shared token
+        // makes a listener inert before cleanup, even if logout must retry.
+        if (state != "cleanup" && state != "logout")
+            for (std::size_t i = 0; i < actors.size(); ++i)
+                if (auto* p = Actor(i))
+                {
+                    auto* ai = GET_PLAYERBOT_AI(p);
+                    auto const engine = ai->GetState();
+                    if (engine < BOT_STATE_MAX && !controlledEngines[i][engine] && ai->GetCurrentEngine())
+                    {
+                        ai->GetCurrentEngine()->AddActionExecutionListener(new BrainActionControl(brainControl));
+                        controlledEngines[i][engine] = true;
+                    }
+                }
         auto* human = Dojo::HumanFixture(token);
         // Teleport acknowledgement and normal raid buffs recalculate the reserves
         // assigned at login. This probe starts at a portal wave, so maintain its
@@ -468,6 +515,7 @@ struct Trial
         }
         else if (state == "cleanup")
         {
+            if (brainControl) brainControl->active = false;
             if (human) if (auto* instance = human->GetInstanceScript())
                 if (auto* sara = instance->GetCreature(760)) sara->AI()->EnterEvadeMode();
             for (std::size_t i = 0; i < actors.size(); ++i) if (auto* p = Actor(i))
@@ -533,6 +581,8 @@ struct Trial
                             {"alive", creature->IsAlive()}, {"health", creature->GetHealth()}, {"gaze", creature->HasAura(64167)}});
             }
         return {{"kind", "dojo-yogg-observation"}, {"format", 1}, {"token", token}, {"state", state}, {"failure", failure},
+            {"brain_action_attempts", brainControl ? brainControl->attempts.load() : 0u},
+            {"brain_action_blocks", brainControl ? brainControl->blocks.load() : 0u},
             {"observation_clock", "map_update"}, {"native_charge_samples", nativeChargeSamples},
             {"negative", negative}, {"ready", ready}, {"cleanup", cleanup}, {"samples", samples}, {"max_gap_ms", maxGap},
             {"illusion", illusion}, {"portals", portals}, {"initial_sanity_members", initialSanity},
@@ -546,7 +596,7 @@ struct Trial
             {"native_spell_teleports", nativeSpellTeleports}, {"bodies", bodies}, {"room", room}};
     }
     char const* controlStrategy() const
-    { return negative ? "-stay,-passive,-follow,-ulduar" : "-stay,-passive,-follow,+ulduar"; }
+    { return "-stay,-passive,-follow,+ulduar"; }
 };
 Trial trial;
 class Commands : public CommandScript
