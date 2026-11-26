@@ -7,6 +7,16 @@
 
 namespace Dojo
 {
+inline bool BlinkDestination(float dx, float dy, float facing, float radius)
+{
+    if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(facing)
+        || !std::isfinite(radius) || radius <= 0.f) return false;
+    // TARGET_DEST_CASTER_FRONT_LEAP follows the cast facing and stops at
+    // collision, within the spell's modified radius. Z follows the core floor.
+    float const forward = dx * std::cos(facing) + dy * std::sin(facing);
+    float const lateral = dy * std::cos(facing) - dx * std::sin(facing);
+    return forward >= -0.1f && forward <= radius + 0.1f && std::abs(lateral) <= 0.1f;
+}
 inline float GroundChargeSpeed(float requested, float running)
 {
     if (!std::isfinite(requested) || !std::isfinite(running) || requested <= 0.f || running < 0.f) return 0.f;

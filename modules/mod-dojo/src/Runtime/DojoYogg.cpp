@@ -93,7 +93,8 @@ struct Trial
     {
         ObjectGuid target;
         Position origin, destination;
-        uint32 castMs = 0, teleportMs = 0;
+        uint32 spell = 0, castMs = 0, teleportMs = 0;
+        float blinkRadius = 0.f;
         bool pending = false, observed = false, castAura = false, teleportAura = false;
     };
     std::array<SpellTeleport, Names.size()> spellTeleports{};
@@ -181,7 +182,9 @@ struct Trial
         auto& proof = spellTeleports[i];
         // The last native pulse can finish as the aura expires. Its presence
         // must be witnessed at the cast and teleport, not at a later map sample.
-        if (!proof.observed || !proof.castAura || !proof.teleportAura || elapsed - proof.teleportMs > 200
+        bool const nativeSpell = (proof.spell == 57840 && proof.castAura && proof.teleportAura)
+            || (proof.spell == 1953 && proof.blinkRadius > 0.f);
+        if (!proof.observed || !nativeSpell || elapsed - proof.teleportMs > 200
             || p->GetMapId() != 603 || Below(p) != wasBelow[i]
             || proof.origin.GetExactDist(previous[i]) > 1.f + p->GetSpeed(MOVE_RUN) * float(diff) * 0.0015f
             || p->GetExactDist(proof.destination) > 0.1f) return false;
@@ -415,7 +418,8 @@ struct Trial
                             {"charge_expected_speed", chargeSpeed[i]}, {"charge_age_ms", elapsed - chargeMs[i]},
                             {"previous_moving", previousMoving[i]}, {"previous_vehicle_entry", previousVehicle[i]},
                             {"constrictor", ConstrictorFacts(p, i)},
-                            {"spell_teleport", {{"observed", spellTeleports[i].observed},
+                            {"spell_teleport", {{"spell", spellTeleports[i].spell},
+                                {"blink_radius", spellTeleports[i].blinkRadius}, {"observed", spellTeleports[i].observed},
                                 {"pending", spellTeleports[i].pending}, {"cast_aura", spellTeleports[i].castAura},
                                 {"teleport_aura", spellTeleports[i].teleportAura}, {"current_aura", p->HasAura(51690)},
                                 {"cast_age_ms", elapsed - spellTeleports[i].castMs},
@@ -642,9 +646,18 @@ public:
             {
                 auto& proof = trial.spellTeleports[i];
                 proof = {};
+                proof.spell = id;
                 proof.target = target->GetGUID(); proof.origin = player->GetPosition();
                 proof.castMs = trial.elapsed; proof.pending = true; proof.castAura = true;
             }
+        }
+        if (id == 1953 && spell->GetSpellInfo()->Effects[EFFECT_0].Effect == SPELL_EFFECT_LEAP)
+        {
+            auto& proof = trial.spellTeleports[i];
+            proof = {};
+            proof.spell = id; proof.origin = player->GetPosition();
+            proof.blinkRadius = spell->GetSpellInfo()->Effects[EFFECT_0].CalcRadius(player);
+            proof.castMs = trial.elapsed; proof.pending = true;
         }
     }
     bool OnPlayerBeforeTeleport(Player* player, uint32 map, float x, float y, float z,
@@ -652,18 +665,29 @@ public:
     {
         std::lock_guard<std::recursive_mutex> lock(trial.mutex);
         if (trial.state != "observe" || !player || map != 603 || player->GetMapId() != map
-            || !(options & TELE_TO_SPELL) || !player->HasAura(51690)) return true;
+            || !(options & TELE_TO_SPELL)) return true;
         auto found = std::find(trial.actors.begin(), trial.actors.end(), player->GetGUID());
         if (found == trial.actors.end()) return true;
         auto& proof = trial.spellTeleports[std::size_t(found - trial.actors.begin())];
         if (!proof.pending || proof.castMs != trial.elapsed) return true;
         proof.pending = false;
-        auto* target = ObjectAccessor::GetUnit(*player, proof.target);
-        if (!target || target->GetMap() != player->GetMap() || !player->IsValidAttackTarget(target)) return true;
+        if (proof.spell == 57840)
+        {
+            auto* target = ObjectAccessor::GetUnit(*player, proof.target);
+            if (!player->HasAura(51690) || !target || target->GetMap() != player->GetMap()
+                || !player->IsValidAttackTarget(target)) return true;
+            proof.teleportAura = true;
+        }
+        else if (proof.spell == 1953)
+        {
+            if (!Dojo::BlinkDestination(x - proof.origin.GetPositionX(), y - proof.origin.GetPositionY(),
+                proof.origin.GetOrientation(), proof.blinkRadius)) return true;
+        }
+        else return true;
         // Witness the core's actual destination, then require the measured actor
         // to arrive there. A recent spell ID alone never permits a displacement.
         proof.destination = Position(x, y, z, orientation);
-        proof.teleportMs = trial.elapsed; proof.observed = true; proof.teleportAura = true;
+        proof.teleportMs = trial.elapsed; proof.observed = true;
         return true;
     }
 };

@@ -3,6 +3,25 @@
 #include "TestHarness.h"
 #include <limits>
 
+DOJO_TEST(blink_requires_the_cast_direction_and_modified_radius)
+{
+    CHECK(Dojo::BlinkDestination(20.f, 0.f, 0.f, 20.f));
+    CHECK(Dojo::BlinkDestination(19.4f, 0.f, 0.f, 20.f)); // Collision can shorten Blink.
+    CHECK(Dojo::BlinkDestination(25.f, 0.f, 0.f, 25.f)); // Modified spell radius.
+    CHECK(!Dojo::BlinkDestination(25.f, 0.f, 0.f, 20.f));
+    CHECK(!Dojo::BlinkDestination(-19.4f, 0.f, 0.f, 20.f));
+    CHECK(!Dojo::BlinkDestination(19.4f, 1.f, 0.f, 20.f));
+    CHECK(!Dojo::BlinkDestination(20.2f, 0.f, 0.f, 20.f));
+    CHECK(!Dojo::BlinkDestination(0.f, 0.f, 0.f, 0.f));
+    for (float invalid : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()})
+    {
+        CHECK(!Dojo::BlinkDestination(invalid, 0.f, 0.f, 20.f));
+        CHECK(!Dojo::BlinkDestination(20.f, invalid, 0.f, 20.f));
+        CHECK(!Dojo::BlinkDestination(20.f, 0.f, invalid, 20.f));
+        CHECK(!Dojo::BlinkDestination(20.f, 0.f, 0.f, invalid));
+    }
+}
+
 DOJO_TEST(movement_matches_the_native_ground_charge_speed_limit)
 {
     // Actual Intercept trace: 42 requested, 28 on the launched spline,

@@ -242,13 +242,17 @@ kill actual influence tentacles, damage the brain and use real exit portals
 before the cast finishes. All actors must remain alive and retain sanity.
 
 The observer recognizes Killing Spree movement only with both its native spell
-and teleport callbacks, the active aura, a valid hostile target and arrival at
-the witnessed destination. A recent cast alone is insufficient. Room geometry,
+and teleport callbacks, the aura at both callbacks, a valid hostile target and
+arrival at the witnessed destination. Blink requires its real Leap cast and
+native teleport callback, a destination along the cast facing within the spell's
+modified radius, and arrival at that exact destination. Both witnesses expire
+after 200 ms, apply once and require continuity before the cast and the same
+floor afterward. A recent cast alone is insufficient. Room geometry,
 actor facing and targets are recorded to diagnose failed illusion clears.
-Sampling follows the actual map-update clock. Native Charge uses its spell's
-speed only while the core reports charge state and a matching active spline;
+Sampling follows the actual map-update clock. Native Charge uses the core's
+ground speed cap only with a real charge spell, charge state and matching active spline;
 ordinary movement retains the original speed bound and distance margin.
-A constrictor grab requires its native boarding callback, summon and spell
+A constrictor grab requires its native ride-aura callback after boarding, summon and spell
 witnesses, and arrival at a witnessed seat transform. The observer retains the
 boarding destination because the base can turn before the next sample without
 relocating its passenger. The existing arrival tolerance and single-use limit
