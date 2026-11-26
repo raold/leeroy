@@ -101,8 +101,10 @@ class VoiceExtension:
         self._launches = 0  # the supervisor's, since the service last stayed up STABLE_S
         self._up_since: float | None = None
         self._greeted_wall = 0.0
+        self._greeted_hold = None
         self._login_due = False  # his login: start a service that is down at once
         self._login_wall = 0.0  # time.time() of that login: a hold written after it still holds
+        self._login_hold = None
         self._held_logged = self._skipped_logged = False
         self.client = VoiceClient(cfg.host, cfg.port, self.on_message, clock=app.clock,
                                   on_connection=self.on_connection)
@@ -227,6 +229,7 @@ class VoiceExtension:
         if up:
             self._down_since, self._up_since, self._login_due = None, now, False
             self._greeted_wall = time.time()
+            self._greeted_hold = voice_hold(voice_data_dir())
             self._held_logged = self._skipped_logged = False
         else:
             if self._up_since is not None and now - self._up_since >= STABLE_S:
@@ -264,6 +267,7 @@ class VoiceExtension:
         if ev.human:
             # The supervisor starts a service his login finds down, held or not
             self._login_due, self._login_wall = not self.client.greeted, time.time()
+            self._login_hold = voice_hold(voice_data_dir())
             self._guard("login", self.begin_session)
         elif self.movement is not None:
             self._guard("member_login", lambda: self.movement.on_login(ev.guid))
@@ -515,10 +519,12 @@ class VoiceExtension:
 
     def _hold(self) -> dict | None:
         """An operator's stop that still holds the service down; None when none does. One older
-        than its last greeting is stale (something started it since) and is removed."""
+        than its last greeting is stale only if it was already present at that greeting.
+        A later stop wins even when the filesystem reuses an older timestamp."""
         data = voice_data_dir()
         hold = voice_hold(data)
-        if hold is not None and self._greeted_wall and hold["at"] < self._greeted_wall:
+        if (hold is not None and hold == self._greeted_hold
+                and self._greeted_wall and hold["at"] < self._greeted_wall):
             with suppress(OSError):
                 release_voice_hold(data)
             return None
@@ -535,7 +541,7 @@ class VoiceExtension:
         if self._down_since is None:
             self._down_since = now
         login, hold = self._login_due, self._hold()
-        if login and hold is not None and hold["at"] > self._login_wall:
+        if login and hold is not None and (hold != self._login_hold or hold["at"] > self._login_wall):
             login = self._login_due = False  # stopped since his login: held until the next one
         if not login:
             if hold is not None:
