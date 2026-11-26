@@ -1,6 +1,6 @@
-From 12ead95437ea7874ac3ccf422518ada49ea39991 Mon Sep 17 00:00:00 2001
+From 2eda8aa00f49cf9f72b58e28d08390d1a4cd3cc6 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
-Date: Thu, 26 Nov 2026 05:10:11 -0500
+Date: Thu, 26 Nov 2026 05:30:08 -0500
 Subject: [PATCH] Split Valithria's adds between the tanks and kill them in
  order
 
@@ -34,35 +34,39 @@ the whole pull.
   through every wave together (portal=2, then dream=2), leaving one or none healing her for 20-25 s a
   cycle. At most one healer is in the dream or holds a live portal claim, never so many that fewer
   than one (two with four or more healers) stay on her, and the turn goes to the healer with the
-  fewest trips, then the oldest trip (RaidInteractions::TakesPortalTurn).
+  fewest trips, then the oldest trip (RaidInteractions::TakesPortalTurn). A healer back from a heroic
+  dream carries Twisted Nightmares for 40 s (200 Nature a second per stack, 43-146k per healer per
+  dojo pull, the largest damage either took; Columns of Frost then finished them): it heals itself
+  first while below 70% with any stack, steps out of a Mana Void even while stacked, and the walk to a
+  portal steps out of Columns and Voids (the portal action outranked the group action's sidestep).
 - valithria_watch gains adds= and turns= (also on its end line).
 - ValithriaAdds = 0 restores the 0021 behaviour exactly; ValithriaPortalTurns = 0 sends the healers
   on her through each wave together, as 0021 does.
 ---
- conf/playerbots.conf.dist                |  14 ++
+ conf/playerbots.conf.dist                |  15 +
  src/Ai/Raid/ICC/Action/ICCActions.h      |  18 ++
- src/Ai/Raid/ICC/Action/ICCActions_VT.cpp | 182 +++++++++++++-
+ src/Ai/Raid/ICC/Action/ICCActions_VT.cpp | 211 +++++++++++++-
  src/Ai/Raid/ICC/ICCActionContext.h       |   4 +
  src/Ai/Raid/ICC/ICCMultipliers.cpp       |  11 +
  src/Ai/Raid/ICC/ICCScripts.h             |   7 +
- src/Ai/Raid/ICC/ICCShared.cpp            | 175 ++++++++++++-
- src/Ai/Raid/ICC/ICCShared.h              |  11 +
- src/Ai/Raid/ICC/ICCStrategy.cpp          |  44 ++++
+ src/Ai/Raid/ICC/ICCShared.cpp            | 187 ++++++++++++-
+ src/Ai/Raid/ICC/ICCShared.h              |  13 +
+ src/Ai/Raid/ICC/ICCStrategy.cpp          |  44 +++
  src/Ai/Raid/ICC/ICCStrategy.h            |   2 +
  src/Ai/Raid/ICC/ICCTriggerContext.h      |   7 +
  src/Ai/Raid/ICC/ICCTriggers.cpp          |   6 +-
- src/Ai/Raid/ICC/ICCTriggers.h            |  14 ++
- src/Ai/Raid/RaidInteractionPolicy.h      | 302 +++++++++++++++++++++++
+ src/Ai/Raid/ICC/ICCTriggers.h            |  14 +
+ src/Ai/Raid/RaidInteractionPolicy.h      | 337 +++++++++++++++++++++++
  src/PlayerbotAIConfig.cpp                |   2 +
  src/PlayerbotAIConfig.h                  |   2 +
- tests/raid_interactions_test.cpp         | 290 ++++++++++++++++++++++
- 17 files changed, 1079 insertions(+), 12 deletions(-)
+ tests/raid_interactions_test.cpp         | 307 +++++++++++++++++++++
+ 17 files changed, 1173 insertions(+), 14 deletions(-)
 
 diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
-index c8838cf8..26f71882 100644
+index c8838cf8..2184168c 100644
 --- a/conf/playerbots.conf.dist
 +++ b/conf/playerbots.conf.dist
-@@ -503,6 +503,20 @@ Playerbots.ValithriaHealerFocus = 1
+@@ -503,6 +503,21 @@ Playerbots.ValithriaHealerFocus = 1
  # hurting her. 0 keeps every healer out of the dream. Default: 1.
  Playerbots.ValithriaPortals = 1
  
@@ -76,8 +80,9 @@ index c8838cf8..26f71882 100644
 +
 +# With ValithriaPortals: the healers on her take the portals in turn. At most one healer is in the dream or on the
 +# way to a portal at a time, never so many that fewer than one (two with four or more healers) stay on her, and the
-+# turn goes to the healer with the fewest trips. 0 sends every healer on her through each portal wave together, as
-+# before. Default: 1.
++# turn goes to the healer with the fewest trips. A healer back from a heroic dream with Twisted Nightmares heals
++# itself first below 70% and steps out of Mana Voids even while stacked; the walk to a portal steps out of Columns
++# of Frost and Mana Voids. 0 sends every healer on her through each portal wave together, as before. Default: 1.
 +Playerbots.ValithriaPortalTurns = 1
 +
  # Opt-in Malygos drake positioning/rotation and human-led Flame Leviathan vehicles.
@@ -120,7 +125,7 @@ index 7dcad11e..05364674 100644
  class IccValithriaManaAction : public Action
  {
 diff --git a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
-index cf351a9d..797d7c27 100644
+index cf351a9d..c1ce2b9f 100644
 --- a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
 +++ b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
 @@ -4,6 +4,8 @@
@@ -344,7 +349,30 @@ index cf351a9d..797d7c27 100644
      {
          claims.erase(bot->GetGUID());
          return false;
-@@ -760,7 +914,7 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+@@ -736,6 +890,22 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+     if (bot->GetPositionZ() > MAX_Z)
+         bot->TeleportTo(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(), TARGET_Z, bot->GetOrientation());
+ 
++    // ValithriaPortalTurns: this action outranks the group action's sidestep, so the walk to a portal stepped
++    // through Columns of Frost and Mana Voids. Step out first.
++    if (sPlayerbotAIConfig.ValithriaPortalTurns)
++    {
++        std::list<Creature*> columns;
++        bot->GetCreatureListWithEntryInGrid(columns, NPC_COLUMN_OF_FROST, 10.0f);
++        for (Creature* column : columns)
++            if (column && column->IsAlive() && bot->GetExactDist2d(column) < 7.0f)
++                return FleePosition(column->GetPosition(), 8.0f, 250U);
++        Creature* manaVoid = bot->FindNearestCreature(NPC_MANA_VOID, 12.0f);
++        if (manaVoid && bot->GetExactDist2d(manaVoid) < 10.0f &&
++            RaidInteractions::StepsOutOfVoid(true, botAI->GetAura("Twisted Nightmares", bot) != nullptr,
++                                             botAI->GetAura("Emerald Vigor", bot) != nullptr))
++            return FleePosition(manaVoid->GetPosition(), 11.0f, 250U);
++    }
++
+     constexpr float SEARCH_RANGE = 200.0f;
+ 
+     std::vector<Creature*> preEffectPortals =
+@@ -760,7 +930,7 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
          Player* owner = ObjectAccessor::GetPlayer(*bot, it->first);
          if (!livePortalGuids.count(it->second) || !owner || !owner->IsInWorld() || !owner->IsAlive() ||
              owner->GetMap() != bot->GetMap() || owner->HasAura(SPELL_DREAM_STATE) || owner->IsBeingTeleported() ||
@@ -353,7 +381,7 @@ index cf351a9d..797d7c27 100644
              it = claims.erase(it);
          else
              ++it;
-@@ -838,6 +992,7 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+@@ -838,6 +1008,7 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
          bot->StopMoving();
          bot->SetFacingToObject(clickTarget);
          clickTarget->HandleSpellClick(bot);
@@ -361,7 +389,33 @@ index cf351a9d..797d7c27 100644
          return true;
      }
  
-@@ -969,6 +1124,23 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+@@ -880,14 +1051,23 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+                 return FleePosition(column->GetPosition(), 8.0f, 250U);
+             }
+         Creature* manaVoid = bot->FindNearestCreature(NPC_MANA_VOID, 12.0f);
+-        if (manaVoid && bot->GetExactDist2d(manaVoid) < 10.0f && !botAI->GetAura("Twisted Nightmares", bot) &&
+-            !botAI->GetAura("Emerald Vigor", bot))
++        if (manaVoid && bot->GetExactDist2d(manaVoid) < 10.0f &&
++            RaidInteractions::StepsOutOfVoid(sPlayerbotAIConfig.ValithriaPortalTurns,
++                                             botAI->GetAura("Twisted Nightmares", bot) != nullptr,
++                                             botAI->GetAura("Emerald Vigor", bot) != nullptr))
+         {
+             IccValithriaNoteHeal(bot, "hazard", false);
+             return FleePosition(manaVoid->GetPosition(), 11.0f, 250U);
+         }
+     }
+ 
++    // ValithriaPortalTurns: back from a heroic dream, a healer carrying Twisted Nightmares heals itself first.
++    if (IccValithriaHealSelfFirst(bot, botAI))
++    {
++        IccValithriaNoteHeal(bot, "self", false);
++        return true;
++    }
++
+     if (!bot->HasAura(SPELL_DREAM_STATE))
+     {
+         constexpr float NORMAL_SPEED = 1.0f;
+@@ -969,6 +1149,23 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
      return cast;
  }
  
@@ -462,7 +516,7 @@ index 60eef5c3..fe89127b 100644
  
          Position gsbLastStarPos;
 diff --git a/src/Ai/Raid/ICC/ICCShared.cpp b/src/Ai/Raid/ICC/ICCShared.cpp
-index b08011d7..4fa42a8f 100644
+index b08011d7..af73f7ec 100644
 --- a/src/Ai/Raid/ICC/ICCShared.cpp
 +++ b/src/Ai/Raid/ICC/ICCShared.cpp
 @@ -7,6 +7,8 @@
@@ -654,7 +708,26 @@ index b08011d7..4fa42a8f 100644
  namespace
  {
  RaidInteractions::HealerClass ValithriaHealerKind(uint8 playerClass)
-@@ -474,11 +633,13 @@ void IccValithriaWatch(Creature* valithria)
+@@ -381,6 +540,18 @@ Unit* ValithriaFiendTarget(Player* bot, PlayerbotAI* botAI)
+ }
+ }  // namespace
+ 
++bool IccValithriaHealSelfFirst(Player* bot, PlayerbotAI* botAI)
++{
++    Aura* twisted = bot->GetAura(RaidInteractions::TwistedNightmares);
++    if (!RaidInteractions::HealsSelfFirst(sPlayerbotAIConfig.ValithriaPortalTurns, bot->GetHealthPct(),
++                                          twisted ? twisted->GetStackAmount() : 0))
++        return false;
++    for (char const* spell : RaidInteractions::SelfHeals(ValithriaHealerKind(bot->getClass())))
++        if (botAI->CanCastSpell(spell, bot) && botAI->CastSpell(spell, bot))
++            return true;
++    return false;
++}
++
+ uint32 IccValithriaManaCooldown(Player* bot, PlayerbotAI* botAI, Unit*& target)
+ {
+     target = nullptr;
+@@ -474,11 +645,13 @@ void IccValithriaWatch(Creature* valithria)
      if (encounter != IN_PROGRESS || !valithria->IsAlive())
      {
          if (watch.engaged)
@@ -670,7 +743,7 @@ index b08011d7..4fa42a8f 100644
          return;
      }
  
-@@ -524,7 +685,7 @@ void IccValithriaWatch(Creature* valithria)
+@@ -524,7 +697,7 @@ void IccValithriaWatch(Creature* valithria)
          in.kited = ValithriaChases(zombies, member);
          in.wormed = ValithriaChases(worms, member);
          in.portal = portalUp && alive && (!twisted || twisted->GetStackAmount() < 25) &&
@@ -679,7 +752,7 @@ index b08011d7..4fa42a8f 100644
          in.lowHealth = member->HealthBelowPct(50);
          in.dragon = alive && IccValithriaHealsDragon(member).value_or(false);
          char const* duty = RaidInteractions::ValithriaDuty(in);
-@@ -550,9 +711,11 @@ void IccValithriaWatch(Creature* valithria)
+@@ -550,9 +723,11 @@ void IccValithriaWatch(Creature* valithria)
      std::string summary;
      for (auto const& [duty, count] : duties)
          summary += " " + duty + "=" + std::to_string(count);
@@ -695,20 +768,22 @@ index b08011d7..4fa42a8f 100644
          LOG_INFO("playerbots", "{}", line);
  }
 diff --git a/src/Ai/Raid/ICC/ICCShared.h b/src/Ai/Raid/ICC/ICCShared.h
-index 5d87b023..187eb68a 100644
+index 5d87b023..7e2cb291 100644
 --- a/src/Ai/Raid/ICC/ICCShared.h
 +++ b/src/Ai/Raid/ICC/ICCShared.h
-@@ -100,6 +100,9 @@ std::optional<bool> IccValithriaHealsDragon(Player* bot);
+@@ -100,6 +100,11 @@ std::optional<bool> IccValithriaHealsDragon(Player* bot);
  // The dragon heal trigger's whole condition: a living, healthy healer outside the dream, not chased.
  bool IccValithriaOnDragon(Player* bot);
  bool IccValithriaCanUsePortal(Player* bot);
 +// CanUsePortal and, with Playerbots.ValithriaPortalTurns, this healer's turn (at most one in the dream at a time).
 +bool IccValithriaPortalTurn(Player* bot);
 +void IccValithriaNoteDreamTrip(Player* bot);
++// ValithriaPortalTurns: a healer back from the dream with Twisted Nightmares below the line heals itself; true if cast.
++bool IccValithriaHealSelfFirst(Player* bot, PlayerbotAI* botAI);
  // False once a heroic portal healer holds the stack cap of Twisted Nightmares (ValithriaHealerFocus).
  bool IccValithriaTakesCloud(Player* bot);
  void IccValithriaNoteHeal(Player* bot, char const* outcome, bool cast);
-@@ -109,6 +112,14 @@ uint32 IccValithriaManaCooldown(Player* bot, PlayerbotAI* botAI, Unit*& target);
+@@ -109,6 +114,14 @@ uint32 IccValithriaManaCooldown(Player* bot, PlayerbotAI* botAI, Unit*& target);
  void IccValithriaNoteManaCooldown(Player* bot);
  // Playerbots.log every 5 s while her encounter is in progress (ICCScripts.cpp calls it from her update).
  void IccValithriaWatch(Creature* valithria);
@@ -877,10 +952,10 @@ index 508d7a5c..67dc8fe4 100644
  {
  public:
 diff --git a/src/Ai/Raid/RaidInteractionPolicy.h b/src/Ai/Raid/RaidInteractionPolicy.h
-index f4cea035..16c4c1d3 100644
+index f4cea035..940e48eb 100644
 --- a/src/Ai/Raid/RaidInteractionPolicy.h
 +++ b/src/Ai/Raid/RaidInteractionPolicy.h
-@@ -163,6 +163,49 @@ inline bool CanUsePortal(std::uint64_t guid, std::vector<Healer> const& healers,
+@@ -163,6 +163,66 @@ inline bool CanUsePortal(std::uint64_t guid, std::vector<Healer> const& healers,
      return healers.size() > 1 && raidHealer.has_value() && !*raidHealer;
  }
  
@@ -927,10 +1002,52 @@ index f4cea035..16c4c1d3 100644
 +    return first->guid == guid;
 +}
 +
++// Coming back from a heroic dream (also Playerbots.ValithriaPortalTurns). Twisted Nightmares stay for 40 s at
++// 200 Nature damage a second per stack (48k from six stacks): it was the largest damage either healer on her
++// took in every 10-heroic dojo pull (43-146k each), and a Column of Frost then finished them. A healer that
++// carries any heals itself first while below DreamSelfHealPct, and steps out of a Mana Void (1,000 mana a
++// second on heroic) even while it carries them; without turns the old rule keeps a stacked healer in it.
++inline constexpr float DreamSelfHealPct = 70.0f;
++
++inline bool HealsSelfFirst(bool turns, float healthPct, std::uint32_t twistedStacks)
++{
++    return turns && twistedStacks > 0 && healthPct < DreamSelfHealPct;
++}
++
++inline bool StepsOutOfVoid(bool turns, bool twisted, bool vigor)
++{
++    return !vigor && (turns || !twisted);
++}
++
  // Heroic Nightmare clouds: each one taken stacks Twisted Nightmares for 40 s (+10% healing, 200 mana every
  // 3 s, and 200 Nature damage a second, stacking); each one left hurts her for 1,000 a second until taken.
  // Bots took 14 and 19 stacks in the 10-heroic dojo pull and died of the damage, as both portal healers did
-@@ -241,6 +284,265 @@ std::uint32_t FirstReadyHeal(std::vector<std::uint32_t> const& choices, Ready re
+@@ -228,6 +288,24 @@ std::uint32_t PickManaCooldown(HealerClass healer, float manaPct, Ready ready)
+     return 0;
+ }
+ 
++// The heals a healer back from the dream casts on itself, quickest first.
++inline std::vector<char const*> SelfHeals(HealerClass healer)
++{
++    switch (healer)
++    {
++        case HealerClass::Paladin:
++            return {"holy shock", "flash of light", "holy light"};
++        case HealerClass::Shaman:
++            return {"riptide", "lesser healing wave", "healing wave"};
++        case HealerClass::Druid:
++            return {"swiftmend", "regrowth", "nourish"};
++        case HealerClass::Priest:
++            return {"flash heal", "greater heal"};
++        default:
++            return {};
++    }
++}
++
+ inline bool AffordableHeal(std::int32_t cost, std::uint32_t mana)
+ {
+     return cost >= 0 && static_cast<std::uint32_t>(cost) <= mana;
+@@ -241,6 +319,265 @@ std::uint32_t FirstReadyHeal(std::vector<std::uint32_t> const& choices, Ready re
              return spell;
      return 0;
  }
@@ -1223,10 +1340,10 @@ index 953970e1..8b8640ca 100644
      bool LichKingMechanics;
      bool AllowAccountBots, AllowGuildBots, AllowTrustedAccountBots;
 diff --git a/tests/raid_interactions_test.cpp b/tests/raid_interactions_test.cpp
-index c671372b..0a69e0ae 100644
+index c671372b..62648693 100644
 --- a/tests/raid_interactions_test.cpp
 +++ b/tests/raid_interactions_test.cpp
-@@ -147,6 +147,66 @@ int main()
+@@ -147,6 +147,83 @@ int main()
      }
      CHECK(NightmareStackCap > 0 && NightmareStackCap < 25);  // below the old 25-stack portal refusal
  
@@ -1290,10 +1407,27 @@ index c671372b..0a69e0ae 100644
 +    CHECK(!TakesPortalTurn(7, {{7, 0, UINT32_MAX, false}}, 2));  // the only healer on her stays
 +    CHECK(!TakesPortalTurn(7, {}, 2));
 +
++    // Back from a heroic dream: self-heal first only with turns, stacks and health under the line; a stacked
++    // healer leaves a Mana Void only with turns (the old rule kept it in), and never one with Emerald Vigor.
++    for (bool turns : {false, true})
++        for (std::uint32_t stacks : {0u, 1u, 6u})
++            for (float health : {10.0f, 49.0f, DreamSelfHealPct - 0.1f, DreamSelfHealPct, 100.0f})
++                CHECK(HealsSelfFirst(turns, health, stacks) == (turns && stacks > 0 && health < DreamSelfHealPct));
++    for (bool turns : {false, true})
++        for (bool twisted : {false, true})
++            for (bool vigor : {false, true})
++                CHECK(StepsOutOfVoid(turns, twisted, vigor) == (!vigor && (turns || !twisted)));
++    CHECK(StepsOutOfVoid(false, false, false));  // the 0021 rule: an unstacked healer always steps out
++    CHECK(!StepsOutOfVoid(false, true, false));
++    CHECK(StepsOutOfVoid(true, true, false));
++    CHECK(SelfHeals(HealerClass::Other).empty());
++    for (HealerClass healer : {HealerClass::Paladin, HealerClass::Priest, HealerClass::Shaman, HealerClass::Druid})
++        CHECK(!SelfHeals(healer).empty());
++
      // Mana cooldowns: each class's own, below its threshold, only when ready; the first that fits wins.
      {
          auto always = [](std::uint32_t) { return true; };
-@@ -266,6 +326,236 @@ int main()
+@@ -266,6 +343,236 @@ int main()
      CHECK(!AffordableHeal(-1, 40));
      CHECK(FirstReadyHeal({1001, 1002},
                           [](std::uint32_t spell) { return AffordableHeal(spell == 1001 ? 130 : 40, 50); }) == 1002);

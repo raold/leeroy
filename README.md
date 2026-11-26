@@ -477,8 +477,12 @@ output in `patches/`:
   in the dream or on the way to a portal, never so many that fewer than one
   (two with four or more healers) stay on her, and the turn goes to the healer
   with the fewest trips (live on 2026-11-26 both went through every wave
-  together and she stalled). `valithria_watch` lines carry `turns=`; `0` sends
-  them together as before.
+  together and she stalled). A healer back from a heroic dream carrying
+  Twisted Nightmares (200 Nature a second per stack for 40 s, the largest
+  damage either healer on her takes) heals itself first below 70% and steps
+  out of Mana Voids even while stacked, and the walk to a portal steps out of
+  Columns of Frost and Mana Voids. `valithria_watch` lines carry `turns=`; `0`
+  sends them together as before.
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.
