@@ -728,9 +728,13 @@ public:
 class SlimeCasts : public AllSpellScript
 {
 public:
-    SlimeCasts() : AllSpellScript("DojoOfflineSlimeCasts", {ALLSPELLHOOK_ON_PREPARE, ALLSPELLHOOK_ON_CAST}) { }
-    void OnSpellPrepare(Spell* spell, Unit* caster, SpellInfo const* info) override
-    { Record(spell, caster, info, false); }
+    SlimeCasts() : AllSpellScript("DojoOfflineSlimeCasts", {ALLSPELLHOOK_CAN_PREPARE, ALLSPELLHOOK_ON_CAST}) { }
+    bool CanPrepare(Spell* spell, SpellCastTargets const*, AuraEffect const*) override
+    {
+        if (spell)
+            Record(spell, spell->GetCaster() ? spell->GetCaster()->ToUnit() : nullptr, spell->GetSpellInfo(), false);
+        return true;
+    }
     void OnSpellCast(Spell* spell, Unit* caster, SpellInfo const* info, bool /*skipCheck*/) override
     { Record(spell, caster, info, true); }
     void Record(Spell* spell, Unit* caster, SpellInfo const* info, bool completed)
@@ -748,8 +752,8 @@ public:
         auto [where, inserted] = fixture.slimePools.try_emplace(caster->GetGUID());
         auto& pool = where->second;
         if (inserted) pool.firstMs = fixture.clockMs;
-        // Immediate damage happens before AllSpellScript::OnSpellCast. Prepare
-        // establishes identity; only the successful cast counts as stimulus.
+        // Triggered damage precedes both OnSpellCast and OnSpellPrepare.
+        // CanPrepare records identity first; only a successful cast counts.
         if (completed)
         {
             ++pool.casts; pool.lastMs = fixture.clockMs; pool.radius = radius;
