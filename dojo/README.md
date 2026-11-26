@@ -279,7 +279,9 @@ encounter stimulus. Both cases require cleanup and shutdown. Reports separate
 `plumbing_problems` (receipt, exposure or observation failures)
 from `behavior_problems`; either list makes the case fail. A native encounter
 failure does not hide an observation gap in the same run. All original limits
-and required effects still apply. Actor health
+and required effects still apply. Optional `--profile` captures fresh native
+`playerbots pmon` JSON for each case to investigate slow actions and triggers;
+it does not alter the scenario, deadlines or verdict. Actor health
 reserves are setup-only; the harness never heals, attacks or teleports on their
 behalf during the measured wave. The report names the randomly selected native
 illusion. One successful wave does not certify the other two illusions, later

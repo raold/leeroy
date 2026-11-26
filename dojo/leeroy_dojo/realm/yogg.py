@@ -71,7 +71,7 @@ def parse_status(reply):
     return json.loads(rows[0])
 
 
-def run(layout, log=print):
+def run(layout, log=print, *, profile=False):
     if world.running(layout):
         raise world.WorldError("Yogg acceptance requires a stopped dedicated dojo realm")
     preflight = world.preflight(layout)
@@ -87,6 +87,7 @@ def run(layout, log=print):
     out.mkdir(parents=True, exist_ok=False)
     report = dict(kind="dojo-yogg-acceptance", format=1, ok=False, source=source, preflight=preflight,
                   cases=[], stopped=False, out=str(out), scope="one native portal wave; report names the actual illusion")
+    report["profile_requested"] = profile
     try:
         for negative in (True, False):
             _, digest = offline.prepare_fixture(layout, log)
@@ -95,6 +96,11 @@ def run(layout, log=print):
             candidate = raids.provenance(layout)
             world.start(layout, log=log)
             with world.ra(layout) as client:
+                profile_start = time.time()
+                if profile:
+                    if read_conf(layout.configs / "modules/playerbots.conf").get("Playerbots.PerfMonEnabled", "0") == "0":
+                        client.command("playerbots pmon toggle")
+                    client.command("playerbots pmon reset")
                 reply = client.command(f"dojo yogg start {token} {name}")
                 if "dojo yogg: started" not in reply:
                     raise world.WorldError(f"Yogg fixture admission refused: {reply}")
@@ -118,6 +124,16 @@ def run(layout, log=print):
                 log(f"Yogg {name}: {'passed' if case['ok'] else 'FAILED'}")
                 if not observed.get("cleanup"):
                     raise world.WorldError("Yogg cleanup unproved")
+                if profile:
+                    client.command("playerbots pmon stack")
+                    stats_path = layout.logs / "pmon_total.json"
+                    stats = json.loads(stats_path.read_text(encoding="utf-8"))
+                    if (stats.get("enabled") is not True or type(stats.get("generatedAt")) is not int
+                            or stats["generatedAt"] < int(profile_start)
+                            or type(stats.get("fullTickCount")) is not int or stats["fullTickCount"] <= 0):
+                        raise world.WorldError("native performance sample missing or stale")
+                    case["performance_file"] = f"{name}-pmon_total.json"
+                    shutil.copyfile(stats_path, out / case["performance_file"])
             world.stop(layout, log=log)
             for filename in ("Server.log", "Playerbots.log"):
                 if (layout.logs / filename).is_file():
