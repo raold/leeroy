@@ -47,32 +47,36 @@ jobs:
           echo "$plan" | tee -a "$RUNNER_TEMP/verify.txt"
           echo "checks=${plan##*checks: }" >> "$GITHUB_OUTPUT"
 
+      # Each check step runs even when an earlier one failed, so a pull request sees every failing
+      # check at once; the job still fails because a failed step fails it.
       - uses: actions/setup-python@v6
-        if: contains(steps.plan.outputs.checks, 'migrate')
+        id: python
+        if: ${{ !cancelled() && steps.plan.conclusion == 'success' && contains(steps.plan.outputs.checks, 'migrate') }}
         with:
           python-version: "3.14"
 
       - name: Mind environment (for the migration fixture)
-        if: contains(steps.plan.outputs.checks, 'migrate')
+        id: mind
+        if: ${{ !cancelled() && steps.plan.conclusion == 'success' && steps.python.conclusion == 'success' && contains(steps.plan.outputs.checks, 'migrate') }}
         run: |
           python -m venv "$RUNNER_TEMP/mind-venv"
           "$RUNNER_TEMP/mind-venv/bin/python" -m pip install -q -e ./mind
           echo "VERIFY_PYTHON=$RUNNER_TEMP/mind-venv/bin/python" >> "$GITHUB_ENV"
 
       - name: Workflows changed together with code (warning)
-        if: contains(steps.plan.outputs.checks, 'workflows')
+        if: ${{ !cancelled() && steps.plan.conclusion == 'success' && contains(steps.plan.outputs.checks, 'workflows') }}
         run: bash "$RUNNER" --ci --only workflows "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
 
       - name: Windows macro identifiers
-        if: contains(steps.plan.outputs.checks, 'identifiers')
+        if: ${{ !cancelled() && steps.plan.conclusion == 'success' && contains(steps.plan.outputs.checks, 'identifiers') }}
         run: bash "$RUNNER" --ci --only identifiers "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
 
       - name: Patch series on upstream, with the pin guard
-        if: contains(steps.plan.outputs.checks, 'patches')
+        if: ${{ !cancelled() && steps.plan.conclusion == 'success' && contains(steps.plan.outputs.checks, 'patches') }}
         run: bash "$RUNNER" --ci --only patches "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
 
       - name: Migrations on a fixture database at the base's schema
-        if: contains(steps.plan.outputs.checks, 'numbering') || contains(steps.plan.outputs.checks, 'migrate')
+        if: ${{ !cancelled() && steps.plan.conclusion == 'success' && ((contains(steps.plan.outputs.checks, 'numbering') && !contains(steps.plan.outputs.checks, 'migrate')) || (contains(steps.plan.outputs.checks, 'migrate') && steps.mind.conclusion == 'success')) }}
         run: bash "$RUNNER" --ci --only numbering,migrate "$BASE" | tee -a "$RUNNER_TEMP/verify.txt"
 
       - name: Summary
