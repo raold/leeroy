@@ -14,7 +14,7 @@ defective against 12%). The lists say their outfits and settings as safe.py rewr
 audit's standing poses were taken out again (owner, 2026-11-19): each candidate's pose is its
 view, as before the audit.
 
-Off by default: `[selfies] varied_sets = true` (read at the mind's start, as the rest of the
+On by default (`[selfies] varied_sets`, read at the mind's start, as the rest of the
 table). With it off nothing is queued, and a set queued while it was on renders as an ordinary
 set of her own photo kind.
 

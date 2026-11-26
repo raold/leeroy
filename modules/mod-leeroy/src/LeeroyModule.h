@@ -31,7 +31,7 @@ struct LeeroyConfig
     bool raidLeadEnable = false;
     uint32 realmMaxActionsPerTick = 5;
     bool realmAnnounce = true;
-    bool castGuard = false;
+    bool castGuard = true;
     bool queueFence = true;
     bool castArenaTeamsLeave = true;
     std::string realmPlacesFile = "leeroy_places.csv";
