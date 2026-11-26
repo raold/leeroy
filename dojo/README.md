@@ -140,7 +140,8 @@ alone), `adds` with both on (patch 0022's adds handling), `turns` like `adds`
 with `Playerbots.ValithriaPortalTurns` on (patch 0022's portal turns; every
 other mode runs with it off), and `noportals` like `after` with
 `Playerbots.ValithriaPortals` off; every switch is restored at cleanup. The
-default runs four: 10-player normal and heroic, each `after` and `adds`.
+default runs four: 10-player normal and heroic, each `after` (patch 0021) and
+`turns` (all of patch 0022).
 `two_in_dream_ms` and `none_on_her_ms` count the time with two or more healers
 in the dream and with no healer out of it in reach of her.
 `--owner-buffs` gives the fire-mage leader the owner's own auras (spells 6560,

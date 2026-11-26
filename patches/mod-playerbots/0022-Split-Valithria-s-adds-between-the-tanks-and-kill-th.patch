@@ -1,6 +1,6 @@
-From 2eda8aa00f49cf9f72b58e28d08390d1a4cd3cc6 Mon Sep 17 00:00:00 2001
+From 2ec62b771470bff3a9897552d4f14aee657c6cf5 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
-Date: Thu, 26 Nov 2026 05:30:08 -0500
+Date: Thu, 26 Nov 2026 05:55:59 -0500
 Subject: [PATCH] Split Valithria's adds between the tanks and kill them in
  order
 
@@ -16,8 +16,10 @@ the whole pull.
 - The tanks split her adds (RaidInteractions::VdwTankHolds): the first by guid holds the abominations,
   the second the archmages, skeletons and blistering zombies (a heroic zombie one-shot a kiting damage
   dealer), both share the rot worms, a tank taking another stray worm only while it holds no more than
-  the other; a lone tank holds them all. A tank's own target leaves out what it does not hold unless
-  it is on it, and every suppresser (RaidIccStrategy::AppendTargetExclusions).
+  the other; a lone tank holds them all. A tank picks up only adds within the 45 yd marking radius
+  (one that went out to the doors held a skeleton 60-65 yd away, out of the skull's reach, for 50 s of
+  Lay Waste). A tank's own target leaves out what it does not hold unless it is on it, and every
+  suppresser (RaidIccStrategy::AppendTargetExclusions).
 - Tank face runs for a tank on an abomination, so its Gut Spray points away from the raid.
 - One skull in kill order (VdwKillRank): skeleton, zombie, rot worms, suppressers, archmages, a lone
   abomination last (with two up, one of them right after the worms: last in line, the first lived
@@ -45,7 +47,7 @@ the whole pull.
 ---
  conf/playerbots.conf.dist                |  15 +
  src/Ai/Raid/ICC/Action/ICCActions.h      |  18 ++
- src/Ai/Raid/ICC/Action/ICCActions_VT.cpp | 211 +++++++++++++-
+ src/Ai/Raid/ICC/Action/ICCActions_VT.cpp | 217 ++++++++++++++-
  src/Ai/Raid/ICC/ICCActionContext.h       |   4 +
  src/Ai/Raid/ICC/ICCMultipliers.cpp       |  11 +
  src/Ai/Raid/ICC/ICCScripts.h             |   7 +
@@ -60,7 +62,7 @@ the whole pull.
  src/PlayerbotAIConfig.cpp                |   2 +
  src/PlayerbotAIConfig.h                  |   2 +
  tests/raid_interactions_test.cpp         | 307 +++++++++++++++++++++
- 17 files changed, 1173 insertions(+), 14 deletions(-)
+ 17 files changed, 1179 insertions(+), 14 deletions(-)
 
 diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
 index c8838cf8..2184168c 100644
@@ -125,7 +127,7 @@ index 7dcad11e..05364674 100644
  class IccValithriaManaAction : public Action
  {
 diff --git a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
-index cf351a9d..c1ce2b9f 100644
+index cf351a9d..ed879284 100644
 --- a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
 +++ b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
 @@ -4,6 +4,8 @@
@@ -178,16 +180,20 @@ index cf351a9d..c1ce2b9f 100644
          ApplyCrowdControl(nearbyZombie);
  
      // Leash: every role stays within 35f of the boss anchor unless doing an
-@@ -254,6 +267,69 @@ bool IccValithriaGroupAction::ApplyCrowdControl(Unit* zombie)
+@@ -254,6 +267,75 @@ bool IccValithriaGroupAction::ApplyCrowdControl(Unit* zombie)
      return IccTryClassCC(bot, botAI, zombie).value_or(false);
  }
  
 +// ValithriaAdds: taunt the nearest add this tank holds that is not on its holder (in reach), or close in on it.
 +// The raid cheat's taunt fixes the add on the tank (IccCastClassTaunt). Stray worms go to the tank holding fewer.
++// Only adds already within the marking radius count: her adds walk in from the doors 80 yd away, and a tank that
++// went out to meet them held a skeleton, a zombie and archmages 60-65 yd from her, where no skull reaches, while
++// the skeleton's Lay Waste burned the room for 50 s.
 +bool IccValithriaGroupAction::TankAdds()
 +{
 +    constexpr float ADD_TAUNT_RANGE = 30.0f;
 +    constexpr float CHASE_STEP = 10.0f;
++    constexpr float MARK_RADIUS = 45.0f;
 +    std::vector<Player*> const tanks = IccValithriaTanks(bot);
 +    int const rank = IccValithriaTankRank(tanks, bot);
 +    if (rank < 0)
@@ -211,7 +217,9 @@ index cf351a9d..c1ce2b9f 100644
 +    for (ObjectGuid const& guid : candidates)
 +    {
 +        Unit* unit = botAI->GetUnit(guid);
-+        if (!unit || !unit->IsAlive())
++        if (!unit || !unit->IsAlive() ||
++            unit->GetExactDist2d(ICC_VDW_HEAL_POSITION.GetPositionX(), ICC_VDW_HEAL_POSITION.GetPositionY()) >
++                MARK_RADIUS)
 +            continue;
 +        RaidInteractions::VdwAdd const add = RaidInteractions::VdwAddOf(unit->GetEntry());
 +        if (!RaidInteractions::VdwTankPicksUp(add, static_cast<std::size_t>(rank), tanks.size(),
@@ -248,7 +256,7 @@ index cf351a9d..c1ce2b9f 100644
  bool IccValithriaGroupAction::Handle25ManGroupLogic()
  {
      Group* group = bot->GetGroup();
-@@ -603,6 +679,8 @@ bool IccValithriaGroupAction::Handle10ManGroupLogic()
+@@ -603,6 +685,8 @@ bool IccValithriaGroupAction::Handle10ManGroupLogic()
          return false;
      if (PlayerbotAI::IsHeal(bot) && bot->HasAura(SPELL_DREAM_STATE))
          return false;
@@ -257,7 +265,7 @@ index cf351a9d..c1ce2b9f 100644
  
      constexpr float MARK_RADIUS = 45.0f;
  
-@@ -716,6 +794,82 @@ bool IccValithriaGroupAction::Handle10ManGroupLogic()
+@@ -716,6 +800,82 @@ bool IccValithriaGroupAction::Handle10ManGroupLogic()
      return false;
  }
  
@@ -340,7 +348,7 @@ index cf351a9d..c1ce2b9f 100644
  bool IccValithriaPortalAction::Execute(Event /*event*/)
  {
      if (bot->GetMapId() != 631)
-@@ -723,7 +877,7 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+@@ -723,7 +883,7 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
      uint32 const instanceId = bot->GetMap()->GetInstanceId();
      auto& claims = IcecrownHelpers::IccState(instanceId).vtPortalClaim;
      if (!bot->IsAlive() || !PlayerbotAI::IsHeal(bot) || bot->HasAura(SPELL_DREAM_STATE) ||
@@ -349,7 +357,7 @@ index cf351a9d..c1ce2b9f 100644
      {
          claims.erase(bot->GetGUID());
          return false;
-@@ -736,6 +890,22 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+@@ -736,6 +896,22 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
      if (bot->GetPositionZ() > MAX_Z)
          bot->TeleportTo(bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(), TARGET_Z, bot->GetOrientation());
  
@@ -372,7 +380,7 @@ index cf351a9d..c1ce2b9f 100644
      constexpr float SEARCH_RANGE = 200.0f;
  
      std::vector<Creature*> preEffectPortals =
-@@ -760,7 +930,7 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+@@ -760,7 +936,7 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
          Player* owner = ObjectAccessor::GetPlayer(*bot, it->first);
          if (!livePortalGuids.count(it->second) || !owner || !owner->IsInWorld() || !owner->IsAlive() ||
              owner->GetMap() != bot->GetMap() || owner->HasAura(SPELL_DREAM_STATE) || owner->IsBeingTeleported() ||
@@ -381,7 +389,7 @@ index cf351a9d..c1ce2b9f 100644
              it = claims.erase(it);
          else
              ++it;
-@@ -838,6 +1008,7 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
+@@ -838,6 +1014,7 @@ bool IccValithriaPortalAction::Execute(Event /*event*/)
          bot->StopMoving();
          bot->SetFacingToObject(clickTarget);
          clickTarget->HandleSpellClick(bot);
@@ -389,7 +397,7 @@ index cf351a9d..c1ce2b9f 100644
          return true;
      }
  
-@@ -880,14 +1051,23 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+@@ -880,14 +1057,23 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
                  return FleePosition(column->GetPosition(), 8.0f, 250U);
              }
          Creature* manaVoid = bot->FindNearestCreature(NPC_MANA_VOID, 12.0f);
@@ -415,7 +423,7 @@ index cf351a9d..c1ce2b9f 100644
      if (!bot->HasAura(SPELL_DREAM_STATE))
      {
          constexpr float NORMAL_SPEED = 1.0f;
-@@ -969,6 +1149,23 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+@@ -969,6 +1155,23 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
      return cast;
  }
  

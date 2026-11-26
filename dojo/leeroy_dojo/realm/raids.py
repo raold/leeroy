@@ -176,8 +176,8 @@ def run(layout, *, log=print):
     return report
 
 
-ENCOUNTER_RUNS = ("10n:after", "10n:adds", "10h:after", "10h:adds")
-ENCOUNTER_EXTRA = ("10n:before", "10h:before", "10n:noportals", "10h:noportals", "10n:turns", "10h:turns")
+ENCOUNTER_RUNS = ("10n:after", "10n:turns", "10h:after", "10h:turns")
+ENCOUNTER_EXTRA = ("10n:before", "10h:before", "10n:noportals", "10h:noportals", "10n:adds", "10h:adds")
 TANK_SLOTS = (3, 4)
 ENCOUNTER_DEADLINE_S = 25 * 60
 
