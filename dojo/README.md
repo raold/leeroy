@@ -101,6 +101,10 @@ the `cleared` terminal, cleanup and shutdown; reaching the first boss or a
 scripted restart cannot pass. These longer runs use a three-hour job limit with
 the same three-wipe caps. The terminal retains the actual encounter-state vector
 after actors return home. `--toc-worm-support` also works with `toc-full`.
+The full ToC runner pins Twins interactions and worm support on before boot,
+including when an older config snapshot has them off. Native admission refuses
+disabled Twins support, and completion additionally requires enabled samples
+and an observed essence aura on each of the ten raid members during Twins.
 
 `--target toc-anub-intro` prepares the first four ToC encounters complete,
 without earned kill credit, and lets the native Twins outro break the arena

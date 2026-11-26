@@ -29,6 +29,7 @@
 #include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "ThreatManager.h"
 #include "Timer.h"
 #include "UnitScript.h"
@@ -114,6 +115,8 @@ struct OfflineFixture
     uint32 slimeHits = 0, slimeLateHits = 0, slimeUnknownHits = 0;
     bool wormRequested = false, wormOverride = false, wormPrevious = false, wormRestored = true;
     uint32 wormSamples = 0;
+    uint32 twinsSamples = 0;
+    std::array<bool, 10> twinsEssenceSeen{};
     DojoNaxxPass naxxPass;
     DojoTocIntro tocIntro;
     DojoStall stall;
@@ -376,6 +379,18 @@ struct OfflineFixture
             if (wormRequested && native.value("stage", "") == "running" && sPlayerbotAIConfig.TocWormSupport)
                 ++wormSamples;
 #endif
+            if (map == 649 && native.value("stage", "") == "running")
+                if (auto* leader = Actor(1); leader && leader->GetInstanceScript()
+                    && leader->GetInstanceScript()->GetBossState(3) == IN_PROGRESS)
+                {
+                    if (sPlayerbotAIConfig.TwinValkyrInteractions) ++twinsSamples;
+                    for (std::size_t i = 1; i <= 10; ++i)
+                        if (auto* player = Actor(i); player && player->IsAlive() && player->GetMap() == leader->GetMap()
+                            && Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter()))
+                            twinsEssenceSeen[i - 1] = twinsEssenceSeen[i - 1]
+                                || player->HasAura(sSpellMgr->GetSpellIdForDifficulty(65686, player))
+                                || player->HasAura(sSpellMgr->GetSpellIdForDifficulty(65684, player));
+                }
             if (native.value("active", false) && native.value("stage", "") != "tearing_down")
                 for (auto const& body : native.value("bodies", json::array()))
                     if (!sRandomPlayerbotMgr.IsPinned(body.value("guid", uint32(0))))
@@ -426,6 +441,8 @@ struct OfflineFixture
         guildId = guild->GetId();
         bool const reserveTrial = scenario == "toc-reserves";
         bool const fullRun = scenario == "toc-full" || scenario == "toc-full-worms" || scenario == "ulduar-full";
+        if ((scenario == "toc-full" || scenario == "toc-full-worms") && !sPlayerbotAIConfig.TwinValkyrInteractions)
+            return "full ToC requires TwinValkyrInteractions";
         bool const wormTrial = scenario == "toc-worms" || scenario == "toc-full-worms";
         bool const naxxTrial = scenario == "naxx-gothik-pass" || scenario == "naxx-gothik-pass-control";
         bool const tocIntroTrial = scenario == "toc-anub-intro" || scenario == "toc-anub-pass";
@@ -475,6 +492,7 @@ struct OfflineFixture
         slimePools.clear(); clockMs = slimeGap = slimeInside = slimeEscapes = slimeOutsideMs = 0;
         slimeHits = slimeLateHits = slimeUnknownHits = 0;
         wormRequested = wormTrial; wormSamples = 0; wormRestored = !wormTrial;
+        twinsSamples = 0; twinsEssenceSeen = {};
         frontier = valithriaTrial ? "pending" : "none"; frontierHeld = {}; frontierStrategies = {};
         frontierMs = frontierHeals = frontierStartHealth = frontierPeakHealth = frontierSetupMask = 0;
         frontierHealing = 0; frontierDragon.Clear();
@@ -645,6 +663,8 @@ struct OfflineFixture
             {"toc_intro", tocIntro.Snapshot()},
             {"native_stall", stall.Snapshot()},
             {"toc_worm_support", {{"requested", wormRequested}, {"active_samples", wormSamples}, {"restored", wormRestored}}},
+            {"toc_twins", {{"enabled", sPlayerbotAIConfig.TwinValkyrInteractions},
+                {"active_samples", twinsSamples}, {"essence_seen", twinsEssenceSeen}}},
             {"valithria_frontier", {{"state", frontier}, {"measured_ms", frontierMs}, {"heals", frontierHeals},
                 {"healing", frontierHealing}, {"start_health", frontierStartHealth}, {"peak_health", frontierPeakHealth},
                 {"setup_completed_mask", frontierSetupMask},

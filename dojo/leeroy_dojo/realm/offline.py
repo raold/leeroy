@@ -71,6 +71,12 @@ def reached(observation, *, target, token):
         count, required = FULL_ROUTES[target]
         states = native.get("boss_states")
         reason = "cleared_reachable" if target == "ulduar-route" else "cleared"
+        if target == "toc-full":
+            twins = observation.get("toc_twins", {})
+            if (twins.get("enabled") is not True or type(twins.get("active_samples")) is not int
+                    or twins["active_samples"] < 10 or twins.get("essence_seen") != [True] * 10
+                    or any(type(value) is not bool for value in twins.get("essence_seen", []))):
+                return False
         return (native.get("active") is False and native.get("cleanup") is True
                 and native.get("map") == map_id and event.get("state") == "done"
                 and event.get("reason") == reason and type(event.get("kills")) is int
@@ -176,6 +182,14 @@ def _set(layout, name, values):
     path.write_text(conf.render(path.read_text(encoding="utf-8"), values), encoding="utf-8")
 
 
+def configure_full_raid_features(layout, target):
+    """An offline full clear must exercise the candidate, even from an older config snapshot."""
+    features = {"Playerbots.TwinValkyrInteractions": "1", "Playerbots.TocWormSupport": "1"} if target == "toc-full" else {}
+    if features:
+        _set(layout, "modules/playerbots.conf", features)
+    return features
+
+
 def _fixture_accounts(layout, log):
     provision.ensure_accounts(layout, "DOJORAID", log=log)
     accounts = provision.ensure_accounts(layout, "RNDBOTDOJO", log=log)
@@ -254,6 +268,7 @@ def run(layout, *, target, toc_worm_support=False, profile=False, log=print):
                                                 "Leeroy.Hazards.Enable": "1"})
         if target in {"icc-valithria", "icc-valithria-frontier"}:
             _set(layout, "modules/mod_dungeon_clear.conf", {"DungeonClear.OfflineValithria": "1"})
+        report["candidate_features"] = configure_full_raid_features(layout, target)
         report["run_source"] = raids.provenance(layout)
         feed = MechanicConnection(layout, guild=prepared["guild"], map_id=TARGETS[target][1])
         feed.__enter__()
