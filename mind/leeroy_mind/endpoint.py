@@ -172,7 +172,7 @@ class Forbidden(BadRequest):
 class ControlCfg:
     enabled: bool = True
     port: int = 0  # 0: a free port the system picks (control.json names it)
-    ops_actions: bool = False
+    ops_actions: bool = True
 
 
 _RULES = {
@@ -1626,7 +1626,7 @@ def attach_control(app) -> ControlEndpoint | None:
         cfg = load_control_config(app.data_dir / "mind.toml")
     except ConfigError as e:
         log_event("control_config_invalid", level=logging.WARNING, reason=str(e))
-        cfg = ControlCfg()
+        cfg = ControlCfg(ops_actions=False)  # the endpoint on, as by default; its ops actions off
     if not cfg.enabled:
         log_event("control_off")
         return None

@@ -44,10 +44,12 @@ def test_invalid_table_reads_as_invalid_off(tmp_path,text):
     assert 'PRIVATE_SENTINEL' not in json.dumps(rows)
 
 
-@pytest.mark.parametrize('text,state', [('', 'off'), ('[drama]\nmember_romance=true', 'on'),
+@pytest.mark.parametrize('text,state', [('', 'on'), ('[drama]\nmember_romance=true', 'on'),
+                                        ('[drama]\nmember_romance=false', 'off'),
                                         ('[drama]\nmember_romance=1', 'invalid'),
                                         ('[drama]\nmember_romance=true\nthreads="record"', 'on'),
-                                        ('[drama]\nthreads="on"', 'off')])
+                                        ('[drama]\nthreads="on"', 'on'),
+                                        ('[drama]\nmember_romance=false\nthreads="on"', 'off')])
 def test_member_romance_switch_is_listed(tmp_path, text, state):
     (tmp_path/'mind.toml').write_text(text)
     rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
@@ -55,7 +57,7 @@ def test_member_romance_switch_is_listed(tmp_path, text, state):
 
 
 def test_unmet_mind_needs_are_listed(tmp_path):
-    (tmp_path/'mind.toml').write_text('[learn]\nbandit=true\n')
+    (tmp_path/'mind.toml').write_text('[learn]\nenabled=false\nbandit=true\n')
     rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
     assert next(r for r in rows if r['key']=='bandit')['unmet'] == ['learn.enabled']
 
@@ -489,6 +491,7 @@ def test_query_deadline_is_reported_as_skipped(tmp_path):
 
 def test_disabled_empty_subsystems_are_missing_but_old_holds_remain_visible(store, data):
     store.conn.commit()
+    (data / "mind.toml").write_text("[realm]\nenabled = false\n[selfies]\nenabled = false\n")
     view = ops.OpsView(data.parent, data)
     assert view._source("realm", deadline(), {})["status"] == "missing"
     assert view._source("selfies", deadline(), {})["status"] == "missing"
@@ -496,6 +499,14 @@ def test_disabled_empty_subsystems_are_missing_but_old_holds_remain_visible(stor
     store.conn.commit()
     got = view._source("realm", deadline(), {})
     assert got["status"] == "ok" and got["enabled"] == "off" and got["held_members"] == 2
+
+
+def test_a_subsystem_whose_switch_is_missing_reads_on_as_its_default(store, data):
+    store.conn.commit()
+    view = ops.OpsView(data.parent, data)
+    assert view._source("realm", deadline(), {})["enabled"] == "on"
+    (data / "mind.toml").write_text("[selfies]\nsteps = 30\n")
+    assert view._source("selfies", deadline(), {})["enabled"] == "on"
 
 
 def test_api_read_only_key_host_origin_and_no_control_gates(tmp_path):
@@ -582,7 +593,7 @@ def test_the_live_photo_request_keys_are_valid_and_listed(tmp_path):
     assert states['photos','scene_from_words'] == 'on'
     row = next(r for r in rows if r['key']=='scene_from_words')
     assert row['needs'] == 'photos.requests' and row['unmet'] == []
-    (tmp_path/'mind.toml').write_text('[photos]\nrequests=true\n')
+    (tmp_path/'mind.toml').write_text('[photos]\nsend=false\nrequests=true\n')
     rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
     assert 'photos.send' in next(r for r in rows if r['key']=='requests')['unmet']
     (tmp_path/'mind.toml').write_text('[photos]\nrequests=true\nscene_from_words=1\n')
@@ -597,7 +608,7 @@ def test_the_photo_critic_switches_are_listed_with_their_needs(tmp_path):
     states = {(r['table'],r['key']):r['state'] for r in rows}
     assert states['selfies','critic'] == states['selfies','param_bandit'] == 'on'
     assert next(r for r in rows if r['key']=='param_bandit')['unmet'] == []
-    (tmp_path/'mind.toml').write_text('[selfies]\nparam_bandit=true\n')
+    (tmp_path/'mind.toml').write_text('[selfies]\ncritic=false\nparam_bandit=true\n')
     rows = ops.switches_view(tmp_path,deadline(),mind_started=None)['rows']
     assert next(r for r in rows if r['key']=='param_bandit')['unmet'] == ['selfies.critic']
     (tmp_path/'mind.toml').write_text('[selfies]\ncritic=true\nbest_of=9\n')

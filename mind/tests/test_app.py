@@ -44,6 +44,7 @@ from leeroy_mind.testing.fake_bridge import FakeBridge, load_fixture
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.wow import CLASSES, RACES
+from shipped_off import off
 
 FIXTURE = Path(__file__).parent / "fixtures" / "session_basic.jsonl"
 START = datetime(2026, 10, 29, 20, 0, tzinfo=timezone.utc)
@@ -171,7 +172,7 @@ async def running(tmp_path: Path, clock, *, events, script=talk_and_extract, llm
                   chattiness: int = 4, seed: int = 1, prepare=None, bridge_kw=None):
     bridge = FakeBridge(events, **(bridge_kw or {}))
     port = await bridge.start()
-    (tmp_path / "mind.toml").write_text(toml(port, chattiness=chattiness), encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off(toml(port, chattiness=chattiness)), encoding="utf-8")
     seed_db(tmp_path / "mind.db", clock)
     llm = llm or FakeLLM(script, models={ORION})  # the live model is there: not silent
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=llm, clock=clock,
@@ -389,7 +390,7 @@ def test_config_reload_on_login(tmp_path, clock):
             await h.bridge.push(presence("logout"))
             await h.wait(lambda: h.app.store.open_session() is None)
             port = h.app.cfg.bridge.port
-            (tmp_path / "mind.toml").write_text(toml(port, chattiness=0), encoding="utf-8")
+            (tmp_path / "mind.toml").write_text(off(toml(port, chattiness=0)), encoding="utf-8")
             await h.bridge.push(presence("login"))
             await h.wait(lambda: h.app.store.open_session() not in (None, first))
             second = h.app.store.open_session()
@@ -1283,7 +1284,7 @@ def test_serve_snapshots_checks_and_stops(tmp_path, caplog):
     async def main():
         bridge = FakeBridge([hello(0), CAST])
         port = await bridge.start()
-        (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+        (tmp_path / "mind.toml").write_text(off(toml(port)), encoding="utf-8")
         seed_db(tmp_path / "mind.db", FakeClock(START))
         conf = tmp_path / "mod_ollama_chat.conf"
         conf.write_text(f'OllamaChat.Model = "{ORION}"\nOllamaChat.NumCtx = 4096\n',
@@ -1308,7 +1309,7 @@ def test_serve_snapshots_checks_and_stops(tmp_path, caplog):
 
 
 def _doctor_setup(tmp_path, port: int, *, model: str = ORION) -> Path:
-    (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off(toml(port)), encoding="utf-8")
     seed_db(tmp_path / "mind.db", FakeClock(START))
     conf = tmp_path / "mod_ollama_chat.conf"
     conf.write_text(f'OllamaChat.Model = "{model}"\nOllamaChat.NumCtx = 4096\n',
@@ -1417,7 +1418,7 @@ def test_db_snapshot_and_migrate(tmp_path, capsys):
 def _ready_dir(path: Path, port: int = 9) -> Path:
     """A data dir `run` accepts: mind.toml and a mind.db with the test cast's personas."""
     path.mkdir(parents=True, exist_ok=True)
-    (path / "mind.toml").write_text(toml(port), encoding="utf-8")
+    (path / "mind.toml").write_text(off(toml(port)), encoding="utf-8")
     seed_db(path / "mind.db", FakeClock(START))
     return path
 
@@ -1583,7 +1584,7 @@ def test_a_loop_that_dies_stops_the_app_and_fails_run(tmp_path, clock, caplog):
     async def main():
         bridge = FakeBridge([hello(HUMAN), CAST])
         port = await bridge.start()
-        (tmp_path / "mind.toml").write_text(toml(port), encoding="utf-8")
+        (tmp_path / "mind.toml").write_text(off(toml(port)), encoding="utf-8")
         seed_db(tmp_path / "mind.db", clock)
         app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path,
                       llm=FakeLLM(talk_and_extract, models={ORION}), clock=clock)

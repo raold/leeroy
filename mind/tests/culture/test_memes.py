@@ -16,10 +16,10 @@ from nightly.test_night_lexicon import term
 from selfies.fake_worker import JPEG
 from leeroy_mind.culture import memes
 from leeroy_mind.culture.config import CultureConfig
-from leeroy_mind.selfies.config import SelfieCfg
 from leeroy_mind.selfies.worker import Captioned, Rendered
+from selfies.fakes import selfie_cfg
 
-SELFIES = SelfieCfg(enabled=True)
+SELFIES = selfie_cfg(enabled=True)
 CAPTION = {"top": "when the floor inspector", "bottom": "inspects the floor again", "picture": "tipped_chair"}
 
 

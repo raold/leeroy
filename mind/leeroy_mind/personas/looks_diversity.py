@@ -50,10 +50,13 @@ class LooksRefused(ValueError):
 
 
 def enabled(root):
+    """[looks] diversity: on when missing; an invalid table or an unreadable file is off."""
     try:
         raw = tomllib.loads((Path(root) / "mind.toml").read_text(encoding="utf-8-sig"))
         table = raw.get("looks", {})
-        return isinstance(table, dict) and set(table) <= {"diversity"} and table.get("diversity") is True
+        return isinstance(table, dict) and set(table) <= {"diversity"} and table.get("diversity", True) is True
+    except FileNotFoundError:
+        return True
     except (OSError, ValueError, UnicodeError):
         return False
 

@@ -48,7 +48,7 @@ def saved(store):
     return [tuple(r) for r in store.conn.execute('SELECT line_id,guid,kind,value,source FROM talk_signal ORDER BY id')]
 
 
-@pytest.mark.parametrize('text,enabled', [('', False), ('[signals]\nenabled=true', True),
+@pytest.mark.parametrize('text,enabled', [('', True), ('[signals]\nenabled=true', True),
     ('[signals]\nenabled=false', False), ('signals="invented secret"', False),
     ('[signals]\nenabled=1', False), ('[signals]\nenabled="yes"', False),
     ('[signals]\nenabled=true\nunknown=1', False), ('[signals', False)])

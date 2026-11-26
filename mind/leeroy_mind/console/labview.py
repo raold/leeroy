@@ -269,7 +269,7 @@ def lab_view(conn, *, now, config=None, member=None, offset=0):
                 report = _numeric(parsed) if type(parsed) is dict else None
             except (ValueError, RecursionError):
                 pass
-    base = config if config is not None else control.LearnCfg()
+    base = config if config is not None else control.OFF
     # a lab piece's family (learn.arms prompt.<piece>) is listed once it has an arm or a freeze
     present = {a.family for a in arms.read(conn)} if arms.available(conn) else set()
     families = list(arms.FAMILIES) + [f for f in arms.prompt_families()

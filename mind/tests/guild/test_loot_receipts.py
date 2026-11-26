@@ -152,9 +152,11 @@ def test_receipt_opt_in_requires_native_support_and_off_wire_stays_unchanged(fak
     assert "receipt" not in json.loads(encode_command(cmd, 0))
 
 
-def test_receipt_config_is_strict_and_defaults_off(tmp_path):
+def test_receipt_config_is_strict_and_defaults_on(tmp_path):
     from leeroy_mind.config import ConfigError
     path = tmp_path / "mind.toml"
+    assert load_guild_config(path).loot_receipts is True
+    path.write_text("[guild]\nloot_receipts = false\n")
     assert load_guild_config(path).loot_receipts is False
     path.write_text("[guild]\nloot_receipts = true\n")
     assert load_guild_config(path).loot_receipts is True

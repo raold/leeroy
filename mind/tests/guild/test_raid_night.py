@@ -57,7 +57,7 @@ def setup(fake):
 
     fake.wait_job = wait_job
     armory = FakeArmory({}, {})
-    return fake, armory, RaidNight(fake, GuildConfig(), armory, random.Random(7))
+    return fake, armory, RaidNight(fake, GuildConfig(loot_receipts=False), armory, random.Random(7))
 
 
 def chat(ports, text, **kwargs):
@@ -841,7 +841,7 @@ async def test_hangout_receipt_survives_relogin_and_controller_restart_but_expir
     await night.tick()
     assert night.state is State.ENDED
     assert not any("Ask Testy about a raid" in text for _, _, text, _ in ports.proposed)
-    restarted = RaidNight(ports, GuildConfig(), armory, random.Random(3))
+    restarted = RaidNight(ports, GuildConfig(loot_receipts=False), armory, random.Random(3))
     await restarted.on_login(Login(0, 1, True))
     await advance(ports, 75)
     await restarted.tick()

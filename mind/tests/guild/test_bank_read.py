@@ -81,7 +81,7 @@ def test_six_full_tabs_fit_in_one_reply():
 
 def _armory(monkeypatch, run):
     monkeypatch.setattr(roster, "run_mysql", run)
-    a = LazyArmory(replace(GuildConfig(), worldserver_conf=Path(__file__)))
+    a = LazyArmory(replace(GuildConfig(loot_receipts=False), worldserver_conf=Path(__file__)))
     a._backend = SimpleNamespace(chars="db")
     return a
 

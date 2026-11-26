@@ -48,7 +48,7 @@ def build(ports, *, summon_plan=None):
     ports.wait_job = wait_job
     kw = {"summon_plan": summon_plan} if summon_plan else {}
     armory = FakeArmory({}, {})
-    return ports, armory, RaidNight(ports, GuildConfig(), armory, random.Random(7), **kw)
+    return ports, armory, RaidNight(ports, GuildConfig(loot_receipts=False), armory, random.Random(7), **kw)
 
 
 @pytest.fixture

@@ -2,7 +2,7 @@
 from leeroy_mind.config import ConfigError
 from leeroy_mind.logs import log
 
-from .config import PersonasCfg, load_personas_config
+from .config import OFF, PersonasCfg, load_personas_config
 
 
 def attach_personas(app) -> PersonasCfg:
@@ -10,7 +10,7 @@ def attach_personas(app) -> PersonasCfg:
         cfg = load_personas_config(app.data_dir / "mind.toml")
     except ConfigError:
         log("personas_config_invalid")
-        cfg = PersonasCfg()
+        cfg = OFF
     if cfg.auto_newcomers:
         from .newcomers import STAGE, count, make_stage
         app.night_runner.add_stage(STAGE, make_stage(lambda: app.cfg.cast),

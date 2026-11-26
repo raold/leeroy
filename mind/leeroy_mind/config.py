@@ -23,22 +23,22 @@ whispers_per_hour = 4         # members whispering him first, per hour of his pl
 openers_per_hour = 2          # members starting a conversation in party or guild, per hour, likewise
 openers_to_him = 0.35         # 0-1: the share of those openers addressed to him; the rest are guild business
 selfies = 3                    # 0-10, member photos in your DMs and guild channels (rendered at night)
-aware = false                  # include a bounded card of visible observations in talk
-realism = false                # bounded member typing, small bursts and rare corrections
-combat_quiet = false           # native drops ambient game chat during ordinary combat too
-texture = false                # members type like people: apostrophes, run-ons, shorthand and slips some of the time
-dm_own_time = false            # members answer his Discord DMs when their presence says they'd see them
+aware = true                   # include a bounded card of visible observations in talk
+realism = true                 # bounded member typing, small bursts and rare corrections
+combat_quiet = true            # native drops ambient game chat during ordinary combat too
+texture = true                 # members type like people: apostrophes, run-ons, shorthand and slips some of the time
+dm_own_time = false            # owner ruling 2026-11-25: off. Members answer his Discord DMs when their presence says they'd see them
 discord_words = 90             # 0-200: most words in a member's Discord channel message (0: one short line, as in game)
 dm_words = 200                 # 0-200: most words in a member's DM to him (0: one short line)
 think_private = true           # a short structured beat before answering his whispers and DMs (read at mind start)
 think_budget = 240             # 120-320: the beat's num_predict, in tokens
-recall_diversity = false       # memories: past plans read as past, no repeats in a conversation, tired subjects rest
-intent = false                 # her want for each turn, drawn by code, in the beat's block on every channel
-situation = false              # the prompt as her situation: hard rules only, "Right now" by the instruction
-shape = false                  # each reply's shape drawn by code: length, burst, question back, late excuse, left on read
+recall_diversity = true        # memories: past plans read as past, no repeats in a conversation, tired subjects rest
+intent = true                  # her want for each turn, drawn by code, in the beat's block on every channel
+situation = true               # the prompt as her situation: hard rules only, "Right now" by the instruction
+shape = true                   # each reply's shape drawn by code: length, burst, question back, late excuse, left on read
 dm_mirror = 5                  # 0-10, with shape on: how closely a DM's length follows his (0: as full as she likes)
-coherence = false              # conversations hold together (talk/README.md): her want and place hold, every waiting whisper answered; read at start and at his login
-coherence_length = false       # the length rule on game lines (talk/length.py): a long answer to his question kept, never cut; read at start and at his login
+coherence = true               # conversations hold together (talk/README.md): her want and place hold, every waiting whisper answered; read at start and at his login
+coherence_length = false       # owner ruling 2026-11-25: off. The length rule on game lines (talk/length.py): a long answer to his question kept, never cut; read at start and at his login
 wow_grounding = true           # raid and guild turns get facts (her class and role, the raid, its boss, the last wipe, loot and DKP), raid words and her own earlier lines; never a whisper or a DM
 wow_exemplars_before = "2026-11-19T14:22:45-05:00"  # her example lines are from before this (the live model's switch from Orion)
 wow_topic = true               # raid and guild turns stay on the game: no unasked life topics, chat register, short game lines, bids in DKP
@@ -46,18 +46,18 @@ invites = true                 # his invitations in game ("come to the inn", "le
 lead = true                    # his "you lead" in game ("take the lead", "take us questing", "lead us to the inn"): a member of his group leads it and he follows (lead/README.md)
 
 [life]
-day_plans = false             # coordinated in-game activities between raids
-dungeons = false              # members can agree on Discord to run a heroic while he is away
+day_plans = true              # coordinated in-game activities between raids
+dungeons = true               # members can agree on Discord to run a heroic while he is away
 availability = 0              # 0-10: how often members are away, busy or slow to answer by their day (0: always there)
-state = false                 # her feeling through the day
+state = true                  # her feeling through the day
 dm_wait_cap_s = 75            # the longest his DM waits for her answer, whatever her day (0: no cap; asleep: twice this)
 wow_vs_life = 5               # 0-10: how present the WoW-vs-life theme is in the night's stories (0: off)
 
 [romance]
 dial = 3                      # 1 milquetoast .. 10 filth
 jealousy = 5                  # 0-10: women's rivalry and the men's envy
-activities = false            # private shared moments, moods and inn invitations
-realism = false               # her romance DMs and whispers answer him first and escalate only when he does
+activities = true             # private shared moments, moods and inn invitations
+realism = true                # her romance DMs and whispers answer him first and escalate only when he does
 
 [cast]
 female_share = 0.7
@@ -88,6 +88,7 @@ DM_MIRROR_MAX = 10  # [talk] dm_mirror
 DM_WAIT_CAP_MAX = 3600  # [life] dm_wait_cap_s
 THINK_BUDGET_RANGE = (120, 320)  # [talk] think_budget: the beat's tokens; 320 still fits a full DM prompt
 _WARNED: set[str] = set()  # invalid [talk] and [life] values already logged in this process
+LIFE_SWITCHES = ("state", "day_plans", "dungeons")  # [life] booleans: on when missing, off when invalid
 # The live model's switch from Orion (mind.log: the first start with another live model,
 # 2026-11-19 14:22:45 local): the WoW grounding's example lines are hers from before it
 EXEMPLARS_BEFORE = "2026-11-19T14:22:45-05:00"
@@ -133,22 +134,23 @@ class TalkCfg:
     openers_per_hour: float = 2
     openers_to_him: float = 0.35  # the share of the openers addressed to him (talk.engine)
     selfies: int = 3
-    aware: bool = False
-    realism: bool = False
-    combat_quiet: bool = False
-    texture: bool = False  # [talk] texture; talk/style.py texture_of
-    dm_own_time: bool = False
+    aware: bool = True
+    realism: bool = True
+    combat_quiet: bool = True
+    texture: bool = True  # [talk] texture; talk/style.py texture_of
+    dm_own_time: bool = False  # owner ruling 2026-11-25: off
     discord_words: int = 90  # [talk] discord_words; talk/discord_length.py
     dm_words: int = 200  # [talk] dm_words: his DMs, as full as she likes
     think_private: bool = True  # [talk] think_private: talk/beat.py, read at mind start
     think_budget: int = 240  # [talk] think_budget: the beat's num_predict
-    recall_diversity: bool = False  # [talk] recall_diversity: memory/diversity.py
-    intent: bool = False  # [talk] intent: talk/intent.py's want on every eligible turn (core Task 8)
-    situation: bool = False  # [talk] situation: talk/prompt.py's situation mode (core Task 8)
-    shape: bool = False  # [talk] shape: talk/shape.py's drawn reply shape (core Task 9)
+    recall_diversity: bool = True  # [talk] recall_diversity: memory/diversity.py
+    intent: bool = True  # [talk] intent: talk/intent.py's want on every eligible turn (core Task 8)
+    situation: bool = True  # [talk] situation: talk/prompt.py's situation mode (core Task 8)
+    shape: bool = True  # [talk] shape: talk/shape.py's drawn reply shape (core Task 9)
     dm_mirror: int = 5  # [talk] dm_mirror: with shape on, a DM's length follows his (0: today's)
-    coherence: bool = False  # [talk] coherence: talk/position.py, talk/sofar.py (anything but true: off)
-    coherence_length: bool = False  # [talk] coherence_length: talk/length.py (anything but true: off)
+    coherence: bool = True  # [talk] coherence: talk/position.py, talk/sofar.py (anything but true: off)
+    # [talk] coherence_length: talk/length.py (anything but true: off; owner ruling 2026-11-25: off)
+    coherence_length: bool = False
     # [talk] wow_grounding: talk/grounding.py on raid and guild turns (anything but true: off)
     wow_grounding: bool = True
     # [talk] wow_exemplars_before: an ISO time with its offset; her example lines are older
@@ -163,12 +165,12 @@ class TalkCfg:
 class LifeCfg:
     """[life]: her day (life/), and the night's WoW-vs-life theme (nightly.settings.load_life)."""
     availability: int = 0  # 0-10; 0: always present, today's behaviour (life/config.py pin)
-    state: bool = False  # her feeling through the day
+    state: bool = True  # her feeling through the day
     # the longest his DM (and a group DM line that names her) waits for her answer, in
     # seconds, whatever her day; asleep twice this; 0: no cap (discord/owntime.py)
     dm_wait_cap_s: int = 75
-    day_plans: bool = False
-    dungeons: bool = False
+    day_plans: bool = True
+    dungeons: bool = True
     wow_vs_life: int = 5
 
 
@@ -176,8 +178,8 @@ class LifeCfg:
 class RomanceCfg:
     dial: int
     jealousy: int
-    activities: bool = False
-    realism: bool = False  # [romance] realism: talk/romance.py REALISM_LEAD
+    activities: bool = True
+    realism: bool = True  # [romance] realism: talk/romance.py REALISM_LEAD
 
 
 @dataclass(frozen=True)
@@ -344,7 +346,7 @@ def _build(data: dict, source: str) -> MindConfig:
         if ("life", repr(data["life"])) not in _WARNED:
             _WARNED.add(("life", repr(data["life"])))
             log.warning("life_invalid want=a table")
-        data = dict(data, life={})
+        data = dict(data, life=dict.fromkeys(LIFE_SWITCHES, False))
     for section in data:
         if section in EXTENSION_SECTIONS:
             continue
@@ -397,14 +399,15 @@ def _build(data: dict, source: str) -> MindConfig:
             if section == 'romance' and key in ('activities', 'realism') and type(v) is not bool:
                 v = False
             if section == "life" and not check(v):
-                # the default (availability 0, state false, dm_wait_cap_s 75, wow_vs_life 5),
-                # logged once a value
+                # a switch off, any other key its default (availability 0, dm_wait_cap_s 75,
+                # wow_vs_life 5), logged once a value
                 # (each login reads it again); the night's load_life still refuses wow_vs_life
+                fallback = False if key in LIFE_SWITCHES else defaults[section][key]
                 if ("life." + key, repr(v)) not in _WARNED:
                     _WARNED.add(("life." + key, repr(v)))
                     log.warning("life_%s_invalid key=%s want=%s default=%s", key, key, want,
-                                defaults[section][key])
-                v = defaults[section][key]
+                                fallback)
+                v = fallback
             if not check(v):
                 raise ConfigError(f"{section}.{key}: expected {want}, got {_shown(section, v)}")
             values[key] = v.strip() if section == "human" else v

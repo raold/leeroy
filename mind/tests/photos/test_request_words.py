@@ -103,8 +103,10 @@ def test_her_name_counts_only_when_it_is_hers():
     assert not asks_for_selfie('send me a pic of Arkon')
 
 
-def test_requests_default_off_and_invalid_table_disables(tmp_path):
+def test_requests_default_on_and_invalid_table_disables(tmp_path):
     path = tmp_path / 'mind.toml'
+    assert load_photos_config(path).requests  # on by default (2026-11-25)
+    path.write_text('[photos]\nsend=true\nrequests=false\n')
     assert not load_photos_config(path).requests
     path.write_text('[photos]\nsend=true\nrequests=true\n')
     assert load_photos_config(path).requests

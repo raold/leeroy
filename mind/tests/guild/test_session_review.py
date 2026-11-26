@@ -35,7 +35,7 @@ def review_setup(fake):
     blade = ItemInfo(50001, "Synthetic blade", 4, 264, 17, 2, 8, -1, frozenset({4}))
     armory = FakeArmory({blade.item_id: blade}, {101: {15: 277}, 105: {15: 251}, 106: {15: 277}})
     plan = RaidPlan("icc", 10, False, False, 101, 101, 104, [101, 104, 105, 106], [], True)
-    return fake, GuildConfig(), armory, plan
+    return fake, GuildConfig(loot_receipts=False), armory, plan
 
 
 async def _open(setup):

@@ -48,7 +48,7 @@ async def advance(fake, seconds):
 async def offline(roster_data, **kwargs):
     fake, armory = roster_data
     fake.online = False
-    roster = Roster(fake, kwargs.pop("cfg", GuildConfig()), armory, premade=PREMADE, **kwargs)
+    roster = Roster(fake, kwargs.pop("cfg", GuildConfig(loot_receipts=False)), armory, premade=PREMADE, **kwargs)
     await advance(fake, 600)
     return fake, roster
 
@@ -80,9 +80,9 @@ def test_rank_changes_preserve_human_and_guild_master(roster_data):
 def test_gear_up_targets(roster_data):
     fake, _ = roster_data
     fake.members[101] = replace(fake.members[101], level=67)
-    assert gear_up_targets(fake.cast(), {101: 270, 102: 200, 103: 270}, set(), GuildConfig()) == [101, 102]
+    assert gear_up_targets(fake.cast(), {101: 270, 102: 200, 103: 270}, set(), GuildConfig(loot_receipts=False)) == [101, 102]
     fake.members[102] = replace(fake.members[102], online=False)
-    assert gear_up_targets(fake.cast(), {}, {101, 103}, GuildConfig()) == []
+    assert gear_up_targets(fake.cast(), {}, {101, 103}, GuildConfig(loot_receipts=False)) == []
 
 
 def test_spec_changes_follow_named_pve_mapping_not_gender(roster_data):
@@ -128,7 +128,7 @@ def test_friends_plan_hysteresis_and_cap():
 @_run_async
 async def test_event_hooks_never_send_or_wait(roster_data):
     fake, armory = roster_data
-    roster = Roster(fake, GuildConfig(), armory, premade=PREMADE)
+    roster = Roster(fake, GuildConfig(loot_receipts=False), armory, premade=PREMADE)
     await roster.on_hello(Hello(0, "test", "1", 21, 1))
     await roster.on_personas_changed()
     await roster.on_logout(Logout(0, 1, True))
@@ -141,7 +141,7 @@ async def test_event_hooks_never_send_or_wait(roster_data):
 async def test_sync_ranks_sends_set_rank(roster_data):
     fake, armory = roster_data
     fake.members[102] = replace(fake.members[102], rank=0)
-    roster = Roster(fake, GuildConfig(), armory, premade=PREMADE)
+    roster = Roster(fake, GuildConfig(loot_receipts=False), armory, premade=PREMADE)
     await roster.sync_ranks()
     assert [(c.guid, c.rank) for c in fake.sent if isinstance(c, SetRank)] == [(101, 2), (103, 2)]
 
@@ -154,7 +154,7 @@ async def test_rank_decisions_hold_the_roster_only_with_rank_reviews_on(roster_d
     fake.members[102] = replace(fake.members[102], rank=0)
     fake.app = NS(decisions=NS(kind_on=lambda kind: on, rules_for=lambda kind: NS(seen=False)),
                   world=NS(members=fake.members), engine=NS(raid=None))
-    roster = Roster(fake, GuildConfig(), armory, premade=PREMADE)
+    roster = Roster(fake, GuildConfig(loot_receipts=False), armory, premade=PREMADE)
     await roster.sync_ranks()
     sent = [(c.guid, c.rank) for c in fake.sent if isinstance(c, SetRank)]
     # On, the rank rules have not seen a cast yet, so the roster waits; off, ranks are as before them
@@ -165,7 +165,7 @@ async def test_rank_decisions_hold_the_roster_only_with_rank_reviews_on(roster_d
 async def test_unknown_rank_waits_for_observation_before_new_desired_rank(roster_data):
     fake, armory = roster_data
     fake.members = {101: fake.members[101]}
-    roster = Roster(fake, GuildConfig(), armory, premade=PREMADE)
+    roster = Roster(fake, GuildConfig(loot_receipts=False), armory, premade=PREMADE)
     original = fake.send
 
     async def lost(command):
@@ -187,7 +187,7 @@ async def test_unknown_rank_waits_for_observation_before_new_desired_rank(roster
 async def test_maintenance_waits_ten_minutes_and_stops_for_any_active_raid(roster_data):
     fake, armory = roster_data
     fake.online = False
-    roster = Roster(fake, GuildConfig(), armory, premade=PREMADE)
+    roster = Roster(fake, GuildConfig(loot_receipts=False), armory, premade=PREMADE)
     await roster.maybe_gear_up()
     await advance(fake, 599)
     await roster.sync_specs()
@@ -244,7 +244,7 @@ async def test_skipped_gear_retries_only_after_hour_even_after_reopen(roster_dat
     await roster.on_job(job("gear_up", "done", id=command.id, skipped=(JobSkip(101, "busy"),)))
     assert not flags(fake.conn, "geared")
     await advance(fake, 600)
-    reopened = Roster(fake, GuildConfig(), roster.armory, premade=PREMADE)
+    reopened = Roster(fake, GuildConfig(loot_receipts=False), roster.armory, premade=PREMADE)
     await advance(fake, 600)
     await reopened.maybe_gear_up()
     assert len(fake.sent) == 1
@@ -288,7 +288,7 @@ async def test_unknown_gear_ack_survives_restart_without_resend(roster_data):
     fake.send = lost
     await roster.maybe_gear_up()
     command = fake.sent[-1]
-    reopened = Roster(fake, GuildConfig(), roster.armory, premade=PREMADE)
+    reopened = Roster(fake, GuildConfig(loot_receipts=False), roster.armory, premade=PREMADE)
     await advance(fake, 7200)
     await reopened.maybe_gear_up()
     assert len(fake.sent) == 1
@@ -473,7 +473,7 @@ async def test_spec_limit_is_durable_across_roster_reopen(roster_data):
     fake.members[101] = replace(fake.members[101], online=False)
     await roster.sync_specs()
     assert len(fake.sent) == 10
-    reopened = Roster(fake, GuildConfig(), roster.armory, premade=PREMADE)
+    reopened = Roster(fake, GuildConfig(loot_receipts=False), roster.armory, premade=PREMADE)
     await advance(fake, 600)
     await reopened.sync_specs()
     assert len(fake.sent) == 10
@@ -494,7 +494,7 @@ async def test_theorycrafters_geared_once_and_disabled_means_no_send(roster_data
     await advance(fake, 3600)
     await roster.maybe_gear_theorycrafters()
     assert len(fake.sent) == 1
-    disabled = Roster(fake, replace(GuildConfig(), theorycrafter_ilvl=0), roster.armory, premade=PREMADE)
+    disabled = Roster(fake, replace(GuildConfig(loot_receipts=False), theorycrafter_ilvl=0), roster.armory, premade=PREMADE)
     await advance(fake, 600)
     await disabled.maybe_gear_theorycrafters()
     assert len(fake.sent) == 1
@@ -505,7 +505,7 @@ def friends_setup(roster_data, *, actual=None, cfg=None):
     actual = set() if actual is None else actual
     for guid in fake.members:
         fake.rels[guid, 1] = Relationship(guid, 1, affinity=100, trust=100, familiarity=100)
-    roster = Roster(fake, cfg or GuildConfig(), armory, premade=PREMADE, friends_of=lambda: set(actual))
+    roster = Roster(fake, cfg or GuildConfig(loot_receipts=False), armory, premade=PREMADE, friends_of=lambda: set(actual))
     return fake, roster, actual
 
 
@@ -536,7 +536,7 @@ async def test_unowned_existing_friends_are_never_adopted_or_removed(roster_data
 
 @_run_async
 async def test_unowned_friends_reserve_capacity(roster_data):
-    fake, roster, _ = friends_setup(roster_data, actual={999, 998}, cfg=replace(GuildConfig(), friends_cap=3))
+    fake, roster, _ = friends_setup(roster_data, actual={999, 998}, cfg=replace(GuildConfig(loot_receipts=False), friends_cap=3))
     await advance(fake, 120)
     await roster.sync_friends()
     assert flags(fake.conn, "friend") == {101}
@@ -579,7 +579,7 @@ async def test_unknown_add_ack_never_claims_or_retries_friend(roster_data):
     await advance(fake, 120)
     await roster.sync_friends()
     assert not flags(fake.conn, "friend")
-    reopened = Roster(fake, GuildConfig(), roster.armory, premade=PREMADE, friends_of=lambda: actual)
+    reopened = Roster(fake, GuildConfig(loot_receipts=False), roster.armory, premade=PREMADE, friends_of=lambda: actual)
     await advance(fake, 1800)
     await reopened.sync_friends()
     assert len(fake.sent) == 1 and not flags(fake.conn, "friend")
@@ -652,7 +652,7 @@ async def test_changed_human_never_inherits_old_owners_friend_flags(roster_data)
     fake.ident = replace(fake.ident, guid=2)
     fake.rels[101, 2] = Relationship(101, 2, affinity=-100)
     actual.add(101)  # The new human already had this friend independently.
-    changed = Roster(fake, GuildConfig(), roster.armory, premade=PREMADE, friends_of=lambda: actual)
+    changed = Roster(fake, GuildConfig(loot_receipts=False), roster.armory, premade=PREMADE, friends_of=lambda: actual)
     await advance(fake, 120)
     await changed.sync_friends()
     assert not fake.sent

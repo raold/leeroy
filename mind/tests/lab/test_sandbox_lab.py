@@ -33,7 +33,7 @@ def test_the_lab_copy_lives_in_scratch_with_its_own_settings(tmp_path):
     assert layout.root == (live / "scratch" / "lab").resolve()
     doc = tomllib.loads((layout.snapshot / "mind.toml").read_text("utf-8"))
     assert doc["lab"]["enabled"] is False and doc["lab"]["overlays"] is True
-    assert doc["life"] == {"availability": 0}
+    assert doc["life"]["availability"] == 0
     assert set(prompt_families()) <= set(doc["learn"]["frozen_families"])
     path = layout.snapshot / "mind.toml"
     assert load_lab(path).overlays and not load_lab(path).enabled

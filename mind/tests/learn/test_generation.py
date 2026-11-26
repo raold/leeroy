@@ -11,6 +11,7 @@ from leeroy_mind.learn.reward import reward
 from leeroy_mind.nightly import budget
 from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
+from shipped_off import off
 
 
 @pytest.mark.parametrize('channel', ['guild', 'whisper', 'discord:general', 'dm:101', 'voice:room'])
@@ -52,7 +53,7 @@ def test_recipe_savepoint_failure_does_not_leave_a_stale_anchor(rig, monkeypatch
 
 @pytest.mark.parametrize('channel', ['guild','discord:general','dm:101'])
 def test_night_waits_for_last_fragment_and_late_vote_revises_single_credit(context,store,clock,tmp_path,channel):
-    (tmp_path/'mind.toml').write_text('[learn]\nenabled=true\n')
+    (tmp_path/'mind.toml').write_text(off('[learn]\nenabled=true\n'))
     async def go():
         async with context(learn_enabled=True) as (ctx,_):
             ctx.window = (0,clock.now()+1000)
@@ -93,7 +94,7 @@ def test_reward_planner_learns_separate_path_costs_and_keeps_seven_nights(contex
                 timing.record_timing(store.conn,'2026-11-01','lexical',.05)
                 timing.record_timing(store.conn,'2026-11-01','embedding',.4)
             assert timing.planning_seconds(ctx) == pytest.approx(.04)
-            (tmp_path/'mind.toml').write_text('[claims]\nenabled=true\n')
+            (tmp_path/'mind.toml').write_text(off('[claims]\nenabled=true\n'))
             assert timing.planning_seconds(ctx) == .4
             for day in range(2,10):
                 with store.transaction():
@@ -108,7 +109,7 @@ def test_reward_planner_learns_separate_path_costs_and_keeps_seven_nights(contex
 
 @pytest.mark.parametrize('embedding',[False,True])
 def test_completed_unit_records_its_own_path_timing(context,store,clock,tmp_path,monkeypatch,embedding):
-    (tmp_path/'mind.toml').write_text('[learn]\nenabled=true\n' + ('[claims]\nenabled=true\n' if embedding else ''))
+    (tmp_path/'mind.toml').write_text(off('[learn]\nenabled=true\n' + ('[claims]\nenabled=true\n' if embedding else '')))
     ticks=iter([10.,10.125])
     monkeypatch.setattr(night,'perf_counter',lambda:next(ticks))
     async def go():

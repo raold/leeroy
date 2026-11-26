@@ -381,7 +381,7 @@ def test_window_adapter_uses_real_guild_logout_and_wraps_midnight(fake):
     from leeroy_mind.guild.offline import LOGOUT_KEY
     with fake.conn:
         _put(fake.conn, LOGOUT_KEY, fake.clock.now() - 4000)
-    snapshot = guild_schedule(fake, GuildConfig(), offline_active=False,
+    snapshot = guild_schedule(fake, GuildConfig(loot_receipts=False), offline_active=False,
         benchmark_active=False, benchmark_due_at=None)
     assert snapshot.last_logout == fake.clock.now() - 4000
     assert snapshot.offline_due_at > fake.clock.now()

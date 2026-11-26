@@ -12,7 +12,7 @@ from leeroy_mind.nightly import budget
 from leeroy_mind.nightly.pipeline import STAGES
 from leeroy_mind.nightly.runner import NightRunner
 from leeroy_mind.turing import judge, night, store as tstore
-from leeroy_mind.turing.config import TuringCfg, load
+from leeroy_mind.turing.config import OFF, TuringCfg, load
 
 CFG = TuringCfg(enabled=True, windows=4, days=3)
 SWITCH = b"[turing]\nenabled = true\nwindows = 4\ndays = 3\n"
@@ -175,6 +175,7 @@ def test_no_windows_writes_style_only(h):
 
 def test_attached_only_when_switched_on_after_the_last_reflection_stage(tmp_path):
     runner = NightRunner(STAGES, lambda n, w: None)
+    (tmp_path / "mind.toml").write_bytes(b"[turing]\nenabled = false\n")
     assert night.attach(runner, tmp_path) is False
     assert "turing" not in [s.name for s in runner.stages]
     (tmp_path / "mind.toml").write_bytes(b"[turing]\nenabled = true\nwindows = 6\n")
@@ -185,13 +186,14 @@ def test_attached_only_when_switched_on_after_the_last_reflection_stage(tmp_path
 
 
 @pytest.mark.parametrize("text,expected", [
-    (b"", TuringCfg()),
+    (b"", TuringCfg(True, 8, 14)),  # on by default (2026-11-25)
+    (b"[turing]\nenabled = false\n", TuringCfg(False, 8, 14)),
     (b"[turing]\nenabled = true\n", TuringCfg(True, 8, 14)),
     (b"[turing]\nenabled = true\nwindows = 0\ndays = 90\n", TuringCfg(True, 0, 90)),
-    (b"[turing]\nenabled = 1\n", TuringCfg()),
-    (b"[turing]\nenabled = true\nwindows = 61\n", TuringCfg()),
-    (b"[turing]\nenabled = true\nshout = true\n", TuringCfg()),
-    (b"[turing\n", TuringCfg()),
+    (b"[turing]\nenabled = 1\n", OFF),
+    (b"[turing]\nenabled = true\nwindows = 61\n", OFF),
+    (b"[turing]\nenabled = true\nshout = true\n", OFF),
+    (b"[turing\n", OFF),
 ])
 def test_config_fails_off(tmp_path, text, expected):
     (tmp_path / "mind.toml").write_bytes(text)

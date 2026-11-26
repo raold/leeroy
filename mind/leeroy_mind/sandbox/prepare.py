@@ -56,9 +56,6 @@ QUIET: dict[str, dict] = {
     # the conversation lab: never its night here; its piece overlays read by name (talk/pieces.py)
     "lab": {"enabled": False, "overlays": True},
 }
-# Tables set only where the live mind.toml has them: absent, the feature is off already (and
-# the core loader would warn about a section it does not know).
-ONLY_IF_PRESENT = frozenset({"raidplay"})
 
 
 class Refused(Exception):
@@ -173,8 +170,6 @@ def quiet_toml(live_text: str) -> dict:
         raise Refused(f"the live mind.toml does not parse: {e}") from None
     for table, keys in QUIET.items():
         current = doc.get(table)
-        if current is None and table in ONLY_IF_PRESENT:
-            continue
         if current is not None and not isinstance(current, dict):
             raise Refused(f"the live mind.toml's [{table}] is not a table")
         doc[table] = {**(current or {}), **keys}

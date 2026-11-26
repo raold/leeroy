@@ -233,10 +233,14 @@ def test_native_and_playerbots_defaults_are_the_compiled_ones():
 
 
 def test_mind_switches_take_the_switchboard_defaults():
+    from leeroy_mind.console import switches as S
+    rows = {f"{r[0]}.{r[1]}": r for r in S.SWITCHES}
     fs = {f.id: f for f in L.load_features()}
+    mind = [s for f in fs.values() for s in f.switches if s.source == "mind"]
+    assert mind and [s.key for s in mind if s.default is not S.default(rows[s.key])] == []
     invites = {s.key: s for s in fs["invitations"].switches}
     assert invites["talk.invites"].default is True
-    assert {s.key: s for s in fs["day_plans"].switches}["life.day_plans"].default is False
+    assert {s.key: s for s in fs["day_plans"].switches}["life.day_plans"].default is True
 
 
 @pytest.mark.parametrize("bad, words", [
@@ -349,7 +353,7 @@ def test_offline_reliability_reads_ordinary_ends_and_explicit_failures(install, 
 def test_day_plans_need_the_realm_on_both_sides():
     keys = {s.key: s for s in next(f for f in L.load_features() if f.id == "day_plans").switches}
     assert {"realm.enabled", "Leeroy.Realm.Enable", "life.day_plans", "Leeroy.DayPlans.Enable", "Leeroy.Enable"} <= set(keys)
-    assert keys["Leeroy.Realm.Enable"].default is False
+    assert keys["Leeroy.Realm.Enable"].default is True
 
 
 def test_the_module_switch_gates_every_feature_mod_leeroy_carries(install):

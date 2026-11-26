@@ -87,7 +87,7 @@ async def _night(tmp, script):
                                            wants=("Testblade",) if guid in {106, 107} else ())
         armory = FakeArmory({50001: BLADE}, {105: {15: 251}, 106: {15: 245}, 101: {15: 264}})
         plan = RaidPlan("icc", 10, False, False, 101, 101, 104, list(MEMBERS), [], True)
-        session = await RaidSession.open(ports, GuildConfig(), armory, plan)
+        session = await RaidSession.open(ports, GuildConfig(loot_receipts=False), armory, plan)
         assert session.bind_instance(77)
         outcomes = deque()
 

@@ -469,8 +469,8 @@ class MindApp:
         self.disabled_features: dict = {}
         def ext(feature, attach, off=None):
             return features.guard(self.disabled_features, feature, attach, off)
-        from .personas.config import PersonasCfg
-        self.persona_settings = ext("personas", lambda: attach_personas(self), PersonasCfg)
+        from .personas.config import OFF as PERSONAS_OFF
+        self.persona_settings = ext("personas", lambda: attach_personas(self), PERSONAS_OFF)
         from .fingerprint.night import attach as attach_fingerprint
         ext("fingerprint", lambda: attach_fingerprint(self.night_runner, self.data_dir))
         self.voice = ext("voice", lambda: attach_voice(self))
@@ -488,10 +488,10 @@ class MindApp:
         # every message of his answered: the watchdog behind the answers (talk/owed.py)
         self.owed = self.engine.owed = OwedWatch(self)
         self.signals = ext("signals", lambda: attach_signals(self))
-        from .learn.config import LearnCfg, load_learn_config
+        from .learn.config import OFF as LEARN_OFF, load_learn_config
         from .learn.night import attach as attach_rewards, ready as learn_ready
         self.engine.learn_settings = ext("learn", lambda: load_learn_config(self.data_dir / "mind.toml"),
-                                         LearnCfg)
+                                         LEARN_OFF)
         self.engine.learn_enabled = self.engine.learn_settings.enabled and learn_ready(self.store)
         self.engine.learn_capture_preferences = self.engine.learn_enabled and self.engine.learn_settings.capture_preferences
         from .lab.config import load as load_lab

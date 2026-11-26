@@ -35,7 +35,7 @@ def raid(tmp_path, clock):
         ports.members[guid] = member(guid, f"Member{guid}", 1 if guid == 101 else 8, 2, map=631)
         ports.personas[guid] = persona(guid, f"Member{guid}")
     plan = RaidPlan("icc", 10, False, False, 101, 101, 103, [101, 102, 103], [], True)
-    session = asyncio.run(RaidSession.open(ports, GuildConfig(), FakeArmory({}, {}), plan))
+    session = asyncio.run(RaidSession.open(ports, GuildConfig(loot_receipts=False), FakeArmory({}, {}), plan))
     session.bind_instance(77)
     run = RaidRun(session.plan, session, True, False)
     ground = service.TrainingGround(SimpleNamespace(), ports)

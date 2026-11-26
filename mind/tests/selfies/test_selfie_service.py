@@ -96,7 +96,7 @@ def test_more_queues_once_and_passes_the_waiting_set(svc, store, data):
 
 
 def test_more_is_refused_while_rendering_is_off_or_the_member_has_no_looks(svc, store, data):
-    off = SelfieService(svc.app, SelfieCfg())
+    off = SelfieService(svc.app, SelfieCfg(enabled=False))
     assert run(off.handle({"action": "more", "guid": 101})) == {
         "ok": False, "error": "rendering is off in mind.toml ([selfies] enabled = false)"}
     assert run(svc.handle({"action": "more", "guid": 104})) == {

@@ -16,12 +16,13 @@ from leeroy_mind.config import load_config
 from leeroy_mind.personas.io import load_persona, save_persona
 from leeroy_mind.personas.schema import ProfilePhoto
 from leeroy_mind.selfies import files
-from leeroy_mind.selfies.config import SelfieCfg
+from leeroy_mind.selfies.config import OFF as SELFIES_OFF, SelfieCfg
 from leeroy_mind.selfies.store import (Candidate, ensure_first_sets, mark_ready, queue_more,
                                        queued_sets)
 from leeroy_mind.protocol import Member
 from leeroy_mind.selfies.worker import RenderRequest, SelfieWorker
 from dbtemplate import open_migrated
+from shipped_off import off
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
@@ -31,7 +32,15 @@ from nightly.test_night_enrich import APPEARANCE  # Task 6's invented looks
 from .fake_worker import JPEG  # the bytes the fake writes; the tests take it from here
 
 FAKE_WORKER = Path(__file__).with_name("fake_worker.py")
-SELFIE_CFG = SelfieCfg(enabled=True)
+
+
+def selfie_cfg(**over) -> SelfieCfg:
+    """A [selfies] config with every switch off but those given: the config these tests were
+    written with, before the switches defaulted on (2026-11-25)."""
+    return replace(SELFIES_OFF, **over)
+
+
+SELFIE_CFG = selfie_cfg(enabled=True)
 OWNER = 100
 CLOCK = datetime(2026, 10, 29, 20, 0, tzinfo=timezone.utc)
 PHOTO = ProfilePhoto(kind="snapshot", framing="upper_body", setting="on the deck of a small boat",
@@ -119,14 +128,16 @@ async def until(condition: Callable[[], bool], timeout: float = 10.0) -> None:
         await asyncio.sleep(0.02)
 
 
-def mind_app(root: Path, *, toml: str = "", prepare: Callable[[Store], None] | None = None
-             ) -> MindApp:
+def mind_app(root: Path, *, toml: str = "", prepare: Callable[[Store], None] | None = None,
+             raw: bool = False) -> MindApp:
     """A MindApp on the data dir `root`, built as tests/tuning/test_tuning_endpoint.py builds one
-    (a FakeLLM and a fake clock, no bridge, nothing started): mind.toml holding `toml`; the test
+    (a FakeLLM and a fake clock, no bridge, nothing started): mind.toml holding `toml`, with every
+    switch that defaults on since 2026-11-25 it does not set off (tests/shipped_off.py; `raw`: `toml`
+    as it is); the test
     cast seeded, 101-103 with looks and a photo kind; the owner (OWNER) on the roster as guild
     master and named; and `prepare(store)` run on its mind.db before the app opens it. The
     caller closes app.store."""
-    (root / "mind.toml").write_text(toml, encoding="utf-8")
+    (root / "mind.toml").write_text(toml if raw else off(toml), encoding="utf-8")
     s = Store(open_migrated(root / "mind.db"), clock=FakeClock(CLOCK))
     try:
         seed_test_cast(s)

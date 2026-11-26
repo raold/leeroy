@@ -1,7 +1,8 @@
-"""[lab] in mind.toml, read once at the mind's start (and by `lab run`). Missing, invalid or
-unknown keys mean the defaults with the lab off; nothing private reaches a diagnostic.
+"""[lab] in mind.toml, read once at the mind's start (and by `lab run`). Missing keys mean the
+defaults (the lab on); invalid or unknown keys, or an unreadable file, mean the defaults with the
+lab off (OFF); nothing private reaches a diagnostic.
 
-- enabled: the night's lab stages (lab/night.py); default false.
+- enabled: the night's lab stages (lab/night.py); default true.
 - minutes: the hard budget of one night's lab, propose, battery and grading together (5-180,
   default 40).
 - pairs: the battery's (script, member) pairs a night, each run once per arm (2-60, default 12).
@@ -12,8 +13,8 @@ unknown keys mean the defaults with the lab off; nothing private reaches a diagn
   it agrees better, but not yet well enough to be the default; lab/README.md, "The judge").
   Default "rubric".
 - promote: a variant that wins becomes an arm of the learn bandit (lab/promote.py). Default
-  false: the lab measures and reports, and proposes nothing to the weekly gate, until its judge
-  agrees with a strong grader (lab/README.md, "The judge"). Only with grader "tells":
+  false (owner ruling 2026-11-25: stays off): the lab measures and reports, and proposes nothing
+  to the weekly gate, until its judge agrees with a strong grader (lab/README.md, "The judge"). Only with grader "tells":
   `promote = true` with the rubric is refused like any bad value (the table reads as off), and
   load() logs `lab_config_refused reason=promote_with_rubric` once a process.
 - overlays: a sandbox mind reads `prompts/lab_<piece>.txt` (talk/pieces.py). Set only in a
@@ -34,7 +35,7 @@ _logged: set[str] = set()   # refusals logged by this process
 
 @dataclass(frozen=True)
 class LabCfg:
-    enabled: bool = False
+    enabled: bool = True
     minutes: int = 40
     pairs: int = 12
     judge: int = 6
@@ -42,6 +43,9 @@ class LabCfg:
     overlays: bool = False
     grader: str = "rubric"
     promote: bool = False
+
+
+OFF = LabCfg(enabled=False)
 
 
 def _int(value, low, high):
@@ -57,8 +61,17 @@ def refusal(table) -> str | None:
 
 
 def parse(table) -> LabCfg:
+    """The table as the lab reads it: OFF when it is not valid (`valid`)."""
+    return _parse(table) or OFF
+
+
+def valid(table) -> bool:
+    return _parse(table) is not None
+
+
+def _parse(table) -> LabCfg | None:
     if not isinstance(table, dict) or set(table) - KEYS or refusal(table) is not None:
-        return LabCfg()
+        return None
     d = LabCfg()
     enabled = table.get("enabled", d.enabled)
     overlays = table.get("overlays", d.overlays)
@@ -69,18 +82,20 @@ def parse(table) -> LabCfg:
     grader = table.get("grader", d.grader)
     promote = table.get("promote", d.promote)
     if type(promote) is not bool or grader not in GRADERS:
-        return LabCfg()
+        return None
     if (type(enabled) is not bool or type(overlays) is not bool or not _int(minutes, 5, 180)
             or not _int(pairs, 2, 60) or not _int(judge, 0, 60) or not _int(variants, 0, 5)):
-        return LabCfg()
+        return None
     return LabCfg(enabled, minutes, pairs, min(judge, pairs), variants, overlays, grader, promote)
 
 
 def load(path: Path) -> LabCfg:
     try:
         doc = tomllib.loads(Path(path).read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+    except FileNotFoundError:
         return LabCfg()
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+        return OFF
     table = doc.get("lab", {})
     reason = refusal(table)
     if reason is not None and reason not in _logged:

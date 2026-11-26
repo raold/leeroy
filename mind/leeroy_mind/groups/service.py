@@ -5,7 +5,7 @@ from pathlib import Path
 
 from leeroy_mind.discord.store import DiscordRefused
 from leeroy_mind.discord import owntime
-from .config import GroupsConfig, load_groups_config
+from .config import OFF as GROUPS_OFF, load_groups_config
 from . import store as groups
 from .audience import message_readers, visible
 
@@ -47,7 +47,7 @@ class Groups:
     def __init__(self, app):
         self.app = app
         self.config = (load_groups_config(Path(app.data_dir)/'mind.toml')
-                       if getattr(app,'data_dir',None) is not None else GroupsConfig())
+                       if getattr(app,'data_dir',None) is not None else GROUPS_OFF)
         world = getattr(app,'world',None)
         if world is not None:
             world.group_audience = self.readers

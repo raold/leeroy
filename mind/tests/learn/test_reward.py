@@ -28,7 +28,7 @@ def screened(store, lid, now):
 
 
 @pytest.mark.parametrize("text,enabled", [
-    ("", False), ("[learn]\nenabled=true", True), ("[learn]\nenabled=false", False),
+    ("", True), ("[learn]\nenabled=true", True), ("[learn]\nenabled=false", False),
     ('learn="secret"', False), ("[learn]\nenabled=1", False),
     ("[learn]\nenabled=true\nunknown=1", False), ("[learn", False)])
 def test_config(tmp_path, text, enabled):

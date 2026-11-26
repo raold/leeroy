@@ -12,6 +12,7 @@ from leeroy_mind.talk.pipeline import TurnMeta
 from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_llm import FakeLLM
+from shipped_off import off
 
 
 @pytest.mark.parametrize('setting,capture,expected', [('true','false',True),('true','true',True),
@@ -22,8 +23,8 @@ def test_fakebridge_delivery_recipe_and_app_stage(tmp_path, setting,capture,expe
         clock = fake_clock()
         bridge = FakeBridge([hello(HUMAN), CAST])
         port = await bridge.start()
-        (tmp_path / "mind.toml").write_text(toml(port) + "\n[talk]\nchattiness=0\n"
-                                          + "[learn]\nenabled=" + setting + "\ncapture_preferences="+capture+"\n")
+        (tmp_path / "mind.toml").write_text(off(toml(port) + "\n[talk]\nchattiness=0\n"
+                                          + "[learn]\nenabled=" + setting + "\ncapture_preferences="+capture+"\n"))
         seed_db(tmp_path / "mind.db", clock)
         cfg = load_config(tmp_path / "mind.toml")
         def answer(*_):

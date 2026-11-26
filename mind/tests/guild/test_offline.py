@@ -20,7 +20,7 @@ def setup(raid_setup):
     ports, armory, _ = raid_setup
     ports.clock = FakeClock(datetime(2026, 10, 29, 14, tzinfo=timezone.utc), yields=1)
     ports.online = False
-    return ports, armory, OfflineRaids(ports, GuildConfig(), armory, random.Random(7))
+    return ports, armory, OfflineRaids(ports, GuildConfig(loot_receipts=False), armory, random.Random(7))
 
 
 def event(controller, *, state="progress", stage="running", reason="", instance=77, kills=0, wipes=0, **changes):

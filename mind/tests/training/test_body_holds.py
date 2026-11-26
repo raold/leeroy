@@ -184,7 +184,7 @@ def journal_ground(fake):
         fake.members[guid] = member(guid, f"M{guid}", 1 if guid == 101 else 8, 2, map=631)
         fake.personas[guid] = persona(guid, f"M{guid}")
     plan = RaidPlan("icc", 10, False, False, 101, 101, 102, [101, 102], [], True)
-    session = asyncio.run(RaidSession.open(fake, GuildConfig(), FakeArmory({}, {}), plan))
+    session = asyncio.run(RaidSession.open(fake, GuildConfig(loot_receipts=False), FakeArmory({}, {}), plan))
     session.bind_instance(77)
     run = RaidRun(session.plan, session, True, False)
     ground = TrainingGround(NS(bodies=object()), fake)

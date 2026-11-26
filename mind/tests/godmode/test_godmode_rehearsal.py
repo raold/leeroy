@@ -25,6 +25,7 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import check_chat
+from shipped_off import off
 
 START = datetime(2026, 10, 29, 20, tzinfo=timezone.utc)
 BOOT = int(START.timestamp() * 1000) - 10000
@@ -235,9 +236,9 @@ def test_godmode_rehearsal(tmp_path, monkeypatch):
         port = await world.start()
         conf = tmp_path / "mind.toml"
         conf.write_text(
-            f"[bridge]\nport={port}\n[godmode]\nenabled=true\n[realm]\nenabled=true\n"
+            off(f"[bridge]\nport={port}\n[godmode]\nenabled=true\n[realm]\nenabled=true\n"
             "[life]\nday_plans=true\ndungeons=true\n[server]\nenabled=true\n[guards]\nenabled=true\n"
-            "[claims]\nenabled=true\n[talk]\nopeners_per_hour=0\nchattiness=4\n"
+            "[claims]\nenabled=true\n[talk]\nopeners_per_hour=0\nchattiness=4\n")
         )
         store = Store(open_migrated(tmp_path / "mind.db"), clock=clock)
         people = seed_test_cast(store)
