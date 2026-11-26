@@ -501,7 +501,10 @@ struct RaidRun
             // ReactDelay (0.1 s); under a bot master playerbots waits 1-3 s out of combat (GetReactDelay). Between
             // teleports the held leader is a self-bot (its own master), which playerbots counts as a game client
             // master; a self-bot's teleport waits for a client's ack, so it is an ordinary bot while it moves.
-            if (!control && GET_PLAYERBOT_AI(owner)->GetMaster() != owner)
+            // Both cases need the same client-master reaction cadence. Leaving
+            // the control under a bot master adds a random 1-3 second AI delay
+            // and changes which poison wave it crosses independently of avoidance.
+            if (GET_PLAYERBOT_AI(owner)->GetMaster() != owner)
                 GET_PLAYERBOT_AI(owner)->SetMaster(owner);
             if (Creature* poison = bot->FindNearestCreature(16027, 70.f))
             {
