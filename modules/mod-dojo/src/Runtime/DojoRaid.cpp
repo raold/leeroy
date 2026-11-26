@@ -1318,7 +1318,7 @@ struct EncounterRun
                 {"alive", a.alive}, {"tanked_ms", a.tankedMs}, {"on_ms", on}, {"on_member_ms", onSlot},
                 {"dealt", a.dealt}, {"taken", a.taken}});
         }
-        out["adds"] = addRows;
+        out["add_list"] = addRows;
         json deathRows = json::array();
         for (EncounterDeath const& d : deaths)
             deathRows.push_back({{"ms", d.ms}, {"name", Roster[d.slot].name}, {"killer", KindName(d.killer)},
