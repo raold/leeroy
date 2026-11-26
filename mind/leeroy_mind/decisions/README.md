@@ -15,13 +15,13 @@ stand-in ahead of both (tests).
 
 | Key | Default | Range | Meaning |
 |---|---|---|---|
-| `enabled` | `false` | bool | Needs `[server] enabled`; without it the table logs `decisions_need_server` and stays off. |
+| `enabled` | `true` | bool | Needs `[server] enabled`; without it the table logs `decisions_need_server` and stays off. |
 | `bank_items_per_day` | 10 | 0-50 | Stacks leaving the bank a day. |
 | `bank_restock_per_week` | 20 | 0-60 | Stacks the crafters restock a week; 0 turns the restock off. |
 | `loot_poll_days` | 14 | 3-60 | Fewest days between loot-rule polls (Part B's loot rules). |
-| `rank_reviews` | `false` | bool | Part C's officers' rank reviews (polls in #applications, then `SetRank`). |
-| `boss_strategy` | `false` | bool | Part C's boss strategy after two wipes (a #strategy post and a training layer). |
-| `bank_requests` | `false` | bool | Part C's members' bank requests (#bank-requests posts and, with native BankMail, handoffs). |
+| `rank_reviews` | `true` | bool | Part C's officers' rank reviews (polls in #applications, then `SetRank`). |
+| `boss_strategy` | `true` | bool | Part C's boss strategy after two wipes (a #strategy post and a training layer). |
+| `bank_requests` | `true` | bool | Part C's members' bank requests (#bank-requests posts and, with native BankMail, handoffs). |
 
 Part B's lineups and loot rules run whenever `enabled` is on. Each Part C kind runs only with its
 own switch on as well (`config.KIND_SWITCHES`, `DecisionsService.kinds_on`). A kind switched off
@@ -252,14 +252,15 @@ The member sees her new rank in the guild roster.
 ## Release and switches
 
 Build and release the native modules with `ac-release.sh --native`. Set
-`Leeroy.GuildAdd.FollowRoster = 1` for the raid picker and `Leeroy.Decisions.BankMail.Enable = 1`
-for item-only member mail. Independently set `Leeroy.Decisions.BankRestock.Enable = 1` for targeted
-weekly stock. Its default of zero leaves the original bootstrap stock available. Then run `.reload config`. The member-mail capability is advertised
+`Leeroy.GuildAdd.FollowRoster = 1` for the raid picker. `Leeroy.Decisions.BankMail.Enable` (item-only
+member mail) and, independently, `Leeroy.Decisions.BankRestock.Enable` (targeted weekly stock) default
+to 1; 0 turns either off, and BankRestock 0 leaves the original bootstrap stock available. Then run `.reload config`. The member-mail capability is advertised
 in the bridge hello while enabled. Reconnect the mind after reloading the switches. An older
 bridge or a disabled mail key leaves an unsupported delivery as talk and consumes no bank stock.
 
-Enable `[server]` and `[decisions]` in the mind configuration, and each Part C kind wanted
-(`rank_reviews`, `boss_strategy`, `bank_requests`, all default off), and restart the mind and console.
+In the mind configuration `[server]`, `[decisions]` and each Part C kind (`rank_reviews`,
+`boss_strategy`, `bank_requests`) default on; set one false to keep it off, and restart the mind and
+console after a change.
 Bank writes also require the normal Realm enablement, bank permissions, item whitelist and a
 guild armory connection. Boss changes require `Leeroy.Training.Enable = 1` and `[training]`
 with telemetry and action enabled. Migration `0062_decisions_bank.sql` admits decision-owned

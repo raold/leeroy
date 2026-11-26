@@ -4,10 +4,10 @@ Currency tokens (including all Wrath raid emblems) stay on the core's automatic
 per-player distribution path. They do not open a DKP claim window, announce an
 item or produce a “no takers” line. Gear and tier-set tokens retain master loot.
 
-Durable hand-out proof is opt-in: set `[guild] loot_receipts = true` in `mind.toml`
+Durable hand-out proof is on by default: `[guild] loot_receipts = true` in `mind.toml`
 and `Leeroy.LootReceipts.Enable = 1` in the native configuration. Deploy the native
 and mind changes together and reconnect after enabling so the mind sees the new
-hello capability. Both settings default off. When the mind setting is on but the
+hello capability. Both settings default on. When the mind setting is on but the
 native capability is missing, new hand-outs wait rather than silently losing proof.
 
 The native build requires core commit `c8bd1f28c20c72560fa5014eda3b0aa7c3d63dec`

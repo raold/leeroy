@@ -1,10 +1,10 @@
 # Guild culture
 
-The culture table defaults off. Enable both `[server] enabled = true` and
-`[culture] enabled = true` in mind.toml to enable event-backed joke births and
-permanent joke retirement. Invalid tables disable culture. Part B's `calendar` and
+The culture table defaults on: `[server] enabled` and `[culture] enabled` (both true by
+default) enable event-backed joke births and permanent joke retirement; culture without the
+server is off. Invalid tables disable culture. Part B's `calendar` and
 `loot` and Part C's `bots`, `emoji` and `memes` are their own switches inside it, each
-false by default; `memes_per_week` defaults 3 (0–14).
+true by default; `memes_per_week` defaults 3 (0–14).
 Culture is read once when the mind starts; restart after changing either switch.
 Live turns and nightly reloads retain the same startup choice.
 
@@ -94,7 +94,7 @@ reservations, so two clocks cannot reuse a freshly delivered joke.
 
 ## Part B: the server's calendar and loot talk
 
-Two more switches inside enabled culture, both false by default and read once at mind start
+Two more switches inside enabled culture, both true by default and read once at mind start
 (restart the mind, and the console for tooltips, after changing them):
 
 ```toml
@@ -189,10 +189,9 @@ No migration, no native change and no model call. Release is mind and console on
 
 ## Part C: server bots, the guild's own emoji and original memes
 
-Three more switches inside enabled culture, each false by default and read once at mind start
-(restart the mind, and the console for `emoji`, after changing them). `bots` was reserved as
-`true` and never read; it now defaults to `false` like the others, so enabling culture gains
-nothing until a part is asked for:
+Three more switches inside enabled culture, each true by default and read once at mind start
+(restart the mind, and the console for `emoji`, after changing them; shipped features default on
+since 2026-11-25). Each can be turned off on its own:
 
 ```toml
 [culture]

@@ -15,8 +15,14 @@ change it). An invalid table means off.
 
 | Key | Default | What it does |
 |---|---|---|
-| `enabled` | `false` | The dial is available. Off: every reader takes the path it took before; stored heat rows do nothing; the tune op refuses heat in words. |
-| `public_cap` | `false` | Once heat is set: cap every channel other people read at the flirty tier. Off is the behaviour as it was (the owner's 2026-10-30 "whatever channel" ruling). |
+| `enabled` | `true` | The dial is available. Off: every reader takes the path it took before; stored heat rows do nothing; the tune op refuses heat in words. |
+| `public_cap` | `false` (owner ruling 2026-11-25: stays off) | Once heat is set: cap every channel other people read at the flirty tier. Off is the behaviour as it was (the owner's 2026-10-30 "whatever channel" ruling). |
+
+```toml
+[heat]
+enabled = true
+public_cap = false  # owner ruling 2026-11-25
+```
 
 **On and not set is exactly today.** With `enabled = true` and no world heat stored, heat governs
 nobody (`HeatLive.reaches`): the world romance dial, each woman's own dial, every clock and every
@@ -176,7 +182,7 @@ clears every one. It lives in meta (`heat:session:<guid>`, `heat:session:all`), 
 change log. Logs: `heat_session guid= code= medium=`, `heat_session_ended reason= n=`, never
 his words.
 
-## Public channels (`public_cap`, off by default)
+## Public channels (`public_cap`, off by default: owner ruling 2026-11-25)
 
 With `public_cap = true` and heat set, every channel that is not a whisper or his one-to-one DM
 is flirty at most, in three places so one bug cannot undo it:

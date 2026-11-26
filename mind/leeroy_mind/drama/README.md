@@ -5,14 +5,15 @@ The approved design is the owner's 2026-11-15 member-romance spec (local docs on
 
 ## Operator notes
 
-Enable with the following in `mind.toml`, then restart the mind and console:
+It is on by default; to turn it off, set the following in `mind.toml`, then restart the mind and
+console:
 
 ```toml
 [drama]
-member_romance = true
+member_romance = false
 ```
 
-The default is off. An invalid table (an unknown key, a value that is not a boolean, an
+The default is on. An invalid table (an unknown key, a value that is not a boolean, an
 unreadable file) turns it off and logs `drama_config_invalid key=<code>` once. The switch is read
 when the mind starts and pinned until it restarts: every night keeps the startup value (as
 `[learn] enabled` does, `nightly/wiring.py`), the `couples` stage is attached only when it was on
@@ -125,7 +126,7 @@ never `relationship.attraction`.
 
 ```toml
 [drama]
-threads = "record"   # "off" is the default; "on" is reserved for the release that acts on it
+threads = "record"   # the default; "off" turns it off; "on" is reserved for the release that acts on it
 ```
 
 Restart the mind: the mode is read at its start and pinned (as `member_romance` is), and only

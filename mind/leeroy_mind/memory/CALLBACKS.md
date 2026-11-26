@@ -2,15 +2,15 @@
 
 The selector and replay are model-free. Live talk uses them only when learning
 application and the selected callback arm also enable it; see
-[learning application](../learn/README.md#applying-learning-to-live-talk). The default is off:
+[learning application](../learn/README.md#applying-learning-to-live-talk). The default is on:
 
 ```toml
 [callbacks]
-enabled = false
+enabled = true
 ```
 
-`load_callbacks_config(path)` returns false for a missing, unreadable or invalid
-table, including unknown keys and non-boolean values. The live talk caller
+`load_callbacks_config(path)` returns true for a missing file, table or key and false for
+an unreadable or invalid table, including unknown keys and non-boolean values. The live talk caller
 passes that result as `CallbackContext.enabled`. Calling the selector without an
 enabled context does not even read the database. Golden prompts are unchanged.
 
