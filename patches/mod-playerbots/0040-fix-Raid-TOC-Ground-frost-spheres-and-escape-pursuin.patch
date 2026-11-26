@@ -1,0 +1,348 @@
+From 20bd684119eacc7555a12af71c420970cd4fc4a9 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 22:48:23 -0500
+Subject: [PATCH 40/40] fix(Raid/TOC): Ground frost spheres and escape pursuing
+ spikes
+
+---
+ src/Ai/Raid/TOC/RaidTocStrategy.h |  35 +++++
+ src/Ai/Raid/TOC/TocStrategy.cpp   | 209 ++++++++++++++++++++++++++++++
+ 2 files changed, 244 insertions(+)
+
+diff --git a/src/Ai/Raid/TOC/RaidTocStrategy.h b/src/Ai/Raid/TOC/RaidTocStrategy.h
+index fa6c3317..61d44e4d 100644
+--- a/src/Ai/Raid/TOC/RaidTocStrategy.h
++++ b/src/Ai/Raid/TOC/RaidTocStrategy.h
+@@ -7,6 +7,7 @@
+ #ifndef PLAYERBOTS_RAIDTOCSTRATEGY_H
+ #define PLAYERBOTS_RAIDTOCSTRATEGY_H
+ 
++#include "AttackAction.h"
+ #include "MovementActions.h"
+ #include "NamedObjectContext.h"
+ #include "Strategy.h"
+@@ -18,6 +19,7 @@ public:
+     RaidTocStrategy(PlayerbotAI* botAI) : Strategy(botAI) {}
+     std::string const getName() override { return "toc"; }
+     void InitTriggers(std::vector<TriggerNode*>& triggers) override;
++    void InitMultipliers(std::vector<Multiplier*>& multipliers) override;
+ };
+ 
+ class TocEssenceTrigger : public Trigger
+@@ -42,6 +44,33 @@ public:
+     bool IsActive() override;
+ };
+ 
++class TocAnubarakTrigger : public Trigger
++{
++public:
++    TocAnubarakTrigger(PlayerbotAI* botAI) : Trigger(botAI, "toc anubarak") {}
++    bool IsActive() override;
++};
++
++class TocSpikeEscapeAction : public MovementAction
++{
++public:
++    TocSpikeEscapeAction(PlayerbotAI* botAI) : MovementAction(botAI, "toc spike escape") {}
++    bool isUseful() override;
++    bool Execute(Event event) override;
++    bool Escaping() const;
++
++private:
++    uint32 _lastEscape = 0;
++};
++
++class TocFrostSphereAction : public AttackAction
++{
++public:
++    TocFrostSphereAction(PlayerbotAI* botAI) : AttackAction(botAI, "toc frost sphere") {}
++    bool isUseful() override;
++    bool Execute(Event event) override;
++};
++
+ class TocToxinCureAction : public MovementAction
+ {
+ public:
+@@ -66,12 +95,16 @@ public:
+         creators["toc twin essence"] = &RaidTocActionContext::Essence;
+         creators["toc toxin cure"] = &RaidTocActionContext::Cure;
+         creators["toc bile spacing"] = &RaidTocActionContext::Spacing;
++        creators["toc spike escape"] = &RaidTocActionContext::Spike;
++        creators["toc frost sphere"] = &RaidTocActionContext::Sphere;
+     }
+ 
+ private:
+     static Action* Essence(PlayerbotAI* botAI) { return new TocEssenceAction(botAI); }
+     static Action* Cure(PlayerbotAI* botAI) { return new TocToxinCureAction(botAI); }
+     static Action* Spacing(PlayerbotAI* botAI) { return new TocBileSpacingAction(botAI); }
++    static Action* Spike(PlayerbotAI* botAI) { return new TocSpikeEscapeAction(botAI); }
++    static Action* Sphere(PlayerbotAI* botAI) { return new TocFrostSphereAction(botAI); }
+ };
+ 
+ class RaidTocTriggerContext : public NamedObjectContext<Trigger>
+@@ -81,11 +114,13 @@ public:
+     {
+         creators["toc twin essence"] = &RaidTocTriggerContext::Essence;
+         creators["toc worms"] = &RaidTocTriggerContext::Worms;
++        creators["toc anubarak"] = &RaidTocTriggerContext::Anubarak;
+     }
+ 
+ private:
+     static Trigger* Essence(PlayerbotAI* botAI) { return new TocEssenceTrigger(botAI); }
+     static Trigger* Worms(PlayerbotAI* botAI) { return new TocWormTrigger(botAI); }
++    static Trigger* Anubarak(PlayerbotAI* botAI) { return new TocAnubarakTrigger(botAI); }
+ };
+ 
+ #endif
+diff --git a/src/Ai/Raid/TOC/TocStrategy.cpp b/src/Ai/Raid/TOC/TocStrategy.cpp
+index f2bcf973..9ab6ae7c 100644
+--- a/src/Ai/Raid/TOC/TocStrategy.cpp
++++ b/src/Ai/Raid/TOC/TocStrategy.cpp
+@@ -5,17 +5,20 @@
+  */
+ 
+ #include <array>
++#include <cmath>
+ 
+ #include "Creature.h"
+ #include "Group.h"
+ #include "InstanceScript.h"
+ #include "Map.h"
+ #include "ObjectAccessor.h"
++#include "PathGenerator.h"
+ #include "PlayerbotMechanicGuard.h"
+ #include "Playerbots.h"
+ #include "RaidInteractionPolicy.h"
+ #include "RaidTocStrategy.h"
+ #include "Spell.h"
++#include "Timer.h"
+ #include "TocWormPolicy.h"
+ #include "WorldSession.h"
+ 
+@@ -36,6 +39,14 @@ constexpr std::array<uint32, 4> SPELL_PARALYTIC_TOXIN{66823, 67618, 67619, 67620
+ constexpr uint32 SPELL_BURNING_BILE = 66869;
+ constexpr float BILE_CONTACT_RANGE = 8.0f;
+ constexpr float BILE_SEPARATION = 13.0f;
++constexpr uint32 BOSS_ANUBARAK = 4;
++constexpr uint32 NPC_FROST_SPHERE = 34606;
++constexpr uint32 NPC_PURSUING_SPIKE = 34660;
++constexpr uint32 SPELL_SPIKE_MARK = 67574;
++constexpr uint32 SPELL_SPIKE_TRAIL = 65921;
++constexpr uint32 SPELL_PERMAFROST_VISUAL = 65882;
++constexpr float ANUB_SEARCH_RANGE = 160.0f;
++constexpr float SPIKE_SEPARATION = 14.0f;
+ 
+ bool HasToxin(Player* player)
+ {
+@@ -102,6 +113,115 @@ bool WormHeld(PlayerbotAI* ai)
+                   ai->HasStrategy("passive", BOT_STATE_COMBAT));
+ }
+ 
++bool AnubarakActive(PlayerbotAI* ai)
++{
++    Player* bot = ai->GetBot();
++    if (!bot->IsInWorld() || bot->GetMapId() != MAP_TRIAL_OF_THE_CRUSADER || !bot->IsAlive() || IsRealPlayer(bot) ||
++        IsSelfBot(bot) || !bot->GetGroup() || !bot->GetGroup()->isRaidGroup() || bot->IsBeingTeleported() ||
++        bot->IsCharmed() || bot->GetVehicle() || bot->GetTransport() || WormHeld(ai))
++        return false;
++    auto* instance = bot->GetInstanceScript();
++    return instance && instance->GetBossState(BOSS_ANUBARAK) == IN_PROGRESS;
++}
++
++Creature* ThreateningSpike(PlayerbotAI* ai)
++{
++    if (!AnubarakActive(ai))
++        return nullptr;
++    Player* bot = ai->GetBot();
++    std::list<Creature*> spikes;
++    bot->GetCreatureListWithEntryInGrid(spikes, NPC_PURSUING_SPIKE, ANUB_SEARCH_RANGE);
++    Creature* chosen = nullptr;
++    for (Creature* spike : spikes)
++        if (spike->IsAlive() && spike->InSamePhase(bot) && spike->HasAura(SPELL_SPIKE_TRAIL) &&
++            std::abs(spike->GetPositionZ() - bot->GetPositionZ()) < 4.0f &&
++            (spike->GetVictim() == bot || bot->IsWithinDistInMap(spike, SPIKE_SEPARATION)) &&
++            (!chosen || bot->GetExactDist2d(spike) < bot->GetExactDist2d(chosen)))
++            chosen = spike;
++    return chosen;
++}
++
++Creature* FrostSphere(PlayerbotAI* ai)
++{
++    if (!AnubarakActive(ai))
++        return nullptr;
++    Player* bot = ai->GetBot();
++    if (PlayerbotAI::IsTank(bot) || PlayerbotAI::IsHeal(bot) || PlayerbotAI::IsMelee(bot) ||
++        bot->HasAura(SPELL_SPIKE_MARK))
++        return nullptr;
++    for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
++    {
++        Player* member = ref->GetSource();
++        PlayerbotAI* memberAI = member ? GET_PLAYERBOT_AI(member) : nullptr;
++        if (memberAI && member->GetGUID() < bot->GetGUID() && member->GetMap() == bot->GetMap() &&
++            AnubarakActive(memberAI) && !PlayerbotAI::IsTank(member) && !PlayerbotAI::IsHeal(member) &&
++            !PlayerbotAI::IsMelee(member) && !member->HasAura(SPELL_SPIKE_MARK))
++            return nullptr;
++    }
++    std::list<Creature*> spheres;
++    bot->GetCreatureListWithEntryInGrid(spheres, NPC_FROST_SPHERE, ANUB_SEARCH_RANGE);
++    unsigned grounded = 0;
++    Creature* chosen = nullptr;
++    for (Creature* sphere : spheres)
++    {
++        if (!sphere->IsAlive() || !sphere->InSamePhase(bot))
++            continue;
++        if (sphere->HasAura(SPELL_PERMAFROST_VISUAL))
++            ++grounded;
++        else if (bot->IsValidAttackTarget(sphere) &&
++                 (!chosen || bot->GetExactDist2d(sphere) < bot->GetExactDist2d(chosen)))
++            chosen = sphere;
++    }
++    // Retain a spare patch when the pursued spike consumes the first one.
++    return grounded < 2 ? chosen : nullptr;
++}
++
++bool CompleteRoute(Player* bot, Position const& point, Creature* spike = nullptr)
++{
++    PathGenerator path(bot);
++    path.SetPathLengthLimit(200.0f);
++    if (!path.CalculatePath(point.GetPositionX(), point.GetPositionY(), point.GetPositionZ()) ||
++        path.GetPathType() != PATHFIND_NORMAL)
++        return false;
++    if (spike)
++    {
++        auto const& points = path.GetPath();
++        float const clearance = std::min(8.0f, bot->GetExactDist2d(spike) - 0.5f);
++        for (std::size_t i = 1; i < points.size(); ++i)
++        {
++            float const dx = points[i].x - points[i - 1].x;
++            float const dy = points[i].y - points[i - 1].y;
++            float const sx = spike->GetPositionX() - points[i - 1].x;
++            float const sy = spike->GetPositionY() - points[i - 1].y;
++            float const lengthSq = dx * dx + dy * dy;
++            float const fraction = lengthSq > 0.0f ? std::clamp((sx * dx + sy * dy) / lengthSq, 0.0f, 1.0f) : 0.0f;
++            if (std::hypot(sx - fraction * dx, sy - fraction * dy) < clearance)
++                return false;
++        }
++    }
++    return true;
++}
++
++class TocAnubarakMultiplier : public Multiplier
++{
++public:
++    TocAnubarakMultiplier(PlayerbotAI* ai) : Multiplier(ai, "toc anubarak") {}
++
++    float GetValue(Action* action) override
++    {
++        if (!action || !AnubarakActive(botAI) || dynamic_cast<TocSpikeEscapeAction*>(action))
++            return 1.0f;
++        auto* escape = dynamic_cast<TocSpikeEscapeAction*>(context->GetAction("toc spike escape"));
++        if (escape && escape->Escaping())
++            return 0.0f;
++        Unit* target = context->GetValue<Unit*>("current target")->Get();
++        if (target && target->GetEntry() == NPC_FROST_SPHERE && bot->IsValidAttackTarget(target) &&
++            dynamic_cast<MovementAction*>(action) && !dynamic_cast<TocFrostSphereAction*>(action))
++            return 0.0f;
++        return 1.0f;
++    }
++};
++
+ bool WormPhase(PlayerbotAI* ai)
+ {
+     Player* bot = ai->GetBot();
+@@ -160,6 +280,95 @@ void RaidTocStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+     triggers.push_back(new TriggerNode("toc twin essence", {NextAction("toc twin essence", ACTION_RAID + 8)}));
+     triggers.push_back(new TriggerNode("toc worms", {NextAction("toc toxin cure", ACTION_RAID + 11),
+                                                      NextAction("toc bile spacing", ACTION_RAID + 10)}));
++    triggers.push_back(new TriggerNode("toc anubarak", {NextAction("toc spike escape", ACTION_EMERGENCY + 7),
++                                                        NextAction("toc frost sphere", ACTION_RAID + 5)}));
++}
++
++void RaidTocStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)
++{
++    multipliers.push_back(new TocAnubarakMultiplier(botAI));
++}
++
++bool TocAnubarakTrigger::IsActive() { return AnubarakActive(botAI); }
++
++bool TocSpikeEscapeAction::isUseful() { return ThreateningSpike(botAI) != nullptr; }
++
++bool TocSpikeEscapeAction::Escaping() const { return _lastEscape && GetMSTimeDiffToNow(_lastEscape) < 1500; }
++
++bool TocSpikeEscapeAction::Execute(Event /*event*/)
++{
++    Creature* spike = ThreateningSpike(botAI);
++    if (!spike || !botAI->CanMove())
++        return false;
++    std::vector<Position> destinations;
++    if (bot->HasAura(SPELL_SPIKE_MARK))
++    {
++        std::list<Creature*> spheres;
++        bot->GetCreatureListWithEntryInGrid(spheres, NPC_FROST_SPHERE, ANUB_SEARCH_RANGE);
++        spheres.sort([this](Creature* a, Creature* b) { return bot->GetExactDist2d(a) < bot->GetExactDist2d(b); });
++        for (Creature* sphere : spheres)
++        {
++            if (!sphere->IsAlive() || !sphere->InSamePhase(bot) || !sphere->HasAura(SPELL_PERMAFROST_VISUAL))
++                continue;
++            float const angle = spike->GetAngle(sphere);
++            float const x = sphere->GetPositionX() + 6.0f * std::cos(angle);
++            float const y = sphere->GetPositionY() + 6.0f * std::sin(angle);
++            float z = bot->GetPositionZ();
++            bot->UpdateAllowedPositionZ(x, y, z);
++            destinations.emplace_back(x, y, z);
++        }
++    }
++    float const away = spike->GetAngle(bot);
++    for (float offset : {0.0f, 0.5f, -0.5f, 1.0f, -1.0f})
++    {
++        float const x = bot->GetPositionX() + SPIKE_SEPARATION * std::cos(away + offset);
++        float const y = bot->GetPositionY() + SPIKE_SEPARATION * std::sin(away + offset);
++        float z = bot->GetPositionZ();
++        bot->UpdateAllowedPositionZ(x, y, z);
++        destinations.emplace_back(x, y, z);
++    }
++    for (Position const& point : destinations)
++    {
++        // Check every navmesh leg, including corners, against the pursuing spike.
++        if (bot->GetExactDist2d(point) < 1.0f || std::abs(point.GetPositionZ() - bot->GetPositionZ()) > 4.0f ||
++            !CompleteRoute(bot, point, spike))
++            continue;
++        bot->InterruptNonMeleeSpells(false);
++        bot->AttackStop();
++        bool const moving = MoveTo(bot->GetMapId(), point.GetPositionX(), point.GetPositionY(), point.GetPositionZ(),
++                                   false, false, false, false, MovementPriority::MOVEMENT_FORCED);
++        if (moving)
++            _lastEscape = getMSTime();
++        return moving;
++    }
++    return false;
++}
++
++bool TocFrostSphereAction::isUseful()
++{
++    Creature* sphere = FrostSphere(botAI);
++    return sphere && (context->GetValue<Unit*>("current target")->Get() != sphere || bot->GetDistance(sphere) > 25.0f ||
++                      !bot->IsWithinLOSInMap(sphere));
++}
++
++bool TocFrostSphereAction::Execute(Event /*event*/)
++{
++    Creature* sphere = FrostSphere(botAI);
++    if (!sphere)
++        return false;
++    if (bot->GetDistance(sphere) > 25.0f || !bot->IsWithinLOSInMap(sphere))
++    {
++        float const angle = sphere->GetAngle(bot);
++        float const x = sphere->GetPositionX() + 18.0f * std::cos(angle);
++        float const y = sphere->GetPositionY() + 18.0f * std::sin(angle);
++        float z = bot->GetPositionZ();
++        bot->UpdateAllowedPositionZ(x, y, z);
++        Position const point(x, y, z);
++        if (std::abs(z - bot->GetPositionZ()) > 4.0f || !CompleteRoute(bot, point))
++            return false;
++        return MoveTo(bot->GetMapId(), x, y, z, false, false, false, false, MovementPriority::MOVEMENT_COMBAT);
++    }
++    return Attack(sphere);
+ }
+ 
+ bool TocEssenceTrigger::IsActive() { return NeededEssence(botAI) != Colour::None; }
