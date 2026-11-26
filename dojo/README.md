@@ -117,12 +117,13 @@ gears each with playerbots' own factory (its premade spec and glyphs, epic gear
 capped at item level 245) and later runs keep that gear; every run refills
 potions and reagents, clears the fixtures' Icecrown binds and fills the
 10-heroic door's achievement prerequisite. The mage leads as a self-bot, so the
-others have a game-client master as in his raids. The lower-spire boss states
-are set as the raid's fresh instance is created, before any creature in it
-loads (an archmage that sees a raider first would start the fight as a sequence
-break and port everyone out, and a loaded lower-spire boss refuses `DONE`), and
-the raid zones in beside her. After up to 15 s out of combat there (the first
-heal on her
+others have a game-client master as in his raids. In place of a cleared lower
+spire, the synthetic account gets the core's permission to skip an instance's
+required bosses (RBAC 13, isolated auth database only; without it an archmage
+that sees a raider before the pull starts the fight as a sequence break and
+ports everyone out), and the lower-spire states are also set in the tick of the
+pull. The raid zones in beside her. After up to 15 s out of combat there (the
+first heal on her
 ends the wait, as it starts the fight in a real raid), the real combat trigger
 pulls the encounter. Nothing then heals, damages, moves, casts or writes health for
 anyone: the run ends at her own `DONE` (healed to full), a reset or wipe, or a

@@ -5,7 +5,8 @@
 #if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
 #include "DojoRuntime.h"
 #include "AccountMgr.h"
-#include "AllMapScript.h"
+#include "DatabaseEnv.h"
+#include "RBAC.h"
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "CommandScript.h"
@@ -566,6 +567,12 @@ struct EncounterRun
     {
         uint32 const account = AccountMgr::GetId(Account);
         if (!account) return "create the isolated DOJORAID account with realm accounts --fixture-account DOJORAID";
+        // In place of clearing the lower spire: the core's own permission to skip an instance's required
+        // bosses, for this synthetic account in the isolated realm only. Without it an archmage that sees
+        // a raider before the pull starts the fight as a sequence break and ports the raid out.
+        LoginDatabase.DirectExecute(Acore::StringFormat("REPLACE INTO rbac_account_permissions (accountId, "
+            "permissionId, granted, realmId) VALUES ({}, {}, 1, -1)", account,
+            uint32(rbac::RBAC_PERM_SKIP_CHECK_INSTANCE_REQUIRED_BOSSES)));
         for (std::size_t i = 0; i < Roster.size(); ++i)
         {
             ObjectGuid guid = sCharacterCache->GetCharacterGuidByName(Roster[i].name);
@@ -682,25 +689,12 @@ struct EncounterRun
         for (std::size_t i = 0; i < actors.size(); ++i)
             if (i != EncounterLeader && !group->AddMember(Actor(i)))
             { group->Disband(); Fail("fixture join failed"); return false; }
-        // The lower-spire states are set as the instance is created (EncounterMaps), before any creature
-        // loads: an archmage that sees a raider before then starts the fight as a sequence break and ports
-        // everyone out, and a loaded lower-spire boss would refuse DONE.
         for (std::size_t i = 0; i < actors.size(); ++i)
             if (!Actor(i)->TeleportTo(631, 4203.5f + float(i % 5) * 2.f, 2484.0f + float(i / 5) * 2.f, 364.96f, 0.f))
             { Fail("fixture teleport refused"); return false; }
         return true;
     }
 
-    // Called as the raid's fresh instance is created, before any creature in it has loaded.
-    void SetSpire(Map* map)
-    {
-        // The instanced base map (instance id 0) is a container, not an InstanceMap.
-        if (!active || state != "arrive" || map->GetId() != 631 || !map->IsRaid() || !map->GetInstanceId()) return;
-        InstanceMap* created = map->ToInstanceMap();
-        InstanceScript* script = created ? created->GetInstanceScript() : nullptr;
-        if (!script) return;
-        for (uint32 boss = 0; boss < 4; ++boss) script->SetBossState(boss, DONE);
-    }
 
     bool Arrived() const
     {
@@ -726,8 +720,6 @@ struct EncounterRun
         instance = leader->GetInstanceId();
         mapDifficulty = uint32(leader->GetMap()->GetDifficulty());
         if (leader->GetMap()->GetDifficulty() != Wanted()) { Fail("instance difficulty differs from the request"); return false; }
-        for (uint32 boss = 0; boss < 4; ++boss)
-            if (script->GetBossState(boss) != DONE) { Fail("the lower-spire prerequisite did not hold"); return false; }
         Creature* dragon = leader->GetMap()->GetCreature(script->GetGuidData(10));
         if (!dragon || !dragon->IsAlive() || !dragon->IsInWorld()) return false;
         valithria = dragon->GetGUID();
@@ -777,6 +769,9 @@ struct EncounterRun
             }
         // A member close to an archmage may already have started it; then the core is pulling it.
         earlyPull = script->GetBossState(10) == IN_PROGRESS;
+        // Belt and braces with the account's skip permission: the lower-spire states, set in the same tick
+        // as the pull (a lower-spire boss that loads later resets its own state, as raid acceptance found).
+        for (uint32 boss = 0; boss < 4; ++boss) script->SetBossState(boss, DONE);
         if (!earlyPull) trigger->AI()->DoZoneInCombat();
         Phase("observe");
     }
@@ -1049,17 +1044,6 @@ public:
     }
 };
 
-class EncounterMaps : public AllMapScript
-{
-public:
-    EncounterMaps() : AllMapScript("DojoEncounterMaps", {ALLMAPHOOK_ON_CREATE_MAP}) { }
-    void OnCreateMap(Map* map) override
-    {
-        std::lock_guard<std::recursive_mutex> lock(encounter.events);
-        encounter.SetSpire(map);
-    }
-};
-
 class EncounterTicks : public WorldScript
 {
 public:
@@ -1161,7 +1145,6 @@ void AddSC_dojo_raid()
     new RaidEvents();
     new EncounterEvents();
     new EncounterCasts();
-    new EncounterMaps();
     new EncounterTicks();
 }
 #else
