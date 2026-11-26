@@ -115,8 +115,9 @@ version; it does not certify an Anub'arak kill or a full ToC clear.
 then requires one earned Anub'arak kill with zero wipes within fifteen minutes
 of measurement. The two-minute surface/engage deadline remains in force.
 At least one native Frost Sphere must cast Permafrost and reach the floor;
-at least one native spike must cast its failure spell, stop moving, lose its
-trail and clear its living victim's mark. Ordinary bot actions supply all
+at least one native spike must cast its failure spell, have both an idle
+movement generator and a finished spline, lose its trail and clear its living
+victim's mark. Ordinary bot actions supply all
 damage and movement. Prepared encounter states never count as earned kills.
 The 200 ms map-update bound, strategy restoration, cleanup and shutdown are
 required. This focused gate does not substitute for a full offline ToC run.

@@ -610,6 +610,7 @@ struct OfflineFixture
                             {"spike_trail", creature->HasAura(65921)},
                             {"permafrost", creature->HasAura(65882)},
                             {"motion", uint32(creature->GetMotionMaster()->GetCurrentMovementGeneratorType())},
+                            {"spline_active", creature->movespline && !creature->movespline->Finalized()},
                             {"cast", cast ? cast->GetSpellInfo()->Id : 0u},
                             {"channel", channel ? channel->GetSpellInfo()->Id : 0u},
                             {"target", victim ? victim->GetGUID().GetCounter() : 0u},

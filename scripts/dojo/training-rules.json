@@ -12,6 +12,7 @@
         "UseProcessors"
       ],
       "training": {
+        "Logger.playerbots": {"value": "4,Console Playerbots", "why": "match production INFO logging during measurements; retain numeric encounter diagnostics without per-action DEBUG tracing"},
         "Appender.DungeonClear": {"value": "2,4,1,DungeonClear.log", "why": "register timestamped module milestones before core logging initializes"},
         "Logger.playerbots.dungeonclear": {"value": "4,DungeonClear", "why": "route the offline raid milestones to their timestamped file from startup"},
         "BindIP": {"value": "127.0.0.1", "why": "loopback only; the training realm takes no outside client"},

@@ -8,6 +8,7 @@
 #include "InstanceScript.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
@@ -121,6 +122,7 @@ struct DojoTocIntro
                 auto* victim = ObjectAccessor::GetPlayer(leader->GetMap(), victimGuid);
                 if (spike && spike->IsAlive() && !spike->HasAura(65921) && victim && victim->IsAlive()
                     && !victim->HasAura(67574)
+                    && spike->movespline && spike->movespline->Finalized()
                     && spike->GetMotionMaster()->GetCurrentMovementGeneratorType() == IDLE_MOTION_TYPE)
                     stoppedSpikes.insert(guid.GetRawValue());
             }
