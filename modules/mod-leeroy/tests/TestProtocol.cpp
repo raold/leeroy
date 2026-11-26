@@ -15,7 +15,7 @@ LEEROY_TEST(Protocol_HelloShape)
     CHECK_EQ(j["guild_id"], 21); CHECK_EQ(j["human_guid"], 0);
     CHECK(j["features"].is_array());
     CHECK(j["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
-        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "mechanics_cast_radius", "combat_quiet"}));
+        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "mechanics_cast_radius", "combat_quiet", "playstyle_table"}));
     auto stockOnly = json::parse(EncodeHello(1, 21, 0, 0, {}, false, false, true))["features"];
     auto expected = j["features"];
     expected.push_back("bank_stock_target");
@@ -32,14 +32,14 @@ LEEROY_TEST(Protocol_HelloAppendsTheBuildsOwnFeaturesOnce)
 {
     auto j = json::parse(EncodeHello(1700000000000, 21, 0, 0, {"dc_toc", "dc_ulduar", "regear", "", "dc_toc"}));
     CHECK(j["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
-        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "mechanics_cast_radius", "combat_quiet", "dc_toc", "dc_ulduar"}));
+        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "mechanics_cast_radius", "combat_quiet", "playstyle_table", "dc_toc", "dc_ulduar"}));
     auto day = json::parse(EncodeHello(1700000000000, 21, 0, 0, {"dc_toc", "dc_ulduar", "day_plan_handoff_v1"}));
     j["features"].push_back("day_plan_handoff_v1");
     CHECK(day == j);
     CHECK(!j.contains("started_ms"));
     auto combined = json::parse(EncodeHello(1, 21, 0, 0, {"dc_toc", "dc_ulduar"}, true, true, true));
     CHECK(combined["features"] == json::array({"item_links", "playstyle", "raidlead", "mechanics", "regear",
-        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "mechanics_cast_radius", "combat_quiet", "bank_stock_target",
+        "dummy_party_on_arrival", "invites", "lead", "mechanics_nearest", "mechanics_naxx", "mechanics_cast_radius", "combat_quiet", "playstyle_table", "bank_stock_target",
         "member_bank_mail", "training_enabled", "dc_toc", "dc_ulduar"}));
 }
 
@@ -184,6 +184,44 @@ LEEROY_TEST(Decode_ExtensionCommand)   // registry is process-wide: use a name n
     CHECK(r.command); CHECK(r.command->type == CommandType::Extension); CHECK_EQ(r.command->extType, "test_ext");
     CHECK_EQ(r.command->id, "x"); CHECK_EQ(r.command->raw["size"], 10);
     CHECK_EQ(DecodeCommand(R"({"v":1,"type":"test_ext","size":10})").error, "missing id");
+}
+
+namespace
+{
+// Vault of Archavon 25 (map 624, difficulty 1): instance_encounters 773, 775, 777, 886 with their
+// DungeonEncounter.dbc bits, which match the instance script's EVENT_* data and the mind's (624, 0..3).
+std::vector<EncounterCredit> const kVault25 = {{0, 31125, 0}, {0, 33993, 1}, {0, 35013, 2}, {0, 38433, 3}};
+}
+
+LEEROY_TEST(Protocol_VaultKillsComeFromTheEncounterTable)   // 2026-11-25 raid 27: Emalon and Koralon, kills 0
+{
+    CHECK(CreditedKill(true, 0, true, 0, 33993, kVault25) == std::optional<std::size_t>(1));
+    CHECK(CreditedKill(true, 0, true, 0, 35013, kVault25) == std::optional<std::size_t>(2));
+    CHECK(CreditedKill(true, 0, true, 0, 31125, kVault25) == std::optional<std::size_t>(0));
+    CHECK(CreditedKill(true, 0, true, 0, 38433, kVault25) == std::optional<std::size_t>(3));
+    CHECK(!CreditedKill(true, 0, true, 0, 31263, kVault25));   // not a credited creature (trash)
+}
+
+LEEROY_TEST(Protocol_EncounterCreditReportsEachKillOnce)
+{
+    // Only the instance's first credit: a re-kill, a reload or a second hit of the same bit leaves the mask alone.
+    CHECK(!CreditedKill(true, 0, false, 0, 33993, kVault25));
+    // A script with boss states reports its own kills (SetBossState DONE): never a second report from the table.
+    CHECK(!CreditedKill(true, 4, true, 0, 33993, kVault25));
+    CHECK(!CreditedKill(true, 1, true, 0, 33993, kVault25));
+    // 5-man dungeons keep their own rules; a spell credit (creditType 1) is not a creature's death.
+    CHECK(!CreditedKill(false, 0, true, 0, 33993, kVault25));
+    CHECK(!CreditedKill(true, 0, true, 1, 33993, {{1, 33993, 1}}));
+    CHECK(!CreditedKill(true, 0, true, 0, 0, {{0, 0, 1}}));
+}
+
+LEEROY_TEST(Protocol_EncounterCreditNeedsOneSoundBossId)
+{
+    CHECK(!CreditedKill(true, 0, true, 0, 33993, {{0, 33993, 1}, {0, 33993, 2}}));   // one creature, two encounters
+    CHECK(!CreditedKill(true, 0, true, 0, 33993, {{0, 33993, 32}}));                 // no bit in the mask
+    CHECK(!CreditedKill(true, 0, true, 0, 33993, {}));
+    // A spell credit naming the same entry is another kind of row and does not make the kill ambiguous.
+    CHECK(CreditedKill(true, 0, true, 0, 33993, {{1, 33993, 0}, {0, 33993, 1}}) == std::optional<std::size_t>(1));
 }
 
 LEEROY_TEST(Protocol_IccGunshipPassNeverAnnouncesAKill)

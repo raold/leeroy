@@ -45,6 +45,20 @@ std::vector<std::uint32_t> Ids(std::initializer_list<std::uint32_t> ids)
 {
     return ids;
 }
+
+OwnerPetState Summoned()
+{
+    OwnerPetState pet;
+    pet.present = true;
+    pet.his = true;
+    pet.alive = true;
+    return pet;
+}
+
+std::vector<std::uint64_t> Units(std::initializer_list<std::uint64_t> units)
+{
+    return units;
+}
 }
 
 LEEROY_TEST(OwnerAuras_ParsesCommaListsSkippingRepeatsAndJunk)
@@ -92,6 +106,7 @@ LEEROY_TEST(OwnerAuras_EveryBlockStopsThePass)
 
     std::vector<std::pair<std::function<void(OwnerAuraState&)>, std::string>> const cases{
         {[](OwnerAuraState& s) { s.online = false; }, "offline"},
+        {[](OwnerAuraState& s) { s.bot = true; }, "bot"},
         {[](OwnerAuraState& s) { s.alive = false; }, "dead"},
         {[](OwnerAuraState& s) { s.alive = false; s.ghost = true; }, "ghost"},
         {[](OwnerAuraState& s) { s.teleporting = true; }, "teleporting"},
@@ -109,6 +124,7 @@ LEEROY_TEST(OwnerAuras_EveryBlockStopsThePass)
     // An offline owner reads offline whatever else the snapshot says.
     OwnerAuraState gone;
     gone.taxi = true;
+    gone.bot = true;
     CHECK_EQ(std::string(OwnerAuraBlock(gone)), std::string("offline"));
 }
 
@@ -162,4 +178,86 @@ LEEROY_TEST(OwnerAuras_PassRunsEveryTwoSecondsOrSoonAfterAWake)
     CHECK(pass.Due(kOwnerAuraWakeGapMs, true));
     CHECK(pass.Due(0xFFFFFFFFu, false));          // a stalled tick saturates, no overflow
     CHECK(!pass.Due(0, false));
+}
+
+LEEROY_TEST(OwnerPetAuras_TheSuggestedListParsesAndAnInlineCommentIsRejected)
+{
+    auto list = ParseOwnerAuras("6560, 51040, 31750");
+    CHECK(list.spells == Ids({6560, 51040, 31750}));
+    CHECK(list.rejected.empty());
+
+    // Config values take no inline comments: the comment's words are entries, each rejected.
+    list = ParseOwnerAuras("6560, 51040 # haste");
+    CHECK(list.spells == Ids({6560, 51040}));
+    CHECK(list.rejected == (std::vector<std::string>{"#", "haste"}));
+}
+
+LEEROY_TEST(OwnerPetAuras_AppliesOnlyWhatHisLivingPetLacks)
+{
+    std::set<std::uint32_t> has{51040};
+    auto const holds = [&](std::uint32_t spell) { return has.contains(spell); };
+    CHECK_EQ(std::string(OwnerPetAuraBlock(Free(), Summoned())), std::string());
+    CHECK(OwnerPetAurasToApply(Ids({6560, 51040, 31750}), Free(), Summoned(), holds) == Ids({6560, 31750}));
+    has = {6560, 51040, 31750};
+    CHECK(OwnerPetAurasToApply(Ids({6560, 51040, 31750}), Free(), Summoned(), holds).empty());
+    CHECK(OwnerPetAurasToApply({}, Free(), Summoned(), holds).empty());
+
+    // The generic form takes any block.
+    CHECK(AurasToApply(Ids({6560}), "", [](std::uint32_t) { return false; }) == Ids({6560}));
+    CHECK(AurasToApply(Ids({6560}), "no_pet", [](std::uint32_t) { return false; }).empty());
+}
+
+LEEROY_TEST(OwnerPetAuras_HisBlocksComeFirstThenThePets)
+{
+    auto const none = [](std::uint32_t) { return false; };
+    // Whatever stops his own auras stops his pet's: offline, a bot, dead, a ghost, a teleport, a taxi,
+    // a vehicle, a battleground.
+    std::vector<std::pair<std::function<void(OwnerAuraState&)>, std::string>> const owner{
+        {[](OwnerAuraState& s) { s.online = false; }, "offline"},
+        {[](OwnerAuraState& s) { s.bot = true; }, "bot"},
+        {[](OwnerAuraState& s) { s.alive = false; }, "dead"},
+        {[](OwnerAuraState& s) { s.alive = false; s.ghost = true; }, "ghost"},
+        {[](OwnerAuraState& s) { s.teleporting = true; }, "teleporting"},
+        {[](OwnerAuraState& s) { s.taxi = true; }, "taxi"},
+        {[](OwnerAuraState& s) { s.vehicle = true; }, "vehicle"},
+        {[](OwnerAuraState& s) { s.battleground = true; }, "battleground"},
+    };
+    for (auto const& [change, code] : owner)
+    {
+        OwnerAuraState state = Free();
+        change(state);
+        CHECK_EQ(std::string(OwnerPetAuraBlock(state, Summoned())), code);
+        CHECK(OwnerPetAurasToApply(Ids({51040}), state, Summoned(), none).empty());
+    }
+
+    std::vector<std::pair<std::function<void(OwnerPetState&)>, std::string>> const pet{
+        {[](OwnerPetState& p) { p.present = false; }, "no_pet"},
+        {[](OwnerPetState& p) { p.his = false; }, "not_his"},
+        {[](OwnerPetState& p) { p.alive = false; }, "pet_dead"},
+        {[](OwnerPetState& p) { p.charmed = true; }, "charmed"},
+    };
+    for (auto const& [change, code] : pet)
+    {
+        OwnerPetState state = Summoned();
+        change(state);
+        CHECK_EQ(std::string(OwnerPetAuraBlock(Free(), state)), code);
+        CHECK(OwnerPetAurasToApply(Ids({51040}), Free(), state, none).empty());
+    }
+
+    // Someone else's pet never reads as his, however alive it is; a missing one reads missing first.
+    OwnerPetState theirs = Summoned();
+    theirs.his = false;
+    theirs.charmed = true;
+    CHECK_EQ(std::string(OwnerPetAuraBlock(Free(), theirs)), std::string("not_his"));
+    CHECK_EQ(std::string(OwnerPetAuraBlock(Free(), OwnerPetState{})), std::string("no_pet"));
+    // An offline owner reads offline even with a pet in the snapshot.
+    CHECK_EQ(std::string(OwnerPetAuraBlock(OwnerAuraState{}, Summoned())), std::string("offline"));
+}
+
+LEEROY_TEST(OwnerPetAuras_ThePetComesFirstThenEachGuardianOnce)
+{
+    CHECK(OwnerPetTargets(7, Units({9, 7, 8, 9, 0})) == Units({7, 9, 8}));
+    CHECK(OwnerPetTargets(0, Units({9, 8})) == Units({9, 8}));
+    CHECK(OwnerPetTargets(7, {}) == Units({7}));
+    CHECK(OwnerPetTargets(0, Units({0})).empty());
 }

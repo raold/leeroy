@@ -270,7 +270,7 @@ def test_load_specs(tmp_path):
 def test_config_defaults_and_loopback(tmp_path):
     cfg = load_voice_config(tmp_path / "mind.toml")  # no file
     assert cfg == VoiceCfg()
-    assert (cfg.enabled, cfg.host, cfg.port, cfg.autostart) == (False, "127.0.0.1", 7879, False)
+    assert (cfg.enabled, cfg.host, cfg.port, cfg.autostart) == (True, "127.0.0.1", 7879, True)  # 2026-11-25
     assert (cfg.on_comms_raider, cfg.on_comms_social) == (0.9, 0.6)
     assert (cfg.hot_mic_per_month, cfg.elsewhere_lines_per_10min) == (1.0, 6)
     p = tmp_path / "mind.toml"

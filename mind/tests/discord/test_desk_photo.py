@@ -63,7 +63,7 @@ def test_rollback_keeps_files_and_does_not_block_next_post(app, monkeypatch):
 def test_disabled_desk_refuses_upload_token(app):
     from leeroy_mind.discord.desk import DiscordDesk
     post = args(app)
-    (app.data_dir/'mind.toml').write_text('')
+    (app.data_dir/'mind.toml').write_text('[photos]\nenabled=false')
     assert not run(DiscordDesk(app).handle(post))['ok']
 
 

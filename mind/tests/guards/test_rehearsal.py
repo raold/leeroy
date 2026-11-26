@@ -40,7 +40,7 @@ async def run_mode(root, enabled):
         rig = make_rig(store, clock, root, script=script, send=wire.client.send)
         engine = rig.engine
         engine.cfg = replace(engine.cfg, talk=replace(engine.cfg.talk, aware=enabled))
-        engine.live_review.config = GuardsCfg(enabled=enabled)
+        engine.live_review.config = GuardsCfg(enabled=enabled, semantic_enabled=False)
         engine.live_review.claims_enabled = enabled
         engine.recall._embedder.embed = embed
         claim_line = store.insert_chat_line(Chat(0,"guild",102,"Invented",0,"I love Saurfang",0,10),

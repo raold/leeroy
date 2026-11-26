@@ -102,17 +102,18 @@ def tables(playbooks: Playbooks, nearest: bool = True, naxx: bool = True, cast_r
 
 def settings(path: Path) -> tuple[bool, str]:
     """([raidplay] respond is on, why not). It needs [training] playbooks: the training ground scores the
-    playbooks' checks that measure the responder. A missing table means off; an invalid one, off."""
+    playbooks' checks that measure the responder. A missing file, table or key means on; an invalid
+    one, off."""
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
-        return False, "off"
+        data = {}
     except (OSError, UnicodeError, tomllib.TOMLDecodeError):
         return False, "invalid"
     table = data.get("raidplay", {})
-    if not isinstance(table, dict) or set(table) - {"respond"} or type(table.get("respond", False)) is not bool:
+    if not isinstance(table, dict) or set(table) - {"respond"} or type(table.get("respond", True)) is not bool:
         return False, "invalid"
-    if not table.get("respond", False):
+    if not table.get("respond", True):
         return False, "off"
     from leeroy_mind.training.config import ConfigError, load_training_config
     try:

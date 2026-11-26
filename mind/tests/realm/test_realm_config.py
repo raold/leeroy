@@ -12,10 +12,10 @@ def _config(tmp_path, settings):
     return path
 
 
-def test_missing_file_or_section_defaults_off(tmp_path):
+def test_missing_file_or_section_defaults_on(tmp_path):
     path = tmp_path / "missing.toml"
     assert load_realm_config(path) == RealmConfig(
-        enabled=False, gank_human=True, trial_rank=4, member_cap=120,
+        enabled=True, gank_human=True, trial_rank=4, member_cap=120,
         his_birthday="", guild_anniversary="")
     path.write_text('[human]\nnickname = "example"\n', encoding="utf-8")
     assert load_realm_config(path) == RealmConfig()

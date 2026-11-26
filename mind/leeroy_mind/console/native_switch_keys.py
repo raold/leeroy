@@ -28,6 +28,7 @@ Leeroy.LootReceipts.Enable
 Leeroy.Mechanics.Enable
 Leeroy.MemberDungeon.Enable
 Leeroy.PlayStyle.Enable
+Leeroy.PlayStyle.Table
 Leeroy.QueueFence.Enable
 Leeroy.RaidLead.Enable
 Leeroy.Realm.Announce
@@ -168,6 +169,8 @@ Playerbots.TellWhenMissingBuffReagents
 Playerbots.TwinValkyrInteractions
 Playerbots.TwoRoundsGearInit
 Playerbots.Updates.EnableDatabases
+Playerbots.ValithriaHealerFocus
+Playerbots.ValithriaPortals
 Playerbots.botActiveAloneSmartScale
 """.split())
 

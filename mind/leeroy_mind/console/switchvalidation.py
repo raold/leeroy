@@ -24,10 +24,11 @@ def valid_table(name, table, raw):
         return False
     simple = {'claims':{'enabled'},'signals':{'enabled'},'fingerprint':{'enabled'},
               'callbacks':{'enabled'},'looks':{'diversity'},'personas':{'auto_newcomers'},
-              'playstyle':{'enabled'},'photos':{'enabled','send','requests','request_priority','scene_from_words'},
+              'playstyle':{'enabled'},
+              'photos':{'enabled','send','requests','request_priority','scene_from_words','unsolicited'},
               'raidlead':{'enabled','briefs'},
               'raidplay':{'respond'},'drama':{'member_romance'},'bakeoff':{'capture'},
-              'outreach':{'enabled'},'godmode':{'enabled'},'tuning':{'nudge_memories'},
+              'outreach':{'enabled'},'videos':{'enabled'},'godmode':{'enabled'},'tuning':{'nudge_memories'},
               'heat':{'enabled','public_cap'},'geography':{'enabled'},'watchdog':{'enabled'}}
     if name == 'drama':
         # `threads` is a mode, not a boolean; a bad one turns only itself off (drama.config)
@@ -63,8 +64,8 @@ def valid_table(name, table, raw):
                 and type(table.get('frozen_members',[])) is list
                 and all(type(g) is int and g>0 for g in table.get('frozen_members',[])))
     if name == 'lab':
-        from leeroy_mind.lab.config import KEYS, parse
-        return not set(table)-KEYS and (table == {} or parse(table) != parse({}) or all(v == getattr(parse({}), k) for k, v in table.items()))
+        from leeroy_mind.lab.config import valid
+        return valid(table)
     if name == 'banter':
         return (not set(table)-{'enabled','per_hour'} and type(table.get('enabled',False)) is bool
                 and type(table.get('per_hour',2)) is int and 0 <= table.get('per_hour',2) <= 12)

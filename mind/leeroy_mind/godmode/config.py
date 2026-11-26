@@ -1,5 +1,5 @@
 """[godmode] in mind.toml: the owner's edits of members' minds and his intents (D6). Read once at
-the mind's start; missing, invalid or false means off."""
+the mind's start; missing means on, invalid or false means off."""
 import logging
 import tomllib
 from dataclasses import dataclass
@@ -11,7 +11,10 @@ _warned: set[tuple[Path, str]] = set()
 
 @dataclass(frozen=True, slots=True)
 class GodmodeConfig:
-    enabled: bool = False
+    enabled: bool = True
+
+
+OFF = GodmodeConfig(enabled=False)
 
 
 def load_godmode_config(path: Path) -> GodmodeConfig:
@@ -35,7 +38,7 @@ def load_godmode_config(path: Path) -> GodmodeConfig:
         if (path, key) not in _warned:
             _warned.add((path, key))
             log.warning("godmode_config_invalid key=%s", key)
-        return GodmodeConfig()
+        return OFF
     return GodmodeConfig(**table)
 
 

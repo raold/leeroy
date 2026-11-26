@@ -30,6 +30,7 @@ from leeroy_mind.testing import control
 from nightly.test_night_enrich import APPEARANCE
 from selfies import clip_bpe
 from selfies.fakes import fake_worker, ready
+from selfies.fakes import selfie_cfg
 
 
 def make_stage_for(cfg, tmp_path, **env):
@@ -41,7 +42,7 @@ KIND = ProfilePhoto("mirror_selfie", "upper_body", "the mirror in her hallway",
                     "a black fitted little dress", "a playful smile")
 FORMAL = {"fitted little dress", "low-cut cocktail dress", "satin midi dress", "sequin party dress",
           "plunging wrap dress", "fitted blazer dress", "off-the-shoulder sweater dress"}
-ON = SelfieCfg(enabled=True, varied_sets=True)
+ON = selfie_cfg(enabled=True, varied_sets=True)
 
 
 def lust(h, guid=101, **over):
@@ -499,7 +500,7 @@ def test_cli_go_asks_the_running_mind_and_needs_the_switch(h, capsys):
                      {"action": "vary", "go": True, "guids": [102, 104]}]
     assert not queued_sets(h.store)
     assert json.loads(capsys.readouterr().out)["queued"] == [101]
-    (root / "mind.toml").write_text("[selfies]\nenabled = true\n")
+    (root / "mind.toml").write_text("[selfies]\nenabled = true\nvaried_sets = false\n")
     assert cli.selfies_main(["vary", "--stance", "lust", "--go", "--data-dir", str(root)]) == 1
     assert "varied_sets = true" in capsys.readouterr().err
     with pytest.raises(SystemExit):
@@ -526,7 +527,7 @@ def test_the_service_plans_and_queues_only_with_the_switch(h):
     _cast(h)
     app = SimpleNamespace(store=h.store, clock=h.clock, data_dir=h.settings.data_dir,
                           personas=PersonaCache(h.store), human_guid=1)
-    off = SelfieService(app, SelfieCfg(enabled=True))
+    off = SelfieService(app, selfie_cfg(enabled=True))
     assert run(off.handle({"action": "vary", "go": True})) == {
         "ok": False, "error": "varied sets are off in mind.toml ([selfies] varied_sets = false)"}
     preview = run(off.handle({"action": "vary", "go": False}))
@@ -572,7 +573,7 @@ def test_the_night_renders_each_candidate_in_its_own_look(h, tmp_path):
 def test_with_the_switch_off_the_set_renders_ordinary_and_drops_its_plan(h, tmp_path):
     p = lust(h, 101)
     varied.queue(h.store, human=1, now=h.T, day=DAY, go=True)
-    _render(h, tmp_path, SelfieCfg(enabled=True))
+    _render(h, tmp_path, selfie_cfg(enabled=True))
     prompts = _prompts(h, 101, 1)
     assert len(set(prompts)) == 1
     assert prompts[0] == ", ".join(t for t, _ in build_prompt(p, kind_style=LUST).phrases)
@@ -627,14 +628,15 @@ def test_a_full_length_cover_has_a_square_face_crop():
 
 # -- the switch ---------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("text,on", [("", False), ("[selfies]\nenabled = true\n", False),
+@pytest.mark.parametrize("text,on", [("", True), ("[selfies]\nenabled = true\n", True),
+                                     ("[selfies]\nvaried_sets = false\n", False),
                                      ("[selfies]\nvaried_sets = true\n", True),
                                      ("[selfies]\nvaried_sets = true\nbogus = 1\n", False)])
-def test_the_switch_is_off_by_default_and_on_only_when_valid(tmp_path, text, on):
+def test_the_switch_is_on_by_default_and_off_when_false_or_invalid(tmp_path, text, on):
     path = tmp_path / "mind.toml"
     path.write_text(text)
     assert load_selfie_config(path).varied_sets is on
-    assert SelfieCfg().varied_sets is False
+    assert SelfieCfg().varied_sets is True  # since 2026-11-25
 
 
 # -- the identity reference: never a back view ------------------------------------------------------
@@ -799,7 +801,7 @@ def test_try_varied_renders_one_set_into_scratch_and_writes_nothing_live(tmp_pat
 
 # -- the face of her chosen photo in every new set (identity_sets, owner 2026-11-14) -------------
 
-IDENT = SelfieCfg(enabled=True, varied_sets=True, identity_sets=True)
+IDENT = selfie_cfg(enabled=True, varied_sets=True, identity_sets=True)
 
 
 def _logged(path):
@@ -866,8 +868,8 @@ def test_the_booth_starts_the_identity_worker_only_with_the_switch(monkeypatch):
     assert asked == [True, False]
 
 
-def test_the_identity_sets_switch_is_off_by_default_and_read_from_the_toml(tmp_path):
+def test_the_identity_sets_switch_is_on_by_default_and_read_from_the_toml(tmp_path):
     path = tmp_path / "mind.toml"
-    path.write_text("[selfies]\nenabled = true\nidentity_sets = true\n", encoding="utf-8")
-    assert load_selfie_config(path).identity_sets is True
-    assert SelfieCfg().identity_sets is False
+    path.write_text("[selfies]\nenabled = true\nidentity_sets = false\n", encoding="utf-8")
+    assert load_selfie_config(path).identity_sets is False
+    assert SelfieCfg().identity_sets is True  # since 2026-11-25

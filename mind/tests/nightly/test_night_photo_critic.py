@@ -8,7 +8,7 @@ import logging
 
 from conftest import run
 from leeroy_mind.selfies import params
-from leeroy_mind.selfies.config import SelfieCfg
+from selfies.fakes import selfie_cfg
 from leeroy_mind.selfies.files import snap, snap_candidate
 from leeroy_mind.selfies.judge import MODEL
 from leeroy_mind.selfies.snapstage import STAGE, make_snaps_stage
@@ -17,7 +17,7 @@ from leeroy_mind.selfies.worker import SelfieWorker
 from selfies.fakes import fake_command, renderable_cast
 from nightly.test_night_snaps import IDENTITY, cast, lines, situation, snap_row
 
-CRITIC = SelfieCfg(enabled=True, snaps=True, critic=True, best_of=3)
+CRITIC = selfie_cfg(enabled=True, snaps=True, critic=True, best_of=3)
 CLEAN = {"limbs": "ok", "hands": "ok", "fingers_ok": True, "eyes_ok": True,
          "extra_people": False, "same_person": True, "overall": 3}
 
@@ -126,7 +126,7 @@ def test_a_situation_with_no_clean_seed_stays_planned_for_another_night(h, tmp_p
 def test_with_the_critic_off_the_night_renders_one_seed_and_measures_nothing(h, tmp_path):
     cast(h, 101); s = situation(h, 101)
     log = tmp_path / "requests.log"
-    off = SelfieCfg(enabled=True, snaps=True, best_of=3)  # best_of needs the critic
+    off = selfie_cfg(enabled=True, snaps=True, best_of=3)  # best_of needs the critic
     ctx = h.ctx()
     run(make_snaps_stage(off, worker=Tracked(tmp_path, FAKE_SELFIE_LOG=str(log)))(ctx))
     assert [line.split()[:2] for line in lines(log)] == [
@@ -138,7 +138,7 @@ def test_with_the_critic_off_the_night_renders_one_seed_and_measures_nothing(h, 
 
 def test_the_bandit_picks_scale_and_steps_from_its_grid(h, tmp_path, caplog):
     cast(h, 101); s = situation(h, 101)
-    cfg = SelfieCfg(enabled=True, snaps=True, critic=True, best_of=2, param_bandit=True)
+    cfg = selfie_cfg(enabled=True, snaps=True, critic=True, best_of=2, param_bandit=True)
     log = tmp_path / "requests.log"
     ctx = h.ctx()
     with caplog.at_level(logging.INFO, logger="leeroy_mind"):
@@ -160,7 +160,7 @@ def test_the_bandit_picks_scale_and_steps_from_its_grid(h, tmp_path, caplog):
 def test_a_profile_set_gets_a_row_per_candidate_settled_after_the_worker(h, tmp_path):
     renderable_cast(h.store, 101)
     ctx = h.ctx()
-    run(make_stage(SelfieCfg(enabled=True, critic=True),
+    run(make_stage(selfie_cfg(enabled=True, critic=True),
                    worker=Tracked(tmp_path))(ctx))
     rows = critic_rows(h, purpose="set")
     assert len(rows) == 4 and {r["verdict"] for r in rows} == {"clean"}

@@ -16,6 +16,7 @@ import pytest
 from leeroy_mind.drama import config as drama_config
 from leeroy_mind.drama import pulls
 from leeroy_mind.nightly.settings import night_bounds
+from shipped_off import merge
 
 run = asyncio.run
 UTC = timezone.utc
@@ -1066,12 +1067,14 @@ def test_every_kind_has_a_weight_and_a_cap():
 
 # -- the switch -----------------------------------------------------------------------------------------------------
 
-def test_threads_is_off_by_default_and_record_turns_it_on(tmp_path):
+def test_threads_records_by_default_and_off_turns_it_off(tmp_path):
     path = tmp_path / "mind.toml"
-    assert drama_config.load_drama_config(path).threads == "off"
+    assert drama_config.load_drama_config(path).threads == "record"
     path.write_bytes(b'[drama]\nmember_romance = true\n')
+    assert drama_config.load_drama_config(path) == drama_config.DramaConfig(True, "record")
+    path.write_bytes(b'[drama]\nthreads = "off"\n')
     assert drama_config.load_drama_config(path) == drama_config.DramaConfig(True, "off")
-    path.write_bytes(b'[drama]\nthreads = "record"\n')
+    path.write_bytes(b'[drama]\nmember_romance = false\nthreads = "record"\n')
     assert drama_config.load_drama_config(path) == drama_config.DramaConfig(False, "record")
 
 
@@ -1104,7 +1107,7 @@ class _Runner:
         self.added.append((name, fn, after, model))
 
 
-@pytest.mark.parametrize("text,stages", [(b"", 0), (b'[drama]\nthreads = "off"\n', 0),
+@pytest.mark.parametrize("text,stages", [(b"", 1), (b'[drama]\nthreads = "off"\n', 0),
                                          (b'[drama]\nthreads = "on"\n', 0),
                                          (b'[drama]\nthreads = "record"\n', 1)])
 def test_only_record_attaches_the_stage(tmp_path, text, stages):
@@ -1200,7 +1203,7 @@ def test_the_recorder_is_no_part_of_the_base_pipeline():
 def test_the_mode_is_pinned_at_mind_start(h):
     from nightly.test_night_wiring import app_for, context
     path = h.settings.data_dir / "mind.toml"
-    path.write_bytes(b'[drama]\nthreads = "record"\n')
+    merge(path, {"drama": {"threads": "record"}})
     app = app_for(h)
     try:
         path.write_bytes(b'[drama]\nthreads = "off"\n')

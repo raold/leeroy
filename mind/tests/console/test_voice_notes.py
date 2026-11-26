@@ -47,7 +47,7 @@ def test_upload_serve_delete_preserves_audio(data,store,clock):
 @pytest.mark.parametrize('mode',['off','control','origin','site','key','type','stopped'])
 def test_voice_upload_gates(data,mode):
     async def go():
-        if mode=='off':(data/'mind.toml').write_text('')
+        if mode=='off':(data/'mind.toml').write_text('[voice_notes]\nenabled=false')
         app=build(data,link=FakeLink(),**({'mind':FakeMind(data)} if mode=='stopped' else {}))
         if mode=='control':app.controls.enabled=False
         headers=dict(HEADERS)

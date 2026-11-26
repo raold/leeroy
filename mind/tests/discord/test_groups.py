@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from leeroy_mind.discord import channels
-from leeroy_mind.groups.config import GroupsConfig, load_groups_config
+from leeroy_mind.groups.config import OFF, GroupsConfig, load_groups_config
 from leeroy_mind.groups import store as groups
 from leeroy_mind.memory.privacy import derive_scope, restricted_channels, GROUP
 from leeroy_mind.memory.recall import hidden_ok, scope_ok, whisper_ok
@@ -31,7 +31,7 @@ def test_group_channel_classification_and_sql_agree(store):
 def test_invalid_group_table_is_off(tmp_path,table):
     path=tmp_path/'mind.toml'
     path.write_text('[groups]\n'+table)
-    assert load_groups_config(path) == GroupsConfig()
+    assert load_groups_config(path) == OFF
 
 
 def test_membership_periods_do_not_change_historical_audiences(store):

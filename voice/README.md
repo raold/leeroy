@@ -14,7 +14,7 @@ voice is a blend of synthetic stock voices: none is cloned from a real person.
 
 Optional [Discord DM voice notes](../mind/leeroy_mind/voice_notes/README.md) use this service
 to render native audio files or transcribe an uploaded recording. They never open a room or
-microphone, and those files are kept indefinitely. The feature is off by default; restart
+microphone, and those files are kept indefinitely. The feature is on by default; restart
 voice, mind and console together when deploying its new wire types.
 
 ## Running it

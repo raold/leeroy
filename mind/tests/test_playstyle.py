@@ -13,6 +13,7 @@ from leeroy_mind.protocol import Ack, Boss, Group, Hello, Login
 from leeroy_mind.personas.io import PersonaCache
 from leeroy_mind.talk.world import WorldView
 from leeroy_mind.testing.wire import bridge_send
+from shipped_off import off
 
 
 @pytest.mark.parametrize('guid',[101,102,103,104,105])
@@ -41,7 +42,7 @@ def app_for(store,tmp_path):
     return app
 
 
-@pytest.mark.parametrize('text',['','[playstyle]\nenabled=false','[playstyle]\nenabled="true"',
+@pytest.mark.parametrize('text',['[playstyle]\nenabled=false','[playstyle]\nenabled="true"',
                                '[playstyle]\nenabled=true\nextra=1','invalid ['])
 def test_off_or_invalid_is_inert(store,tmp_path,text):
     (tmp_path/'mind.toml').write_text(text)
@@ -54,7 +55,7 @@ def test_off_or_invalid_is_inert(store,tmp_path,text):
 
 def test_observed_encounters_instances_raids_and_disconnection_gate_additions(store,tmp_path):
     async def scenario():
-        (tmp_path/'mind.toml').write_text('[playstyle]\nenabled=true')
+        (tmp_path/'mind.toml').write_text(off('[playstyle]\nenabled=true'))
         app = app_for(store,tmp_path)
         service = PlayStyles(app)
         await service.connection(True)
@@ -82,7 +83,7 @@ def test_observed_encounters_instances_raids_and_disconnection_gate_additions(st
 
 def test_unknown_receipt_is_durable_before_dispatch_and_bad_receipt_fails_closed(store,tmp_path):
     async def scenario():
-        (tmp_path/'mind.toml').write_text('[playstyle]\nenabled=true')
+        (tmp_path/'mind.toml').write_text(off('[playstyle]\nenabled=true'))
         app = app_for(store,tmp_path)
         service = PlayStyles(app)
         service.supported = service.connected = True
@@ -190,7 +191,7 @@ def test_mind_switch_off_enqueues_undo_without_new_additions(store,tmp_path):
         store.set_meta(KEY,'[101]')
         service = PlayStyles(app)
         service.on = service.connected = service.supported = True
-        (tmp_path/'mind.toml').write_text('[playstyle]\nenabled=false')
+        (tmp_path/'mind.toml').write_text(off('[playstyle]\nenabled=false'))
         await service.event(Login(0,101,False))
         assert service.pending=={101:True} and not service.safe(101)
         @bridge_send
@@ -230,7 +231,7 @@ def test_real_mind_fake_bridge_applies_and_shutdown_restores(tmp_path,clock,capl
         bridge = FakeBridge([{**hello(HUMAN),'features':['playstyle']},CAST],ack=ack,
                             known_types=CORE_COMMAND_TYPES|{'bot_do'})
         port = await bridge.start()
-        (tmp_path/'mind.toml').write_text(toml(port,chattiness=0)+'\n[playstyle]\nenabled=true\n')
+        (tmp_path/'mind.toml').write_text(off(toml(port,chattiness=0)+'\n[playstyle]\nenabled=true\n'))
         seed_db(tmp_path/'mind.db',clock)
         cfg = load_config(tmp_path/'mind.toml')
         llm = FakeLLM(models={cfg.models.live,cfg.models.reflection,cfg.models.embedding})
@@ -261,7 +262,7 @@ def test_real_mind_fake_bridge_applies_and_shutdown_restores(tmp_path,clock,capl
 
 
 def summary_rig(store,tmp_path,owned,*,outcome=lambda cmd:{}):
-    (tmp_path/'mind.toml').write_text('[playstyle]\nenabled=true')
+    (tmp_path/'mind.toml').write_text(off('[playstyle]\nenabled=true'))
     app = app_for(store,tmp_path)
     store.set_meta(KEY,json.dumps(owned))
     service = PlayStyles(app)

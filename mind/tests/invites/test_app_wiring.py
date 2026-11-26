@@ -16,6 +16,7 @@ from leeroy_mind.testing.fake_bridge import FakeBridge
 from leeroy_mind.testing.fake_llm import FakeLLM
 
 from test_app import CAST, ORION, Harness, chat, hello, seed_db, toml
+from shipped_off import off
 
 LINES = itertools.cycle(["ooh yes, see you there", "omw, grabbing a seat", "be right there"])
 
@@ -30,7 +31,7 @@ async def running(tmp_path, clock, *, features, prompts, invites=True):
     text = toml(port)
     if not invites:
         text = text.replace("[talk]\n", "[talk]\ninvites = false\n", 1)
-    (tmp_path / "mind.toml").write_text(text, encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off(text), encoding="utf-8")
     seed_db(tmp_path / "mind.db", clock)
     llm = FakeLLM(script, models={ORION})
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=llm, clock=clock, rng_seed=1)

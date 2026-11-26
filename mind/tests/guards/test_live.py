@@ -13,6 +13,7 @@ from leeroy_mind.discord import store as dstore
 from leeroy_mind.discord.channels import channel_id, is_discord
 from leeroy_mind.discord.transport import DiscordTarget
 from leeroy_mind.guards import GuardsCfg, Verdict
+from leeroy_mind.guards.config import OFF as GUARDS_OFF
 from leeroy_mind.protocol import Chat, Emote, Group
 from leeroy_mind.storage.rows import pack_vec
 from leeroy_mind.talk import awareness as live
@@ -24,7 +25,7 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 def rig(store, tmp_path):
     r = make_rig(store, engine_clock(), tmp_path, reply="the ferry leaves at seven")
     r.clock._yields = 0  # read-only SQLite workers need real scheduling between fake ticks
-    r.engine.live_review.config = GuardsCfg(enabled=True)
+    r.engine.live_review.config = GuardsCfg(enabled=True, semantic_enabled=False)
     r.world.apply(Group(0, 1, True, (1, 101, 102, 103, 104, 105)), r.clock.now())
     yield r
     r.close()
@@ -299,7 +300,7 @@ def test_corrupt_cached_vector_is_fail_open_and_cancellation_propagates(rig, mon
 
 
 def test_disabled_guards_never_review_or_embed(rig, monkeypatch):
-    rig.engine.live_review.config = GuardsCfg()
+    rig.engine.live_review.config = GUARDS_OFF
     def forbidden(*a):
         raise AssertionError("off path")
     monkeypatch.setattr(live, "review", forbidden)

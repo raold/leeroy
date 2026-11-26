@@ -16,6 +16,7 @@ from leeroy_mind.nightly.store import run_begin
 from leeroy_mind.personas.io import PersonaCache, save_persona
 from leeroy_mind.protocol import Chat, Member
 from leeroy_mind.testing.fake_llm import FakeLLM
+from shipped_off import off
 
 
 def say(store, guid, text, *, origin='mind'):
@@ -40,6 +41,8 @@ def context(store, clock, tmp_path):
                          race='Orc', class_name='Warrior')
     store.set_meta('human_guid', '1')
     ident = HumanIdentity(1, 'Ownerly', '', 'Avery Example', True)
+    # every switch that defaults on since 2026-11-25 off, unless a test writes its own
+    (tmp_path / 'mind.toml').write_text(off(), encoding='utf-8')
     cfg = load_config(tmp_path / 'mind.toml')
     settings = load_settings(cfg, tmp_path)
 

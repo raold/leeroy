@@ -2,7 +2,7 @@
 
 `[server] enabled = true` enables the quiet-window lease, Discord knowledge and
 autonomous conversations, reactions and private openers while he is away.
-The table defaults off; invalid settings disable it. Restart the mind and console
+The table defaults on; invalid settings disable it. Restart the mind and console
 after changing the switch. New server lines also require `[guards] enabled = true`;
 without it the engine logs one `server_needs_guards` notice a day and stays quiet.
 With claims disabled it also logs `server_needs_claims` once per local day:

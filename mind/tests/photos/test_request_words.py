@@ -1,6 +1,6 @@
 import pytest
 
-from leeroy_mind.photos.request_words import asks_for_selfie
+from leeroy_mind.photos.request_words import asks_for_selfie, specific_ask
 from leeroy_mind.photos.config import load_photos_config
 
 NAMES = ('Arkon',)
@@ -54,14 +54,59 @@ def test_non_requests_and_previous_photo_questions(text):
     assert not asks_for_selfie(text, names=NAMES)
 
 
+# The owner's DMs, 2026-11-17..25, that the recognizer missed (paraphrased): each got a words-only
+# answer in which the live model, told of no photo, said she couldn't send one right now.
+@pytest.mark.parametrize('text', [
+    'DM me a pic', 'dm me a selfie, a cute one', 'text me a photo', 'message me a selfie',
+    'DM me a really cute little selfie', 'gimme a pic', 'give me a selfie',
+    'i want you to send me the cutest pic you can', 'i need a selfie of you',
+    "i'd love a pic", 'i wanna see a selfie', 'can you retry sending me a selfie?',
+    'keep sending me selfies of your outfit', 'would you mind sending a pic?',
+    'go ahead and send me a pic', 'hurry up and send me a selfie',
+    'send me a selfie of your new haircut', 'snap a pic of your nails',
+    'im ready baby, send me a selfie of your look today',
+    'show me everything baby send me a cute selfie', 'NSFW - send me a selfie',
+    'what are you wearing?', 'what r u wearing', "show me what you're wearing",
+    'Arkon: send me a pic', 'can i have a pic?', 'shoot me a selfie',
+])
+def test_his_other_ways_of_asking(text):
+    assert asks_for_selfie(text, names=NAMES)
+
+
+@pytest.mark.parametrize('text', [
+    # His offers of his own photo, and "stop".
+    'want to see a pic?', 'want me to send you a pic?', 'can i send you a pic?',
+    'i want to send you a pic', 'stop sending me pics', 'never dm me a selfie again',
+    # Other subjects of hers, and her old photos.
+    'dm me a pic of your cat', 'send me a pic of your lunch', 'text me a photo of your setup',
+    'i love your selfies', 'your last selfie was great', 'you never sent me that pic',
+    'i know what you are wearing', 'dm me later', 'i need it',
+])
+def test_his_offers_other_subjects_and_old_photos_are_not_asks(text):
+    assert not asks_for_selfie(text, names=NAMES)
+
+
+@pytest.mark.parametrize('text,specific', [
+    ('send me a pic', False), ('selfie?', False), ('DM me a selfie', False),
+    ('what are you wearing?', False), ('pls send pics', False), ('send me a selfie of you', False),
+    ('send me a sexy selfie', True), ('send me a selfie from the beach', True),
+    ('send a pic of you in that dress', True), ('bathroom mirror selfie?', True),
+    ('send me a selfie of your outfit', True), ('pic of you at work?', True),
+])
+def test_specific_asks_describe_the_photo(text, specific):
+    assert specific_ask(text) is specific
+
+
 def test_her_name_counts_only_when_it_is_hers():
     assert asks_for_selfie('send me a pic of Arkon', names=('Arkon',))
     assert not asks_for_selfie('send me a pic of Arkon', names=('Belra',))
     assert not asks_for_selfie('send me a pic of Arkon')
 
 
-def test_requests_default_off_and_invalid_table_disables(tmp_path):
+def test_requests_default_on_and_invalid_table_disables(tmp_path):
     path = tmp_path / 'mind.toml'
+    assert load_photos_config(path).requests  # on by default (2026-11-25)
+    path.write_text('[photos]\nsend=true\nrequests=false\n')
     assert not load_photos_config(path).requests
     path.write_text('[photos]\nsend=true\nrequests=true\n')
     assert load_photos_config(path).requests

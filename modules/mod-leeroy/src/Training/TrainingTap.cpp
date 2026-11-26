@@ -286,8 +286,8 @@ bool TrainingTap::TakeTrainingTurnedOff() { return _impl->turnedOff.exchange(fal
 
 void TrainingTap::LoadConfig()
 {
-    bool telemetry = sConfigMgr->GetOption<bool>("Leeroy.Telemetry.Enable", false);
-    bool training = sConfigMgr->GetOption<bool>("Leeroy.Training.Enable", false);
+    bool telemetry = sConfigMgr->GetOption<bool>("Leeroy.Telemetry.Enable", true);
+    bool training = sConfigMgr->GetOption<bool>("Leeroy.Training.Enable", true);
     bool oldTelemetry = _impl->telemetry.exchange(telemetry);
     bool oldTraining = _impl->training.exchange(training);
     if (oldTraining && !training)

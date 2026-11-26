@@ -67,6 +67,7 @@ OUTCOME_WORDS = {
     "dc_stalled": "kept getting stuck",
     "dc_door_blocked": "got stuck at a door we couldn't open",
     "dc_paused": "got stuck and couldn't go on",
+    "dc_unreachable": "couldn't find a way to the next boss",
     "stalled": "got stuck before the next boss",
     "stopped": "called it early",
     "operator_stopped": "called it early",
@@ -78,6 +79,7 @@ OUTCOME_WORDS = {
     "cancelled": "called it off",
     "hangout": "turned it into a hangout",
     "disbanded": "the group broke up",
+    "new_instance": "moved on to a fresh instance",
     "failed": "couldn't fill the raid",
     "assemble_timeout": "never got everyone together",
 }

@@ -9,6 +9,7 @@ from leeroy_mind.guild.protocol import BotDo, ClearLockout, StringDo
 from leeroy_mind.realm.action_policy import classify
 from leeroy_mind.realm.protocol import RealmMove, RpgStatus, Duel
 from leeroy_mind.testing.wire import bridge_send
+from shipped_off import off
 
 PERMIT = "a" * 32
 
@@ -78,7 +79,7 @@ class Rehearsal:
         from realm.fakes import RealmApp
 
         register()  # guild life's install registers its types (bot_do, job) before the Realm attaches
-        (root / "mind.toml").write_text(f"[realm]\nenabled={str(realm_on).lower()}\n[life]\nday_plans={str(enabled).lower()}\n")
+        (root / "mind.toml").write_text(off(f"[realm]\nenabled={str(realm_on).lower()}\n[life]\nday_plans={str(enabled).lower()}\n"))
         self.people = seed_test_cast(store)
         self.app = app = RealmApp(root, store, clock)
         self.store, self.clock = store, clock
@@ -874,7 +875,7 @@ def test_enabling_after_authenticated_greeting_uses_the_current_connection(tmp_p
     from realm.fakes import RealmApp
 
     async def go():
-        (tmp_path / "mind.toml").write_text("[realm]\nenabled=true\n")
+        (tmp_path / "mind.toml").write_text(off("[realm]\nenabled=true\n"))
         seed_test_cast(store)
         app = RealmApp(tmp_path, store, clock)
         app.world.group = app.guild = None

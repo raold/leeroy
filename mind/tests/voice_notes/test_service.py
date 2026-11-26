@@ -52,7 +52,7 @@ def test_choice_stable_and_caps_share_server_day_without_losing_other_counts(sto
 @pytest.mark.parametrize('gate',['off','no_spec','down','engine','old_service','idle','short','long','item','bracket_item','emoji','channel','thread','zero','bad_count','guild_cap','lease'])
 def test_choice_conditions_fail_closed(store,clock,monkeypatch,gate):
     app,p,t,m,_=fixture(store,clock,monkeypatch); notes=app.voice_notes; text='An invented short message'
-    if gate=='off':notes.config=VoiceNotesConfig()
+    if gate=='off':notes.config=VoiceNotesConfig(enabled=False)
     elif gate=='no_spec':app.voice.specs={}
     elif gate=='down':app.voice.client.greeted=False
     elif gate=='engine':app.voice.client.status=replace(app.voice.client.status,ok=False,render=False)

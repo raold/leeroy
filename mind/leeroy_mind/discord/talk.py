@@ -839,6 +839,10 @@ class DiscordTalk:
             lines = (self.context_lines(store.conn, cid, thread, exclude=message, speaker=speaker)
                      if reads and not dm else [])
             photo = self._photos(store.conn, [message]).get(message) if reads else None
+            clip = None
+            if photo is not None and photo['kind'] == 'upload':
+                from leeroy_mind.videos.files import by_messages as videos
+                clip = videos(store.conn, [message]).get(message)
         their = app.engine.human.forms[2]
         purpose = self.purpose_line(cid)
         late = ""
@@ -873,6 +877,14 @@ class DiscordTalk:
             ownership = (f'{subject.capitalize()} posted a photo; it is {possessive} photo; '
                          f'do not assume {subject} {verb} in it unless {subject} {says} so. ')
             label = 'What it shows: '
+            if clip is not None:
+                # His video: the look saw a few stills of it, never its sound (videos/README.md)
+                from leeroy_mind.videos.files import duration_words
+                length = duration_words(clip['ms'])
+                ownership = (f"{subject.capitalize()} sent a short video{f' ({length})' if length else ''}; "
+                             f'it is {possessive} video; you saw a few stills from it and cannot hear '
+                             f'its sound; do not assume {subject} {verb} in it unless {subject} {says} so. ')
+                label = 'What happens in it: '
             answer = f'Answer {their} message: '
             message_text = truncate_words(fold(row[0]), HIS_CHARS)
             look = photo['look'] or "You can't make it out well."

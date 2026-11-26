@@ -11,14 +11,16 @@
 #include <utility>
 #include <vector>
 #include <nlohmann/json.hpp>
+#include "LeeroyPlayStyle.h"
 
 namespace Leeroy::Guild
 {
-inline constexpr std::array<std::string_view, 19> kCommandTypes = {
+inline constexpr std::array<std::string_view, 20> kCommandTypes = {
     "form_raid", "summon", "clear_lockout", "set_loot_master", "give_loot",
     "start_offline_raid", "gear_up", "raid_control", "remove_friend", "set_spec",
     "bot_do", "stock_items", "offline_raid_stop", "string_do", "guild_add_roster",
-    "start_member_dungeon", "member_dungeon_stop", "member_dungeon_status", "get_loot_receipt"
+    "start_member_dungeon", "member_dungeon_stop", "member_dungeon_status", "get_loot_receipt",
+    "playstyle_table"
 };
 inline constexpr std::array<std::string_view, 12> kBotStrategyAdd = {
     "behind", "tank face", "mark rti", "boost", "ss tank", "ss healer",
@@ -108,6 +110,12 @@ struct StockItemsCmd
     std::vector<std::uint32_t> items;
     std::uint32_t count = 5;
 };
+// playstyle_table {styles: [{guid, param}, ...]}: the mind's whole play-style table (LeeroyPlayStyle.h), at most
+// PlayStyle::kTableMax members, none twice, each param a bot_do "playstyle" param ("<delay>:<potions>"). Empty clears it.
+struct PlayStyleTableCmd
+{
+    std::vector<PlayStyle::TableEntry> styles;
+};
 
 // Field parsers do not inspect the envelope; DecodeCommand owns v/type/id validation.
 std::optional<FormRaidCmd> ParseFormRaid(nlohmann::json const&, std::string& error);
@@ -125,6 +133,7 @@ std::optional<RemoveFriendCmd> ParseRemoveFriend(nlohmann::json const&, std::str
 std::optional<SetSpecCmd> ParseSetSpec(nlohmann::json const&, std::string& error);
 std::optional<BotDoCmd> ParseBotDo(nlohmann::json const&, std::string& error);
 std::optional<StockItemsCmd> ParseStockItems(nlohmann::json const&, std::string& error);
+std::optional<PlayStyleTableCmd> ParsePlayStyleTable(nlohmann::json const&, std::string& error);
 void RegisterGuildCommandTypes();
 std::optional<std::string> ParseOfflineRaidStop(nlohmann::json const&, std::string& error);
 bool BotDoParamAllowed(std::string_view action, std::string_view param);

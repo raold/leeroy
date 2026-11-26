@@ -276,12 +276,12 @@ def test_persona_write_rolls_back_but_failure_receipt_prevents_unbounded_retry(h
 
 
 @pytest.mark.parametrize("text,enabled", [
-    ("", False), ("[personas]\nauto_newcomers=false\n", False),
+    ("", True), ("[personas]\nauto_newcomers=false\n", False),
     ("[personas]\nauto_newcomers=true\n", True),
     ('[personas]\nauto_newcomers="true"\n', False),
     ("personas=1\n", False), ("[personas]\nauto_newcomers=true\nunknown=1\n", False),
 ])
-def test_config_is_opt_in_and_stage_precedes_persona_readers(tmp_path, text, enabled):
+def test_config_is_on_by_default_and_stage_precedes_persona_readers(tmp_path, text, enabled):
     (tmp_path / "mind.toml").write_text(text, encoding="utf-8")
     cfg = load_config(tmp_path / "mind.toml")
     app = SimpleNamespace(data_dir=tmp_path, cfg=cfg, night_runner=NightRunner(STAGES, None))

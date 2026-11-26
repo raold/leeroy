@@ -171,6 +171,8 @@ def test_switch_off_writes_nothing(store, clock, tmp_path):
     from leeroy_mind.life.service import LifeService
     world = world_of(store)
     cfg = load_config(tmp_path / "absent.toml")
+    assert cfg.life.state is True  # on by default (2026-11-25): switched off here
+    cfg = dataclasses.replace(cfg, life=dataclasses.replace(cfg.life, state=False))
     life =LifeService(store=store, clock=clock, personas=PersonaCache(store), world=world, cfg=cfg)
     assert life.state is None
     life.tick(clock.now())

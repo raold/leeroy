@@ -11,13 +11,14 @@ from leeroy_mind.config import load_config
 from dbtemplate import open_migrated
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_llm import FakeLLM
+from shipped_off import merge, off
 
 
 @pytest.fixture
 def data(tmp_path, clock, monkeypatch):
     root = tmp_path / "mind-data"
     root.mkdir()
-    (root / "mind.toml").write_text("[bridge]\nport = 39001\n", encoding="utf-8")
+    (root / "mind.toml").write_text(off("[bridge]\nport = 39001\n"), encoding="utf-8")
     store = Store(open_migrated(root / "mind.db"), clock=clock)
     seed_test_cast(store)
     with store.transaction():
@@ -47,8 +48,7 @@ def run_doctor(root, capsys):
 
 
 def enable(root, port=39002):
-    with (root / "mind.toml").open("a", encoding="utf-8") as f:
-        f.write(f"\n[voice]\nenabled = true\nport = {port}\n")
+    merge(root / "mind.toml", {"voice": {"enabled": True, "port": port}})
 
 
 @pytest.mark.parametrize("invalid", ['{"guid": 999}', '{malformed'])
@@ -118,12 +118,11 @@ def test_disabled_voice_never_probes(data, monkeypatch):
     assert _doctor_voice_service(root) == [(None, "voice service: disabled")]
 
 
-@pytest.mark.parametrize("host", ['[]', '{ bad = true }'])
+@pytest.mark.parametrize("host", [[], {"bad": True}])
 def test_malformed_mind_voice_host_is_a_note(data, monkeypatch, host):
     root, _ = data
     enable(root)
-    with (root / "mind.toml").open("a", encoding="utf-8") as f:
-        f.write(f"host = {host}\n")
+    merge(root / "mind.toml", {"voice": {"host": host}})
 
     def forbidden(*args, **kwargs):
         pytest.fail("invalid voice host must not probe any port")

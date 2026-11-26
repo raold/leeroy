@@ -1,6 +1,6 @@
 """The night's bounded share of retention (storage/prune.py), model-free.
 
-`[prune] enabled = true` in mind.toml (read once at the mind's start; missing, invalid or an
+`[prune] enabled` in mind.toml (read once at the mind's start; missing means on, invalid or an
 unknown key means off) adds the stage `prune` after `eval`. Each night it removes at most
 `rows_per_night` rows per rule (a resumed night goes on within the same allowance), in transactions of 500 rows with the loop free between them, and
 the files `prune_files` names. What it finds is read on a worker's read-only connection. A
@@ -30,21 +30,26 @@ ROWS_MAX = 200_000
 
 @dataclass(frozen=True)
 class PruneCfg:
-    enabled: bool = False
+    enabled: bool = True
     rows_per_night: int = 20_000   # per rule
+
+
+OFF = PruneCfg(enabled=False)  # an invalid table or an unreadable file
 
 
 def load(path: Path) -> PruneCfg:
     try:
         table = tomllib.loads(Path(path).read_text(encoding="utf-8-sig")).get("prune", {})
+    except FileNotFoundError:
+        return PruneCfg()
     except (OSError, UnicodeError, tomllib.TOMLDecodeError):
-        return PruneCfg()
+        return OFF
     if not isinstance(table, dict) or set(table) - {"enabled", "rows_per_night"}:
-        return PruneCfg()
-    enabled = table.get("enabled", False)
+        return OFF
+    enabled = table.get("enabled", True)
     rows = table.get("rows_per_night", PruneCfg.rows_per_night)
     if type(enabled) is not bool or type(rows) is not int or not 1 <= rows <= ROWS_MAX:
-        return PruneCfg()
+        return OFF
     return PruneCfg(enabled, rows)
 
 

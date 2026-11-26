@@ -54,7 +54,9 @@ ULDUAR = 603
 # Ulduar's bosses with a hard mode the race can stake. Yogg-Saron's (12) no-Keepers mode is canon
 # (Death's Demise), and the easier Keeper counts with it; Algalon (13) has none of his own.
 HARD_MODE_BOSSES = frozenset({0, 3, 4, 7, 8, 9, 10, 11})
-_UNOBSERVED = frozenset({624})  # Vault of Archavon reports no boss states: nobody's kill is seen.
+# Vault of Archavon keeps no boss states. Its kills now reach the raid as boss events (encounter
+# credit), but realm_kill and tg_pull are both proved from boss states, so the race sees none.
+_UNOBSERVED = frozenset({624})
 LAGS = {"progression": (3, 10), "drama": (7, 21), "gankers": (14, 28)}  # days behind the guild
 FLOORS = {"progression": 2, "drama": 30}  # the lowest best_pct each comes to by rule
 STEP = (5, 15)  # best_pct points a week

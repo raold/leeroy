@@ -249,7 +249,8 @@ class LivePorts:
                 deadline=self.clock.now() + (30 if kind is TurnKind.CALLOUT else 20), max_lines=1),
                 run=self.run_for_speech() if channel == "raid" else None)
 
-    async def say(self, guid, channel, text, *, kind=TurnKind.CALLOUT, to_guid=0, before_transport=None):
+    async def say(self, guid, channel, text, *, kind=TurnKind.CALLOUT, to_guid=0, before_transport=None,
+                  window_exempt=False):
         """A fixed line through the talk pipeline's template path. `before_transport` (the raid
         lead's boss briefs): a barrier checked right before the line is sent, which also makes
         it go out exactly as given, typed and unstyled (talk/pipeline.py TurnMeta)."""
@@ -257,6 +258,8 @@ class LivePorts:
             return False
         run = self.run_for_speech() if channel == "raid" else None
         exact = {} if before_transport is None else {"before_transport": before_transport}
+        if window_exempt:
+            exact["window_exempt"] = True
         return await self._speak_owned(
             self.app.engine.say_as(guid, channel, text, kind=kind, to_guid=to_guid, **exact), run, False)
 
@@ -479,7 +482,8 @@ class GuildPorts(Protocol):
     def propose(self, guid: int, channel: str, instruction: str,
                 *, kind: TurnKind = TurnKind.CALLOUT) -> None: ...
     async def say(self, guid: int, channel: str, text: str, *,
-                  kind=TurnKind.CALLOUT, to_guid=0, before_transport=None) -> bool: ...
+                  kind=TurnKind.CALLOUT, to_guid=0, before_transport=None,
+                  window_exempt=False) -> bool: ...
     def set_lead(self, guid: int | None) -> None: ...
     async def remember(self, c: MemoryCandidate): ...
     async def loot_lost(self, guid: int, item_name: str): ...

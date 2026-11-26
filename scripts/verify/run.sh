@@ -14,7 +14,7 @@
 #                VERIFY_STRICT_WORKFLOWS=1): a workflow change belongs in its own PR
 #   identifiers  modules/*/src C++: added lines naming a <windows.h> macro (near, far, ...)
 #   numbering    new mind migrations against the merge target: no number taken, no hole
-#   patches      patches/mod-playerbots or mod-dungeon-clear: the series entries the live module
+#   patches      patches/mod-playerbots, mod-dungeon-clear or mod-individual-progression: the series entries the live module
 #                checkouts lack, `git am` in temporary --shared clones (scripts/ac-release-patches.py
 #                prepare, as the release does), then the pin guard on the result (CLAUDE.md's awk
 #                and the release helper's comment-aware check)
@@ -33,7 +33,7 @@
 #                       $VERIFY_LIVE_ROOT/mind-data/mind.db)
 #   VERIFY_PYTHON       python with the mind's dependencies (default: the live mind venv; --ci: python3)
 #   VERIFY_JOBS         concurrent cl.exe (default 4)
-#   VERIFY_UPSTREAM_PLAYERBOTS, VERIFY_UPSTREAM_DUNGEON_CLEAR   --ci clone sources
+#   VERIFY_UPSTREAM_PLAYERBOTS, VERIFY_UPSTREAM_DUNGEON_CLEAR, VERIFY_UPSTREAM_INDIVIDUAL_PROGRESSION   --ci clone sources
 
 set -uo pipefail
 
@@ -107,7 +107,7 @@ other_files="$(for path in "${changed[@]}"; do [[ $path == .github/* ]] || print
 src_files="$(matching "^modules/[^/]+/src/.*$cxx")"
 leeroy_src="$(matching "^modules/mod-leeroy/src/.*$cxx" | present)"
 migration_files="$(matching '^mind/leeroy_mind/storage/(migrations/|db\.py$)')"
-patch_files="$(matching '^patches/(mod-playerbots|mod-dungeon-clear)/')"
+patch_files="$(matching '^patches/(mod-playerbots|mod-dungeon-clear|mod-individual-progression)/')"
 contract_files="$(matching '^mind/leeroy_mind/(bridge|protocol)\.py$|^mind/leeroy_mind/guild/|^modules/mod-leeroy/src/(LeeroyCommands\.|Guild/BotCommands\.|Lib/(LeeroyProtocol|LeeroyBridge|LeeroyGuildCommands|LeeroyBotCommandPolicy)\.)|contracts?([^a-z]|$)')"
 
 selected=()
@@ -240,12 +240,13 @@ for m in json.load(open(sys.argv[1], encoding="utf-8"))["modules"]:
 
 check_patches_upstream() {
     local module url branch series clone n failed=0
-    for module in mod-playerbots mod-dungeon-clear; do
+    for module in mod-playerbots mod-dungeon-clear mod-individual-progression; do
         series="$repo/patches/$module"
         compgen -G "$series/*.patch" >/dev/null || continue
         case "$module" in
             mod-playerbots) url="${VERIFY_UPSTREAM_PLAYERBOTS:-https://github.com/mod-playerbots/mod-playerbots.git}" ;;
             mod-dungeon-clear) url="${VERIFY_UPSTREAM_DUNGEON_CLEAR:-https://github.com/jrad7/mod-dungeon-clear.git}" ;;
+            mod-individual-progression) url="${VERIFY_UPSTREAM_INDIVIDUAL_PROGRESSION:-https://github.com/ZhengPeiRu21/mod-individual-progression.git}" ;;
         esac
         branch=master
         clone="$scratch/upstream/$module"

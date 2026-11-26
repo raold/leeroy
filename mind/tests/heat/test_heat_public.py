@@ -27,14 +27,16 @@ def write(tmp_path, body: str):
     return load_heat_config(tmp_path / "mind.toml")
 
 
-def test_the_table_is_off_by_default_and_an_invalid_one_is_off(tmp_path):
-    assert load_heat_config(tmp_path / "absent.toml") == HeatConfig(False, False)
+def test_the_table_is_on_by_default_its_cap_off_and_an_invalid_one_is_off(tmp_path):
+    # shipped features default on (2026-11-25); public_cap stays off (owner ruling 2026-11-25)
+    assert load_heat_config(tmp_path / "absent.toml") == HeatConfig(True, False) == HeatConfig()
     assert write(tmp_path, "") == HeatConfig()
+    assert write(tmp_path, "[heat]\nenabled = false\n") == HeatConfig(False, False)
     assert write(tmp_path, "[heat]\nenabled = true\n") == HeatConfig(True, False)
     assert write(tmp_path, "[heat]\nenabled = true\npublic_cap = true\n") == HeatConfig(True, True)
     for bad in ("[heat]\nenabled = 1\n", "[heat]\nenabled = true\nlevel = 9\n",
                 "heat = 3\n", "[heat]\npublic_cap = 'yes'\n", "[heat\n"):
-        assert write(tmp_path, bad) == HeatConfig()
+        assert write(tmp_path, bad) == HeatConfig(False, False)
 
 
 def test_heat_is_a_known_section_of_mind_toml(tmp_path):

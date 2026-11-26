@@ -108,9 +108,9 @@ def test_actual_migration_ancestry_preserves_existing_rows_and_vectors(tmp_path,
         conn.close()
 
 
-def test_config_defaults_and_extension_are_off_and_unwired(tmp_path):
+def test_config_defaults_and_extension_are_on_and_unwired(tmp_path):
     assert load_training_config(tmp_path / "none.toml") == TrainingConfig()
-    assert TrainingConfig().enabled is False
+    assert TrainingConfig().enabled is True and TrainingConfig().playbooks is True  # since 2026-11-25
     assert "training" in EXTENSION_SECTIONS
     assert "[training]" not in DEFAULT_TOML
     path = tmp_path / "mind.toml"

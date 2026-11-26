@@ -19,10 +19,11 @@ from leeroy_mind.voice import attach, wire
 from leeroy_mind.voice.config import VoiceCfg
 from live_guard import LiveServiceTouched
 from voice.conftest import write_spec
+from shipped_off import off
 
 
 def make_app(tmp_path, clock, toml=""):
-    (tmp_path / "mind.toml").write_text(toml, encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off(toml), encoding="utf-8")
     return MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
 
 
@@ -536,7 +537,7 @@ def test_serve_starts_the_client_when_ensure_service_fails(tmp_path, clock, capl
 def test_bad_voice_config_leaves_the_mind_running(tmp_path, clock, caplog):
     with caplog.at_level("WARNING"):
         app = make_app(tmp_path, clock, '[voice]\nenabled = true\nhost = "0.0.0.0"\n')
-    assert app.voice.cfg == VoiceCfg()
+    assert app.voice.cfg == VoiceCfg(enabled=False, autostart=False)  # an invalid table is off
     assert app._background == [app.nightly.run_forever, app.guild.run, app.control.serve, app.realm.run]
     assert any("voice_config_invalid" in r.getMessage() for r in caplog.records)
 

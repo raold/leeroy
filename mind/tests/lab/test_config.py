@@ -1,13 +1,15 @@
-"""[lab] in mind.toml: off by default, an unknown key or a bad value reads as off."""
+"""[lab] in mind.toml: on by default (2026-11-25), an unknown key or a bad value reads as off;
+`promote` stays off by default (owner ruling 2026-11-25)."""
 import pytest
 
 from leeroy_mind.config import load_config
-from leeroy_mind.lab.config import LabCfg, load, parse
+from leeroy_mind.lab.config import OFF, LabCfg, load, parse
 
 
 def test_defaults_and_values(tmp_path):
     assert load(tmp_path / "absent.toml") == LabCfg()
-    assert LabCfg().enabled is False and LabCfg().minutes == 40 and LabCfg().variants == 3
+    assert LabCfg().enabled is True and LabCfg().minutes == 40 and LabCfg().variants == 3
+    assert OFF == LabCfg(enabled=False)
     p = tmp_path / "mind.toml"
     p.write_bytes(b"[lab]\nenabled = true\nminutes = 20\npairs = 4\njudge = 9\nvariants = 0\n")
     assert load(p) == LabCfg(True, 20, 4, 4, 0, False)  # judge never more than pairs
@@ -36,7 +38,7 @@ def test_promote_with_the_rubric_is_refused_and_logged_once(tmp_path, monkeypatc
     p.write_bytes(text)
     assert config.refusal(tomllib.loads(text.decode())["lab"]) == config.PROMOTE_WITH_RUBRIC
     with caplog.at_level("WARNING", logger="leeroy_mind"):
-        assert load(p) == LabCfg() and load(p) == LabCfg()
+        assert load(p) == OFF and load(p) == OFF
     refused = [r for r in caplog.records if "lab_config_refused" in r.getMessage()]
     assert len(refused) == 1 and "promote_with_rubric" in refused[0].getMessage()
     # the Ops switchboard reads the table as invalid
@@ -50,13 +52,13 @@ def test_promote_with_the_rubric_is_refused_and_logged_once(tmp_path, monkeypatc
     {"enabled": True, "grader": ["tells"]}, {"enabled": True, "promote": 1},
     {"enabled": True, "promote": "yes"}])
 def test_anything_odd_reads_as_off(table):
-    assert parse(table) == LabCfg()
+    assert parse(table) == OFF
 
 
 def test_the_ops_switchboard_lists_the_lab(tmp_path):
     import time
     from leeroy_mind.console import opsview
-    for text, state in (("", "off"), ("[lab]\nenabled = true\n", "on"),
+    for text, state in (("", "on"), ("[lab]\nenabled = true\n", "on"),
                         ("[lab]\nenabled = true\nminutes = 30\n", "on"),
                         ("[lab]\nenabled = false\nminutes = 40\n", "off"),
                         ("[lab]\nenabled = 1\n", "invalid"), ("[lab]\nminutes = 4\n", "invalid"),

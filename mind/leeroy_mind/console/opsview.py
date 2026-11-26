@@ -408,15 +408,17 @@ def _entries(path, deadline):
 
 
 def feature_state(data, section):
+    """[section] enabled as mind.toml sets it; missing, its switchboard default."""
+    default = next((_switch_default(row) for row in SWITCHES if row[:2] == (section, "enabled")), False)
     try:
         value = tomllib.loads(_read(data / "mind.toml", 65536).decode("utf-8-sig")).get(section, {})
     except FileNotFoundError:
-        return "off"
+        return "on" if default else "off"
     except (OSError, ValueError, Budget):
         return "unknown"
-    if not isinstance(value, dict) or type(value.get("enabled", False)) is not bool:
+    if not isinstance(value, dict) or type(value.get("enabled", default)) is not bool:
         return "unknown"
-    return "on" if value.get("enabled", False) else "off"
+    return "on" if value.get("enabled", default) else "off"
 
 
 from .switches import SWITCHES, default as _switch_default, is_number as _switch_number

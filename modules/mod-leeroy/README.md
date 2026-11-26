@@ -125,12 +125,16 @@ cannot do without the owner. Two rotation raids were such raids:
   there until the mind's 30-minute watchdog stopped it `stalled` with no kill.
 
 Every offline Running tick now reads dungeon-clear's leader run as a phase (`DcPhase`: off, on,
-paused, door; `dc_phase=<to> from=<from>` is logged on change, first 20 then every 50th). The
+paused, door, stalled; `dc_phase=<to> from=<from>` is logged on change, first 20 then every 50th). The
 heartbeat carries it as `dc_state`; entering Running (a start or a restart) resets the phase to
 `unknown` and the hold, so the first heartbeat never repeats a pre-restart `off`. A pause out of
 every boss fight (an encounter known to be disengaged) for `OfflineDcHoldStopMs` (5 minutes)
-stops the run under its own name, `dc_door_blocked` (paused at a door) or `dc_paused` (any other
-pause). Nobody types `dc pause` in an offline raid, so `paused` is dungeon-clear's null-door
+stops the run under its own name, `dc_door_blocked` (paused at a door), `dc_paused` (any other
+pause) or `dc_unreachable` (`stalled`: an unpaused run whose leader carries a stall reason that is not
+a door's, dungeon-clear's "Can't path to <boss>" / "Stuck near <boss>" waiting for a `dc skip`; it
+clears the reason itself as soon as it moves again). On 2026-11-23 a Naxx 10 run read `on` for 24
+minutes in front of Gothik until the mind's 30-minute watchdog stopped it. Nobody types `dc pause` in
+an offline raid, so `paused` is dungeon-clear's null-door
 fallback or, once the Training Ground acts (`[training] act` and 28 days of pulls), its boss hold:
 the training listener sets WaitAtBoss on every offline run's tank and releases each hold, native
 resuming it after 20 s, so `dc_phase=paused` then appears at every boss and only a stuck hold
@@ -140,11 +144,20 @@ the reachable clear and the phase are offline only; the roster check applies to 
 
 Naxxramas's Sapphiron and Kel'Thuzad (instance bosses 13 and 14) are reached only by the hub's
 teleporter after the four wings, which dungeon-clear does not use: its route stalls there with
-the run still enabled. When every other boss is done and one of those is not (and neither is
+the run still enabled. Gothik the Harvester (11) waits on his balcony (2642, -3387, z 285.5, 18
+yards above his room's floor), passive until struck; dungeon-clear finds no navmesh route up to him
+(2026-11-23: `path rebuilt -> Gothik the Harvester ... UNREACHABLE: no navigable route`) and stalls,
+and the Four Horsemen (12) are a spell-credit encounter its roster never lists, behind the two gates
+only Gothik's death opens. When every other boss is done and one of those is not (and none is
 engaged, failed or mid-event, as a manual `dc skip` could make it), native ends the run
 `cleared_reachable` (pure `DcUnreachableBosses`, `ClearedReachable`; logged
-`cleared_reachable kills= out_of_reach=13,14`) instead of idling into the mind's stall stop or
-the timeout.
+`cleared_reachable kills= out_of_reach=11,12,13,14`) instead of idling into the mind's stall stop or
+the timeout. Gothik sits in the middle of dungeon-clear's order (Military Quarter, before the
+Construct Quarter), so the job types the `dc skip` his stall asks for as soon as dungeon-clear heads
+for him (pure `OfflineDcPassEntries`, `OfflineDcPassDue`: creature 16060, run enabled and unpaused,
+no boss engaged, leader out of combat, checked once a second, at most `OfflineDcPassLimit` 16 times a
+job since a restart's `dc on` forgets the skip; logged `dc_passed entry= passes= kills= enabled=`):
+the run goes on to Patchwerk, Grobbulus, Gluth and Thaddius.
 
 The mind never plans `toc` or `ulduar` on a worldserver whose hello lacks `dc_toc` /
 `dc_ulduar` (`guild/offline.py` `UNSUPPORTED`, `RUNNABLE_WITH`; logged once per hello as
@@ -157,11 +170,11 @@ the day, any raid at a size he holds a permanent save for this lockout week (her
 reason=owner_saved`): an offline run would save its members to another copy and his add command
 would leave them out (`locked`) until the reset. `setup:starting:dc_no_bosses`, like
 `no_fresh_encounters`, voids the run and passes the raid over for the rest of the day; so does a
-native `dc_door_blocked` stop with no kill and no wipe, which also takes back the attendance and
+native `dc_door_blocked` or `dc_unreachable` stop with no kill and no wipe, which also takes back the attendance and
 its DKP recorded when the run reached running (`RaidSession.retract_attendance`; bench memories
 already written stay) and marks the run not raided. A stall the mind stops names its cause from
 the last fresh heartbeat: `offline_raid_stop raid_id= reason=stalled cause= idle_s= inside=
-members=`, with `cause` one of `dc_door_blocked`, `dc_paused`, `dc_off`, `members_out`,
+members=`, with `cause` one of `dc_door_blocked`, `dc_paused`, `dc_unreachable` (`dc_state=stalled`), `dc_off`, `members_out`,
 `no_boss_reached` (dungeon-clear on, no boss engaged) or `unknown` (an older worldserver sends
 no `dc_state`); an operator stop is `cause=operator`. The cause is kept in the owned stop
 receipt and the day receipt (`stall_cause`); the raid row keeps the stable outcome `stalled`.
@@ -216,6 +229,18 @@ run its rez recovery or regroup (2026-11-15, ICC 10: all nine died at Lady Death
 mind's 30-minute stall stop). The job switches dungeon-clear off (`full_wipe dead= inside= restarts= kills=`),
 and its existing `dc_stopped` restart revives the raid at the entrance 30 s later, within the run's restart and
 wipe limits. Benchmarks never take this full-wipe regroup. **Native rebuild required.**
+
+# Kills in raids whose script keeps no boss states
+
+The mind hears a boss kill as a `boss` event, sent from `SetBossState`. Vault of Archavon's instance script keeps
+no boss states (it uses `SetData`), so no VoA kill ever reached the mind: on 2026-11-25 his VoA 25 raid killed
+Emalon and Koralon and kept `kills 0`, with no kill DKP. The core still credits each kill through the encounter
+table (`instance_encounters`, creditType 0) into the instance's saved completed-encounter mask, and mod-leeroy
+now reports that credit (`OnAfterUpdateEncounterState`, policy `CreditedKill`) as the same `boss` event, state
+`killed`, with `boss_id` the encounter's `DungeonEncounter.dbc` bit (VoA's own order: Archavon 0, Emalon 1,
+Koralon 2, Toravon 3) and `boss_name` the DBC's name. Only in a raid whose script has no boss states, so a script
+that sets DONE is never reported twice; only when the mask gained the bit just now, so a re-kill, a reload or an
+evade reports nothing. Such raids still send no `engaged` or `wiped`. **Native rebuild required.**
 
 # Rezzes in the owner's group
 
@@ -305,6 +330,49 @@ he dies like any aura. `Leeroy.OwnerAuras` (a comma list of spell ids, default e
 - **Limits.** Nobody else is ever touched, and his bots still cleanse it: the aura is put back after
   each cleanse rather than shielded from it. `Leeroy.Enable = 0` stops it. Removing an id (then
   `.reload config`) is the only way to keep its aura off: `.unaura` or a cancel is undone.
+- **Bots.** A character a playerbot plays (`GET_PLAYERBOT_AI`, his own self-bot excepted) takes
+  nothing (`bot`), should `Leeroy.HumanGuid` ever name one.
+
+**Native rebuild required.**
+
+## His pet's auras (`Leeroy.OwnerPetAuras`)
+
+The same for his pet: `Leeroy.OwnerPetAuras` (a comma or space list of spell ids, default empty =
+off, `.reload config`) keeps the listed auras on the pet the owner controls (`Player::GetPet()`:
+the permanent Water Elemental that Glyph of Eternal Water, aura 70937 in his `Leeroy.OwnerAuras`,
+makes `spell_mage_summon_water_elemental` summon as 70908 / `NPC_WATER_ELEMENTAL_PERM`, or a
+hunter's pet) and on the guardians he summons (units of his `m_Controlled` that are guardians:
+Mirror Image, a ghoul, treants). Totems, companions and puppets are not guardians, and a unit he
+charms belongs to someone else, so none of them is touched. It shares the parse, the spell-store
+check, the pass timer, the wake and the log gate with `Leeroy.OwnerAuras` (`Guild/OwnerAuras`
+holds both lists in one `Keeper` each; pure policy `Lib/LeeroyOwnerAuras`).
+
+- **When.** On the same world tick (about every 2 s, its own timer), while he can take his own
+  auras (`OwnerAuraBlock`: online, not a bot, alive, not teleporting, on a taxi, in a vehicle or in
+  a battleground or arena), each pet of his that is in the world, alive, summoned by him
+  (`GetOwnerGUID()` is his character) and not under someone else's control (`OwnerPetAuraBlock`:
+  `no_pet`, `not_his`, `pet_dead`, `charmed`) gets each listed aura it lacks, cast by the pet on
+  itself (`AddAura(spell, pet)`, as the core puts the ICC buff on pets). His controlled pet goes
+  first, then each guardian once (`OwnerPetTargets`); each is looked up again by guid before its
+  turn. An offline owner has no pet in the world, and nobody else's pet is ever visited.
+- **At once.** The aura-remove hook also notes how a listed aura came off one of his pets or
+  guardians (dispel, death, expiry, cancel) and wakes the next tick; a `PetScript` wakes it when one
+  of his pets or guardians is summoned (`OnInitStatsForLevel`) or added to the world
+  (`OnPetAddToWorld`: a resummon after a death, or the pet coming back after a teleport or a
+  zone change). Passes stay at least 500 ms apart; a dead pet waits until it is alive or summoned
+  again.
+- **Checks.** As for his own list: `owner_pet_aura_invalid spell= reason=unknown_spell|not_an_aura`
+  once per load, `owner_pet_aura_invalid entry= reason=not_a_spell_id` for an entry that is not a
+  positive number (so a comment written after the value shows up here: config values take no inline
+  comments), and `owner_pet_auras spells=6560,51040,31750` for the ids in force (`owner_pet_auras
+  off` when emptied).
+- **Logs.** `owner_pet_aura_reapplied spell= pet_entry= why=` and `owner_pet_aura_refused spell=
+  pet_entry= why=`, at most once a minute per spell and outcome for his pet, and apart from that
+  once for his guardians (a Mirror Image cast does not hide the elemental's line). `why` is the last
+  way the spell came off one of his pets (`unknown` for a fresh summon).
+- **Limits.** Removing an id (then `.reload config`) stops putting it back; an aura already on a
+  pet stays (the core saves it with the pet like any aura) until it comes off: a dispel, the pet's
+  death, or `.unaura` with the pet targeted. `Leeroy.Enable = 0` stops it.
 
 **Native rebuild required.**
 
@@ -377,7 +445,7 @@ offline raid).
 
 # The raid lead (his orders to his own group)
 
-`Leeroy.RaidLead.Enable` (default 0, reloadable with `.reload config`) is the native half of the
+`Leeroy.RaidLead.Enable` (default 1, reloadable with `.reload config`) is the native half of the
 mind's `[raidlead]` (`mind/leeroy_mind/raidlead/README.md`). Pure policy is
 `Lib/LeeroyRaidLeadPolicy.*` (unit tests `TestRaidLeadPolicy.cpp`); the world-thread side is
 `Guild/RaidLead.cpp`. Hello lists `features: [..., "raidlead"]` so the mind knows the build has it.
@@ -424,7 +492,7 @@ set**, and the leader flag is never touched.
 Logs carry ids, guids and codes only. **Native rebuild required** (`ac-release.sh --native`).
 ## Members' heroic parties
 
-`Leeroy.MemberDungeon.Enable = 1` enables the guild party runner after `.reload config`. It defaults to 0. The separate `Leeroy.Strings.Enable` key controls the owner's in-game strings. The mind's `[life] dungeons` switch admits a party after members agree on Discord. Halls of Lightning heroic uses normal entry and a dedicated DungeonClear test driver. The party tank leads. The native receipt records the original start, party, copy and return evidence in the characters database. Deploy the native module and mind together with `ac-release.sh --native`.
+`Leeroy.MemberDungeon.Enable = 1` enables the guild party runner after `.reload config`. It defaults to 1. The separate `Leeroy.Strings.Enable` key controls the owner's in-game strings. The mind's `[life] dungeons` switch admits a party after members agree on Discord. Halls of Lightning heroic uses normal entry and a dedicated DungeonClear test driver. The party tank leads. The native receipt records the original start, party, copy and return evidence in the characters database. Deploy the native module and mind together with `ac-release.sh --native`.
 
 Receipt reads, schema creation and checkpoint transactions run through the asynchronous Characters
 database pool. A start's positive acknowledgement waits for its first durable receipt before changing any member;
@@ -477,7 +545,7 @@ attacked, and `follow` walks it to its formation spot beside him, through and in
 `avoid aoe` is also reactive (a dynamic object's area only once its aura is on the bot; a trap or trigger npc
 only when its centre is within 15 yards) and ignores anything above `Playerbots.MaxAoeAvoidRadius` (15).
 
-`Leeroy.Hazards.Enable` (default 0, `.reload config`) changes that for the cast bots of his group only
+`Leeroy.Hazards.Enable` (default 1, `.reload config`) changes that for the cast bots of his group only
 (`HazardJob`, pure policy `LeeroyHazardPolicy`). A member qualifies while it is a cast bot (not a self-bot),
 in his group (not a battleground or battlefield group) with him as its master; a Realm lease, offline raid,
 training state or pending bot command leaves the body to its owner (nothing added or removed).
@@ -640,7 +708,7 @@ guids, counts and reason codes only. **Native rebuild required, with the playerb
 
 Stock playerbots meets most boss mechanics only after standing in them: `avoid aoe` steps out once an effect has
 landed (and only with a real-player master), and nothing at all handles the mechanics the raid playbooks mark
-`handled_by = "none"`. `Leeroy.Mechanics.Enable` (default 0, `.reload config`) moves the cast bots of the owner's
+`handled_by = "none"`. `Leeroy.Mechanics.Enable` (default 1, `.reload config`) moves the cast bots of the owner's
 group and of a running offline raid when the boss **starts casting**, from the playbooks
 (`mind/leeroy_mind/raidplay/README.md`, the mind's `[raidplay] respond`). The world side is `Guild/MechanicJob.*`,
 pure policy and geometry `Lib/LeeroyMechanicPolicy.*` (unit tests `TestMechanicPolicy.cpp`); the bodies move
@@ -742,7 +810,7 @@ mind sends one `string_do {guid, kind, target_guid, emote}` (`Guild/Strings.cpp`
 `job` (kind `string_do`) whose `reason` says what she did (`came`, `joined`, `joined_far`, `following`,
 `stopped`, `challenged`, `emoted`, `sat`); or it refuses with one code in the ack and changes nothing.
 
-`Leeroy.Strings.Enable` (default 0, `.reload config`; `off` while 0). Every kind needs him online and alive, the
+`Leeroy.Strings.Enable` (default 1, `.reload config`; `off` while 0). Every kind needs him online and alive, the
 member a pinned cast member of his guild on a random-bot account run by playerbots, and her body free of every
 ownership fence: a Realm lease, training, an offline raid, a pending bot command (`MutationReason`; a member of
 his own group under every fence but the one that holds his group for him, as his add command treats her). Never
@@ -787,7 +855,7 @@ outcome=`, `string_refused guid= kind= code=`, `string_stay_lifted guid=`. **Nat
 
 His invitations in game chat ("meet me at the bank", "let's go fishing in Dalaran"; the mind's
 `[talk] invites`, `mind/leeroy_mind/invites/README.md`) are the same `string_do` marked `"via":
-"invite"`, which answers to `Leeroy.Invites.Enable` (default 0, `.reload config`; `off` while 0)
+"invite"`, which answers to `Leeroy.Invites.Enable` (default 1, `.reload config`; `off` while 0)
 instead of `Leeroy.Strings.Enable`. Hello's `features` lists `invites`. Every fence and shared
 refusal above holds, and two kinds are added (pure policy `Lib/LeeroyStrings.h`, spots
 `Lib/LeeroyInviteSpots.h`):
@@ -825,7 +893,7 @@ queue. **Native rebuild required.**
 
 His "you lead", "take the lead", "take us questing", "go grind", "lead us to the inn" in party,
 raid or a whisper (the mind's `[talk] lead`, `mind/leeroy_mind/lead/README.md`) is `lead_do`
-(`Guild/Lead.cpp`, pure policy `Lib/LeeroyLead.h`), answering to `Leeroy.Lead.Enable` (default 0,
+(`Guild/Lead.cpp`, pure policy `Lib/LeeroyLead.h`), answering to `Leeroy.Lead.Enable` (default 1,
 `.reload config`; `off` while 0, and 0 ends the lead in force). Hello's `features` lists `lead`.
 One lead at a time (a newer start ends the one in force, `replaced`).
 
@@ -1045,7 +1113,7 @@ and its desk separately never spends a try on an older worldserver's `busy:` ref
 A native rebuild adds `get_world_roster` (complete, bounded roster pages carrying
 an independent `request` token) and `world_say` (Trade/General for an eligible
 member of a current rival guild). Both require `Leeroy.Realm.Enable = 1` and
-`Leeroy.World.Enable = 1`. World defaults to 0; `.reload config` applies the switch.
+`Leeroy.World.Enable = 1`. World defaults to 1; `.reload config` applies the switch.
 The roster excludes the owner, our guild and every character on auction-bot
 accounts. Missing character/account evidence refuses the guild. A member row that breaks
 the page rules (or repeats a guid) is left out of the roster instead of refusing all of it,
@@ -1070,3 +1138,31 @@ true once a fill of that group added at least one of the roster's members or ben
 (`GuildAddRosterFollowed`), so the mind can record the lineup in effect through his add. Server.log:
 `guild_add_roster held (N members, M bench)` and `add<N> from the guild follows the posted roster
 (...)`, counts only. **Native rebuild required.**
+
+# The play-style table (`playstyle_table`)
+
+`playstyle_table {styles: [{guid, param}, ...]}` (pure policy `Lib/LeeroyPlayStyle.h`, parser
+`ParsePlayStyleTable`, adapter `Guild/PlayStyle.cpp`; hello feature `playstyle_table`) is the mind's
+whole persona play-style table, at most 512 members, none twice, each `param` a `bot_do playstyle`
+param. It replaces the last table whole and belongs to the bridge connection that sent it; a member
+it repeats unchanged keeps its retry time. With `Leeroy.PlayStyle.Enable` and `Leeroy.PlayStyle.Table`
+(default 1, `.reload config`) on, he online and his group no raid group, the play-style tick (once a
+second) tries at most 16 due members, those waiting longest first, through the same admission and
+journal as `bot_do playstyle`, and checks each tried member again 15 seconds later whatever came of it. A member whose
+journal is the table's with the same request is not tried; one whose journal another writer made
+(an explicit `bot_do playstyle`) is left to that writer. The tick takes back a journal the table made
+once the table no longer lists its member: a smaller or empty table, the mind's disconnect (the
+table is dropped, `why=mind`) or `Leeroy.Enable`, `Leeroy.PlayStyle.Enable` or `Leeroy.PlayStyle.Table`
+at 0 (dropped, `why=off`, as a config load invalidates queued `bot_do` additions; the mind sends it
+again at his next login or hello). The usual cleanup (PvP, instance, raid, role, another owner) still
+applies, and the table then styles her again once she is free. So does a table journal whose fields no
+longer hold what it wrote (`Journal::Drifted`): playerbots' `OnPlayerLogin` resets the strategies of his
+group's bots at his relog without a new body or AI, so the tick restores what is still the table's and
+styles her anew.
+
+The handler refuses `disabled`, `playstyle_off` and `playstyle_table_off` (the mind then keeps one
+`bot_do` a member), and `not_connected` for a table its mind queued before that connection closed (a
+table is bound to the command's own connection serial, never to the one that replaced it). Server.log: `mod-leeroy: playstyle_table held styles=N`, `mod-leeroy:
+playstyle_table dropped styles=N why=mind|off`, and at most once a minute, when a style was added or
+the styled count moved, `mod-leeroy: playstyle_table styles= styled= tried= applied=
+refused=<code=n,...>`; counts and codes only. **Native rebuild required.**

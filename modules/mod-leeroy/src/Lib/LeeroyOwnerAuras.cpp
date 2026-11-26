@@ -82,6 +82,7 @@ OwnerAuraChecked CheckOwnerAuras(std::vector<std::uint32_t> const& listed,
 std::string_view OwnerAuraBlock(OwnerAuraState const& state)
 {
     if (!state.online) return "offline";
+    if (state.bot) return "bot";
     if (state.ghost) return "ghost";
     if (!state.alive) return "dead";
     if (state.teleporting) return "teleporting";
@@ -91,16 +92,50 @@ std::string_view OwnerAuraBlock(OwnerAuraState const& state)
     return {};
 }
 
-std::vector<std::uint32_t> OwnerAurasToApply(std::vector<std::uint32_t> const& listed,
-    OwnerAuraState const& state, std::function<bool(std::uint32_t)> const& has)
+std::vector<std::uint32_t> AurasToApply(std::vector<std::uint32_t> const& listed, std::string_view block,
+    std::function<bool(std::uint32_t)> const& has)
 {
     std::vector<std::uint32_t> missing;
-    if (!OwnerAuraBlock(state).empty())
+    if (!block.empty())
         return missing;
     for (std::uint32_t spell : listed)
         if (!has(spell))
             missing.push_back(spell);
     return missing;
+}
+
+std::vector<std::uint32_t> OwnerAurasToApply(std::vector<std::uint32_t> const& listed,
+    OwnerAuraState const& state, std::function<bool(std::uint32_t)> const& has)
+{
+    return AurasToApply(listed, OwnerAuraBlock(state), has);
+}
+
+std::string_view OwnerPetAuraBlock(OwnerAuraState const& owner, OwnerPetState const& pet)
+{
+    std::string_view const his = OwnerAuraBlock(owner);
+    if (!his.empty()) return his;
+    if (!pet.present) return "no_pet";
+    if (!pet.his) return "not_his";
+    if (!pet.alive) return "pet_dead";
+    if (pet.charmed) return "charmed";
+    return {};
+}
+
+std::vector<std::uint32_t> OwnerPetAurasToApply(std::vector<std::uint32_t> const& listed,
+    OwnerAuraState const& owner, OwnerPetState const& pet, std::function<bool(std::uint32_t)> const& has)
+{
+    return AurasToApply(listed, OwnerPetAuraBlock(owner, pet), has);
+}
+
+std::vector<std::uint64_t> OwnerPetTargets(std::uint64_t pet, std::vector<std::uint64_t> const& guardians)
+{
+    std::vector<std::uint64_t> targets;
+    if (pet)
+        targets.push_back(pet);
+    for (std::uint64_t unit : guardians)
+        if (unit && std::find(targets.begin(), targets.end(), unit) == targets.end())
+            targets.push_back(unit);
+    return targets;
 }
 
 char const* OwnerAuraWhyName(OwnerAuraWhy why)
