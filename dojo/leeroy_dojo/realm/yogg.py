@@ -11,46 +11,57 @@ from .ra import RaError
 
 
 def verdict(o, *, token, negative=False):
-    problems = []
-    expected = dict(kind="dojo-yogg-observation", format=1, token=token, state="done", failure="",
+    plumbing, behavior = [], []
+
+    def result():
+        return dict(ok=not plumbing and not behavior, problems=plumbing + behavior,
+                    plumbing_problems=plumbing, behavior_problems=behavior)
+
+    expected = dict(kind="dojo-yogg-observation", format=1, token=token, state="done",
                     negative=negative, ready=True, cleanup=True, portals=4, initial_sanity_members=9,
                     observation_clock="map_update")
     for key, value in expected.items():
         if type(o.get(key)) is not type(value) or o[key] != value:
-            problems.append(f"invalid {key}")
+            plumbing.append(f"invalid {key}")
+    if not isinstance(o.get("failure"), str):
+        plumbing.append("invalid failure")
     counts = ("samples", "max_gap_ms", "illusion", "max_below", "max_healers_below", "healer_entrants", "min_healers_above",
               "tank_below_samples", "influence_deaths", "brain_hits", "brain_start_health", "brain_least_health",
               "exit_remaining_ms", "native_spell_teleports", "native_charge_samples", "native_constrictor_attachments")
     for key in counts:
         if type(o.get(key)) is not int or o[key] < 0:
-            problems.append(f"invalid {key}")
+            plumbing.append(f"invalid {key}")
     for key in ("entered", "exited", "portal_casts", "exit_casts", "minimum_sanity"):
         row = o.get(key)
         kind = bool if key in {"entered", "exited"} else int
         if not isinstance(row, list) or len(row) != 9 or any(type(v) is not kind or v < 0 for v in row):
-            problems.append(f"invalid {key}")
-    if problems:
-        return dict(ok=False, problems=problems)
-    if o["illusion"] not in {1, 2, 3} or o["samples"] < 20 or o["max_gap_ms"] > 200:
-        problems.append("native illusion and continuous observation missing")
+            plumbing.append(f"invalid {key}")
+    if plumbing:
+        return result()
+    if o["failure"]:
+        behavior.append("native encounter failure")
+    if o["illusion"] not in {1, 2, 3}:
+        plumbing.append("native illusion exposure missing")
+    if o["samples"] < 20 or o["max_gap_ms"] > 200:
+        plumbing.append("continuous observation missing")
     if any(n < 1 or n > 100 for n in o["minimum_sanity"]):
-        problems.append("every actor must retain sanity")
+        behavior.append("every actor must retain sanity")
     if negative:
         if any(o["entered"]) or any(o["portal_casts"]) or o["brain_hits"] or o["influence_deaths"]:
-            problems.append("strategy-disabled control entered or affected the brain room")
+            behavior.append("strategy-disabled control entered or affected the brain room")
     else:
         if sum(o["entered"]) != 4 or o["entered"] != o["exited"]:
-            problems.append("exactly four actual entrants must return alive")
+            behavior.append("exactly four actual entrants must return alive")
         if o["max_below"] != 4 or o["max_healers_below"] != 1 or o["healer_entrants"] != 1 or o["min_healers_above"] < 1 or o["tank_below_samples"]:
-            problems.append("brain-team roles or upstairs healer reserve invalid")
+            behavior.append("brain-team roles or upstairs healer reserve invalid")
         for i, entered in enumerate(o["entered"]):
             if entered and (o["portal_casts"][i] < 1 or o["exit_casts"][i] < 1):
-                problems.append("arrival requires real portal and exit spell effects")
+                behavior.append("arrival requires real portal and exit spell effects")
         if not o["influence_deaths"] or not o["brain_hits"] or o["brain_least_health"] >= o["brain_start_health"]:
-            problems.append("native illusion kills and brain damage missing")
+            behavior.append("native illusion kills and brain damage missing")
         if o["exit_remaining_ms"] < 1000:
-            problems.append("team did not return before Induce Madness")
-    return dict(ok=not problems, problems=problems)
+            behavior.append("team did not return before Induce Madness")
+    return result()
 
 
 def parse_status(reply):

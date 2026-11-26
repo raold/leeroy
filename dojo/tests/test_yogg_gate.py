@@ -19,6 +19,19 @@ def observed(negative=False):
 
 
 class YoggGateTest(unittest.TestCase):
+    def test_cadence_and_behavior_failures_stay_failed_and_are_separate(self):
+        sample = observed(True); sample["max_gap_ms"] = 201
+        actual = verdict(sample, token="test", negative=True)
+        self.assertFalse(actual["ok"])
+        self.assertTrue(actual["plumbing_problems"])
+        self.assertEqual(actual["behavior_problems"], [])
+        sample["failure"] = "sanity_lost"
+        sample["minimum_sanity"][0] = 0
+        actual = verdict(sample, token="test", negative=True)
+        self.assertFalse(actual["ok"])
+        self.assertTrue(actual["plumbing_problems"])
+        self.assertIn("every actor must retain sanity", actual["behavior_problems"])
+
     def test_actual_team_and_sensitive_control(self):
         for negative in (True, False):
             self.assertTrue(verdict(observed(negative), token="test", negative=negative)["ok"])
