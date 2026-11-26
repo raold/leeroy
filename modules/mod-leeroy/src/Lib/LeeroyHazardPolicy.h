@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string_view>
@@ -196,9 +197,12 @@ bool HazardFirstCrossingMoves(HazardPoint from, HazardPoint goal, std::vector<Ha
 // kHazardMovingLegYards but never shorter than `minLeg` (HazardDetourStep: a nearer spot would stop follow), when
 // the walk is clear; else the bot's own spot to wait, if HazardStandClear, or the nearest such spot to step aside
 // to. nullopt when no moving zone is near, when the bot stands in a zone (the exit's job), when a zone that stays
-// shuts the way (follow as before), or when no spot to wait on is in reach.
+// shuts the way (follow as before), or when no spot to wait on is in reach. With
+// a reachability filter, candidates must pass it; failure holds the current spot
+// instead of returning an unchecked follow goal.
 std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std::optional<HazardPoint> waypoint,
-    std::vector<HazardZone> const& zones, float reach, float minLeg);
+    std::vector<HazardZone> const& zones, float reach, float minLeg,
+    std::function<bool(HazardPoint const&)> const& reachable = {});
 
 // One bot's recent exits, counted per hazard, so an exit never loops with another mover (follow, dungeon-clear's
 // route) that walks it back into the same hazards, overlapping ones included.

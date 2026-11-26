@@ -16,10 +16,12 @@
 #include "Map.h"
 #include "MoveSpline.h"
 #include "ObjectAccessor.h"
+#include "PathGenerator.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
+#include "ScriptMgr.h"
 #include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -54,7 +56,6 @@ namespace
 using MapKey = std::pair<std::uint32_t, std::uint32_t>; // map id, instance id
 
 constexpr std::uint32_t kPassMs = 500;
-constexpr std::uint32_t kPassesPerSummary = 120;  // a minute
 constexpr float kScanYards = 70.0f;              // zones that can reach a spot moved the most
 constexpr float kAnchorYards = 15.0f;            // a member this far from every scan centre gets its own
 
@@ -92,7 +93,7 @@ bool ContextMember(Player* bot, Player* owner)
 // The master whose bots the last pass made aware (0: none), so map threads turn every other bot away at once.
 std::atomic<std::uint32_t> awareMaster{0};
 std::uint32_t untilPass = 0;
-std::uint32_t passes = 0;
+std::uint64_t summaryMs = 0;
 std::uint64_t version = 0;
 
 // World thread: the bodies whose non-combat avoid aoe this job added, by the life it was added to.
@@ -116,6 +117,54 @@ struct Snapshot
 };
 std::mutex snapshotLock;
 std::shared_ptr<Snapshot const> snapshot;
+
+struct PoisonWindow
+{
+    std::uint64_t hitEvents = 0;
+    std::uint64_t botSamples = 0;
+    std::uint64_t hazardSamples = 0;
+};
+std::mutex poisonLock;
+std::map<MapKey, PoisonWindow> poisonWindows;
+std::uint64_t poisonOverflow = 0;
+constexpr std::size_t kPoisonWindows = 64;
+
+PoisonWindow* PoisonCounter(MapKey key) // poisonLock held
+{
+    auto const found = poisonWindows.find(key);
+    if (found != poisonWindows.end()) return &found->second;
+    if (poisonWindows.size() >= kPoisonWindows)
+    {
+        ++poisonOverflow;
+        return nullptr;
+    }
+    return &poisonWindows[key];
+}
+
+class HazardDamage final : public UnitScript
+{
+public:
+    HazardDamage() : UnitScript("LeeroyHazardDamage", true, {UNITHOOK_ON_DAMAGE}) { }
+
+    void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
+    {
+        if (!damage || !attacker || !attacker->IsCreature() || attacker->GetEntry() != 16027
+            || !victim || !victim->IsPlayer() || victim->GetMapId() != 533
+            || victim->ToPlayer()->GetCommandStatus(CHEAT_GOD))
+            return;
+        std::shared_ptr<Snapshot const> current;
+        {
+            std::lock_guard<std::mutex> lock(snapshotLock);
+            current = snapshot;
+        }
+        if (!current) return;
+        auto const member = current->aware.find(victim->GetGUID().GetCounter());
+        MapKey const key{victim->GetMapId(), victim->GetInstanceId()};
+        if (member == current->aware.end() || member->second != key) return;
+        std::lock_guard<std::mutex> lock(poisonLock);
+        if (auto* counter = PoisonCounter(key)) ++counter->hitEvents;
+    }
+};
 
 // Map threads: each member's last answer, reused while the question barely moved.
 struct Memo
@@ -454,15 +503,55 @@ void Publish(Player* owner, std::vector<Player*> const& aware, bool on)
         std::erase_if(exitGuards, gone);
         std::erase_if(detourTracks, gone);
     }
-    std::lock_guard<std::mutex> lock(snapshotLock);
+    // Record exposure as well as hits, so zero hits without a nearby hazard is
+    // not mistaken for a successful crossing. Only IDs/counts reach the log.
+    for (auto const& [key, zones] : next->zones)
+    {
+        if (key.first != 533) continue;
+        auto const poisons = std::count_if(zones.begin(), zones.end(), [](HazardZone const& zone)
+        {
+            ObjectGuid const guid(zone.id);
+            return guid.IsCreature() && guid.GetEntry() == 16027;
+        });
+        if (!poisons) continue;
+        auto const bots = std::count_if(next->aware.begin(), next->aware.end(),
+            [&](auto const& member) { return member.second == key; });
+        if (!bots) continue;
+        std::lock_guard<std::mutex> lock(poisonLock);
+        if (auto* counter = PoisonCounter(key))
+        {
+            counter->botSamples += bots;
+            counter->hazardSamples += poisons;
+        }
+    }
+    std::shared_ptr<Snapshot const> previous;
+    {
+        std::lock_guard<std::mutex> lock(snapshotLock);
+        previous = snapshot;
+    }
     // A new version only when the zones changed, so the answers memoised against them hold between passes.
-    next->version = snapshot && snapshot->zones == next->zones ? snapshot->version : ++version;
+    // Publish has one world-thread writer; compare the immutable vectors without
+    // holding the lock used by every map-thread reader.
+    next->version = previous && previous->zones == next->zones ? previous->version : ++version;
     awareMaster.store(owner && !next->aware.empty() ? owner->GetGUID().GetCounter() : 0, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(snapshotLock);
     snapshot = std::move(next);
 }
 
-void Summarise()
+void Summarise(std::uint64_t windowMs)
 {
+    std::map<MapKey, PoisonWindow> poison;
+    std::uint64_t overflow = 0;
+    {
+        std::lock_guard<std::mutex> lock(poisonLock);
+        poison.swap(poisonWindows);
+        overflow = std::exchange(poisonOverflow, 0);
+    }
+    for (auto const& [key, counts] : poison)
+        LOG_INFO("module.leeroy", "living_poison_minute map={} instance={} window_ms={} hit_events={} bot_samples={} hazard_samples={}",
+            key.first, key.second, windowMs, counts.hitEvents, counts.botSamples, counts.hazardSamples);
+    if (overflow)
+        LOG_WARN("module.leeroy", "living_poison_overflow window_ms={} unrecorded_updates={}", windowMs, overflow);
     std::size_t spots = 0;
     std::size_t exits = 0;
     std::size_t detours = 0;
@@ -620,7 +709,29 @@ public:
             changed = true;
         }
         // Near a moving npc, short legs (or a wait), so follow plans again from each fresh pass.
-        if (auto const leg = HazardMovingLeg(at, goal.answer, waypoint, *zones, reach, step))
+        unsigned pathChecks = 0;
+        auto const reachable = [&](HazardPoint const& candidate)
+        {
+            if (std::hypot(candidate.x - at.x, candidate.y - at.y) < 0.01f)
+                return true; // waiting does not need a new route
+            if (++pathChecks > kCandidates)
+                return false;
+            PathGenerator path(bot);
+            path.SetUseRaycast(true); // preserve the straight leg's hazard proof
+            path.SetPathLengthLimit(kScanYards);
+            if (!path.CalculatePath(candidate.x, candidate.y, candidate.z)
+                || path.GetPathType() != PATHFIND_NORMAL)
+                return false;
+            auto const& end = path.GetActualEndPosition();
+            if (std::hypot(end.x - candidate.x, end.y - candidate.y) > 0.25f
+                || std::fabs(end.z - candidate.z) > 0.25f)
+                return false;
+            float x = candidate.x, y = candidate.y, z = candidate.z;
+            return bot->GetMap()->CheckCollisionAndGetValidCoords(bot, at.x, at.y, at.z, x, y, z, true)
+                && std::hypot(x - candidate.x, y - candidate.y) <= 0.25f
+                && std::fabs(z - candidate.z) <= 0.25f;
+        };
+        if (auto const leg = HazardMovingLeg(at, goal.answer, waypoint, *zones, reach, step, std::cref(reachable)))
         {
             target = *leg;
             changed = true;
@@ -663,6 +774,8 @@ public:
         std::optional<HazardPoint> goal;
         bool known = false;
         bool yielded = false;
+        bool yieldStarts = false;
+        std::optional<Memo> previous;
         {
             std::lock_guard<std::mutex> lock(memoLock);
             auto const found = exitMemo.find(guid);
@@ -672,27 +785,29 @@ public:
                 entry != HazardEntry::Exit)
             {
                 yielded = true;
-                if (entry == HazardEntry::YieldStarts)
-                    LOG_INFO("module.leeroy", "hazard_exit_yield guid={} zones={}", guid, standing.size());
+                yieldStarts = entry == HazardEntry::YieldStarts;
             }
-            else if (found != exitMemo.end() && found->second.moved && HazardClear(found->second.answer, *zones, reach)
-                && std::hypot(found->second.answer.x - at.x, found->second.answer.y - at.y) <= kHazardMaxShiftYards)
-            {
-                memo = found->second; // keep walking to the exit already chosen: no new path every tick
-                known = true;
-            }
-            else if (found != exitMemo.end() && !found->second.moved && found->second.version == selection
-                && Close(found->second.asked, at))
-                known = true; // nothing reachable a moment ago
+            else if (found != exitMemo.end())
+                previous = found->second;
             if (yielded)
                 exitMemo.erase(guid);
             // Out of combat: his side is the side of the follow goal the last follow tick chose.
-            if (auto const spot = spotMemo.find(guid); !known && !yielded && spot != spotMemo.end()
+            if (auto const spot = spotMemo.find(guid); !yielded && spot != spotMemo.end()
                 && ai->GetState() == BOT_STATE_NON_COMBAT)
                 goal = spot->second.answer;
         }
+        if (yieldStarts)
+            LOG_INFO("module.leeroy", "hazard_exit_yield guid={} zones={}", guid, standing.size());
         if (yielded)
             return false;
+        if (previous && previous->moved && HazardClear(previous->answer, *zones, reach)
+            && std::hypot(previous->answer.x - at.x, previous->answer.y - at.y) <= kHazardMaxShiftYards)
+        {
+            memo = *previous;
+            known = true;
+        }
+        else if (previous && !previous->moved && previous->version == selection && Close(previous->asked, at))
+            known = true;
         if (!known)
         {
             HazardPoint toward = goal.value_or(at);
@@ -721,25 +836,28 @@ private:
     static std::optional<HazardPoint> Detour(Player* bot, std::uint32_t guid, HazardPoint at, HazardPoint goal,
         std::vector<HazardZone> const& zones, float reach, std::uint64_t zonesVersion, float reached)
     {
+        std::optional<Memo> previous;
         {
             std::lock_guard<std::mutex> lock(memoLock);
             auto const found = detourMemo.find(guid);
             if (found != detourMemo.end())
-            {
-                Memo const& last = found->second;
-                if (last.version == zonesVersion && Close(last.asked, goal)
-                    && std::hypot(last.answer.x - at.x, last.answer.y - at.y) > reached
-                    && HazardSegmentClear(at, last.answer, zones, reach))
-                    return last.answer;
-                detourMemo.erase(found);
-            }
+                previous = found->second;
+        }
+        if (previous && previous->version == zonesVersion && Close(previous->asked, goal)
+            && std::hypot(previous->answer.x - at.x, previous->answer.y - at.y) > reached
+            && HazardSegmentClear(at, previous->answer, zones, reach))
+            return previous->answer;
+        {
+            std::lock_guard<std::mutex> lock(memoLock);
+            detourMemo.erase(guid);
         }
         if (HazardSegmentClear(at, goal, zones, reach) || HazardAt(at, zones, reach))
             return std::nullopt; // the straight way is clear, or stepping out comes first
+        bool const movingFirst = HazardFirstCrossingMoves(at, goal, zones, reach);
         {
             std::lock_guard<std::mutex> lock(memoLock);
             // A moving npc in the way passes: no pocket to give up on.
-            if (!HazardFirstCrossingMoves(at, goal, zones, reach) && !HazardDetourAllowed(detourTracks[guid], at, goal))
+            if (!movingFirst && !HazardDetourAllowed(detourTracks[guid], at, goal))
                 return std::nullopt; // circling in a pocket between hazards: straight, as stock
         }
         auto const waypoints = HazardDetour(at, goal, zones, reach, reached);
@@ -807,6 +925,12 @@ void InstallHazardFilter()
 
 void TickHazards(std::uint32_t diffMs)
 {
+    summaryMs += diffMs;
+    if (summaryMs >= 60000)
+    {
+        Summarise(summaryMs);
+        summaryMs = 0;
+    }
     if (diffMs < untilPass)
     {
         untilPass -= diffMs;
@@ -845,12 +969,14 @@ void TickHazards(std::uint32_t diffMs)
             aware.push_back(bot);
     }
     Publish(owner, aware, on);
+}
 
-    if (++passes >= kPassesPerSummary)
-    {
-        passes = 0;
-        Summarise();
-    }
+void AddHazardScripts() { new HazardDamage(); }
+
+void FlushHazardSummary()
+{
+    if (summaryMs) Summarise(summaryMs);
+    summaryMs = 0;
 }
 
 void ApplyHazards(Player* bot)

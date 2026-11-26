@@ -124,6 +124,20 @@ bool Crosses(HazardPoint a, HazardPoint b, HazardZone const& zone, float reach, 
 {
     if (!SameFloor(a, zone) && !SameFloor(b, zone))
         return false;
+    // Reject distant zones before the one-yard leg search repeats projection and
+    // closest-approach calculations. Include the NPC's whole remaining motion,
+    // not just its current centre: a distant fast mover can still cross the leg.
+    auto const overlaps = [&](float x0, float y0, float x1, float y1, float radius)
+    {
+        return std::max(a.x, b.x) >= std::min(x0, x1) - radius
+            && std::min(a.x, b.x) <= std::max(x0, x1) + radius
+            && std::max(a.y, b.y) >= std::min(y0, y1) - radius
+            && std::min(a.y, b.y) <= std::max(y0, y1) + radius;
+    };
+    if (!overlaps(zone.x, zone.y, zone.x, zone.y, zone.radius + reach)
+        && (!zone.moving || !overlaps(zone.px, zone.py, zone.px + zone.vx * zone.until,
+            zone.py + zone.vy * zone.until, zone.core + reach)))
+        return false;
     if (Closest(a, b, zone).second <= zone.radius + reach)
         return true;
     return zone.moving && Approach(a, b, zone, stand) <= zone.core + reach;
@@ -480,7 +494,8 @@ bool HazardStandClear(HazardPoint p, std::vector<HazardZone> const& zones, float
 }
 
 std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std::optional<HazardPoint> waypoint,
-    std::vector<HazardZone> const& zones, float reach, float minLeg)
+    std::vector<HazardZone> const& zones, float reach, float minLeg,
+    std::function<bool(HazardPoint const&)> const& reachable)
 {
     if (std::none_of(zones.begin(), zones.end(), [&](HazardZone const& zone)
             { return zone.moving && SameFloor(at, zone) && Distance2d(at, zone.x, zone.y) <= kHazardMovingNearYards; }))
@@ -500,7 +515,7 @@ std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std
         HazardPoint const end{at.x + (to.x - at.x) * part, at.y + (to.y - at.y) * part, at.z + (to.z - at.z) * part};
         if (!WalkClear(at, end, zones, reach))
             break;
-        if (HazardStandClear(end, zones, reach))
+        if (HazardStandClear(end, zones, reach) && (!reachable || reachable(end)))
             return end;
         if (along >= length)
             break;
@@ -520,7 +535,7 @@ std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std
             if (!HazardStandClear(spot, zones, reach) || !WalkClear(at, spot, zones, reach))
                 continue;
             float const toward = Distance2d(spot, to.x, to.y);
-            if (!best || toward < bestToward)
+            if ((!best || toward < bestToward) && (!reachable || reachable(spot)))
             {
                 best = spot;
                 bestToward = toward;
@@ -529,7 +544,9 @@ std::optional<HazardPoint> HazardMovingLeg(HazardPoint at, HazardPoint goal, std
         if (best)
             break; // the nearest ring that has one
     }
-    return best;
+    // A caller that checks the real navmesh must never fall back to an unchecked
+    // follow goal when no candidate is reachable. Retry from the next snapshot.
+    return best ? best : (reachable ? std::optional<HazardPoint>(at) : std::nullopt);
 }
 
 bool HazardExitYielded(HazardExitGuard const& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now)

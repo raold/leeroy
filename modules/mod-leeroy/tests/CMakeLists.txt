@@ -12,6 +12,16 @@ file(GLOB LEEROY_LIB_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../s
 
 add_executable(leeroy_tests ${LEEROY_TEST_SOURCES} ${LEEROY_LIB_SOURCES})
 
+# Exercise the actual damage hook with strict unit/ownership boundaries.
+set(hazard_source "${CMAKE_CURRENT_SOURCE_DIR}/../src/Guild/HazardJob.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${hazard_source}")
+file(READ "${hazard_source}" hazard_text)
+string(FIND "${hazard_text}" "struct PoisonWindow" hazard_begin)
+string(FIND "${hazard_text}" "// Map threads: each member's last answer" hazard_end)
+math(EXPR hazard_size "${hazard_end}-${hazard_begin}")
+string(SUBSTRING "${hazard_text}" ${hazard_begin} ${hazard_size} hazard_body)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/HazardTelemetry.inc" "${hazard_body}")
+
 # Exercise the production loot receipt adapter with delayed database/bridge boundaries.
 set(loot_receipt_source "${CMAKE_CURRENT_SOURCE_DIR}/../src/Guild/LootReceipts.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${loot_receipt_source}")

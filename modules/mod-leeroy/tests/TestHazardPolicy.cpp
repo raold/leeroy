@@ -785,6 +785,34 @@ LEEROY_TEST(Hazard_AMovingHazardNeverYieldsTheExit)
     CHECK(NoteHazardZoneEntry(guard, {pool}, 14000) == HazardEntry::Yielded); // the pool alone is let through
 }
 
+LEEROY_TEST(Hazard_DistantMotionStillCrossesAndBoundaryTouchesStillBlock)
+{
+    HazardZone const fast = HazardLeadZone({0, 31, 0, 1.5f, 1}, HazardPoint{0, -30, 0}, 20.0f);
+    // The current/led circle misses the entire segment; its later trajectory does not.
+    CHECK(fast.y - fast.radius > 1.0f);
+    CHECK(!HazardSegmentClear({-7, 0, 0}, {7, 0, 0}, {fast}, 1.0f));
+    CHECK(!HazardSegmentClear({7, 0, 0}, {-7, 0, 0}, {fast}, 1.0f));
+    CHECK(!HazardSegmentClear({-7, 0, 0}, {7, 0, 0}, {{0, 3, 0, 2, 2}}, 1.0f));
+    CHECK(HazardSegmentClear({-7, 0, 0}, {7, 0, 0}, {{0, 3.01f, 0, 2, 2}}, 1.0f));
+    CHECK(HazardSegmentClear({-7, 0, 0}, {7, 0, 0}, {{1000, 1000, 0, 2, 3}}, 1.0f));
+}
+
+LEEROY_TEST(Hazard_StepAsideTriesReachableSpotsAndNeverReturnsAnUncheckedGoal)
+{
+    HazardPoint const at{4, 0, 0}, goal{-30, 0, 0};
+    HazardZone const slime = HazardLeadZone({0, 3, 0, 1.5f, 1}, HazardPoint{0, -40, 0}, 2.5f);
+    auto const blocked = HazardMovingLeg(at, goal, std::nullopt, {slime}, 1.5f, 3.5f,
+        [](HazardPoint const&) { return false; });
+    CHECK(blocked.has_value());
+    CHECK(Dist(*blocked, at) < 0.01f);
+    // A wall closes the nearest candidate but leaves the north side reachable.
+    auto const around = HazardMovingLeg(at, goal, std::nullopt, {slime}, 1.5f, 3.5f,
+        [](HazardPoint const& point) { return point.y > 0.4f; });
+    CHECK(around.has_value());
+    CHECK(around->y > 0.4f);
+    CHECK(HazardStandClear(*around, {slime}, 1.5f));
+}
+
 // An exit planned again and again inside the same zones is one entry; a bot another mover walks from one
 // overlapping zone into the other and back, never out of both, enters each in turn (review of #424).
 LEEROY_TEST(Hazard_OnlyAZoneNewlyEnteredCountsTowardTheYield)
