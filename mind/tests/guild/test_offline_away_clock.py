@@ -62,7 +62,7 @@ async def test_a_mind_restart_keeps_the_away_clock_of_a_logout_it_recorded(setup
     left = await play_then_leave(ports, controller)
     for _ in range(5):  # Releases: five restarts within the hour, each greeted with him offline.
         await advance(ports, 10 * 60)
-        controller = OfflineRaids(ports, GuildConfig(loot_receipts=False), armory, random.Random(7))
+        controller = OfflineRaids(ports, GuildConfig(), armory, random.Random(7))
         await controller.on_logout(Logout(0, 1, True))
     assert _get(ports.conn, LOGOUT_KEY) == left
     await advance(ports, 11 * 60)
@@ -79,7 +79,7 @@ async def test_a_hello_after_he_was_last_seen_online_is_his_logout(setup):
     await controller.on_login(Login(0, 1, True))
     await advance(ports, 30 * 60)
     ports.online = False
-    restarted = OfflineRaids(ports, GuildConfig(loot_receipts=False), armory, random.Random(7))
+    restarted = OfflineRaids(ports, GuildConfig(), armory, random.Random(7))
     await restarted.on_logout(Logout(0, 1, True))
     greeted = ports.clock.now()
     assert _get(ports.conn, LOGOUT_KEY) == greeted

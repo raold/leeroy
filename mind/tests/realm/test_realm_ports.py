@@ -48,7 +48,7 @@ def app(store, clock):
 
 
 def guild(app):
-    app.guild = NS(cfg=GuildConfig(loot_receipts=False), raid_night=NS(state=State.RUNNING, run=None, session=None, _closing=deque()),
+    app.guild = NS(cfg=GuildConfig(), raid_night=NS(state=State.RUNNING, run=None, session=None, _closing=deque()),
                    offline=NS(_owned=None, run=None, session=None))
     return app.guild
 

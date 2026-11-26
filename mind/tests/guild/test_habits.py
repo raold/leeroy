@@ -46,7 +46,7 @@ def setup(fake):
                                      skill="sloppy" if guid == 106 else "solid",
                                      thinks_as="theorycrafter" if guid == 107 else "social")
     plan = RaidPlan("icc", 10, False, False, 101, 101, 109, list(specs), [], True)
-    session = asyncio.run(RaidSession.open(fake, GuildConfig(loot_receipts=False), FakeArmory({}, {}), plan))
+    session = asyncio.run(RaidSession.open(fake, GuildConfig(), FakeArmory({}, {}), plan))
     session.bind_instance(77)
     run = RaidRun(session.plan, session, True, False)
 
@@ -178,7 +178,7 @@ async def test_cooks_alternate_by_logical_night_not_clock_at_retry(setup):
     with ports.conn:
         ports.conn.execute("UPDATE guild_raid SET ended=?", (ports.clock.now(),))
     await advance(ports, 86400)
-    session = await RaidSession.open(ports, GuildConfig(loot_receipts=False), FakeArmory({}, {}), run.plan)
+    session = await RaidSession.open(ports, GuildConfig(), FakeArmory({}, {}), run.plan)
     session.bind_instance(78)
     next_run = RaidRun(session.plan, session, True, False)
     ports.sent.clear()
@@ -227,7 +227,7 @@ async def test_second_raid_same_night_reuses_member_skip_decision(setup):
     with ports.conn:
         ports.conn.execute("UPDATE guild_raid SET ended=?", (ports.clock.now(),))
     await habits.on_end("done")
-    session = await RaidSession.open(ports, GuildConfig(loot_receipts=False), FakeArmory({}, {}), run.plan)
+    session = await RaidSession.open(ports, GuildConfig(), FakeArmory({}, {}), run.plan)
     session.bind_instance(78)
     rng = FixedRandom(.99)
     second = BetweenPulls(ports, rng, gap=CallGap(ports.clock))
@@ -523,7 +523,7 @@ async def test_old_stock_receipt_cannot_pollute_a_new_run_started_during_await(s
         with ports.conn:
             ports.conn.execute("UPDATE guild_raid SET ended=?", (ports.clock.now(),))
         await habits.on_end("done")
-        session = await RaidSession.open(ports, GuildConfig(loot_receipts=False), FakeArmory({}, {}), run.plan)
+        session = await RaidSession.open(ports, GuildConfig(), FakeArmory({}, {}), run.plan)
         session.bind_instance(78)
         await habits.on_start(RaidRun(session.plan, session, True, False))
         return ack

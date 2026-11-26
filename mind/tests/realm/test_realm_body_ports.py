@@ -37,7 +37,7 @@ def boundary(tmp_path, clock):
     for guid in (101, 102):
         guild_ports.members[guid] = member(guid, f"Member{guid}", 1 if guid == 101 else 8, 2, map=631)
         guild_ports.personas[guid] = persona(guid, f"Member{guid}")
-    cfg, armory = GuildConfig(loot_receipts=False), FakeArmory({}, {})
+    cfg, armory = GuildConfig(), FakeArmory({}, {})
     controller = RaidNight(guild_ports, cfg, armory, random.Random(7))
     app = NS(clock=clock, store=Store(guild_ports.conn, clock=clock), human_guid=1,
              guild=NS(cfg=cfg, ports=guild_ports, raid_night=controller,

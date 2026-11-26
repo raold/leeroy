@@ -30,7 +30,7 @@ def setup(fake):
         fake.members[guid] = member(guid, f"Member{guid}", cls, spec, map=631)
         fake.personas[guid] = persona(guid, f"Member{guid}")
     plan = RaidPlan("icc", 10, False, False, 101, 107, 120, list(specs), [], True)
-    session = asyncio.run(RaidSession.open(fake, GuildConfig(loot_receipts=False), FakeArmory({}, {}), plan))
+    session = asyncio.run(RaidSession.open(fake, GuildConfig(), FakeArmory({}, {}), plan))
     session.bind_instance(77)
     run = RaidRun(session.plan, session, True, False)
 
@@ -131,7 +131,7 @@ def owner_led(ports, lead):
     plan = RaidPlan("icc", 10, False, False, lead, 107, 120,
                     [101, 102, 104, 107, 108, 109, 110, 111, 120], [], True)
     ports.conn.execute("UPDATE guild_raid SET ended=0 WHERE ended IS NULL")
-    session = asyncio.run(RaidSession.open(ports, GuildConfig(loot_receipts=False), FakeArmory({}, {}), plan))
+    session = asyncio.run(RaidSession.open(ports, GuildConfig(), FakeArmory({}, {}), plan))
     session.bind_instance(77)
     return RaidRun(session.plan, session, True, True)
 

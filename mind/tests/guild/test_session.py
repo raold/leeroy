@@ -38,7 +38,7 @@ def setup(fake):
     blade = ItemInfo(50001, "Testblade", 4, 264, 17, 2, 8, -1, frozenset({4}))
     armory = FakeArmory({50001: blade}, {105: {15: 251}, 106: {15: 245}})
     plan = RaidPlan("icc", 10, False, False, 101, 101, 104, list(range(101, 108)), [108], True)
-    return fake, GuildConfig(loot_receipts=False), armory, plan
+    return fake, GuildConfig(), armory, plan
 
 
 async def opened(setup, *, offline=False, bind=True):

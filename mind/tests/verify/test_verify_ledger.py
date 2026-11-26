@@ -232,6 +232,19 @@ def test_native_and_playerbots_defaults_are_the_compiled_ones():
     assert checked >= 10
 
 
+def test_the_dist_sets_every_native_switch_to_its_compiled_default():
+    src = REPO / "modules" / "mod-leeroy" / "src"
+    dist = REPO / "modules" / "mod-leeroy" / "conf" / "mod_leeroy.conf.dist"
+    if not src.is_dir() or not dist.is_file():
+        pytest.skip("not a full checkout: modules/ is absent")
+    text = "\n".join(p.read_text("utf-8", errors="replace") for p in sorted(src.rglob("*.cpp")))
+    compiled = dict(re.findall(r'GetOption<bool>\("(Leeroy\.[A-Za-z.]+)",\s*(true|false)\)', text))
+    written = dict(re.findall(r"^(Leeroy\.[A-Za-z.]+) = ([01])$", dist.read_text("utf-8"), re.MULTILINE))
+    assert {"Leeroy.Telemetry.Enable", "Leeroy.Training.Enable"} <= set(compiled)
+    assert sorted(set(compiled) - set(written)) == []  # every native boolean is in the template
+    assert [k for k, v in compiled.items() if written[k] != ("1" if v == "true" else "0")] == []
+
+
 def test_mind_switches_take_the_switchboard_defaults():
     from leeroy_mind.console import switches as S
     rows = {f"{r[0]}.{r[1]}": r for r in S.SWITCHES}

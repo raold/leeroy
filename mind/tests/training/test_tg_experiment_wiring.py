@@ -36,7 +36,7 @@ def wired(fake, experiment, tmp_path):
         fake.personas[guid] = persona(guid, f"Member{guid}")
     plan = RaidPlan("icc", 10, False, True, 101, 101, 101, list(range(101, 109)), [], False)
     meta(fake, f"guild:raid:{prior.session.raid_id}:plan", asdict(plan))
-    session = asyncio.run(RaidSession.open(fake, GuildConfig(loot_receipts=False), FakeArmory({}, {}), plan))
+    session = asyncio.run(RaidSession.open(fake, GuildConfig(), FakeArmory({}, {}), plan))
     session.bind_instance(77)
     run = RaidRun(session.plan, session, False, False)
     offline = OfflineRaids.__new__(OfflineRaids)

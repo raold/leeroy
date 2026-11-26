@@ -57,7 +57,7 @@ def test_a_won_drop_reaches_the_game_and_is_charged(fake, clock):
         client, task = await _wired(fake, bridge)
         try:
             armory, plan = _setup(fake)
-            session = await RaidSession.open(fake, GuildConfig(loot_receipts=False), armory, plan)
+            session = await RaidSession.open(fake, GuildConfig(), armory, plan)
             assert session.bind_instance(77)
             await session.on_loot_drop(LootDrop(0, 631, 77, 36597, (LootItem(50001, "Testblade", 4, 0),)))
             await clock.advance(20, step=20)
@@ -90,7 +90,7 @@ def test_an_unanswered_give_is_sent_again_under_a_new_identity_and_charged_once(
         client, task = await _wired(fake, bridge, ack_timeout=0.2)
         try:
             armory, plan = _setup(fake)
-            session = await RaidSession.open(fake, GuildConfig(loot_receipts=False), armory, plan)
+            session = await RaidSession.open(fake, GuildConfig(), armory, plan)
             assert session.bind_instance(77)
             await session.on_loot_drop(LootDrop(0, 631, 77, 36597, (LootItem(50001, "Testblade", 4, 0),)))
             await clock.advance(20, step=20)
@@ -135,7 +135,7 @@ def test_a_give_the_bridge_refused_before_writing_goes_again_under_the_same_rule
         client.send = flaky
         try:
             armory, plan = _setup(fake)
-            session = await RaidSession.open(fake, GuildConfig(loot_receipts=False), armory, plan)
+            session = await RaidSession.open(fake, GuildConfig(), armory, plan)
             assert session.bind_instance(77)
             await session.on_loot_drop(LootDrop(0, 631, 77, 36597, (LootItem(50001, "Testblade", 4, 0),)))
             await clock.advance(20, step=20)
@@ -164,7 +164,7 @@ def test_loot_call_is_window_exempt_and_a_replayed_drop_is_called_once(fake, clo
         client, task = await _wired(fake, bridge)
         try:
             armory, plan = _setup(fake)
-            session = await RaidSession.open(fake, GuildConfig(loot_receipts=False), armory, plan)
+            session = await RaidSession.open(fake, GuildConfig(), armory, plan)
             assert session.bind_instance(77)
             drop = LootDrop(0, 631, 77, 36597, (LootItem(50001, "Testblade", 4, 0),))
             await session.on_loot_drop(drop)

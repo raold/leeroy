@@ -139,17 +139,39 @@ def test_wrong_ack_and_other_owner_do_not_settle(fake, clock):
     asyncio.run(go())
 
 
-def test_receipt_opt_in_requires_native_support_and_off_wire_stays_unchanged(fake, clock):
+def test_without_native_receipts_the_award_is_given_as_with_receipts_off(fake, clock):
+    """[guild] loot_receipts on (its default) and a bridge whose hello lacks loot_receipts_v1:
+    the give goes without a receipt and is charged on its ack, as with the switch off (GuildLife
+    logs loot_receipts_unavailable at that hello)."""
     async def go():
         session, _ = await session_for(fake)
+        assert session.loot.cfg.loot_receipts is True
         fake.loot_receipts = False
         await session.on_loot_drop(LootDrop(0, 631, 77, 36597, (LootItem(50001, "Testblade", 4, 0),)))
         await clock.advance(20, step=20)
         await session.tick()
-        assert not any(isinstance(cmd, GiveLoot) for cmd in fake.sent)
+        [give] = [cmd for cmd in fake.sent if isinstance(cmd, GiveLoot)]
+        assert give.receipt is False and "receipt" not in json.loads(encode_command(give, 0))
+        [(_, record)] = session.loot._records()
+        assert not record.get("receipt")
+        charges = fake.conn.execute("SELECT guid,item_id FROM dkp_ledger WHERE reason='item'").fetchall()
+        assert [tuple(row) for row in charges] == [(105, 50001)]
     asyncio.run(go())
     cmd = GiveLoot("test", 631, 77, 36597, 0, 50001, 105)
     assert "receipt" not in json.loads(encode_command(cmd, 0))
+
+
+def test_an_award_waiting_on_its_receipt_is_never_sent_again_when_native_loses_receipts(fake, clock):
+    async def go():
+        session, key, record = await unknown(fake, clock)
+        fake.loot_receipts = fake.loot_receipt_status = False  # a hello without the features
+        for _ in range(3):
+            await session.tick()
+            await clock.advance(RETRY_AFTER_S, step=RETRY_AFTER_S)
+        assert _get(fake.conn, key)["state"] == "uncertain"
+        assert len([cmd for cmd in fake.sent if isinstance(cmd, GiveLoot)]) == 1
+        assert not fake.conn.execute("SELECT 1 FROM dkp_ledger WHERE reason='item'").fetchone()
+    asyncio.run(go())
 
 
 def test_receipt_config_is_strict_and_defaults_on(tmp_path):

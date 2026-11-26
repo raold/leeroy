@@ -373,8 +373,11 @@ class LootMaster:
                     continue
                 if not self._here(record):
                     continue
-                if self.cfg.loot_receipts and not getattr(self.ports, "loot_receipts", False):
-                    continue
+                # Receipts only where native proves them ([guild] loot_receipts and the hello's
+                # loot_receipts_v1); without it the give goes as with receipts off (GuildLife logs
+                # loot_receipts_unavailable at the hello). An award already waiting on a receipt is
+                # never sent again (above).
+                receipts = self.cfg.loot_receipts and getattr(self.ports, "loot_receipts", False)
                 current_balances = balances(self.ports.conn)
                 held = self._held()
                 cast = self.ports.cast()
@@ -407,7 +410,7 @@ class LootMaster:
                         # The intended award rides with the give, so an unknown outcome can be sent
                         # again; `award` is written only by a matching ack (the console's winner)
                         current.update(state="sending", intent=asdict(result), attempt=0)
-                        if self.cfg.loot_receipts:
+                        if receipts:
                             current.update(receipt=True, receipt_owner=self.ports.human_guid,
                                            receipt_guild=_get(self.ports.conn, "guild_id"))
                     _put(self.ports.conn, key, current)

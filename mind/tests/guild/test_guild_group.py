@@ -317,11 +317,11 @@ async def test_only_a_group_the_mind_formed_is_disbanded_at_login(setup):
     assert _get(ports.conn, FORMED_GROUP_KEY) is True
     before = len(controls(ports, "disband"))
     # A restarted mind still knows its raid group stood and clears it at his login.
-    restarted = RaidNight(ports, GuildConfig(loot_receipts=False), armory, random.Random(7))
+    restarted = RaidNight(ports, GuildConfig(), armory, random.Random(7))
     await restarted.on_login(Login(0, 1, True))
     await restarted.tick()
     assert len(controls(ports, "disband")) == before + 1 and _get(ports.conn, FORMED_GROUP_KEY) is None
-    again = RaidNight(ports, GuildConfig(loot_receipts=False), armory, random.Random(7))
+    again = RaidNight(ports, GuildConfig(), armory, random.Random(7))
     await again.on_login(Login(0, 1, True))
     await again.tick()
     assert len(controls(ports, "disband")) == before + 1

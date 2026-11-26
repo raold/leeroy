@@ -17,7 +17,7 @@ from leeroy_mind.protocol import Hello, Login, Logout
 from .fakes import FakeArmory, job, member, persona
 
 
-CFG = replace(GuildConfig(loot_receipts=False), regear_to=245)
+CFG = replace(GuildConfig(), regear_to=245)
 KEY = regear_key(245)
 
 
@@ -97,7 +97,7 @@ def test_theorycrafters_regear_to_their_own_level_when_it_is_higher():
 
 @_run_async
 async def test_off_by_default_and_never_sent_to_a_native_without_the_feature(cast):
-    roster = await regearing(cast, GuildConfig(loot_receipts=False))
+    roster = await regearing(cast, GuildConfig())
     await roster.tick()
     assert not regears(cast) and state(cast) is None
     roster = await regearing(cast, features=())
@@ -461,7 +461,7 @@ async def test_a_capped_theorycrafter_pass_takes_a_floor_and_no_ceiling(cast, av
     # Capped at 251, a theorycrafter averages a little under it: the old 245 floor would refuse 240 every hour.
     # Loot it keeps can lift its average past the cap: that still lands.
     cast.personas[102].game.thinks_as = "theorycrafter"
-    roster = await regearing(cast, GuildConfig(loot_receipts=False))
+    roster = await regearing(cast, GuildConfig())
     await roster.maybe_gear_theorycrafters()
     [command] = [c for c in cast.sent if isinstance(c, GearUp)]
     assert command.guids == (102,) and command.ilvl == 251 and not command.regear
@@ -477,7 +477,7 @@ async def test_a_capped_theorycrafter_pass_takes_a_floor_and_no_ceiling(cast, av
 @_run_async
 async def test_a_capped_gear_up_takes_a_floor_and_no_ceiling(cast, avg, lands):
     cast.members = {101: cast.members[101]}
-    roster = await regearing(cast, GuildConfig(loot_receipts=False))
+    roster = await regearing(cast, GuildConfig())
     await roster.maybe_gear_up()
     command = cast.sent[-1]
     assert command.guids == (101,) and command.ilvl == 245 and not command.regear
@@ -489,7 +489,7 @@ async def test_a_capped_gear_up_takes_a_floor_and_no_ceiling(cast, avg, lands):
 @_run_async
 async def test_an_uncapped_native_keeps_the_old_floor_and_no_ceiling(cast):
     cast.members = {101: cast.members[101]}
-    roster = await regearing(cast, GuildConfig(loot_receipts=False), features=())
+    roster = await regearing(cast, GuildConfig(), features=())
     await roster.maybe_gear_up()
     command = cast.sent[-1]
     await roster.on_job(progress(command, 101, 231))

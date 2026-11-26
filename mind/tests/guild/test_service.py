@@ -84,6 +84,27 @@ def test_receipt_recovery_lane_runs_for_debts_even_after_disabling_new_awards(ap
     asyncio.run(go())
 
 
+def test_a_hello_without_native_receipts_says_so_once_a_connection(app, caplog):
+    from leeroy_mind.guild.loot import _put
+    service = install(app, armory=armory())  # [guild] loot_receipts: on by default
+    assert service.cfg.loot_receipts is True
+    with app.store.conn:
+        _put(app.store.conn, "guild:loot:1:synthetic", {"state": "uncertain", "receipt": True})
+
+    def hello(*features):
+        return Hello(ts=1, server="mod-leeroy", version="0.1.0", guild_id=21, human_guid=0,
+                     features=features)
+    with caplog.at_level("WARNING", logger="leeroy_mind.guild.service"):
+        asyncio.run(service.event(hello(), "hello"))
+        lines = [r.getMessage() for r in caplog.records if "loot_receipts_unavailable" in r.getMessage()]
+        assert lines == ["loot_receipts_unavailable feature=loot_receipts_v1 held=1"]
+        assert service.ports.loot_receipts is False
+        asyncio.run(service.event(hello("loot_receipts_v1", "loot_receipt_status_v1"), "hello"))
+        asyncio.run(service.event(hello(), "hello"))  # the next connection's hello
+    lines = [r.getMessage() for r in caplog.records if "loot_receipts_unavailable" in r.getMessage()]
+    assert len(lines) == 2
+
+
 def test_install_only_registers_shared_ordered_listeners(app, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("construction must not create tasks")
@@ -100,7 +121,7 @@ def test_install_only_registers_shared_ordered_listeners(app, monkeypatch):
 def test_install_missing_database_logs_once_without_reading_credentials(app, monkeypatch, caplog):
     from leeroy_mind.personas import roster
     monkeypatch.setattr(roster, "read_db_info", lambda *a, **k: pytest.fail("credential read during install"))
-    cfg = replace(GuildConfig(loot_receipts=False), worldserver_conf=app.data_dir / "missing.conf")
+    cfg = replace(GuildConfig(), worldserver_conf=app.data_dir / "missing.conf")
     service = install(app, cfg=cfg)
     assert not service.armory.available and service.armory._backend is None
     assert caplog.text.count("guild_armory_unavailable") == 1
@@ -111,7 +132,7 @@ def test_injected_client_never_queries_configured_database(app, monkeypatch):
     config = app.data_dir / "worldserver.conf"
     config.write_text("synthetic", encoding="utf-8")
     monkeypatch.setattr(roster, "read_db_info", lambda *a, **k: pytest.fail("live credential read"))
-    service = install(app, cfg=replace(GuildConfig(loot_receipts=False), worldserver_conf=config))
+    service = install(app, cfg=replace(GuildConfig(), worldserver_conf=config))
     service._connected = True
     asyncio.run(service.roster_tick())
     assert not service.armory.available
@@ -127,7 +148,7 @@ def test_real_client_boundary_keeps_armory_lazy_and_injectable(app, monkeypatch)
     monkeypatch.setattr(roster, "read_db_info", lambda *a: reads.append(a) or object())
     monkeypatch.setattr(module, "MysqlArmory", lambda *a: SimpleNamespace(human_tier=lambda guid: 16))
     app.llm = OllamaClient("http://127.0.0.1:1")
-    service = install(app, cfg=replace(GuildConfig(loot_receipts=False), worldserver_conf=config))
+    service = install(app, cfg=replace(GuildConfig(), worldserver_conf=config))
     assert reads == [] and service.armory.available
     assert service.armory.human_tier(1) == 16
     assert len(reads) == 2
@@ -293,7 +314,7 @@ def test_full_guild_snapshot_is_maintenance_only_and_uses_actual_membership(app)
 
 def test_friends_snapshot_reads_actual_social_flags_without_implicit_additions(app, monkeypatch):
     from leeroy_mind.personas import roster
-    lazy = LazyArmory(replace(GuildConfig(loot_receipts=False), worldserver_conf=app.data_dir / "absent"))
+    lazy = LazyArmory(replace(GuildConfig(), worldserver_conf=app.data_dir / "absent"))
     lazy.available = True
     lazy._backend = SimpleNamespace(chars=object())
     calls = []

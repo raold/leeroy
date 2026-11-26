@@ -313,11 +313,11 @@ def offline(tmp_path, clock):
         ports.members[guid] = member(guid, f"Member{guid}", 1 if guid == 101 else 8, 2, map=631)
         ports.personas[guid] = persona(guid, f"Member{guid}")
     plan = RaidPlan("icc", 10, False, True, 101, 101, 103, list(ports.members), [], False)
-    session = asyncio.run(RaidSession.open(ports, GuildConfig(loot_receipts=False), FakeArmory({}, {}), plan))
+    session = asyncio.run(RaidSession.open(ports, GuildConfig(), FakeArmory({}, {}), plan))
     session.bind_instance(77)
     run = RaidRun(session.plan, session, False, False)
     controller = OfflineRaids.__new__(OfflineRaids)
-    controller.ports, controller.cfg = ports, GuildConfig(loot_receipts=False)
+    controller.ports, controller.cfg = ports, GuildConfig()
     controller.run, controller.session = run, session
     controller._online, controller._lease = False, False
     controller._inputs, controller._votes = deque(), []

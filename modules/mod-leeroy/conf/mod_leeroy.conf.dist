@@ -9,6 +9,12 @@
 # Master switch for the module (1 = on, 0 = off).
 Leeroy.Enable = 1
 
+# The training ground's kill switches (the mind's [training]). 0 for Telemetry stops recording his
+# raids and the offline raids; 0 for Training stops additions and requests verified cleanup, which
+# may remain pending (keep its journals until it is verified). Reloadable with .reload config.
+Leeroy.Telemetry.Enable = 1
+Leeroy.Training.Enable = 1
+
 # Persona play styles: outdoor quiet cast only; reloadable. RaidHabits win.
 Leeroy.PlayStyle.Enable = 1
 # The mind sends its whole play-style table once (playstyle_table) and native styles each member whenever she is free,
