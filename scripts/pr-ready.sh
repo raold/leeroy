@@ -85,8 +85,18 @@ def flatten(pages):
     return out
 
 
-def login(name):
-    return (name or "").removesuffix("[bot]")
+def is_codex(user):
+    # The App's own login carries the [bot] suffix, which no human account can have;
+    # a bare login counts only when GitHub types the account as a Bot.
+    user = user or {}
+    name = user.get("login") or ""
+    return name == f"{bot}[bot]" or (name == bot and user.get("type") == "Bot")
+
+
+def is_maintainer(c):
+    # A claude-local receipt counts only from someone who can write to the repo.
+    return (c.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR")
+            or (c.get("user") or {}).get("login") == "raold")
 
 
 pr, ruleset = load("pr"), load("ruleset")
@@ -134,14 +144,14 @@ else:
     # Commits a review is bound to, by SHA: a review of an older revision proves nothing.
     seen = []
     for r in flatten(load("reviews")):
-        if login((r.get("user") or {}).get("login")) == bot and r.get("commit_id"):
+        if is_codex(r.get("user")) and r.get("commit_id"):
             seen.append(r["commit_id"])
     for c in rcomments:
-        if login((c.get("user") or {}).get("login")) == bot:
+        if is_codex(c.get("user")):
             seen += [c[k] for k in ("commit_id", "original_commit_id") if c.get(k)]
     for c in flatten(load("icomments")):
         body = c.get("body") or ""
-        if login((c.get("user") or {}).get("login")) == bot:
+        if is_codex(c.get("user")):
             m = re.search(r"<!-- codex-review-state:v1 (.*?) -->", body)
             if m:
                 try:
@@ -154,7 +164,8 @@ else:
                 m = re.search(r"Reviewed commit:\*\* `([0-9a-f]{7,40})`", body)
                 if m:
                     seen.append(m[1])
-        seen += re.findall(r"claude-local reviewed ([0-9a-f]{7,40})", body)
+        if is_maintainer(c):
+            seen += re.findall(r"claude-local reviewed ([0-9a-f]{7,40})", body)
     # The last real commit, or a merge of main made after it, counts as reviewed.
     covered = [c["sha"] for c in commits[commits.index(last):]]
     if not any(s and len(s) >= 7 and c.startswith(s) for s in seen for c in covered):

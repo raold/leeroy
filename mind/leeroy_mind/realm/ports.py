@@ -955,19 +955,33 @@ class LivePorts(RealmPorts):
                         retained.update(_members(session.plan.members))
                     except ValueError:
                         raise RealmEvidenceUnavailable("offline reservations unavailable") from None
-        try:
-            accepted = None if owned.get("accepted") is None else set(_members(owned["accepted"]))
-            if accepted is not None and not accepted <= planned:
-                raise ValueError("invalid accepted scope")
-        except (TypeError, ValueError):
-            log.warning("realm_offline_reservations_corrupt")
+        phase = owned.get("phase")
+        if type(phase) is not str:
+            self._warn_reservations_corrupt(owned)
             return planned | retained
-        if type(owned.get("phase")) is not str:
-            log.warning("realm_offline_reservations_corrupt")
-            return planned | retained
-        if owned["phase"] in ("complete", "rejected"):
+        if phase in ("complete", "rejected"):
             return set()
-        return (planned if accepted is None else accepted) | retained
+        try:
+            reserves = set(_members(owned.get("reserves") or ()))
+            actual = owned.get("actual_plan")
+            legal = planned | reserves | (set(_members(actual["members"])) if actual is not None else set())
+            accepted = None if owned.get("accepted") is None else set(_members(owned["accepted"]))
+            if accepted is not None and not accepted <= legal:
+                raise ValueError("invalid accepted scope")
+        except (KeyError, TypeError, ValueError):
+            self._warn_reservations_corrupt(owned)
+            return planned | retained
+        return (planned | reserves if accepted is None else accepted) | retained
+
+    def _warn_reservations_corrupt(self, owned):
+        key = (owned.get("id"), owned.get("raid_id"))
+        try:
+            warned = self._reservations_warned
+        except AttributeError:
+            warned = self._reservations_warned = set()
+        if key not in warned:
+            warned.add(key)
+            log.warning("realm_offline_reservations_corrupt")
 
     def _open(self, session):
         if session is None or not self._tables("guild_raid"):

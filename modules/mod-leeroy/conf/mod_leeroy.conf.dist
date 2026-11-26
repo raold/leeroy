@@ -26,7 +26,7 @@ Leeroy.PlayStyle.Table = 1
 # within each role its members first, its bench only when nobody else free fits. 0 picks exactly as without one.
 # The roster lives in memory until its raid night ends (at most 12 h); the mind sends it again on hello.
 # Reloadable with .reload config.
-Leeroy.GuildAdd.FollowRoster = 0
+Leeroy.GuildAdd.FollowRoster = 1
 # Permit guild bank deliveries to cast members through mail_send.
 Leeroy.Decisions.BankMail.Enable = 1
 # Allow targeted weekly top-ups by a guild maker. Bootstrap stock is independent.
@@ -167,7 +167,7 @@ Leeroy.Realm.Enable = 1
 # Status remains readable when disabled, to settle awards made before disabling.
 Leeroy.LootReceipts.Enable = 1
 Leeroy.DayPlans.Enable = 1
-Leeroy.CastGuard = 0
+Leeroy.CastGuard = 1
 # Bounded world-thread body steps per tick, clamped to 1-20.
 Leeroy.Realm.MaxActionsPerTick = 5
 Leeroy.Realm.Announce = 1

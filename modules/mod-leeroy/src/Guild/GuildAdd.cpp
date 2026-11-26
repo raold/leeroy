@@ -49,7 +49,7 @@ bool builtFollowed = false;
 // World thread. The posted raid lineup (guild_add_roster), in memory only: a worldserver start clears it and the mind
 // sends it again on hello. Followed only while Leeroy.GuildAdd.FollowRoster is on.
 GuildAddRoster postedRoster;
-bool followRoster = false;
+bool followRoster = true;
 
 struct PendingAdd
 {
@@ -650,7 +650,7 @@ bool GuildAddBring(Player* bot, Player* human) { return Bring(bot, human, 0, 1);
 
 void RegisterGuildAddRosterHandler() { RegisterCommand(std::string(kGuildAddRosterType), HandleGuildAddRoster); }
 
-void ReloadGuildAdd() { followRoster = sConfigMgr->GetOption<bool>("Leeroy.GuildAdd.FollowRoster", false); }
+void ReloadGuildAdd() { followRoster = sConfigMgr->GetOption<bool>("Leeroy.GuildAdd.FollowRoster", true); }
 
 void AddGuildAddScripts()
 {
