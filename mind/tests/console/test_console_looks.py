@@ -124,7 +124,8 @@ def test_the_minds_refusals_are_worded_for_the_page(cast, data, said, words):
     run(go())
 
 
-def test_only_a_done_change_is_announced(cast, data):
+@pytest.mark.parametrize("status_between", [False, True])
+def test_only_a_done_change_is_announced(cast, data, status_between):
     replies = iter([{"ok": True, "guid": 101, "ledger": 4, "set": 2, "message": "Saved."},
                     {"ok": True, "guid": 101, "ledger": None, "set": None,
                      "message": "Nothing changed."},
@@ -134,10 +135,13 @@ def test_only_a_done_change_is_announced(cast, data):
 
     async def go():
         async with served(make_app(data, mind=running(data), link=link)) as app:
-            listen = asyncio.create_task(events(app, count=3, timeout=3))  # the snapshot first
+            # Count the snapshot and both looks events; a status refresh is unrelated.
+            listen = asyncio.create_task(events(app, count=3, timeout=3, skip={"status"}))
             await asyncio.sleep(0.2)
-            for body in (SET, SET, SET, {"action": "undo", "ledger": 4}):
+            for index, body in enumerate((SET, SET, SET, {"action": "undo", "ledger": 4})):
                 await http(app, "POST", "/api/looks", body=body, origin=True)
+                if status_between and index == 0:
+                    app.broadcast("status", app.strip())
             try:
                 seen = await listen
             except TimeoutError:
