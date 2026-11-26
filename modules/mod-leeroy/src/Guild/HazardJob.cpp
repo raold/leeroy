@@ -118,11 +118,18 @@ struct Snapshot
 std::mutex snapshotLock;
 std::shared_ptr<Snapshot const> snapshot;
 
+struct PoisonRoutes
+{
+    std::uint64_t attempts = 0, pathRejected = 0, endRejected = 0, collisionRejected = 0, budgetRejected = 0, waits = 0;
+    std::uint32_t rejectedTypes = 0, maxHeightErrorMm = 0;
+};
+
 struct PoisonWindow
 {
     std::uint64_t hitEvents = 0;
     std::uint64_t botSamples = 0;
     std::uint64_t hazardSamples = 0;
+    PoisonRoutes routes;
 };
 std::mutex poisonLock;
 std::map<MapKey, PoisonWindow> poisonWindows;
@@ -139,6 +146,23 @@ PoisonWindow* PoisonCounter(MapKey key) // poisonLock held
         return nullptr;
     }
     return &poisonWindows[key];
+}
+
+void NotePoisonRoutes(MapKey key, PoisonRoutes const& routes)
+{
+    if (key.first != 533 || (!routes.attempts && !routes.waits)) return;
+    std::lock_guard<std::mutex> lock(poisonLock);
+    auto* counter = PoisonCounter(key);
+    if (!counter) return;
+    auto& total = counter->routes;
+    total.attempts += routes.attempts;
+    total.pathRejected += routes.pathRejected;
+    total.endRejected += routes.endRejected;
+    total.collisionRejected += routes.collisionRejected;
+    total.budgetRejected += routes.budgetRejected;
+    total.waits += routes.waits;
+    total.rejectedTypes |= routes.rejectedTypes;
+    total.maxHeightErrorMm = std::max(total.maxHeightErrorMm, routes.maxHeightErrorMm);
 }
 
 class HazardDamage final : public UnitScript
@@ -548,8 +572,15 @@ void Summarise(std::uint64_t windowMs)
         overflow = std::exchange(poisonOverflow, 0);
     }
     for (auto const& [key, counts] : poison)
+    {
         LOG_INFO("module.leeroy", "living_poison_minute map={} instance={} window_ms={} hit_events={} bot_samples={} hazard_samples={}",
             key.first, key.second, windowMs, counts.hitEvents, counts.botSamples, counts.hazardSamples);
+        auto const& routes = counts.routes;
+        if (routes.attempts || routes.waits)
+            LOG_INFO("module.leeroy", "living_poison_routes map={} instance={} attempts={} path_rejected={} end_rejected={} collision_rejected={} budget_rejected={} waits={} rejected_types={} max_height_error_mm={}",
+                key.first, key.second, routes.attempts, routes.pathRejected, routes.endRejected,
+                routes.collisionRejected, routes.budgetRejected, routes.waits, routes.rejectedTypes, routes.maxHeightErrorMm);
+    }
     if (overflow)
         LOG_WARN("module.leeroy", "living_poison_overflow window_ms={} unrecorded_updates={}", windowMs, overflow);
     std::size_t spots = 0;
@@ -710,37 +741,57 @@ public:
         }
         // Near a moving npc, short legs (or a wait), so follow plans again from each fresh pass.
         unsigned pathChecks = 0;
+        PoisonRoutes routes;
         auto const reachable = [&](HazardPoint const& candidate)
         {
             if (std::hypot(candidate.x - at.x, candidate.y - at.y) < 0.01f)
                 return true; // waiting does not need a new route
             if (++pathChecks > kCandidates)
+            {
+                ++routes.budgetRejected;
                 return false;
+            }
+            ++routes.attempts;
             PathGenerator path(bot);
             path.SetUseRaycast(true); // preserve the straight leg's hazard proof
             path.SetPathLengthLimit(kScanYards);
             if (!path.CalculatePath(candidate.x, candidate.y, candidate.z)
-                || path.GetPathType() != PATHFIND_NORMAL)
+                || path.GetPathType() != PATHFIND_NORMAL || path.GetPath().empty())
+            {
+                ++routes.pathRejected;
+                routes.rejectedTypes |= path.GetPathType();
                 return false;
-            auto const& end = path.GetActualEndPosition();
+            }
+            // The core's raycast branch normalizes its path points but does not
+            // update GetActualEndPosition(). Inspect the actual walking endpoint.
+            auto const& end = path.GetPath().back();
             if (std::hypot(end.x - candidate.x, end.y - candidate.y) > 0.25f
                 || std::fabs(end.z - candidate.z) > 0.25f)
+            {
+                ++routes.endRejected;
+                routes.maxHeightErrorMm = std::max(routes.maxHeightErrorMm,
+                    static_cast<std::uint32_t>(std::min(1000000.0f, std::fabs(end.z - candidate.z) * 1000.0f)));
                 return false;
+            }
             float const height = bot->GetCollisionHeight() * 0.5f;
             // The route is already complete. Check collision trees directly;
             // CheckCollisionAndGetValidCoords would build a second navmesh ray.
-            return bot->GetMap()->GetMapCollisionData().GetStaticTree().isInLineOfSight(
+            bool const clear = bot->GetMap()->GetMapCollisionData().GetStaticTree().isInLineOfSight(
                        at.x, at.y, at.z + height, candidate.x, candidate.y, candidate.z + height,
                        VMAP::ModelIgnoreFlags::Nothing)
                 && bot->GetMap()->GetDynamicMapTree().isInLineOfSight(
                        at.x, at.y, at.z + height, candidate.x, candidate.y, candidate.z + height,
                        bot->GetPhaseMask(), VMAP::ModelIgnoreFlags::Nothing);
+            if (!clear) ++routes.collisionRejected;
+            return clear;
         };
         if (auto const leg = HazardMovingLeg(at, goal.answer, waypoint, *zones, reach, step, std::cref(reachable)))
         {
             target = *leg;
             changed = true;
+            if (std::hypot(target.x - at.x, target.y - at.y) < 0.01f) ++routes.waits;
         }
+        NotePoisonRoutes(KeyOf(bot), routes);
         if (!changed)
             return false;
         x = target.x;

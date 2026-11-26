@@ -625,8 +625,12 @@ training state or pending bot command leaves the body to its owner (nothing adde
   drain every 60 seconds of world time and at shutdown, with the actual interval recorded. At most 64 instance
   windows are retained; `living_poison_overflow ... unrecorded_updates=` makes any loss explicit.
   Near moving hazards, at most six navmesh raycasts check candidate legs/step-aside spots per answer, with
-  dynamic collision checks and no incomplete/direct-path fallback. If none is reachable, follow holds for
-  the next snapshot. Hazard geometry is evaluated outside the shared memo and snapshot locks.
+  dynamic collision checks and no incomplete/direct-path fallback. If none is reachable, the filter returns
+  the current position instead of an unchecked follow goal. `living_poison_routes` reports attempted routes,
+  path/endpoint/collision refusals, exhausted candidate budgets and requested waits for the same instance
+  window; these are planning decisions, not proof the bot stopped or avoided damage. Endpoint diagnostics
+  retain the maximum height discrepancy in millimetres and rejected path-type flags. Hazard geometry is
+  evaluated outside the shared memo and snapshot locks.
 
 **Larger hazards (measured, 2026-11-14).** From the live `Spell.dbc`/`SpellRadius.dbc` and the core's raid
 scripts and world SQL for Naxxramas, Ulduar, Trial of the Crusader, Icecrown Citadel, the Obsidian Sanctum, the

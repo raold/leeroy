@@ -1,5 +1,6 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #include "TestHarness.h"
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -91,4 +92,24 @@ LEEROY_TEST(HazardTelemetry_BoundsInstancesWithoutSilentlyDroppingUpdates)
     CHECK_EQ(poisonWindows.size(), kPoisonWindows);
     CHECK(PoisonCounter({533, 1}) != nullptr); // existing counters still work at capacity
     CHECK_EQ(poisonOverflow, 1u);
+}
+
+LEEROY_TEST(HazardTelemetry_AggregatesRouteFailuresWithoutCountingOtherMapsOrEmptyCalls)
+{
+    ResetPoison();
+    NotePoisonRoutes({533, 1}, {});
+    NotePoisonRoutes({603, 1}, {1, 1});
+    CHECK(poisonWindows.empty());
+    NotePoisonRoutes({533, 1}, {6, 1, 2, 1, 3, 1, 8, 500});
+    NotePoisonRoutes({533, 1}, {2, 1, 0, 1, 0, 0, 4, 250});
+    auto const& total = poisonWindows.at({533, 1});
+    CHECK_EQ(total.hitEvents, 0u);
+    CHECK_EQ(total.routes.attempts, 8u);
+    CHECK_EQ(total.routes.pathRejected, 2u);
+    CHECK_EQ(total.routes.endRejected, 2u);
+    CHECK_EQ(total.routes.collisionRejected, 2u);
+    CHECK_EQ(total.routes.budgetRejected, 3u);
+    CHECK_EQ(total.routes.waits, 1u);
+    CHECK_EQ(total.routes.rejectedTypes, 12u);
+    CHECK_EQ(total.routes.maxHeightErrorMm, 500u);
 }
