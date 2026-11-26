@@ -459,6 +459,19 @@ output in `patches/`:
   = 0` restores the earlier allocation and portal handling. The dojo's
   `valithria-encounter` pulls her with a fixed ten-player bot raid on 10-player
   normal and heroic with the switches off and on ([dojo](dojo/README.md)).
+- **Valithria's adds** (playerbots patch 0022, `Playerbots.ValithriaAdds`,
+  default `1`): the first tank by guid holds the abominations and faces their
+  Gut Spray away from the raid, the second holds the archmages, skeletons and
+  blistering zombies, and both share the rot worms (a tank takes another stray
+  worm only while it holds no more than the other); a tank's own target leaves
+  out the adds it does not hold. One skull marks the kill order: a skeleton
+  (Lay Waste reaches the whole room), a zombie, the worms, the suppressers, the
+  archmages and the abomination last, with worms and suppressers marked where
+  the most stand; melee never takes a zombie. Warriors, rogues, mages,
+  shamans, hunters and death knights interrupt a Frostbolt Volley in reach, and
+  a tank under her adds uses its own defensive cooldowns (stock Shield Wall sat
+  under the rotation). `valithria_watch` lines carry `adds=`. `0` restores the
+  patch 0021 behaviour exactly.
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.

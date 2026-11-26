@@ -1,0 +1,1224 @@
+From c94ed7622f4a2bb30fc165d124eaad2799098781 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 03:01:43 -0500
+Subject: [PATCH] Split Valithria's adds between the tanks and kill them in
+ order
+
+Playerbots.ValithriaAdds (default 1).
+
+With 0021 the dojo 10-heroic raid lost both tanks at 161-206 s. The warrior held every zombie that the
+skull and the stock tank pick sent him (195-202k of zombie melee), Gut Spray landed on everyone in front
+of an abomination (the dream-cloud multiplier blocked tank face), worms piled on whichever tank stood
+nearest, the skull waited on archmages while a skeleton's Lay Waste burned the whole room (up to 394k
+raid damage), half the Frostbolt Volleys landed (202k) and neither tank used a defensive cooldown in
+the whole pull.
+
+- The tanks split her adds (RaidInteractions::VdwTankHolds): the first by guid holds the abominations,
+  the second the archmages, skeletons and blistering zombies (a heroic zombie one-shot a kiting damage
+  dealer), both share the rot worms, a tank taking another stray worm only while it holds no more than
+  the other; a lone tank holds them all. A tank's own target leaves out what it does not hold unless
+  it is on it, and every suppresser (RaidIccStrategy::AppendTargetExclusions).
+- Tank face runs for a tank on an abomination, so its Gut Spray points away from the raid.
+- One skull in kill order (VdwKillRank): skeleton, zombie, rot worms, suppressers, archmages, the
+  abomination last; worms and suppressers are marked where the most stand, so area spells hit the
+  pile; a mark moves only to a more urgent kind. Melee never takes a zombie and fights the best melee
+  target while the skull is one.
+- icc valithria interrupt (ACTION_RAID + 6): warriors, rogues, mages, shamans, hunters and death
+  knights interrupt the nearest Frostbolt Volley in reach.
+- icc valithria tank cooldown (ACTION_EMERGENCY + 1): Shield Block, Shield Wall, Last Stand; Divine
+  Protection, Lay on Hands; Vampiric Blood, Icebound Fortitude; Barkskin, Survival Instincts, each
+  below its health line (stock Shield Wall sat at ACTION_MEDIUM_HEAL, under the rotation).
+- No crowd control on a zombie a tank holds.
+- valithria_watch gains adds= (also on its end line).
+- ValithriaAdds = 0 restores the 0021 behaviour exactly.
+---
+ conf/playerbots.conf.dist                |   8 +
+ src/Ai/Raid/ICC/Action/ICCActions.h      |  18 ++
+ src/Ai/Raid/ICC/Action/ICCActions_VT.cpp | 172 ++++++++++++++-
+ src/Ai/Raid/ICC/ICCActionContext.h       |   4 +
+ src/Ai/Raid/ICC/ICCMultipliers.cpp       |  11 +
+ src/Ai/Raid/ICC/ICCShared.cpp            | 122 ++++++++++-
+ src/Ai/Raid/ICC/ICCShared.h              |   8 +
+ src/Ai/Raid/ICC/ICCStrategy.cpp          |  44 ++++
+ src/Ai/Raid/ICC/ICCStrategy.h            |   2 +
+ src/Ai/Raid/ICC/ICCTriggerContext.h      |   7 +
+ src/Ai/Raid/ICC/ICCTriggers.cpp          |   4 +
+ src/Ai/Raid/ICC/ICCTriggers.h            |  14 ++
+ src/Ai/Raid/RaidInteractionPolicy.h      | 255 +++++++++++++++++++++++
+ src/PlayerbotAIConfig.cpp                |   1 +
+ src/PlayerbotAIConfig.h                  |   1 +
+ tests/raid_interactions_test.cpp         | 212 +++++++++++++++++++
+ 16 files changed, 876 insertions(+), 7 deletions(-)
+
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index c8838cf8..5e4116a3 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -503,6 +503,14 @@ Playerbots.ValithriaHealerFocus = 1
+ # hurting her. 0 keeps every healer out of the dream. Default: 1.
+ Playerbots.ValithriaPortals = 1
+ 
++# Icecrown Citadel, Valithria Dreamwalker: her adds. The first tank holds the abominations and faces their Gut
++# Spray away from the raid; the second holds the archmages, skeletons and blistering zombies; both share the rot
++# worms. Damage dealers kill a skeleton first, then a zombie, the worms, the suppressers, the archmages and the
++# abomination last, with worms and suppressers marked where the most stand; any bot with an interrupt stops a
++# Frostbolt Volley; a tank under her adds uses its own defensive cooldowns. 0 restores the ValithriaHealerFocus
++# behaviour exactly. Default: 1.
++Playerbots.ValithriaAdds = 1
++
+ # Opt-in Malygos drake positioning/rotation and human-led Flame Leviathan vehicles.
+ # Uses normal boarding and spell costs; never moves the human or skips a boss.
+ Playerbots.RaidVehicleSupport = 0
+diff --git a/src/Ai/Raid/ICC/Action/ICCActions.h b/src/Ai/Raid/ICC/Action/ICCActions.h
+index 7dcad11e..05364674 100644
+--- a/src/Ai/Raid/ICC/Action/ICCActions.h
++++ b/src/Ai/Raid/ICC/Action/ICCActions.h
+@@ -627,6 +627,8 @@ public:
+ 
+ private:
+     bool ApplyCrowdControl(Unit* zombie);
++    bool TankAdds();
++    bool MarkAdds();
+ };
+ 
+ class IccValithriaZombieKiteAction : public MovementAction
+@@ -653,6 +655,22 @@ public:
+     bool Execute(Event event) override;
+ };
+ 
++// An interrupt on an archmage's Frostbolt Volley (Playerbots.ValithriaAdds).
++class IccValithriaInterruptAction : public Action
++{
++public:
++    IccValithriaInterruptAction(PlayerbotAI* botAI) : Action(botAI, "icc valithria interrupt") {}
++    bool Execute(Event event) override;
++};
++
++// A tank's defensive cooldown under her adds (Playerbots.ValithriaAdds).
++class IccValithriaTankCooldownAction : public Action
++{
++public:
++    IccValithriaTankCooldownAction(PlayerbotAI* botAI) : Action(botAI, "icc valithria tank cooldown") {}
++    bool Execute(Event event) override;
++};
++
+ // A Valithria healer's mana cooldown (Playerbots.ValithriaHealerFocus), ahead of her heal.
+ class IccValithriaManaAction : public Action
+ {
+diff --git a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
+index cf351a9d..587369df 100644
+--- a/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
++++ b/src/Ai/Raid/ICC/Action/ICCActions_VT.cpp
+@@ -4,6 +4,8 @@
+  * or (at your option) any later version.
+  */
+ 
++#include <algorithm>
++#include <cstdint>
+ #include <unordered_map>
+ #include <unordered_set>
+ 
+@@ -45,10 +47,16 @@ bool IccValithriaGroupAction::Execute(Event /*event*/)
+             frostColumns.push_back(unit);
+     }
+ 
++    // With ValithriaAdds the tanks split her adds (RaidInteractions::VdwTankHolds).
++    if (PlayerbotAI::IsTank(bot) && sPlayerbotAIConfig.ValithriaAdds)
++    {
++        if (TankAdds())
++            return true;
++    }
+     // Tanks collect stray Gluttonous Abominations / Rot Worms anywhere.
+     // Each tank picks NEAREST stray so two tanks naturally split work.
+     // In taunt range -> taunt. Out of range -> step toward add to close gap.
+-    if (PlayerbotAI::IsTank(bot))
++    else if (PlayerbotAI::IsTank(bot))
+     {
+         constexpr float ADD_TAUNT_RANGE = 30.0f;
+         constexpr float CHASE_STEP = 10.0f;
+@@ -187,7 +195,12 @@ bool IccValithriaGroupAction::Execute(Event /*event*/)
+         return FleePosition(nearbyZombie->GetPosition(), 15.0f, 250U);
+     }
+ 
+-    if (nearbyZombie && !PlayerbotAI::IsMainTank(bot) && !PlayerbotAI::IsHeal(bot) && nearbyZombie->GetVictim() != bot)
++    // With ValithriaAdds a zombie on a tank stays there: a fear or stun would only send it after someone else.
++    Unit* const zombieVictim = nearbyZombie ? nearbyZombie->GetVictim() : nullptr;
++    bool const zombieTanked = sPlayerbotAIConfig.ValithriaAdds && zombieVictim && zombieVictim->ToPlayer() &&
++                              PlayerbotAI::IsTank(zombieVictim->ToPlayer());
++    if (nearbyZombie && !PlayerbotAI::IsMainTank(bot) && !PlayerbotAI::IsHeal(bot) && zombieVictim != bot &&
++        !zombieTanked)
+         ApplyCrowdControl(nearbyZombie);
+ 
+     // Leash: every role stays within 35f of the boss anchor unless doing an
+@@ -254,6 +267,69 @@ bool IccValithriaGroupAction::ApplyCrowdControl(Unit* zombie)
+     return IccTryClassCC(bot, botAI, zombie).value_or(false);
+ }
+ 
++// ValithriaAdds: taunt the nearest add this tank holds that is not on its holder (in reach), or close in on it.
++// The raid cheat's taunt fixes the add on the tank (IccCastClassTaunt). Stray worms go to the tank holding fewer.
++bool IccValithriaGroupAction::TankAdds()
++{
++    constexpr float ADD_TAUNT_RANGE = 30.0f;
++    constexpr float CHASE_STEP = 10.0f;
++    std::vector<Player*> const tanks = IccValithriaTanks(bot);
++    int const rank = IccValithriaTankRank(tanks, bot);
++    if (rank < 0)
++        return false;
++
++    GuidVector const candidates = AI_VALUE(GuidVector, "possible targets");
++    std::vector<std::size_t> worms(tanks.size(), 0);
++    for (ObjectGuid const& guid : candidates)
++        if (Unit* unit = botAI->GetUnit(guid))
++            if (unit->IsAlive() && RaidInteractions::VdwAddOf(unit->GetEntry()) == RaidInteractions::VdwAdd::Worm)
++                if (int const on = IccValithriaTankRank(tanks, unit->GetVictim()); on >= 0)
++                    ++worms[static_cast<std::size_t>(on)];
++    std::size_t fewest = SIZE_MAX;
++    for (std::size_t i = 0; i < tanks.size(); ++i)
++        if (static_cast<int>(i) != rank)
++            fewest = std::min(fewest, worms[i]);
++    bool const takesWorms = RaidInteractions::VdwTakesWorm(worms[static_cast<std::size_t>(rank)], fewest);
++
++    Unit* stray = nullptr;
++    float bestDist = FLT_MAX;
++    for (ObjectGuid const& guid : candidates)
++    {
++        Unit* unit = botAI->GetUnit(guid);
++        if (!unit || !unit->IsAlive())
++            continue;
++        RaidInteractions::VdwAdd const add = RaidInteractions::VdwAddOf(unit->GetEntry());
++        if (!RaidInteractions::VdwTankPicksUp(add, static_cast<std::size_t>(rank), tanks.size(),
++                                              IccValithriaTankRank(tanks, unit->GetVictim())) ||
++            (add == RaidInteractions::VdwAdd::Worm && !takesWorms))
++            continue;
++        float const d = bot->GetExactDist2d(unit);
++        if (d < bestDist)
++        {
++            bestDist = d;
++            stray = unit;
++        }
++    }
++    if (!stray)
++        return false;
++    if (bestDist <= ADD_TAUNT_RANGE)
++    {
++        IccCastClassTaunt(bot, botAI, stray);
++        return false;
++    }
++    float dx = stray->GetPositionX() - bot->GetPositionX();
++    float dy = stray->GetPositionY() - bot->GetPositionY();
++    float const len = std::sqrt(dx * dx + dy * dy);
++    if (len <= 0.001f)
++        return false;
++    dx /= len;
++    dy /= len;
++    float const step = std::min(CHASE_STEP, bestDist - ADD_TAUNT_RANGE + 5.0f);
++    MoveTo(bot->GetMapId(), bot->GetPositionX() + dx * step, bot->GetPositionY() + dy * step, bot->GetPositionZ(),
++           false, false, false, false, MovementPriority::MOVEMENT_COMBAT);
++    return true;
++}
++
+ bool IccValithriaGroupAction::Handle25ManGroupLogic()
+ {
+     Group* group = bot->GetGroup();
+@@ -603,6 +679,8 @@ bool IccValithriaGroupAction::Handle10ManGroupLogic()
+         return false;
+     if (PlayerbotAI::IsHeal(bot) && bot->HasAura(SPELL_DREAM_STATE))
+         return false;
++    if (sPlayerbotAIConfig.ValithriaAdds)
++        return MarkAdds();
+ 
+     constexpr float MARK_RADIUS = 45.0f;
+ 
+@@ -716,6 +794,79 @@ bool IccValithriaGroupAction::Handle10ManGroupLogic()
+     return false;
+ }
+ 
++// ValithriaAdds (10-player): one skull for the raid in RaidInteractions::VdwKillRank order, a pile of rot worms
++// or suppressers marked at its centre so area spells hit them all. Tanks hold their own adds (TankAdds; their
++// targets leave out the rest, RaidIccStrategy::AppendTargetExclusions); a melee damage dealer whose mark is a
++// zombie fights the best melee target instead of standing idle.
++bool IccValithriaGroupAction::MarkAdds()
++{
++    static constexpr uint8 SKULL = RtiTargetValue::skullIndex;
++    constexpr float MARK_RADIUS = 45.0f;
++    constexpr float CROWD_RADIUS = 8.0f;
++
++    Group* group = bot->GetGroup();
++    bool const tank = PlayerbotAI::IsTank(bot);
++    bool const healer = PlayerbotAI::IsHeal(bot);
++    context->GetValue<std::string>("rti")->Set("skull");
++
++    auto inMarkRange = [](Unit* unit)
++    {
++        return unit->GetExactDist2d(ICC_VDW_HEAL_POSITION.GetPositionX(), ICC_VDW_HEAL_POSITION.GetPositionY()) <=
++               MARK_RADIUS;
++    };
++
++    Unit* current = botAI->GetUnit(group->GetTargetIcon(SKULL));
++    RaidInteractions::VdwAdd const currentAdd =
++        current ? RaidInteractions::VdwAddOf(current->GetEntry()) : RaidInteractions::VdwAdd::Other;
++    bool const currentValid = current && current->IsAlive() && currentAdd != RaidInteractions::VdwAdd::Other &&
++                              !current->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE) && inMarkRange(current);
++    Position const ref = current ? current->GetPosition() : ICC_VDW_HEAL_POSITION;
++
++    std::vector<Unit*> units;
++    std::vector<RaidInteractions::VdwTarget> targets;
++    for (ObjectGuid const& guid : AI_VALUE(GuidVector, "possible targets"))
++    {
++        Unit* unit = botAI->GetUnit(guid);
++        if (!unit || !unit->IsAlive() || unit->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE) || !inMarkRange(unit))
++            continue;
++        RaidInteractions::VdwAdd const add = RaidInteractions::VdwAddOf(unit->GetEntry());
++        if (add == RaidInteractions::VdwAdd::Other)
++            continue;
++        units.push_back(unit);
++        targets.push_back({add, unit->GetExactDist2d(ref.GetPositionX(), ref.GetPositionY()), 0});
++    }
++    for (std::size_t i = 0; i < units.size(); ++i)
++        if (RaidInteractions::VdwCrowds(targets[i].add))
++            for (std::size_t j = 0; j < units.size(); ++j)
++                if (j != i && targets[j].add == targets[i].add && units[i]->GetExactDist2d(units[j]) <= CROWD_RADIUS)
++                    ++targets[i].crowd;
++
++    Unit* mark = currentValid ? current : nullptr;
++    int const pick = RaidInteractions::VdwPickTarget(targets, false);
++    if (pick >= 0 &&
++        RaidInteractions::VdwRemark(currentAdd, currentValid, targets[static_cast<std::size_t>(pick)].add, false))
++    {
++        mark = units[static_cast<std::size_t>(pick)];
++        if (mark != current)
++            group->SetTargetIcon(SKULL, bot->GetGUID(), mark->GetGUID());
++    }
++    else if (pick < 0 && current && !currentValid)
++        group->SetTargetIcon(SKULL, bot->GetGUID(), ObjectGuid::Empty);
++
++    if (tank || healer || !mark)
++        return false;
++    if (PlayerbotAI::IsMelee(bot) && RaidInteractions::VdwAddOf(mark->GetEntry()) == RaidInteractions::VdwAdd::Zombie)
++    {
++        int const own = RaidInteractions::VdwPickTarget(targets, true);
++        if (own >= 0 && bot->GetVictim() != units[static_cast<std::size_t>(own)])
++            Attack(units[static_cast<std::size_t>(own)]);
++        return false;
++    }
++    if (bot->GetVictim() != mark)
++        botAI->DoSpecificAction("attack rti target");
++    return false;
++}
++
+ bool IccValithriaPortalAction::Execute(Event /*event*/)
+ {
+     if (bot->GetMapId() != 631)
+@@ -969,6 +1120,23 @@ bool IccValithriaHealAction::Execute(Event /*event*/)
+     return cast;
+ }
+ 
++bool IccValithriaInterruptAction::Execute(Event /*event*/)
++{
++    Creature* archmage = IccValithriaVolleyToInterrupt(bot);
++    if (!archmage)
++        return false;
++    for (char const* spell : IccValithriaInterrupts(bot))
++        if (botAI->CanCastSpell(spell, archmage) && botAI->CastSpell(spell, archmage))
++            return true;
++    return false;
++}
++
++bool IccValithriaTankCooldownAction::Execute(Event /*event*/)
++{
++    char const* spell = IccValithriaTankCooldown(bot, botAI);
++    return spell && botAI->CastSpell(spell, bot);
++}
++
+ bool IccValithriaManaAction::Execute(Event /*event*/)
+ {
+     Unit* target = nullptr;
+diff --git a/src/Ai/Raid/ICC/ICCActionContext.h b/src/Ai/Raid/ICC/ICCActionContext.h
+index c898ae9b..045aa20c 100644
+--- a/src/Ai/Raid/ICC/ICCActionContext.h
++++ b/src/Ai/Raid/ICC/ICCActionContext.h
+@@ -69,6 +69,8 @@ public:
+         creators["icc valithria heal"] = &RaidIccActionContext::icc_valithria_heal;
+         creators["icc valithria dream cloud"] = &RaidIccActionContext::icc_valithria_dream_cloud;
+         creators["icc valithria mana"] = &RaidIccActionContext::icc_valithria_mana;
++        creators["icc valithria interrupt"] = &RaidIccActionContext::icc_valithria_interrupt;
++        creators["icc valithria tank cooldown"] = &RaidIccActionContext::icc_valithria_tank_cooldown;
+         creators["icc valithria zombie kite"] = &RaidIccActionContext::icc_valithria_zombie_kite;
+ 
+         creators["icc sindragosa group position"] = &RaidIccActionContext::icc_sindragosa_group_position;
+@@ -142,6 +144,8 @@ private:
+     static Action* icc_valithria_heal(PlayerbotAI* botAI) { return new IccValithriaHealAction(botAI); }
+     static Action* icc_valithria_dream_cloud(PlayerbotAI* botAI) { return new IccValithriaDreamCloudAction(botAI); }
+     static Action* icc_valithria_mana(PlayerbotAI* botAI) { return new IccValithriaManaAction(botAI); }
++    static Action* icc_valithria_interrupt(PlayerbotAI* botAI) { return new IccValithriaInterruptAction(botAI); }
++    static Action* icc_valithria_tank_cooldown(PlayerbotAI* botAI) { return new IccValithriaTankCooldownAction(botAI); }
+     static Action* icc_valithria_zombie_kite(PlayerbotAI* botAI) { return new IccValithriaZombieKiteAction(botAI); }
+ 
+     static Action* icc_sindragosa_group_position(PlayerbotAI* botAI) { return new IccSindragosaGroupPositionAction(botAI); }
+diff --git a/src/Ai/Raid/ICC/ICCMultipliers.cpp b/src/Ai/Raid/ICC/ICCMultipliers.cpp
+index 2343102d..b51070d1 100644
+--- a/src/Ai/Raid/ICC/ICCMultipliers.cpp
++++ b/src/Ai/Raid/ICC/ICCMultipliers.cpp
+@@ -22,6 +22,7 @@
+ #include "PetsAction.h"
+ #include "PlayerbotAI.h"
+ #include "PriestActions.h"
++#include "RaidInteractionPolicy.h"
+ #include "ReachTargetActions.h"
+ #include "RogueActions.h"
+ #include "ShamanActions.h"
+@@ -711,6 +712,16 @@ float IccValithriaDreamCloudMultiplier::GetValue(Action* action)
+     if (!boss && !bot->HasAura(SPELL_DREAM_STATE))
+         return 1.0f;
+ 
++    // ValithriaAdds: a tank turns an abomination's Gut Spray away from the raid (stock "tank face"); without
++    // it the spray landed on everyone behind the tank (177k raid-wide in a 10-heroic pull).
++    if (boss && sPlayerbotAIConfig.ValithriaAdds && dynamic_cast<TankFaceAction*>(action) &&
++        PlayerbotAI::IsTank(bot))
++    {
++        Unit* target = AI_VALUE(Unit*, "current target");
++        if (target && RaidInteractions::VdwAddOf(target->GetEntry()) == RaidInteractions::VdwAdd::Abomination)
++            return 1.0f;
++    }
++
+     if (dynamic_cast<FollowAction*>(action) || dynamic_cast<CombatFormationMoveAction*>(action))
+         return 0.0f;
+ 
+diff --git a/src/Ai/Raid/ICC/ICCShared.cpp b/src/Ai/Raid/ICC/ICCShared.cpp
+index b08011d7..b6764f88 100644
+--- a/src/Ai/Raid/ICC/ICCShared.cpp
++++ b/src/Ai/Raid/ICC/ICCShared.cpp
+@@ -7,6 +7,7 @@
+ #include "ICCShared.h"
+ 
+ #include <algorithm>
++#include <cfloat>
+ #include <list>
+ #include <map>
+ #include <string>
+@@ -19,6 +20,8 @@
+ #include "LastSpellCastValue.h"
+ #include "Playerbots.h"
+ #include "RaidInteractionPolicy.h"
++#include "Spell.h"
++#include "SpellInfo.h"
+ #include "StringFormat.h"
+ #include "ThreatManager.h"
+ #include "Timer.h"
+@@ -341,6 +344,115 @@ bool IccValithriaTakesCloud(Player* bot)
+                                         twisted ? twisted->GetStackAmount() : 0);
+ }
+ 
++std::vector<Player*> IccValithriaTanks(Player* bot)
++{
++    std::vector<Player*> tanks;
++    if (Group* group = bot->GetGroup())
++        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
++        {
++            Player* member = ref->GetSource();
++            if (member && member->IsAlive() && member->IsInWorld() && member->GetMap() == bot->GetMap() &&
++                PlayerbotAI::IsTank(member))
++                tanks.push_back(member);
++        }
++    std::sort(tanks.begin(), tanks.end(), [](Player const* a, Player const* b) { return a->GetGUID() < b->GetGUID(); });
++    return tanks;
++}
++
++int IccValithriaTankRank(std::vector<Player*> const& tanks, Unit const* unit)
++{
++    for (std::size_t i = 0; i < tanks.size(); ++i)
++        if (tanks[i] == unit)
++            return static_cast<int>(i);
++    return -1;
++}
++
++std::vector<char const*> IccValithriaInterrupts(Player* bot)
++{
++    RaidInteractions::VdwInterrupter who = RaidInteractions::VdwInterrupter::None;
++    switch (bot->getClass())
++    {
++        case CLASS_WARRIOR:
++            who = RaidInteractions::VdwInterrupter::Warrior;
++            break;
++        case CLASS_ROGUE:
++            who = RaidInteractions::VdwInterrupter::Rogue;
++            break;
++        case CLASS_MAGE:
++            who = RaidInteractions::VdwInterrupter::Mage;
++            break;
++        case CLASS_SHAMAN:
++            who = RaidInteractions::VdwInterrupter::Shaman;
++            break;
++        case CLASS_HUNTER:
++            who = RaidInteractions::VdwInterrupter::Hunter;
++            break;
++        case CLASS_DEATH_KNIGHT:
++            who = RaidInteractions::VdwInterrupter::DeathKnight;
++            break;
++        default:
++            break;
++    }
++    return RaidInteractions::VdwInterruptSpells(who);
++}
++
++char const* IccValithriaTankCooldown(Player* bot, PlayerbotAI* botAI)
++{
++    // Cheapest checks first: the trigger asks every tick.
++    if (!sPlayerbotAIConfig.ValithriaAdds || bot->GetMapId() != 631 || !bot->IsAlive() ||
++        bot->GetHealthPct() >= 75.0f || !PlayerbotAI::IsTank(bot) || !bot->IsInCombat() ||
++        !bot->FindNearestCreature(NPC_VALITHRIA_DREAMWALKER, 100.0f))
++        return nullptr;
++    RaidInteractions::VdwTankClass tank = RaidInteractions::VdwTankClass::Other;
++    switch (bot->getClass())
++    {
++        case CLASS_WARRIOR:
++            tank = RaidInteractions::VdwTankClass::Warrior;
++            break;
++        case CLASS_PALADIN:
++            tank = RaidInteractions::VdwTankClass::Paladin;
++            break;
++        case CLASS_DEATH_KNIGHT:
++            tank = RaidInteractions::VdwTankClass::DeathKnight;
++            break;
++        case CLASS_DRUID:
++            tank = RaidInteractions::VdwTankClass::Druid;
++            break;
++        default:
++            return nullptr;
++    }
++    return RaidInteractions::VdwPickTankCooldown(
++        tank, bot->GetHealthPct(),
++        [&](char const* spell) { return !botAI->HasAura(spell, bot) && botAI->CanCastSpell(spell, bot); });
++}
++
++Creature* IccValithriaVolleyToInterrupt(Player* bot)
++{
++    // Cheapest checks first: the trigger asks every tick. Healers keep healing.
++    if (!sPlayerbotAIConfig.ValithriaAdds || bot->GetMapId() != 631 || !bot->IsAlive() || PlayerbotAI::IsHeal(bot) ||
++        bot->HasAura(SPELL_DREAM_STATE) || IccValithriaInterrupts(bot).empty())
++        return nullptr;
++    std::list<Creature*> archmages;
++    bot->GetCreatureListWithEntryInGrid(archmages, NPC_RISEN_ARCHMAGE, 30.0f);
++    Creature* best = nullptr;
++    float bestDistance = FLT_MAX;
++    for (Creature* archmage : archmages)
++    {
++        if (!archmage || !archmage->IsAlive())
++            continue;
++        Spell* spell = archmage->GetCurrentSpell(CURRENT_GENERIC_SPELL);
++        if (!spell || !RaidInteractions::VdwTakesInterrupt(spell->GetSpellInfo()->Id, spell->GetCastTimeRemaining()))
++            continue;
++        float const distance = bot->GetExactDist(archmage);
++        if (distance < bestDistance)
++        {
++            bestDistance = distance;
++            best = archmage;
++        }
++    }
++    return best;
++}
++
+ namespace
+ {
+ RaidInteractions::HealerClass ValithriaHealerKind(uint8 playerClass)
+@@ -474,9 +586,9 @@ void IccValithriaWatch(Creature* valithria)
+     if (encounter != IN_PROGRESS || !valithria->IsAlive())
+     {
+         if (watch.engaged)
+-            LOG_INFO("playerbots", "valithria_watch instance={} end={} hp={:.1f} focus={}", instanceId,
++            LOG_INFO("playerbots", "valithria_watch instance={} end={} hp={:.1f} focus={} adds={}", instanceId,
+                      encounter == DONE ? "done" : "reset", valithria->GetHealthPct(),
+-                     sPlayerbotAIConfig.ValithriaHealerFocus ? 1 : 0);
++                     sPlayerbotAIConfig.ValithriaHealerFocus ? 1 : 0, sPlayerbotAIConfig.ValithriaAdds ? 1 : 0);
+         watch = IcecrownHelpers::ValithriaWatch{};
+         state.vtHealNotes.clear();
+         return;
+@@ -550,9 +662,9 @@ void IccValithriaWatch(Creature* valithria)
+     std::string summary;
+     for (auto const& [duty, count] : duties)
+         summary += " " + duty + "=" + std::to_string(count);
+-    LOG_INFO("playerbots", "valithria_watch instance={} diff={} focus={} hp={:.1f} healers={}{} casts={}", instanceId,
+-             uint32(map->GetDifficulty()), sPlayerbotAIConfig.ValithriaHealerFocus ? 1 : 0, valithria->GetHealthPct(),
+-             healers.size(), summary, casts);
++    LOG_INFO("playerbots", "valithria_watch instance={} diff={} focus={} adds={} hp={:.1f} healers={}{} casts={}",
++             instanceId, uint32(map->GetDifficulty()), sPlayerbotAIConfig.ValithriaHealerFocus ? 1 : 0,
++             sPlayerbotAIConfig.ValithriaAdds ? 1 : 0, valithria->GetHealthPct(), healers.size(), summary, casts);
+     for (std::string const& line : lines)
+         LOG_INFO("playerbots", "{}", line);
+ }
+diff --git a/src/Ai/Raid/ICC/ICCShared.h b/src/Ai/Raid/ICC/ICCShared.h
+index 5d87b023..ec3a2186 100644
+--- a/src/Ai/Raid/ICC/ICCShared.h
++++ b/src/Ai/Raid/ICC/ICCShared.h
+@@ -109,6 +109,14 @@ uint32 IccValithriaManaCooldown(Player* bot, PlayerbotAI* botAI, Unit*& target);
+ void IccValithriaNoteManaCooldown(Player* bot);
+ // Playerbots.log every 5 s while her encounter is in progress (ICCScripts.cpp calls it from her update).
+ void IccValithriaWatch(Creature* valithria);
++// The living group tanks by guid, and a unit's place among them (-1 for none), for her adds (ValithriaAdds).
++std::vector<Player*> IccValithriaTanks(Player* bot);
++// ValithriaAdds: the nearest archmage in reach casting a Frostbolt Volley this bot can interrupt, or null.
++Creature* IccValithriaVolleyToInterrupt(Player* bot);
++std::vector<char const*> IccValithriaInterrupts(Player* bot);
++// ValithriaAdds: the defensive cooldown a tank under her adds should use now, or null.
++char const* IccValithriaTankCooldown(Player* bot, PlayerbotAI* botAI);
++int IccValithriaTankRank(std::vector<Player*> const& tanks, Unit const* unit);
+ std::vector<Creature*> IccGetCreaturesByEntries(WorldObject* searcher, std::initializer_list<uint32> entries,
+                                                 float range);
+ 
+diff --git a/src/Ai/Raid/ICC/ICCStrategy.cpp b/src/Ai/Raid/ICC/ICCStrategy.cpp
+index 2f6b8d0b..3598e89e 100644
+--- a/src/Ai/Raid/ICC/ICCStrategy.cpp
++++ b/src/Ai/Raid/ICC/ICCStrategy.cpp
+@@ -6,6 +6,10 @@
+ 
+ #include "ICCStrategy.h"
+ #include "ICCMultipliers.h"
++#include "ICCShared.h"
++#include "ICCTriggers.h"
++#include "Playerbots.h"
++#include "RaidInteractionPolicy.h"
+ 
+ void RaidIccStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+ {
+@@ -144,6 +148,15 @@ void RaidIccStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+     triggers.push_back(new TriggerNode("icc valithria mana",
+         { NextAction("icc valithria mana", ACTION_RAID + 3) }));
+ 
++    // An archmage's Frostbolt Volley is interrupted ahead of every Valithria action but the zombie kite
++    // (ValithriaAdds).
++    triggers.push_back(new TriggerNode("icc valithria interrupt",
++        { NextAction("icc valithria interrupt", ACTION_RAID + 6) }));
++
++    // A tank's own defensive cooldown under her adds, ahead of its rotation (ValithriaAdds).
++    triggers.push_back(new TriggerNode("icc valithria tank cooldown",
++        { NextAction("icc valithria tank cooldown", ACTION_EMERGENCY + 1) }));
++
+     //SINDRAGOSA
+     triggers.push_back(new TriggerNode("icc sindragosa group position",
+         { NextAction("icc sindragosa group position", ACTION_RAID + 1) }));
+@@ -205,3 +218,34 @@ void RaidIccStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)
+     multipliers.push_back(new IccLichKingSpiritBombMultiplier(botAI));
+     multipliers.push_back(new IccGunshipMultiplier(botAI));
+ }
++
++// Playerbots.ValithriaAdds: at Valithria a tank's own target leaves out what it does not hold
++// (RaidInteractions::VdwTankHolds) unless that add is on it, and every suppresser, so neither the skull nor the
++// stock pick drags a tank off its own adds. Off, nothing is excluded.
++void RaidIccStrategy::AppendTargetExclusions(GuidSet& exclusions, TargetValueExclusionType type)
++{
++    if (!sPlayerbotAIConfig.ValithriaAdds || type != TargetValueExclusionType::TankTarget)
++        return;
++    Player* bot = botAI->GetBot();
++    if (bot->GetMapId() != 631 || !PlayerbotAI::IsTank(bot) ||
++        !bot->FindNearestCreature(NPC_VALITHRIA_DREAMWALKER, 100.0f))
++        return;
++    std::vector<Player*> const tanks = IccValithriaTanks(bot);
++    int const rank = IccValithriaTankRank(tanks, bot);
++    if (rank < 0)
++        return;
++    AiObjectContext* context = botAI->GetAiObjectContext();
++    for (ObjectGuid const& guid : AI_VALUE(GuidVector, "possible targets"))
++    {
++        Unit* unit = botAI->GetUnit(guid);
++        if (!unit)
++            continue;
++        RaidInteractions::VdwAdd const add = RaidInteractions::VdwAddOf(unit->GetEntry());
++        if (add == RaidInteractions::VdwAdd::Other)
++            continue;
++        bool const onMe = unit->GetVictim() == bot;
++        if (add == RaidInteractions::VdwAdd::Suppresser ||
++            (!onMe && !RaidInteractions::VdwTankHolds(add, static_cast<std::size_t>(rank), tanks.size())))
++            exclusions.insert(guid);
++    }
++}
+diff --git a/src/Ai/Raid/ICC/ICCStrategy.h b/src/Ai/Raid/ICC/ICCStrategy.h
+index fa598dba..cfcc8e47 100644
+--- a/src/Ai/Raid/ICC/ICCStrategy.h
++++ b/src/Ai/Raid/ICC/ICCStrategy.h
+@@ -16,6 +16,8 @@ public:
+     virtual std::string const getName() override { return "icc"; }
+     virtual void InitTriggers(std::vector<TriggerNode*>& triggers) override;
+     virtual void InitMultipliers(std::vector<Multiplier*> &multipliers) override;
++    void AppendTargetExclusions(GuidSet& exclusions, TargetValueExclusionType type) override;
++    bool HasTargetExclusions() const override { return true; }
+ };
+ 
+ #endif
+diff --git a/src/Ai/Raid/ICC/ICCTriggerContext.h b/src/Ai/Raid/ICC/ICCTriggerContext.h
+index 1b3867d8..4f563253 100644
+--- a/src/Ai/Raid/ICC/ICCTriggerContext.h
++++ b/src/Ai/Raid/ICC/ICCTriggerContext.h
+@@ -65,6 +65,8 @@ public:
+         creators["icc valithria heal"] = &RaidIccTriggerContext::icc_valithria_heal;
+         creators["icc valithria dream cloud"] = &RaidIccTriggerContext::icc_valithria_dream_cloud;
+         creators["icc valithria mana"] = &RaidIccTriggerContext::icc_valithria_mana;
++        creators["icc valithria interrupt"] = &RaidIccTriggerContext::icc_valithria_interrupt;
++        creators["icc valithria tank cooldown"] = &RaidIccTriggerContext::icc_valithria_tank_cooldown;
+         creators["icc valithria zombie kite"] = &RaidIccTriggerContext::icc_valithria_zombie_kite;
+ 
+         creators["icc sindragosa group position"] = &RaidIccTriggerContext::icc_sindragosa_group_position;
+@@ -137,6 +139,11 @@ private:
+     static Trigger* icc_valithria_zombie_kite(PlayerbotAI* botAI) { return new IccValithriaZombieKiteTrigger(botAI); }
+     static Trigger* icc_valithria_dream_cloud(PlayerbotAI* botAI) { return new IccValithriaDreamCloudTrigger(botAI); }
+     static Trigger* icc_valithria_mana(PlayerbotAI* botAI) { return new IccValithriaManaTrigger(botAI); }
++    static Trigger* icc_valithria_interrupt(PlayerbotAI* botAI) { return new IccValithriaInterruptTrigger(botAI); }
++    static Trigger* icc_valithria_tank_cooldown(PlayerbotAI* botAI)
++    {
++        return new IccValithriaTankCooldownTrigger(botAI);
++    }
+ 
+     static Trigger* icc_sindragosa_group_position(PlayerbotAI* botAI) { return new IccSindragosaGroupPositionTrigger(botAI); }
+     static Trigger* icc_sindragosa_frost_beacon(PlayerbotAI* botAI) { return new IccSindragosaFrostBeaconTrigger(botAI); }
+diff --git a/src/Ai/Raid/ICC/ICCTriggers.cpp b/src/Ai/Raid/ICC/ICCTriggers.cpp
+index a801b405..128fa092 100644
+--- a/src/Ai/Raid/ICC/ICCTriggers.cpp
++++ b/src/Ai/Raid/ICC/ICCTriggers.cpp
+@@ -732,6 +732,10 @@ bool IccValithriaHealTrigger::IsActive()
+     return IccValithriaOnDragon(bot);
+ }
+ 
++bool IccValithriaInterruptTrigger::IsActive() { return IccValithriaVolleyToInterrupt(bot) != nullptr; }
++
++bool IccValithriaTankCooldownTrigger::IsActive() { return IccValithriaTankCooldown(bot, botAI) != nullptr; }
++
+ bool IccValithriaManaTrigger::IsActive()
+ {
+     Unit* target = nullptr;
+diff --git a/src/Ai/Raid/ICC/ICCTriggers.h b/src/Ai/Raid/ICC/ICCTriggers.h
+index 508d7a5c..67dc8fe4 100644
+--- a/src/Ai/Raid/ICC/ICCTriggers.h
++++ b/src/Ai/Raid/ICC/ICCTriggers.h
+@@ -578,6 +578,20 @@ public:
+     bool IsActive() override;
+ };
+ 
++class IccValithriaInterruptTrigger : public Trigger
++{
++public:
++    IccValithriaInterruptTrigger(PlayerbotAI* botAI) : Trigger(botAI, "icc valithria interrupt") {}
++    bool IsActive() override;
++};
++
++class IccValithriaTankCooldownTrigger : public Trigger
++{
++public:
++    IccValithriaTankCooldownTrigger(PlayerbotAI* botAI) : Trigger(botAI, "icc valithria tank cooldown") {}
++    bool IsActive() override;
++};
++
+ class IccValithriaManaTrigger : public Trigger
+ {
+ public:
+diff --git a/src/Ai/Raid/RaidInteractionPolicy.h b/src/Ai/Raid/RaidInteractionPolicy.h
+index f4cea035..925c2d2d 100644
+--- a/src/Ai/Raid/RaidInteractionPolicy.h
++++ b/src/Ai/Raid/RaidInteractionPolicy.h
+@@ -241,6 +241,261 @@ std::uint32_t FirstReadyHeal(std::vector<std::uint32_t> const& choices, Ready re
+             return spell;
+     return 0;
+ }
++
++// Valithria's adds (Playerbots.ValithriaAdds). A heroic add keeps its base (10-normal) entry.
++enum class VdwAdd
++{
++    Other,
++    Abomination,
++    Zombie,
++    Worm,
++    Archmage,
++    Skeleton,
++    Suppresser
++};
++
++inline VdwAdd VdwAddOf(std::uint32_t entry)
++{
++    switch (entry)
++    {
++        case 37886:
++            return VdwAdd::Abomination;
++        case 37934:
++            return VdwAdd::Zombie;
++        case 37907:
++            return VdwAdd::Worm;
++        case 37868:
++            return VdwAdd::Archmage;
++        case 36791:
++            return VdwAdd::Skeleton;
++        case 37863:
++            return VdwAdd::Suppresser;
++        default:
++            return VdwAdd::Other;
++    }
++}
++
++// Which living tank holds an add. `rank` is this tank's place among the living tanks by guid. The first holds
++// the abominations (whose Gut Spray it faces away); the second the archmages, skeletons and blistering zombies,
++// none of which may sit on the abomination tank as well; both share the rot worms a dead abomination leaves; a
++// lone tank holds them all. A heroic zombie's swing one-shot a kiting damage dealer (33-36k on 25-28k health),
++// so a tank holds it while it dies. No tank holds a suppresser: it channels on her.
++inline bool VdwTankHolds(VdwAdd add, std::size_t rank, std::size_t tanks)
++{
++    switch (add)
++    {
++        case VdwAdd::Worm:
++            return true;
++        case VdwAdd::Abomination:
++            return rank == 0 || tanks < 2;
++        case VdwAdd::Archmage:
++        case VdwAdd::Skeleton:
++        case VdwAdd::Zombie:
++            return rank >= 1 || tanks < 2;
++        default:
++            return false;
++    }
++}
++
++// Worms are shared: a tank taunts another stray worm only while it holds no more worms than the tank holding the
++// fewest, so eight worms split four and four instead of stacking Flesh Rot on the abomination tank.
++inline bool VdwTakesWorm(std::size_t mine, std::size_t fewestOnAnotherTank)
++{
++    return mine <= fewestOnAnotherTank;
++}
++
++// Whether this tank should pick up an add that is not on it: one it holds whose victim is not a tank that also
++// holds it. `victimTankRank` is the victim's rank among the living tanks, or -1 when the victim is no tank.
++inline bool VdwTankPicksUp(VdwAdd add, std::size_t rank, std::size_t tanks, int victimTankRank)
++{
++    if (!VdwTankHolds(add, rank, tanks) || victimTankRank == static_cast<int>(rank))
++        return false;
++    if (victimTankRank < 0)
++        return true;
++    return !VdwTankHolds(add, static_cast<std::size_t>(victimTankRank), tanks);
++}
++
++// The damage dealers' kill order, lowest first. The skeleton first: its Lay Waste reaches the whole room (356k
++// raid damage in a 10-heroic pull while it waited behind zombies and worms). Then a zombie: it hits hardest,
++// whoever holds it. Then the rot worms, which come eight at once from a dead
++// abomination and pile on the tanks; the suppressers (each one cuts her healing); the archmages, which a tank
++// holds; the abomination last, since its death brings the worms. Melee never takes a zombie: its acid burst
++// lands on everyone near it.
++inline int VdwKillRank(VdwAdd add, bool melee)
++{
++    switch (add)
++    {
++        case VdwAdd::Skeleton:
++            return 0;
++        case VdwAdd::Zombie:
++            return melee ? -1 : 1;
++        case VdwAdd::Worm:
++            return 2;
++        case VdwAdd::Suppresser:
++            return 3;
++        case VdwAdd::Archmage:
++            return 4;
++        case VdwAdd::Abomination:
++            return 5;
++        default:
++            return -1;
++    }
++}
++
++struct VdwTarget
++{
++    VdwAdd add = VdwAdd::Other;
++    float distance = 0.0f;       // from the reference point (the current mark, or her)
++    std::uint32_t crowd = 0;     // other adds of its kind within area-of-effect reach (worms, suppressers)
++};
++
++// Worms pile on a tank and suppressers on her: those are marked where the most of them stand, so area spells
++// hit the pile.
++inline bool VdwCrowds(VdwAdd add)
++{
++    return add == VdwAdd::Worm || add == VdwAdd::Suppresser;
++}
++
++// The add to mark: the best kill rank; within a rank the one with the most of its kind around it (only worms and
++// suppressers count any), then the nearest. -1 when none can be killed by this role.
++inline int VdwPickTarget(std::vector<VdwTarget> const& adds, bool melee)
++{
++    int best = -1;
++    for (std::size_t i = 0; i < adds.size(); ++i)
++    {
++        int const rank = VdwKillRank(adds[i].add, melee);
++        if (rank < 0)
++            continue;
++        if (best < 0)
++        {
++            best = static_cast<int>(i);
++            continue;
++        }
++        VdwTarget const& chosen = adds[static_cast<std::size_t>(best)];
++        int const bestRank = VdwKillRank(chosen.add, melee);
++        if (rank != bestRank)
++        {
++            if (rank < bestRank)
++                best = static_cast<int>(i);
++            continue;
++        }
++        if (adds[i].crowd != chosen.crowd)
++        {
++            if (adds[i].crowd > chosen.crowd)
++                best = static_cast<int>(i);
++            continue;
++        }
++        if (adds[i].distance < chosen.distance)
++            best = static_cast<int>(i);
++    }
++    return best;
++}
++
++// Whether a mark should move from the current add to the picked one: only to a strictly better kill rank, so
++// a mark stays on its add until it dies, the add leaves reach or a more urgent kind arrives.
++inline bool VdwRemark(VdwAdd current, bool currentValid, VdwAdd picked, bool melee)
++{
++    if (!currentValid)
++        return true;
++    int const currentRank = VdwKillRank(current, melee);
++    int const pickedRank = VdwKillRank(picked, melee);
++    return currentRank < 0 || (pickedRank >= 0 && pickedRank < currentRank);
++}
++// A tank's own defensive cooldowns under her adds. The stock triggers put Shield Wall at ACTION_MEDIUM_HEAL, below
++// the rotation, so in a 10-heroic pull neither tank used one (no Shield Wall, Last Stand or Divine Protection in
++// 296 s) while both died under abominations and worms. Each fires once the tank's health is below its threshold,
++// cheapest first.
++enum class VdwTankClass
++{
++    Other,
++    Warrior,
++    Paladin,
++    DeathKnight,
++    Druid
++};
++
++struct VdwDefensive
++{
++    char const* spell;
++    float belowPct;
++};
++
++inline std::vector<VdwDefensive> VdwTankCooldowns(VdwTankClass tank)
++{
++    switch (tank)
++    {
++        case VdwTankClass::Warrior:
++            return {{"shield block", 75.0f}, {"shield wall", 40.0f}, {"last stand", 30.0f}};
++        case VdwTankClass::Paladin:
++            return {{"divine protection", 40.0f}, {"lay on hands", 20.0f}};
++        case VdwTankClass::DeathKnight:
++            return {{"vampiric blood", 50.0f}, {"icebound fortitude", 40.0f}};
++        case VdwTankClass::Druid:
++            return {{"barkskin", 60.0f}, {"survival instincts", 35.0f}};
++        default:
++            return {};
++    }
++}
++
++// The first of this tank's cooldowns whose threshold its health is under and that `ready` accepts, or null.
++template <class Ready>
++char const* VdwPickTankCooldown(VdwTankClass tank, float healthPct, Ready ready)
++{
++    for (VdwDefensive const& cooldown : VdwTankCooldowns(tank))
++        if (healthPct < cooldown.belowPct && ready(cooldown.spell))
++            return cooldown.spell;
++    return nullptr;
++}
++
++// Her archmages' Frostbolt Volley: a 2 s cast hitting everyone near the archmage with Frost and, on heroic, draining
++// mana. In a 10-heroic dojo pull 13 of 21 casts landed for 202k raid damage. A bot with an interrupt takes the
++// nearest volley in reach while enough of the cast is left for an instant interrupt to land.
++inline constexpr std::array<std::uint32_t, 4> FrostboltVolley = {70759, 71889, 72015, 72016};
++inline constexpr std::int32_t VdwInterruptMinLeftMs = 150;
++
++inline bool IsFrostboltVolley(std::uint32_t spell)
++{
++    return std::find(FrostboltVolley.begin(), FrostboltVolley.end(), spell) != FrostboltVolley.end();
++}
++
++enum class VdwInterrupter
++{
++    None,
++    Warrior,
++    Rogue,
++    Mage,
++    Shaman,
++    Hunter,
++    DeathKnight
++};
++
++// The interrupts a class tries, in order (the bot's own spell book and range decide which one is castable).
++inline std::vector<char const*> VdwInterruptSpells(VdwInterrupter who)
++{
++    switch (who)
++    {
++        case VdwInterrupter::Warrior:
++            return {"pummel", "shield bash"};
++        case VdwInterrupter::Rogue:
++            return {"kick"};
++        case VdwInterrupter::Mage:
++            return {"counterspell"};
++        case VdwInterrupter::Shaman:
++            return {"wind shear"};
++        case VdwInterrupter::Hunter:
++            return {"silencing shot"};
++        case VdwInterrupter::DeathKnight:
++            return {"mind freeze"};
++        default:
++            return {};
++    }
++}
++
++// Whether a cast is one to interrupt: a volley with time left for the interrupt to land.
++inline bool VdwTakesInterrupt(std::uint32_t spell, std::int32_t castLeftMs)
++{
++    return IsFrostboltVolley(spell) && castLeftMs > VdwInterruptMinLeftMs;
++}
+ }  // namespace RaidInteractions
+ 
+ #endif
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index 094411aa..ef5c68e8 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -314,6 +314,7 @@ bool PlayerbotAIConfig::Initialize()
+     TwinValkyrInteractions = sConfigMgr->GetOption<bool>("Playerbots.TwinValkyrInteractions", false);
+     ValithriaHealerFocus = sConfigMgr->GetOption<bool>("Playerbots.ValithriaHealerFocus", true);
+     ValithriaPortals = sConfigMgr->GetOption<bool>("Playerbots.ValithriaPortals", true);
++    ValithriaAdds = sConfigMgr->GetOption<bool>("Playerbots.ValithriaAdds", true);
+     RaidVehicleSupport = sConfigMgr->GetOption<bool>("Playerbots.RaidVehicleSupport", false);
+     LichKingMechanics = sConfigMgr->GetOption<bool>("Playerbots.LichKingMechanics", false);
+ 
+diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
+index 953970e1..fe84a25e 100644
+--- a/src/PlayerbotAIConfig.h
++++ b/src/PlayerbotAIConfig.h
+@@ -110,6 +110,7 @@ public:
+     bool TwinValkyrInteractions;
+     bool ValithriaHealerFocus;
+     bool ValithriaPortals;
++    bool ValithriaAdds;
+     bool RaidVehicleSupport;
+     bool LichKingMechanics;
+     bool AllowAccountBots, AllowGuildBots, AllowTrustedAccountBots;
+diff --git a/tests/raid_interactions_test.cpp b/tests/raid_interactions_test.cpp
+index c671372b..96e1f51d 100644
+--- a/tests/raid_interactions_test.cpp
++++ b/tests/raid_interactions_test.cpp
+@@ -266,6 +266,218 @@ int main()
+     CHECK(!AffordableHeal(-1, 40));
+     CHECK(FirstReadyHeal({1001, 1002},
+                          [](std::uint32_t spell) { return AffordableHeal(spell == 1001 ? 130 : 40, 50); }) == 1002);
++
++    // Valithria's adds (Playerbots.ValithriaAdds): heroic adds keep their base entries.
++    CHECK(VdwAddOf(37886) == VdwAdd::Abomination);
++    CHECK(VdwAddOf(37934) == VdwAdd::Zombie);
++    CHECK(VdwAddOf(37907) == VdwAdd::Worm);
++    CHECK(VdwAddOf(37868) == VdwAdd::Archmage);
++    CHECK(VdwAddOf(36791) == VdwAdd::Skeleton);
++    CHECK(VdwAddOf(37863) == VdwAdd::Suppresser);
++    CHECK(VdwAddOf(38724) == VdwAdd::Other);  // a difficulty template entry is never an add's own entry
++    CHECK(VdwAddOf(36789) == VdwAdd::Other);  // Valithria herself
++    CHECK(VdwAddOf(0) == VdwAdd::Other);
++
++    std::vector<VdwAdd> const kinds = {VdwAdd::Other,    VdwAdd::Abomination, VdwAdd::Zombie,    VdwAdd::Worm,
++                                       VdwAdd::Archmage, VdwAdd::Skeleton,    VdwAdd::Suppresser};
++    // Tank duty: no tank ever holds a suppresser; every tank shares the worms; the first holds the abominations and
++    // the others the archmages, skeletons and zombies; a lone tank holds everything it may hold.
++    for (std::size_t tanks = 1; tanks <= 4; ++tanks)
++        for (std::size_t rank = 0; rank < tanks; ++rank)
++            for (VdwAdd add : kinds)
++            {
++                bool const addTankKind =
++                    add == VdwAdd::Archmage || add == VdwAdd::Skeleton || add == VdwAdd::Zombie;
++                bool const expected = add == VdwAdd::Worm ||
++                                      (add == VdwAdd::Abomination && (rank == 0 || tanks == 1)) ||
++                                      (addTankKind && (rank >= 1 || tanks == 1));
++                CHECK(VdwTankHolds(add, rank, tanks) == expected);
++            }
++    // With two tanks or more, nothing but worms sits on the abomination tank and its adds.
++    for (std::size_t tanks = 2; tanks <= 4; ++tanks)
++        for (VdwAdd add : {VdwAdd::Archmage, VdwAdd::Skeleton, VdwAdd::Zombie})
++            CHECK(!VdwTankHolds(add, 0, tanks));
++    // Every kind a tank may hold has a holder whatever the number of tanks.
++    for (std::size_t tanks = 1; tanks <= 4; ++tanks)
++        for (VdwAdd add : {VdwAdd::Abomination, VdwAdd::Worm, VdwAdd::Archmage, VdwAdd::Skeleton, VdwAdd::Zombie})
++        {
++            std::size_t holders = 0;
++            for (std::size_t rank = 0; rank < tanks; ++rank)
++                holders += VdwTankHolds(add, rank, tanks);
++            CHECK(holders >= 1);
++        }
++
++    // Pick-up: a held add on nobody's tank, or on a tank that does not hold it, is a stray to taunt; one already
++    // on a tank that holds it, or on this tank, is left alone.
++    for (std::size_t tanks = 1; tanks <= 3; ++tanks)
++        for (std::size_t rank = 0; rank < tanks; ++rank)
++            for (VdwAdd add : kinds)
++                for (int victim = -1; victim < static_cast<int>(tanks); ++victim)
++                {
++                    bool const picks = VdwTankPicksUp(add, rank, tanks, victim);
++                    bool expected = VdwTankHolds(add, rank, tanks) && victim != static_cast<int>(rank);
++                    if (expected && victim >= 0)
++                        expected = !VdwTankHolds(add, static_cast<std::size_t>(victim), tanks);
++                    CHECK(picks == expected);
++                    CHECK(!(picks && (add == VdwAdd::Other || add == VdwAdd::Suppresser)));
++                }
++    CHECK(VdwTankPicksUp(VdwAdd::Abomination, 0, 2, -1));   // on a healer: the abomination tank taunts it
++    CHECK(VdwTankPicksUp(VdwAdd::Abomination, 0, 2, 1));    // on the add tank: back to the abomination tank
++    CHECK(!VdwTankPicksUp(VdwAdd::Abomination, 1, 2, -1));  // the add tank leaves it to the abomination tank
++    CHECK(VdwTankPicksUp(VdwAdd::Archmage, 1, 2, 0));       // an archmage on the abomination tank moves over
++    CHECK(!VdwTankPicksUp(VdwAdd::Worm, 1, 2, 0));          // a worm on either tank stays where it is
++    CHECK(VdwTankPicksUp(VdwAdd::Worm, 1, 2, -1));
++    CHECK(VdwTankPicksUp(VdwAdd::Archmage, 0, 1, -1));      // a lone tank takes all but suppressers
++    CHECK(VdwTankPicksUp(VdwAdd::Zombie, 0, 1, -1));
++    CHECK(VdwTankPicksUp(VdwAdd::Zombie, 1, 2, -1));         // a zombie chasing a healer goes to the add tank
++    CHECK(VdwTankPicksUp(VdwAdd::Zombie, 1, 2, 0));          // and off the abomination tank
++    CHECK(!VdwTankPicksUp(VdwAdd::Zombie, 0, 2, -1));
++    CHECK(!VdwTankPicksUp(VdwAdd::Suppresser, 0, 1, -1));
++
++    // Worms split between the tanks: a tank takes another only while it holds no more than the fewest elsewhere.
++    for (std::size_t mine = 0; mine <= 8; ++mine)
++        for (std::size_t other = 0; other <= 8; ++other)
++            CHECK(VdwTakesWorm(mine, other) == (mine <= other));
++    CHECK(VdwTakesWorm(3, SIZE_MAX));  // a lone tank takes them all
++    {
++        // Eight strays, two tanks taking turns: four each.
++        std::size_t onTank[2] = {0, 0};
++        for (int worm = 0; worm < 8; ++worm)
++            for (std::size_t rank = 0; rank < 2; ++rank)
++                if (VdwTakesWorm(onTank[rank], onTank[1 - rank]))
++                {
++                    ++onTank[rank];
++                    break;
++                }
++        CHECK(onTank[0] == 4 && onTank[1] == 4);
++    }
++
++    // Kill order: skeleton, zombie, worms, suppressers, archmages, abomination; melee never takes a zombie.
++    std::vector<VdwAdd> const order = {VdwAdd::Skeleton,   VdwAdd::Zombie,   VdwAdd::Worm,
++                                       VdwAdd::Suppresser, VdwAdd::Archmage, VdwAdd::Abomination};
++    for (std::size_t i = 0; i < order.size(); ++i)
++    {
++        CHECK(VdwKillRank(order[i], false) == static_cast<int>(i));
++        for (std::size_t j = i + 1; j < order.size(); ++j)
++        {
++            CHECK(VdwKillRank(order[i], false) < VdwKillRank(order[j], false));
++            if (order[i] != VdwAdd::Zombie && order[j] != VdwAdd::Zombie)
++                CHECK(VdwKillRank(order[i], true) < VdwKillRank(order[j], true));
++        }
++    }
++    CHECK(VdwKillRank(VdwAdd::Zombie, true) < 0);
++    CHECK(VdwKillRank(VdwAdd::Other, false) < 0);
++    CHECK(VdwKillRank(VdwAdd::Other, true) < 0);
++
++    // Only worms and suppressers are marked where the most of them stand.
++    for (VdwAdd add : kinds)
++        CHECK(VdwCrowds(add) == (add == VdwAdd::Worm || add == VdwAdd::Suppresser));
++    CHECK(VdwPickTarget({{VdwAdd::Suppresser, 2.0f, 1}, {VdwAdd::Suppresser, 9.0f, 5}}, false) == 1);
++    CHECK(VdwPickTarget({{VdwAdd::Archmage, 2.0f, 0}, {VdwAdd::Archmage, 9.0f, 0}}, false) == 0);
++    CHECK(VdwPickTarget({{VdwAdd::Skeleton, 40.0f, 0}, {VdwAdd::Worm, 1.0f, 7}}, false) == 0);
++
++    // Picking: best rank first, then the worm with the most worms around it, then the nearest.
++    CHECK(VdwPickTarget({}, false) == -1);
++    CHECK(VdwPickTarget({{VdwAdd::Other, 1.0f, 0}}, false) == -1);
++    CHECK(VdwPickTarget({{VdwAdd::Zombie, 1.0f, 0}}, true) == -1);
++    CHECK(VdwPickTarget({{VdwAdd::Archmage, 1.0f, 0}, {VdwAdd::Zombie, 30.0f, 0}}, false) == 1);
++    CHECK(VdwPickTarget({{VdwAdd::Archmage, 1.0f, 0}, {VdwAdd::Zombie, 30.0f, 0}}, true) == 0);
++    CHECK(VdwPickTarget({{VdwAdd::Abomination, 1.0f, 0}, {VdwAdd::Worm, 20.0f, 0}, {VdwAdd::Worm, 10.0f, 0}},
++                        false) == 2);
++    CHECK(VdwPickTarget({{VdwAdd::Worm, 1.0f, 1}, {VdwAdd::Worm, 20.0f, 6}, {VdwAdd::Worm, 10.0f, 6}}, true) == 2);
++    CHECK(VdwPickTarget({{VdwAdd::Suppresser, 5.0f, 0}, {VdwAdd::Skeleton, 40.0f, 0}, {VdwAdd::Archmage, 1.0f, 0}},
++                        false) == 1);
++    // Every order of a mixed set picks the same add.
++    {
++        std::vector<VdwTarget> const mixed = {{VdwAdd::Abomination, 3.0f, 0}, {VdwAdd::Worm, 9.0f, 2},
++                                              {VdwAdd::Worm, 4.0f, 5},        {VdwAdd::Worm, 2.0f, 5},
++                                              {VdwAdd::Archmage, 1.0f, 0},    {VdwAdd::Suppresser, 1.5f, 0}};
++        std::vector<std::size_t> index = {0, 1, 2, 3, 4, 5};
++        do
++        {
++            std::vector<VdwTarget> shuffled;
++            for (std::size_t i : index)
++                shuffled.push_back(mixed[i]);
++            int const pick = VdwPickTarget(shuffled, false);
++            CHECK(pick >= 0 && shuffled[static_cast<std::size_t>(pick)].add == VdwAdd::Worm &&
++                  shuffled[static_cast<std::size_t>(pick)].crowd == 5 &&
++                  shuffled[static_cast<std::size_t>(pick)].distance == 2.0f);
++        } while (std::next_permutation(index.begin(), index.end()));
++    }
++
++    // A mark moves only to a strictly more urgent kind, or off an add that is gone or out of reach.
++    for (VdwAdd current : kinds)
++        for (VdwAdd picked : kinds)
++            for (bool melee : {false, true})
++            {
++                CHECK(VdwRemark(current, false, picked, melee));
++                int const currentRank = VdwKillRank(current, melee);
++                int const pickedRank = VdwKillRank(picked, melee);
++                CHECK(VdwRemark(current, true, picked, melee) ==
++                      (currentRank < 0 || (pickedRank >= 0 && pickedRank < currentRank)));
++            }
++    CHECK(!VdwRemark(VdwAdd::Worm, true, VdwAdd::Worm, false));    // a marked worm stays until it dies
++    CHECK(VdwRemark(VdwAdd::Archmage, true, VdwAdd::Worm, false));  // worms out-rank an archmage
++    CHECK(!VdwRemark(VdwAdd::Zombie, true, VdwAdd::Worm, false));   // a zombie keeps the mark
++    CHECK(VdwRemark(VdwAdd::Zombie, true, VdwAdd::Worm, true));     // melee never stays on a zombie
++
++    // Tank cooldowns: the cheapest whose threshold the tank's health is under, and only what `ready` accepts.
++    auto all = [](char const*) { return true; };
++    auto none = [](char const*) { return false; };
++    CHECK(VdwTankCooldowns(VdwTankClass::Other).empty());
++    CHECK(VdwPickTankCooldown(VdwTankClass::Other, 1.0f, all) == nullptr);
++    for (VdwTankClass tank : {VdwTankClass::Warrior, VdwTankClass::Paladin, VdwTankClass::DeathKnight,
++                              VdwTankClass::Druid})
++    {
++        std::vector<VdwDefensive> const cooldowns = VdwTankCooldowns(tank);
++        CHECK(!cooldowns.empty());
++        for (std::size_t i = 0; i < cooldowns.size(); ++i)
++        {
++            CHECK(cooldowns[i].spell && *cooldowns[i].spell && cooldowns[i].belowPct <= 75.0f);
++            if (i)
++                CHECK(cooldowns[i].belowPct < cooldowns[i - 1].belowPct);  // cheapest (highest threshold) first
++        }
++        CHECK(VdwPickTankCooldown(tank, 100.0f, all) == nullptr);
++        CHECK(VdwPickTankCooldown(tank, cooldowns.front().belowPct, all) == nullptr);
++        CHECK(VdwPickTankCooldown(tank, 1.0f, none) == nullptr);
++        CHECK(std::string_view(VdwPickTankCooldown(tank, 1.0f, all)) == cooldowns.front().spell);
++        // With the first one spent, the next below its threshold.
++        char const* first = cooldowns.front().spell;
++        auto spent = [first](char const* spell) { return std::string_view(spell) != first; };
++        if (cooldowns.size() > 1)
++            CHECK(std::string_view(VdwPickTankCooldown(tank, 1.0f, spent)) == cooldowns[1].spell);
++    }
++    CHECK(std::string_view(VdwPickTankCooldown(VdwTankClass::Warrior, 50.0f, all)) == "shield block");
++    CHECK(VdwPickTankCooldown(VdwTankClass::Paladin, 50.0f, all) == nullptr);
++    CHECK(std::string_view(VdwPickTankCooldown(VdwTankClass::Paladin, 39.0f, all)) == "divine protection");
++
++    // Frostbolt Volley interrupts: every difficulty's volley, only while enough of the cast is left.
++    for (std::uint32_t volley : FrostboltVolley)
++    {
++        CHECK(IsFrostboltVolley(volley));
++        CHECK(VdwTakesInterrupt(volley, 2000));
++        CHECK(VdwTakesInterrupt(volley, VdwInterruptMinLeftMs + 1));
++        CHECK(!VdwTakesInterrupt(volley, VdwInterruptMinLeftMs));
++        CHECK(!VdwTakesInterrupt(volley, 0));
++        CHECK(!VdwTakesInterrupt(volley, -1));
++    }
++    for (std::uint32_t other : {0u, 70754u, 72023u, 70704u, 71179u, 70588u})  // fireball, column, void, suppression
++    {
++        CHECK(!IsFrostboltVolley(other));
++        CHECK(!VdwTakesInterrupt(other, 2000));
++    }
++    CHECK(VdwInterruptSpells(VdwInterrupter::None).empty());
++    for (VdwInterrupter who : {VdwInterrupter::Warrior, VdwInterrupter::Rogue, VdwInterrupter::Mage,
++                               VdwInterrupter::Shaman, VdwInterrupter::Hunter, VdwInterrupter::DeathKnight})
++    {
++        std::vector<char const*> const spells = VdwInterruptSpells(who);
++        CHECK(!spells.empty());
++        for (char const* spell : spells)
++            CHECK(spell && *spell);
++    }
++    CHECK(std::string_view(VdwInterruptSpells(VdwInterrupter::Mage).front()) == "counterspell");
++    CHECK(VdwInterruptSpells(VdwInterrupter::Warrior).size() == 2);  // pummel, then the prot warrior's shield bash
++
+     std::cout << checks - failures << " checks passed, " << failures << " failed\n";
+     return failures ? 1 : 0;
+ }
