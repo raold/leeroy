@@ -3,6 +3,24 @@
 #include "TestHarness.h"
 #include <limits>
 
+DOJO_TEST(movement_matches_the_native_ground_charge_speed_limit)
+{
+    // Actual Intercept trace: 42 requested, 28 on the launched spline,
+    // 1.661907 yards in 59 ms. Comparing against 42 lost the charge witness.
+    CHECK(Dojo::GroundChargeSpeed(42.f, 7.f) == 28.f);
+    CHECK(Dojo::ContinuousMovement(1.661907f, 28.f, 28.f, 59));
+    CHECK(!Dojo::ContinuousMovement(1.661907f, 7.f, 7.f, 59));
+    CHECK(!Dojo::ContinuousMovement(4.f, 28.f, 28.f, 59));
+    CHECK(Dojo::GroundChargeSpeed(42.f, 14.f) == 42.f);
+    CHECK(Dojo::GroundChargeSpeed(20.f, 7.f) == 20.f);
+    CHECK(Dojo::GroundChargeSpeed(42.f, 0.f) == 28.f);
+    for (float invalid : {-1.f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()})
+    {
+        CHECK(Dojo::GroundChargeSpeed(invalid, 7.f) == 0.f);
+        CHECK(Dojo::GroundChargeSpeed(42.f, invalid) == 0.f);
+    }
+}
+
 DOJO_TEST(movement_keeps_the_original_constant_speed_bound)
 {
     for (float speed : {0.f, 7.f, 14.f, 42.f})

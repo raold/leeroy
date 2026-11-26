@@ -7,6 +7,12 @@
 
 namespace Dojo
 {
+inline float GroundChargeSpeed(float requested, float running)
+{
+    if (!std::isfinite(requested) || !std::isfinite(running) || requested <= 0.f || running < 0.f) return 0.f;
+    // MoveSplineInit::Launch applies this client limit to a ground spline.
+    return std::min(requested, std::max(28.f, running * 4.f));
+}
 inline bool ContinuousMovement(float distance, float previousSpeed, float currentSpeed, std::uint32_t diff)
 {
     if (!std::isfinite(distance) || !std::isfinite(previousSpeed) || !std::isfinite(currentSpeed)

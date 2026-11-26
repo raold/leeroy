@@ -412,6 +412,7 @@ struct Trial
                             {"charging", p->HasUnitState(UNIT_STATE_CHARGING)},
                             {"motion", uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType())},
                             {"previous_motion", previousMotion[i]}, {"moving", p->isMoving()},
+                            {"charge_expected_speed", chargeSpeed[i]}, {"charge_age_ms", elapsed - chargeMs[i]},
                             {"previous_moving", previousMoving[i]}, {"previous_vehicle_entry", previousVehicle[i]},
                             {"constrictor", ConstrictorFacts(p, i)},
                             {"spell_teleport", {{"observed", spellTeleports[i].observed},
@@ -627,7 +628,10 @@ public:
             if (target && target->GetMap() == player->GetMap() && player->IsValidAttackTarget(target))
             {
                 float const speed = spell->GetSpellInfo()->Speed;
-                trial.chargeSpeed[i] = speed > 0.f ? speed : SPEED_CHARGE;
+                bool const flying = player->HasUnitMovementFlag(
+                    MovementFlags(MOVEMENTFLAG_CAN_FLY | MOVEMENTFLAG_DISABLE_GRAVITY));
+                trial.chargeSpeed[i] = flying ? 0.f :
+                    Dojo::GroundChargeSpeed(speed > 0.f ? speed : SPEED_CHARGE, player->GetSpeed(MOVE_RUN));
                 trial.chargeMs[i] = trial.elapsed;
             }
         }
