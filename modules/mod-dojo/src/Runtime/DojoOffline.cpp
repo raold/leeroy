@@ -14,8 +14,10 @@
 #include "GuildMgr.h"
 #include "Group.h"
 #include "InstanceScript.h"
+#include "LastMovementValue.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -27,6 +29,7 @@
 #include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellInfo.h"
+#include "Timer.h"
 #include "UnitScript.h"
 #include "World.h"
 #include "WorldScript.h"
@@ -423,6 +426,9 @@ struct OfflineFixture
                 auto* casting = p->GetCurrentSpell(CURRENT_GENERIC_SPELL);
                 auto* channel = p->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
                 auto* victim = p->GetVictim();
+                auto* ai = GET_PLAYERBOT_AI(p);
+                auto const& movement = ai->GetAiObjectContext()->GetValue<LastMovement&>("last movement")->Get();
+                auto* selected = ai->GetAiObjectContext()->GetValue<Unit*>("current target")->Get();
                 bodies.push_back({{"slot", i}, {"guid", actors[i].GetCounter()}, {"alive", p->IsAlive()},
                     {"map", p->GetMapId()}, {"instance", p->GetInstanceId()}, {"health", p->GetHealth()},
                     {"max_health", p->GetMaxHealth()}, {"mana", p->GetPower(POWER_MANA)},
@@ -431,6 +437,15 @@ struct OfflineFixture
                     {"channel", channel ? channel->GetSpellInfo()->Id : 0u},
                     {"target", victim ? victim->GetGUID().GetCounter() : 0u},
                     {"target_entry", victim ? victim->GetEntry() : 0u},
+                    {"ai_target_entry", selected ? selected->GetEntry() : 0u},
+                    {"ai_state", uint32(ai->GetState())}, {"can_move", ai->CanMove()},
+                    {"moving", p->isMoving()}, {"rooted", p->IsRooted()},
+                    {"motion", uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType())},
+                    {"spline_active", p->movespline && !p->movespline->Finalized()},
+                    {"last_move", {{"age_ms", GetMSTimeDiffToNow(movement.msTime)},
+                        {"priority", uint32(movement.priority)}, {"delay_ms", movement.lastdelayTime},
+                        {"x", movement.lastMoveShort.GetPositionX()}, {"y", movement.lastMoveShort.GetPositionY()},
+                        {"z", movement.lastMoveShort.GetPositionZ()}}},
                     {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
                     {"combat", p->IsInCombat()}, {"bosses", bosses}, {"auras", auras},
                     {"speed_run", p->GetSpeed(MOVE_RUN)}, {"tank", PlayerbotAI::IsTank(p)},
