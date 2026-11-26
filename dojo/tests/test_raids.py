@@ -79,7 +79,7 @@ def encounter_observation(difficulty="10h", mode="after", outcome="done"):
     members = [dict(healer, name=f"h{i}") for i in range(3)]
     members += [dict(name=f"d{i}", healer=False, is_heal=False, level=80, deaths=0) for i in range(7)]
     return dict(format=1, kind="dojo-valithria-encounter", token="abc", difficulty=difficulty, mode=mode,
-                focus=mode == "after", state="done", setup=True, cleanup=True, failure="", outcome=outcome,
+                focus=mode != "before", portals=mode != "noportals", state="done", setup=True, cleanup=True, failure="", outcome=outcome,
                 instance=7, map_difficulty={"10n": 0, "10h": 2}[difficulty], engaged=True, pull_ms=300000,
                 samples=1200, start_hp=50.0, hp=100.0 if outcome == "done" else 63.0,
                 peak_hp=100.0 if outcome == "done" else 68.0, members=members)
@@ -91,7 +91,7 @@ class EncounterVerdictTest(unittest.TestCase):
 
     def test_a_kill_needs_her_own_done_state_and_full_health(self):
         for difficulty in ("10n", "10h"):
-            for mode in ("before", "after"):
+            for mode in ("before", "after", "noportals"):
                 result = self.check(encounter_observation(difficulty, mode))
                 self.assertTrue(result["ok"] and result["killed"])
                 self.assertEqual(result["summary"]["healing_on_her"], 6000000)
@@ -106,7 +106,7 @@ class EncounterVerdictTest(unittest.TestCase):
                              ("failure", "setup deadline"), ("instance", 0), ("map_difficulty", 0),
                              ("engaged", False), ("samples", 3), ("start_hp", 80.0), ("start_hp", 40.0),
                              ("outcome", ""),
-                             ("focus", False), ("kind", "dojo-raid-observation")):
+                             ("focus", False), ("portals", False), ("kind", "dojo-raid-observation")):
             with self.subTest(field=field):
                 result = self.check(encounter_observation() | {field: value})
                 self.assertFalse(result["ok"])

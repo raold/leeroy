@@ -25,7 +25,8 @@ def add_parser(sub) -> None:
     vt = cmds.add_parser("valithria-encounter",
                          help="full Valithria pulls of a fixed ten-player bot raid, healer focus off and on")
     vt.add_argument("--run", action="append", dest="runs",
-                    help="difficulty:mode, one of 10n:before 10n:after 10h:before 10h:after (repeatable; default all)")
+                    help="difficulty:mode, 10n or 10h with before, after or noportals (repeatable; "
+                         "default the four before/after runs)")
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)
     acc_run.add_argument("--keep-running", action="store_true", help="leave a worldserver this command started")

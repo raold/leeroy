@@ -176,6 +176,7 @@ def run(layout, *, log=print):
 
 
 ENCOUNTER_RUNS = ("10n:before", "10n:after", "10h:before", "10h:after")
+ENCOUNTER_EXTRA = ("10n:noportals", "10h:noportals")
 ENCOUNTER_DEADLINE_S = 25 * 60
 
 
@@ -187,7 +188,8 @@ def encounter_verdict(observation, *, token, difficulty, mode):
     o = observation
     problems = []
     for key, expected in (("format", 1), ("kind", "dojo-valithria-encounter"), ("token", token),
-                          ("difficulty", difficulty), ("mode", mode), ("focus", mode == "after"),
+                          ("difficulty", difficulty), ("mode", mode), ("focus", mode != "before"),
+                          ("portals", mode != "noportals"),
                           ("state", "done"), ("setup", True), ("cleanup", True), ("engaged", True)):
         if key not in o or type(o[key]) is not type(expected) or o[key] != expected:
             problems.append(f"{key}: expected {expected!r}")
@@ -238,8 +240,8 @@ def parse_encounter(text):
 def encounter(layout, runs=ENCOUNTER_RUNS, *, log=print):
     """Full Valithria pulls of one fixed ten-player bot raid, before and after the healer focus switch."""
     for item in runs:
-        if item not in ENCOUNTER_RUNS:
-            raise LayoutError(f"unknown encounter run {item!r}; use {', '.join(ENCOUNTER_RUNS)}")
+        if item not in ENCOUNTER_RUNS + ENCOUNTER_EXTRA:
+            raise LayoutError(f"unknown encounter run {item!r}; use {', '.join(ENCOUNTER_RUNS + ENCOUNTER_EXTRA)}")
     if world.running(layout):
         raise world.WorldError("the encounter needs a stopped dedicated dojo instance")
     preflight = world.preflight(layout)

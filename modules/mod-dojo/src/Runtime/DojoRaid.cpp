@@ -39,6 +39,7 @@
 #include "SpellInfo.h"
 #include <algorithm>
 #include <array>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -463,7 +464,7 @@ RaidRun run;
 // self-bot, the owner's stand-in, so the others have a game-client master as in his raids. Nothing here
 // heals, damages, moves or casts for a fixture during the pull; it records her health, deaths, portal
 // trips, healing on her and mana spent. `before` pulls with Playerbots.ValithriaHealerFocus off, `after`
-// with it on; the switch is restored at cleanup.
+// with it on, `noportals` with it on and Playerbots.ValithriaPortals off; both are restored at cleanup.
 struct EncounterSlot
 {
     char const* name;
@@ -538,7 +539,8 @@ struct EncounterMember
 struct EncounterRun
 {
     std::string token, difficulty, mode, state = "idle", failure, outcome;
-    bool active = false, setup = false, cleanup = false, engaged = false, earlyPull = false, oldFocus = true;
+    bool active = false, setup = false, cleanup = false, engaged = false, earlyPull = false, oldFocus = true,
+        oldPortals = true;
     uint32 elapsed = 0, phaseMs = 0, pullMs = 0, sampleMs = 0, instance = 0, mapDifficulty = 0, samples = 0;
     std::size_t prepared = 0;
     float startHp = 0.f, hp = 0.f, peakHp = 0.f;
@@ -547,6 +549,9 @@ struct EncounterRun
     std::array<ObjectGuid, 10> actors{};
     std::array<EncounterMember, 10> members{};
     std::array<bool, 10> forcedLogout{};
+    // What hurt the raid: damage taken by spell (0 = melee or untagged) and each death's killer entry.
+    std::map<uint32, uint64> damageTaken;
+    std::vector<std::pair<uint32, uint32>> killers;  // (pull ms, killer creature entry; 0 = not a creature)
     std::vector<std::pair<uint32, float>> timeline;
     std::recursive_mutex events;
 
@@ -614,7 +619,8 @@ struct EncounterRun
         if (Dojo::State().plan.state != Dojo::RuntimeState::Armed || Dojo::State().manifest)
             return "refused: use an armed isolated training realm with no arena manifest";
         if (diff != "10n" && diff != "10h") return "refused: difficulty is 10n or 10h";
-        if (how != "before" && how != "after") return "refused: mode is before or after";
+        if (how != "before" && how != "after" && how != "noportals")
+            return "refused: mode is before, after or noportals";
         if (id.empty() || id.size() > 64 ||
             id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != std::string::npos)
             return "refused: invalid run token";
@@ -625,8 +631,9 @@ struct EncounterRun
         setup = cleanup = engaged = earlyPull = false;
         elapsed = phaseMs = pullMs = sampleMs = instance = mapDifficulty = samples = 0;
         prepared = 0; startHp = hp = peakHp = 0.f; damageToHer = 0; valithria.Clear();
-        members = {}; forcedLogout = {}; timeline.clear();
+        members = {}; forcedLogout = {}; timeline.clear(); damageTaken.clear(); killers.clear();
         oldFocus = sPlayerbotAIConfig.ValithriaHealerFocus;
+        oldPortals = sPlayerbotAIConfig.ValithriaPortals;
         active = true;
         Phase("login");
         for (ObjectGuid guid : actors) sRandomPlayerbotMgr.AddPlayerBot(guid, 0);
@@ -732,7 +739,8 @@ struct EncounterRun
             ai->ChangeStrategy("+icc", BOT_STATE_COMBAT);
             ai->ChangeStrategy("+icc", BOT_STATE_NON_COMBAT);
         }
-        sPlayerbotAIConfig.ValithriaHealerFocus = mode == "after";
+        sPlayerbotAIConfig.ValithriaHealerFocus = mode != "before";
+        sPlayerbotAIConfig.ValithriaPortals = mode != "noportals";
         setup = true;
         Phase("prepull");
         return true;
@@ -892,6 +900,7 @@ struct EncounterRun
         else if (state == "cleanup")
         {
             sPlayerbotAIConfig.ValithriaHealerFocus = oldFocus;
+            sPlayerbotAIConfig.ValithriaPortals = oldPortals;
             for (std::size_t i = 0; i < actors.size(); ++i)
                 if (Player* p = Actor(i))
                 {
@@ -975,7 +984,8 @@ struct EncounterRun
             roster.push_back(row);
         }
         json out = {{"format", 1}, {"kind", "dojo-valithria-encounter"}, {"token", token},
-            {"difficulty", difficulty}, {"mode", mode}, {"focus", mode == "after"}, {"state", state},
+            {"difficulty", difficulty}, {"mode", mode}, {"focus", mode != "before"}, {"portals", mode != "noportals"},
+            {"state", state},
             {"setup", setup}, {"cleanup", cleanup}, {"failure", failure}, {"outcome", outcome},
             {"instance", instance}, {"map_difficulty", mapDifficulty}, {"engaged", engaged},
             {"early_pull", earlyPull}, {"pull_ms", pullMs},
@@ -995,6 +1005,15 @@ struct EncounterRun
             json line = json::array();
             for (auto const& [ms, pct] : timeline) line.push_back({ms, pct});
             out["timeline"] = line;
+            std::vector<std::pair<uint64, uint32>> top;
+            for (auto const& [spell, amount] : damageTaken) top.emplace_back(amount, spell);
+            std::sort(top.rbegin(), top.rend());
+            json hurt = json::array();
+            for (std::size_t i = 0; i < top.size() && i < 12; ++i) hurt.push_back({top[i].second, top[i].first});
+            out["damage_taken_by_spell"] = hurt;
+            json deaths = json::array();
+            for (auto const& [ms, entry] : killers) deaths.push_back({ms, entry});
+            out["killers"] = deaths;
         }
         return out;
     }
@@ -1027,6 +1046,31 @@ public:
         std::lock_guard<std::recursive_mutex> lock(encounter.events);
         if (encounter.state == "observe" && victim && victim->GetGUID() == encounter.valithria)
             encounter.damageToHer += damage;
+    }
+};
+
+class EncounterHurt : public UnitScript
+{
+public:
+    EncounterHurt() : UnitScript("DojoEncounterHurt", true,
+        {UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN, UNITHOOK_MODIFY_MELEE_DAMAGE, UNITHOOK_ON_UNIT_DEATH}) { }
+    void ModifySpellDamageTaken(Unit* target, Unit* /*attacker*/, int32& damage, SpellInfo const* spellInfo) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(encounter.events);
+        if (encounter.state == "observe" && damage > 0 && encounter.Slot(target) >= 0)
+            encounter.damageTaken[spellInfo ? spellInfo->Id : 0] += uint64(damage);
+    }
+    void ModifyMeleeDamage(Unit* target, Unit* /*attacker*/, uint32& damage) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(encounter.events);
+        if (encounter.state == "observe" && damage && encounter.Slot(target) >= 0)
+            encounter.damageTaken[0] += damage;
+    }
+    void OnUnitDeath(Unit* unit, Unit* killer) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(encounter.events);
+        if (encounter.state == "observe" && encounter.Slot(unit) >= 0)
+            encounter.killers.emplace_back(encounter.pullMs, killer && killer->IsCreature() ? killer->GetEntry() : 0);
     }
 };
 
@@ -1089,7 +1133,7 @@ public:
         std::string token, difficulty, mode, extra;
         in >> token >> difficulty >> mode >> extra;
         if (!extra.empty() || mode.empty())
-            handler->SendSysMessage("usage: dojo raid encounter start <token> 10n|10h before|after");
+            handler->SendSysMessage("usage: dojo raid encounter start <token> 10n|10h before|after|noportals");
         else handler->SendSysMessage("dojo encounter: " + encounter.Start(token, difficulty, mode, run.active));
         return true;
     }
@@ -1150,6 +1194,7 @@ void AddSC_dojo_raid()
     new RaidEvents();
     new EncounterEvents();
     new EncounterCasts();
+    new EncounterHurt();
     new EncounterTicks();
 }
 #else
