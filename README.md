@@ -472,7 +472,13 @@ output in `patches/`:
   shamans, hunters and death knights interrupt a Frostbolt Volley in reach, and
   a tank under her adds uses its own defensive cooldowns (stock Shield Wall sat
   under the rotation). `valithria_watch` lines carry `adds=`. `0` restores the
-  patch 0021 behaviour exactly.
+  patch 0021 behaviour exactly. `Playerbots.ValithriaPortalTurns` (default `1`)
+  sends the healers on her through the portals one at a time: at most one is
+  in the dream or on the way to a portal, never so many that fewer than one
+  (two with four or more healers) stay on her, and the turn goes to the healer
+  with the fewest trips (live on 2026-11-26 both went through every wave
+  together and she stalled). `valithria_watch` lines carry `turns=`; `0` sends
+  them together as before.
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.

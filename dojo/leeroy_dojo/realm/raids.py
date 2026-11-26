@@ -177,7 +177,7 @@ def run(layout, *, log=print):
 
 
 ENCOUNTER_RUNS = ("10n:after", "10n:adds", "10h:after", "10h:adds")
-ENCOUNTER_EXTRA = ("10n:before", "10h:before", "10n:noportals", "10h:noportals")
+ENCOUNTER_EXTRA = ("10n:before", "10h:before", "10n:noportals", "10h:noportals", "10n:turns", "10h:turns")
 TANK_SLOTS = (3, 4)
 ENCOUNTER_DEADLINE_S = 25 * 60
 
@@ -191,7 +191,8 @@ def encounter_verdict(observation, *, token, difficulty, mode, owner_buffs=False
     problems = []
     for key, expected in (("format", 1), ("kind", "dojo-valithria-encounter"), ("token", token),
                           ("difficulty", difficulty), ("mode", mode), ("focus", mode != "before"),
-                          ("portals", mode != "noportals"), ("adds", mode == "adds"),
+                          ("portals", mode != "noportals"), ("adds", mode in ("adds", "turns")),
+                          ("portal_turns", mode == "turns"),
                           ("owner_buffs", owner_buffs),
                           ("state", "done"), ("setup", True), ("cleanup", True), ("engaged", True)):
         if key not in o or type(o[key]) is not type(expected) or o[key] != expected:
@@ -233,6 +234,8 @@ def encounter_verdict(observation, *, token, difficulty, mode, owner_buffs=False
         max_twisted_nightmares=max((m.get("max_twisted_nightmares", 0) for m in healers), default=0),
         max_emerald_vigor=max((m.get("max_emerald_vigor", 0) for m in healers), default=0),
         first_death_s=round(deaths[0].get("ms", 0) / 1000, 1) if deaths else None,
+        two_in_dream_s=round(o.get("two_in_dream_ms", 0) / 1000, 1),
+        none_on_her_s=round(o.get("none_on_her_ms", 0) / 1000, 1),
         tank_deaths=[[d.get("name"), round(d.get("ms", 0) / 1000, 1), d.get("killer")] for d in deaths
                      if d.get("name") in tanks])
     return {"ok": not problems, "killed": killed, "problems": problems, "summary": summary}

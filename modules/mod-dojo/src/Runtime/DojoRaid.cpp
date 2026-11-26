@@ -612,13 +612,15 @@ struct EncounterRun
 {
     std::string token, difficulty, mode, state = "idle", failure, outcome;
     bool active = false, setup = false, cleanup = false, engaged = false, earlyPull = false, oldFocus = true,
-        oldPortals = true, oldAdds = true, ownerBuffs = false;
+        oldPortals = true, oldAdds = true, oldTurns = true, ownerBuffs = false;
     uint32 elapsed = 0, phaseMs = 0, pullMs = 0, sampleMs = 0, instance = 0, mapDifficulty = 0, samples = 0;
     uint32 itemLevel = EncounterItemLevel;
     std::size_t prepared = 0;
     float startHp = 0.f, hp = 0.f, peakHp = 0.f;
     uint64 damageToHer = 0;
     uint32 leaderTeleportAcks = 0;
+    // Healer time with two or more of them in the dream, and with none of them out of it in reach of her.
+    uint32 twoInDreamMs = 0, noneOnHerMs = 0;
     ObjectGuid valithria;
     std::array<ObjectGuid, 10> actors{};
     std::array<EncounterMember, 10> members{};
@@ -703,8 +705,8 @@ struct EncounterRun
         if (Dojo::State().plan.state != Dojo::RuntimeState::Armed || Dojo::State().manifest)
             return "refused: use an armed isolated training realm with no arena manifest";
         if (diff != "10n" && diff != "10h") return "refused: difficulty is 10n or 10h";
-        if (how != "before" && how != "after" && how != "noportals" && how != "adds")
-            return "refused: mode is before, after, noportals or adds";
+        if (how != "before" && how != "after" && how != "noportals" && how != "adds" && how != "turns")
+            return "refused: mode is before, after, noportals, adds or turns";
         if (id.empty() || id.size() > 64 ||
             id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != std::string::npos)
             return "refused: invalid run token";
@@ -716,12 +718,14 @@ struct EncounterRun
         setup = cleanup = engaged = earlyPull = false;
         elapsed = phaseMs = pullMs = sampleMs = instance = mapDifficulty = samples = 0;
         prepared = 0; startHp = hp = peakHp = 0.f; damageToHer = 0; leaderTeleportAcks = 0; valithria.Clear();
+        twoInDreamMs = noneOnHerMs = 0;
         members = {}; forcedLogout = {}; timeline.clear(); damageTaken.clear(); killers.clear();
         adds.clear(); deaths.clear(); addCasts.clear(); finalBySpell.clear(); pendingSpell.clear();
         addTimeline.clear();
         oldFocus = sPlayerbotAIConfig.ValithriaHealerFocus;
         oldPortals = sPlayerbotAIConfig.ValithriaPortals;
         oldAdds = sPlayerbotAIConfig.ValithriaAdds;
+        oldTurns = sPlayerbotAIConfig.ValithriaPortalTurns;
         active = true;
         Phase("login");
         for (ObjectGuid guid : actors) sRandomPlayerbotMgr.AddPlayerBot(guid, 0);
@@ -843,7 +847,8 @@ struct EncounterRun
         }
         sPlayerbotAIConfig.ValithriaHealerFocus = mode != "before";
         sPlayerbotAIConfig.ValithriaPortals = mode != "noportals";
-        sPlayerbotAIConfig.ValithriaAdds = mode == "adds";
+        sPlayerbotAIConfig.ValithriaAdds = mode == "adds" || mode == "turns";
+        sPlayerbotAIConfig.ValithriaPortalTurns = mode == "turns";
         if (ownerBuffs) OwnerBuffs(leader);
         setup = true;
         Phase("prepull");
@@ -993,7 +998,7 @@ struct EncounterRun
         if (timeline.empty() || pullMs - timeline.back().first >= 10000) timeline.emplace_back(pullMs, hp);
         SampleAdds(step, dragon);
         if (ownerBuffs) OwnerBuffs(Actor(EncounterLeader));
-        uint32 alive = 0;
+        uint32 alive = 0, dreamers = 0, onHer = 0;
         for (std::size_t i = 0; i < actors.size(); ++i)
         {
             Player* p = Actor(i);
@@ -1009,7 +1014,7 @@ struct EncounterRun
             bool const dreaming = p->HasAura(DreamState);
             if (dreaming && !m.dreaming) ++m.dreamEntries;
             m.dreaming = dreaming;
-            if (dreaming) m.dreamMs += step;
+            if (dreaming) { m.dreamMs += step; ++dreamers; }
             if (Aura* a = p->GetAura(EmeraldVigor)) m.maxVigor = std::max<uint32>(m.maxVigor, a->GetStackAmount());
             if (Aura* a = p->GetAura(TwistedNightmares))
                 m.maxTwisted = std::max<uint32>(m.maxTwisted, a->GetStackAmount());
@@ -1017,8 +1022,13 @@ struct EncounterRun
             m.minMana = std::min(m.minMana, mana);
             if (mana < 10.f) m.lowManaMs += step;
             if (!dreaming && dragon && p->IsWithinDistInMap(dragon, 40.f) && p->IsWithinLOSInMap(dragon))
+            {
                 m.inReachMs += step;
+                ++onHer;
+            }
         }
+        if (dreamers >= 2) twoInDreamMs += step;
+        if (alive && !onHer) noneOnHerMs += step;
         if (!alive && engaged && outcome.empty()) outcome = "wipe";
     }
 
@@ -1108,6 +1118,7 @@ struct EncounterRun
             sPlayerbotAIConfig.ValithriaHealerFocus = oldFocus;
             sPlayerbotAIConfig.ValithriaPortals = oldPortals;
             sPlayerbotAIConfig.ValithriaAdds = oldAdds;
+            sPlayerbotAIConfig.ValithriaPortalTurns = oldTurns;
             for (std::size_t i = 0; i < actors.size(); ++i)
                 if (Player* p = Actor(i))
                 {
@@ -1195,7 +1206,9 @@ struct EncounterRun
         }
         json out = {{"format", 1}, {"kind", "dojo-valithria-encounter"}, {"token", token},
             {"difficulty", difficulty}, {"mode", mode}, {"focus", mode != "before"}, {"portals", mode != "noportals"},
-            {"adds", mode == "adds"}, {"owner_buffs", ownerBuffs}, {"leader_teleport_acks", leaderTeleportAcks},
+            {"adds", mode == "adds" || mode == "turns"}, {"portal_turns", mode == "turns"},
+            {"owner_buffs", ownerBuffs}, {"leader_teleport_acks", leaderTeleportAcks},
+            {"two_in_dream_ms", twoInDreamMs}, {"none_on_her_ms", noneOnHerMs},
             {"raid_cheat", true},
             {"state", state},
             {"setup", setup}, {"cleanup", cleanup}, {"failure", failure}, {"outcome", outcome},

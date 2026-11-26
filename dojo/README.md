@@ -136,9 +136,13 @@ turn, so before this one Blink froze the whole raid for 30 s or until the wipe
 2026-11-25 ran with it).
 `before` pulls with `Playerbots.ValithriaHealerFocus` off and the adds handling
 off, `after` with the focus on and `Playerbots.ValithriaAdds` off (patch 0021
-alone), `adds` with both on (patch 0022), and `noportals` like `after` with
+alone), `adds` with both on (patch 0022's adds handling), `turns` like `adds`
+with `Playerbots.ValithriaPortalTurns` on (patch 0022's portal turns; every
+other mode runs with it off), and `noportals` like `after` with
 `Playerbots.ValithriaPortals` off; every switch is restored at cleanup. The
 default runs four: 10-player normal and heroic, each `after` and `adds`.
+`two_in_dream_ms` and `none_on_her_ms` count the time with two or more healers
+in the dream and with no healer out of it in reach of her.
 `--owner-buffs` gives the fire-mage leader the owner's own auras (spells 6560,
 51040, 31750 and 23434: 200% haste, +3000 spell power, +50% spell crit) to
 approximate his raid; it is a separate variant and never replaces a plain run.

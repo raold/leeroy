@@ -25,7 +25,7 @@ def add_parser(sub) -> None:
     vt = cmds.add_parser("valithria-encounter",
                          help="full Valithria pulls of a fixed ten-player bot raid, healer focus off and on")
     vt.add_argument("--run", action="append", dest="runs",
-                    help="difficulty:mode, 10n or 10h with before, after, noportals or adds (repeatable; "
+                    help="difficulty:mode, 10n or 10h with before, after, noportals, adds or turns (repeatable; "
                          "default the four after/adds runs)")
     vt.add_argument("--item-level", type=int, default=245,
                     help="epic gear cap for the fixtures (default 245; the guild's raiders average 238)")

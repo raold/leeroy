@@ -79,7 +79,8 @@ def encounter_observation(difficulty="10h", mode="after", outcome="done"):
     members = [dict(healer, name=f"h{i}") for i in range(3)]
     members += [dict(name=f"d{i}", healer=False, is_heal=False, level=80, deaths=0) for i in range(7)]
     return dict(format=1, kind="dojo-valithria-encounter", token="abc", difficulty=difficulty, mode=mode,
-                focus=mode != "before", portals=mode != "noportals", adds=mode == "adds", owner_buffs=False,
+                focus=mode != "before", portals=mode != "noportals", adds=mode in ("adds", "turns"),
+                portal_turns=mode == "turns", owner_buffs=False,
                 state="done", setup=True, cleanup=True, failure="", outcome=outcome,
                 instance=7, map_difficulty={"10n": 0, "10h": 2}[difficulty], engaged=True, pull_ms=300000,
                 samples=1200, start_hp=50.0, hp=100.0 if outcome == "done" else 63.0,
@@ -92,7 +93,7 @@ class EncounterVerdictTest(unittest.TestCase):
 
     def test_a_kill_needs_her_own_done_state_and_full_health(self):
         for difficulty in ("10n", "10h"):
-            for mode in ("before", "after", "noportals", "adds"):
+            for mode in ("before", "after", "noportals", "adds", "turns"):
                 result = self.check(encounter_observation(difficulty, mode))
                 self.assertTrue(result["ok"] and result["killed"])
                 self.assertEqual(result["summary"]["healing_on_her"], 6000000)
@@ -107,7 +108,8 @@ class EncounterVerdictTest(unittest.TestCase):
                              ("failure", "setup deadline"), ("instance", 0), ("map_difficulty", 0),
                              ("engaged", False), ("samples", 3), ("start_hp", 80.0), ("start_hp", 40.0),
                              ("outcome", ""),
-                             ("focus", False), ("portals", False), ("adds", True), ("owner_buffs", True),
+                             ("focus", False), ("portals", False), ("adds", True), ("portal_turns", True),
+                             ("owner_buffs", True),
                              ("kind", "dojo-raid-observation")):
             with self.subTest(field=field):
                 result = self.check(encounter_observation() | {field: value})
@@ -139,6 +141,14 @@ class EncounterVerdictTest(unittest.TestCase):
         self.assertEqual(result["summary"]["first_death_s"], 64.3)
         self.assertEqual(result["summary"]["tank_deaths"], [["warrior", 64.3, "abomination"]])
         self.assertFalse(encounter_verdict(o, token="abc", difficulty="10h", mode="adds")["ok"])
+
+    def test_portal_turns_run_with_the_adds_switch_and_report_dream_overlap(self):
+        o = encounter_observation(mode="turns") | {"two_in_dream_ms": 0, "none_on_her_ms": 1500}
+        result = self.check(o)
+        self.assertTrue(result["ok"])
+        self.assertEqual((result["summary"]["two_in_dream_s"], result["summary"]["none_on_her_s"]), (0.0, 1.5))
+        self.assertFalse(self.check(o | {"adds": False})["ok"])
+        self.assertFalse(self.check(encounter_observation(mode="adds") | {"portal_turns": True})["ok"])
 
     def test_encounter_replies_must_have_one_observation(self):
         for text in ("command succeeded", "", 'dojo-encounter {}\ndojo-encounter {}'):
