@@ -18,7 +18,7 @@ def test_status_cli_reads_old_meta_only_database_without_migration(tmp_path, cap
         conn.executemany('INSERT INTO meta VALUES (?,?)', rows)
     before = hashlib.sha256(path.read_bytes()).digest()
     result = status(tmp_path, local=datetime(2026,11,12,4,tzinfo=timezone.utc))
-    assert result['config']['enabled'] is False
+    assert result['config']['enabled'] is True  # [server] enabled: on by default (2026-11-25)
     assert result['window'] == dict(start='03:00',end='08:00',inside=True)
     assert result['counts'] == dict(messages=42,conversations=6,reactions=0,dms=0)
     assert [r['messages'] for r in result['recent']] == [7,6,5,4,3]

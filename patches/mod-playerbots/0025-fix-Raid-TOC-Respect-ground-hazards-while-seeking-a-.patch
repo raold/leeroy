@@ -1,7 +1,7 @@
-From 788fe99a0df2b192136639b6748f45afbd41c1ad Mon Sep 17 00:00:00 2001
+From 3267e408626a15a278114e758ba14553fd8a878d Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Wed, 25 Nov 2026 08:43:37 -0500
-Subject: [PATCH 24/25] fix(Raid/TOC): Respect ground hazards while seeking a
+Subject: [PATCH 25/46] fix(Raid/TOC): Respect ground hazards while seeking a
  toxin cure
 
 ---

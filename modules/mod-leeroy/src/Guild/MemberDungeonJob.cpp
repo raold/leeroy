@@ -38,7 +38,7 @@ std::string Target(nlohmann::json const& message)
 void ReloadMemberDungeon()
 {
     bool const previous = enabled;
-    enabled = sConfigMgr->GetOption<bool>("Leeroy.MemberDungeon.Enable", false);
+    enabled = sConfigMgr->GetOption<bool>("Leeroy.MemberDungeon.Enable", true);
 #if LEEROY_HAS_DUNGEON_CLEAR
     auto& module = LeeroyModule::Instance();
     if (enabled != previous && module.Bridge().Connected())

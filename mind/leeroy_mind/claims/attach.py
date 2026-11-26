@@ -2,7 +2,7 @@
 from leeroy_mind.config import ConfigError
 from leeroy_mind.logs import log
 
-from .config import ClaimsCfg, load_claims_config
+from .config import OFF, ClaimsCfg, load_claims_config
 
 
 def attach_claims(app) -> ClaimsCfg:
@@ -14,7 +14,7 @@ def attach(runner, root) -> ClaimsCfg:
         cfg = load_claims_config(root / 'mind.toml')
     except ConfigError:
         log('claims_config_invalid')
-        cfg = ClaimsCfg()
+        cfg = OFF
     if cfg.enabled:
         from .stage import STAGE, stage_claims
         runner.add_stage(STAGE, stage_claims, after='notes', model='reflection')

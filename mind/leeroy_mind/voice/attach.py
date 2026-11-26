@@ -1,7 +1,6 @@
 """The voice extension: attach_voice(app) builds it at the end of MindApp.__init__ and starts
-nothing. Only an enabled voice registers a background task (the client's reconnect loop and a
-1 s tick) and gives the talk engine its Comms, so a mind without a [voice] section behaves
-exactly as before.
+nothing. Only an enabled voice (the default; [voice] enabled = false turns it off) registers a
+background task (the client's reconnect loop and a 1 s tick) and gives the talk engine its Comms.
 
 With `autostart`, the mind starts leeroy-voice when it starts and nothing listens, and a
 supervisor starts it again whenever it has been unreachable for RELAUNCH_AFTER_S, then at
@@ -29,7 +28,7 @@ from leeroy_mind.voice import wire
 from leeroy_mind.voice.brief import SpecWatch, load_specs
 from leeroy_mind.voice.client import VoiceClient, VoiceDown
 from leeroy_mind.voice.comms import Comms, roll_on_comms
-from leeroy_mind.voice.config import VoiceCfg, load_voice_config
+from leeroy_mind.voice.config import OFF as VOICE_OFF, VoiceCfg, load_voice_config
 from leeroy_mind.voice.elsewhere import ElsewhereTalk
 from leeroy_mind.voice.gpu import OllamaPins
 from leeroy_mind.voice.heard import HeardHandler
@@ -645,7 +644,7 @@ def attach_voice(app) -> VoiceExtension:
         cfg = load_voice_config(app.data_dir / "mind.toml")
     except ConfigError as exc:
         event("voice_config_invalid", level=logging.WARNING, reason=str(exc))
-        cfg = VoiceCfg()
+        cfg = VOICE_OFF
     ext = VoiceExtension(app, cfg)
     if ext.cfg.enabled:
         app.engine.comms = ext.comms

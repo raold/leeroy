@@ -1,7 +1,7 @@
-From cbec0a582c3f226cbd03324d8625ec16948a5f52 Mon Sep 17 00:00:00 2001
+From 7794d451ce99af22ad5b6b226066c74a4f8c11a7 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Wed, 25 Nov 2026 13:19:43 -0500
-Subject: [PATCH 23/27] fix(Raid/TOC): Support spellclick and legacy gossip
+Subject: [PATCH 24/46] fix(Raid/TOC): Support spellclick and legacy gossip
  essences
 
 ---

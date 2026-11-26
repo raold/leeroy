@@ -1,7 +1,7 @@
-From 36062510d545d4a89840098064bfe5fa32474d82 Mon Sep 17 00:00:00 2001
+From 20e0105ffc69c0af21ea3430806c3fbbf81c9cca Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Tue, 24 Nov 2026 22:09:10 -0500
-Subject: [PATCH 22/27] fix(Raid/TOC): Coordinate toxin cures and bile spacing
+Subject: [PATCH 23/46] fix(Raid/TOC): Coordinate toxin cures and bile spacing
 
 ---
  conf/playerbots.conf.dist         |   5 ++
@@ -16,12 +16,12 @@ Subject: [PATCH 22/27] fix(Raid/TOC): Coordinate toxin cures and bile spacing
  create mode 100644 tests/toc_worm_test.cpp
 
 diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
-index 12609d05..e4135777 100644
+index c8838cf8..4ab1d583 100644
 --- a/conf/playerbots.conf.dist
 +++ b/conf/playerbots.conf.dist
-@@ -490,6 +490,11 @@ Playerbots.ApplyInstanceStrategies = 1
- # Requires ApplyInstanceStrategies (or the toc strategy added explicitly). Default: 0.
- Playerbots.TwinValkyrInteractions = 0
+@@ -503,6 +503,11 @@ Playerbots.ValithriaHealerFocus = 1
+ # hurting her. 0 keeps every healer out of the dream. Default: 1.
+ Playerbots.ValithriaPortals = 1
  
 +# Meet a Burning Bile carrier before Paralytic Toxin roots the victim, rescue
 +# paralysed victims and separate carriers after the cure. Opt in after a dojo gate.
@@ -328,25 +328,25 @@ index 00000000..0ef733cb
 +}  // namespace TocWorms
 +#endif
 diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
-index ca223417..923607ce 100644
+index 094411aa..f27a89da 100644
 --- a/src/PlayerbotAIConfig.cpp
 +++ b/src/PlayerbotAIConfig.cpp
-@@ -312,6 +312,7 @@ bool PlayerbotAIConfig::Initialize()
- 
-     EnableICCBuffs = sConfigMgr->GetOption<bool>("Playerbots.EnableICCBuffs", true);
+@@ -314,6 +314,7 @@ bool PlayerbotAIConfig::Initialize()
      TwinValkyrInteractions = sConfigMgr->GetOption<bool>("Playerbots.TwinValkyrInteractions", false);
+     ValithriaHealerFocus = sConfigMgr->GetOption<bool>("Playerbots.ValithriaHealerFocus", true);
+     ValithriaPortals = sConfigMgr->GetOption<bool>("Playerbots.ValithriaPortals", true);
 +    TocWormSupport = sConfigMgr->GetOption<bool>("Playerbots.TocWormSupport", false);
      RaidVehicleSupport = sConfigMgr->GetOption<bool>("Playerbots.RaidVehicleSupport", false);
      LichKingMechanics = sConfigMgr->GetOption<bool>("Playerbots.LichKingMechanics", false);
  
 diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
-index 6a133676..6c0e2b55 100644
+index 953970e1..8316a418 100644
 --- a/src/PlayerbotAIConfig.h
 +++ b/src/PlayerbotAIConfig.h
-@@ -108,6 +108,7 @@ public:
-     bool DisabledWithoutRealPlayer;
-     bool EnableICCBuffs;
+@@ -110,6 +110,7 @@ public:
      bool TwinValkyrInteractions;
+     bool ValithriaHealerFocus;
+     bool ValithriaPortals;
 +    bool TocWormSupport;
      bool RaidVehicleSupport;
      bool LichKingMechanics;

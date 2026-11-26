@@ -5,6 +5,7 @@ from contextlib import suppress
 
 from conftest import run
 from test_app import running, hello, CAST, chat, SCHEMA_MARK
+from shipped_off import merge
 from leeroy_mind.config import load_config
 from leeroy_mind.personas.io import save_persona
 from leeroy_mind.guild.raid_night import State
@@ -15,8 +16,7 @@ from leeroy_mind.testing.fake_bridge import CORE_COMMAND_TYPES
 
 def test_fake_bridge_accept_move_sit_and_private_conversation(tmp_path,clock,caplog):
     def prepare(app):
-        with (tmp_path/'mind.toml').open('a',encoding='utf-8') as f:
-            f.write('\n[realm]\nenabled=true\n[romance]\nactivities=true\n')
+        merge(tmp_path/'mind.toml',{'realm':{'enabled':True},'romance':{'activities':True}})
         app.cfg=load_config(tmp_path/'mind.toml')
         app.engine.cfg=app.cfg
         app.guild.cfg=replace(app.guild.cfg,worldserver_conf=tmp_path/'absent.conf')

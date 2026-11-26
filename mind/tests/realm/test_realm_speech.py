@@ -91,8 +91,8 @@ def test_world_member_uses_own_voice_and_direct_receipt_without_actor_or_move(sa
     from leeroy_mind.world.protocol import WorldMember, WorldSay
     from leeroy_mind.world.targets import save
     s = sapp
-    with open(s.app.data_dir/"mind.toml","a",encoding="utf-8") as out:
-        out.write("\n[world]\nenabled=true\nrealm=true\n")
+    from shipped_off import merge
+    merge(s.app.data_dir/"mind.toml",{"world":{"enabled":True,"realm":True}})
     m = s.store.cast()[101]
     save(s.store,(WorldMember(101,2,TESTGUILD,"Testguild",m.name,m.race,m.class_,m.gender,24,3,True,1,zone),),
          own=21,human=1,now=s.clock.now())

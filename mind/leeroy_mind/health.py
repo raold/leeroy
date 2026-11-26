@@ -678,16 +678,18 @@ def _unavailable(e: sqlite3.Error) -> bool:
     return isinstance(e, sqlite3.OperationalError) and "no such table" in str(e)
 
 
-def _native_flag(root: Path, key: str) -> bool | None:
+def _native_flag(root: Path, key: str, default: bool) -> bool | None:
     """A boolean key of the live mod_leeroy.conf (only that key is read); None when the file
-    cannot be read. A missing key is native's default, off."""
+    cannot be read. A missing key is native's compiled default, `default`."""
     path = bin_dir(root) / "configs" / "modules" / "mod_leeroy.conf"
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     found = re.findall(rf'^[ \t]*{re.escape(key)}[ \t]*=[ \t]*"?([^"\s#]*)', text, re.MULTILINE)
-    return bool(found) and found[-1].lower() in ("1", "true", "yes")
+    if not found:
+        return default
+    return found[-1].lower() in ("1", "true", "yes")
 
 
 def _telemetry(conn, root: Path, data: Path, now: float) -> Check:
@@ -699,7 +701,7 @@ def _telemetry(conn, root: Path, data: Path, now: float) -> Check:
     if not (t.enabled and t.telemetry):
         return Check("telemetry", NOTE, "telemetry: off in mind.toml ([training]); no pulls "
                                         "expected")
-    native = _native_flag(root, "Leeroy.Telemetry.Enable")
+    native = _native_flag(root, "Leeroy.Telemetry.Enable", True)  # on by default (2026-11-25)
     if native is False:
         return Check("telemetry", NOTE, "telemetry: off in mod_leeroy.conf "
                                         "(Leeroy.Telemetry.Enable); no pulls expected")

@@ -72,7 +72,7 @@ Membership changes and renames log ids, counts and action codes, never names or 
 
 Apply the migration containing `discord_group` and `discord_group_member`, then
 restart mind and console. No native rebuild or voice-service change is needed.
-The feature is off by default; this PR does not change the live setting.
+The feature is on by default (`[groups] enabled = false` turns it off).
 Disabling groups stops their actions and generation without deleting history.
 Take the normal database snapshot before release. An older reader does not know
 the new scope sentinel and treats `gdm:` as public game chat; restore that snapshot

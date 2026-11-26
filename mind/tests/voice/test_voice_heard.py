@@ -14,6 +14,7 @@ from leeroy_mind.talk.turns import Turn, TurnKind
 from leeroy_mind.voice import wire
 from leeroy_mind.voice.heard import BOT_COMMANDS, DC_COMMANDS, command_for, is_command
 from voice.conftest import HUMAN, status
+from shipped_off import off
 
 SECRET = "the words he said"
 HIS_NAME = "Testmage"
@@ -874,7 +875,7 @@ def test_voice_off_keeps_typed_chat(tmp_path, clock, voice_data):
     from leeroy_mind.app import MindApp
     from leeroy_mind.config import load_config
     from leeroy_mind.testing.fake_llm import FakeLLM
-    (tmp_path / "mind.toml").write_text("", encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off(""), encoding="utf-8")
     app = MindApp(load_config(tmp_path / "mind.toml"), tmp_path, llm=FakeLLM(), clock=clock)
     assert app.voice.heard is None
     assert app.voice._on_chat not in app._handlers.get("chat", ())

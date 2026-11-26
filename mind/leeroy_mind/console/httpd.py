@@ -1,8 +1,9 @@
 """The console's HTTP/1.1: one request per connection (every response says Connection: close),
 plus a server-sent event stream that stays open. Standard library only, as is the rest of the
-mind. Limits: a 16 KiB head of at most 100 headers, a 16 KiB body, 10 s to send a request, and
-10 s for a client to take its response or each stream chunk before it is dropped, and at most
-64 active connections (including clients still sending their request).
+mind. Limits: a 16 KiB head of at most 100 headers, a 16 KiB body, 10 s to send a request (a
+Route may allow an upload more of both), 10 s for a client to take each 256 KiB of its
+response or each stream chunk before it is dropped, and at most 64 active connections
+(including clients still sending their request).
 
 handler(request) returns a Response or a Stream. A handler that raises answers 500 with no
 detail; its exception's class is logged, never its text."""
@@ -23,6 +24,7 @@ MAX_HEADERS = 100
 MAX_BODY = 16384
 READ_S = 10.0
 DRAIN_S = 10.0  # how long a stream waits for a client to take what it was sent
+WRITE_CHUNK = 256 * 1024  # an answer is written in pieces of this size, each within DRAIN_S
 MAX_CONNECTIONS = 64  # includes requests still sending headers/bodies and event streams
 _TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 
@@ -169,7 +171,17 @@ class Route:
     require_length: bool = False
 
 
-async def read_request(reader: asyncio.StreamReader, routes=None) -> Request:
+class Answered(Exception):
+    """The answer given from a request's head, before its body was read."""
+    def __init__(self, response: "Response"):
+        super().__init__(response.status)
+        self.response = response
+
+
+async def read_request(reader: asyncio.StreamReader, routes=None, precheck=None) -> Request:
+    """The request, its body read whole. A route that takes more than MAX_BODY is first put to
+    `precheck(request)` (its head only): an answer it gives is raised as Answered, so a refused
+    upload is never buffered."""
     started = asyncio.get_running_loop().time()
     try:
         head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), READ_S)
@@ -219,6 +231,8 @@ async def read_request(reader: asyncio.StreamReader, routes=None) -> Request:
             raise BadRequest(400, "bad Content-Length")
         if size > route.max_body:
             raise BadRequest(413, "body too large")
+        if precheck is not None and route.max_body > MAX_BODY and (early := precheck(request)) is not None:
+            raise Answered(early)
         try:
             remaining = route.read_s - (asyncio.get_running_loop().time() - started)
             request.body = await asyncio.wait_for(reader.readexactly(size), max(0., remaining))
@@ -227,12 +241,14 @@ async def read_request(reader: asyncio.StreamReader, routes=None) -> Request:
     return request
 
 
-async def _connection(handler: Handler, reader, writer, routes=None) -> None:
+async def _connection(handler: Handler, reader, writer, routes=None, precheck=None) -> None:
     try:
         try:
-            request = await read_request(reader, routes)
+            request = await read_request(reader, routes, precheck)
         except BadRequest as e:
             response = text(e.status, str(e))
+        except Answered as e:
+            response = e.response
         except (asyncio.TimeoutError, ConnectionError, OSError):
             return
         else:
@@ -246,11 +262,16 @@ async def _connection(handler: Handler, reader, writer, routes=None) -> None:
         if isinstance(response, Stream):
             await response.run(reader, writer)
         else:
-            writer.write(response.encode())
-            try:
-                await asyncio.wait_for(writer.drain(), DRAIN_S)
-            except TimeoutError:
-                writer.transport.abort()
+            # In pieces, each with its own deadline: a client still reading a large answer (his
+            # video, over the tailnet) keeps it, one that stopped reading is dropped.
+            data = memoryview(response.encode())
+            for start in range(0, len(data), WRITE_CHUNK):
+                writer.write(data[start:start + WRITE_CHUNK])
+                try:
+                    await asyncio.wait_for(writer.drain(), DRAIN_S)
+                except TimeoutError:
+                    writer.transport.abort()
+                    break
     except (ConnectionError, OSError):
         pass
     finally:
@@ -275,14 +296,14 @@ def listen_socket(host: str, port: int) -> socket.socket:
     return sock
 
 
-async def serve(handler: Handler, host: str, port: int, *, routes=None) -> asyncio.Server:
+async def serve(handler: Handler, host: str, port: int, *, routes=None, precheck=None) -> asyncio.Server:
     sock = listen_socket(host, port)
     active = 0
 
     async def accepted(reader, writer):
         nonlocal active
         try:
-            await _connection(handler, reader, writer, routes)
+            await _connection(handler, reader, writer, routes, precheck)
         finally:
             active -= 1
 

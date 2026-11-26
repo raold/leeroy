@@ -17,6 +17,19 @@ LOOK_PROMPT = ('Describe this photo in two or three plain sentences: what and wh
 LOOK_TIMEOUT_S = 30.0
 
 
+def video_prompt(frames: int) -> str:
+    """The look's instruction for his video's stills (videos/files.py lays them side by side)."""
+    if frames > 1:
+        return (f'These are {frames} stills from one short video, side by side from left to right '
+                'in the order they happen. Describe in two or three plain sentences what happens '
+                'in the video: what and who is in it (without guessing who anyone is), where it '
+                'seems to be, and anything notable or funny. Do not describe them as separate '
+                'pictures, and do not say who took it or who posted it.')
+    return ('This is a still from a short video. Describe in two or three plain sentences what '
+            'and who is in it (without guessing who anyone is), where it seems to be, and anything '
+            'notable or funny. Do not say who took it or who posted it.')
+
+
 def sentences(text: str) -> list[str]:
     return [s.strip() for s in re.split(r'(?<=[.!?])\s+|[\r\n]+', text) if s.strip()]
 
@@ -25,13 +38,19 @@ def photo_note(look: str | None) -> str:
     return '[photo: ' + ' '.join(sentences(look)[:2]) + ']' if look else '[photo]'
 
 
-async def look_at(app, data: bytes) -> str | None:
+def video_note(look: str | None, length: str) -> str:
+    """'[video, 12 seconds: ...]': his video as history shows it (`length` may be empty)."""
+    head = '[video' + (', ' + length if length else '')
+    return head + ': ' + ' '.join(sentences(look)[:2]) + ']' if look else head + ']'
+
+
+async def look_at(app, data: bytes, prompt: str = LOOK_PROMPT) -> str | None:
     started = time.monotonic()
     try:
         if (admission := getattr(app.engine, 'live_admission', None)) is not None:
             await admission()
         async def job(llm):
-            return await llm.chat(app.cfg.models.live, [{'role':'user', 'content':LOOK_PROMPT,
+            return await llm.chat(app.cfg.models.live, [{'role':'user', 'content':prompt,
                 'images':[base64.b64encode(data).decode('ascii')]}], options=dict(LOOK.options),
                 think=False, timeout=LOOK_TIMEOUT_S)
         async with asyncio.timeout(LOOK_TIMEOUT_S):

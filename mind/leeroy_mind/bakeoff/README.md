@@ -11,10 +11,10 @@ sent. It answers "would this do better on *our* turns", not "is this model good"
 
 ```toml
 [bakeoff]
-capture = true   # default false: nothing is captured
+capture = true   # the default; false: nothing is captured
 ```
 
-Read once at the mind's start; a missing, invalid or unknown key means off. The console's Ops
+Read once at the mind's start; a missing key means on, an invalid or unknown one means off. The console's Ops
 tab lists it in the switchboard. With it on, the talk pipeline stores each **sent** model turn in
 `bakeoff_turn` (migration `*_bakeoff.sql`), one row per generation that became a line:
 

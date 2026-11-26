@@ -7,6 +7,7 @@ import pytest
 
 from leeroy_mind.app import acquire_instance_lock
 from leeroy_mind.training import cli
+from shipped_off import off
 
 
 @pytest.mark.parametrize("args", [["status"], ["gate"], ["report", "--week", "2026-W44"],
@@ -187,7 +188,7 @@ def test_enabled_attachment_does_not_leak_training_into_disabled_schema7_eval(ap
     weekly.register_section("synthetic_extra", lambda ctx, week: {"status": "complete"})
     root = tmp_path / "disabled"
     root.mkdir()
-    (root / "mind.toml").write_text("[training]\nenabled=false\n", encoding="utf-8")
+    (root / "mind.toml").write_text(off("[training]\nenabled=false\n"), encoding="utf-8")
     migrations = db._migration_files()
     with monkeypatch.context() as schema7:
         schema7.setattr(db, "_migration_files", lambda: [(version, path) for version, path in migrations if version <= 7])

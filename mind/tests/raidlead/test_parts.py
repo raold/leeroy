@@ -11,7 +11,7 @@ from leeroy_mind.talk.world import WorldView
 
 
 @pytest.mark.parametrize("text, on", [
-    ("", False), ("[raidlead]\nenabled = true\n", True), ("[raidlead]\nenabled = false\n", False),
+    ("", True), ("[raidlead]\nenabled = true\n", True), ("[raidlead]\nenabled = false\n", False),
     ('[raidlead]\nenabled = "yes"\n', False), ("[raidlead]\nenabled = true\nmodel = 1\n", False),
     ("raidlead = 3\n", False), ("[raidlead\n", False),
 ])
@@ -20,8 +20,8 @@ def test_switch(tmp_path, text, on):
     assert load(tmp_path / "mind.toml").enabled is on
 
 
-def test_switch_without_a_file_is_off(tmp_path):
-    assert load(tmp_path / "missing.toml").enabled is False
+def test_switch_without_a_file_is_on(tmp_path):
+    assert load(tmp_path / "missing.toml").enabled is True  # on by default (2026-11-25)
 
 
 def test_default_rule_counts_nights_led_then_attended(store):
@@ -79,7 +79,8 @@ def test_control_op_refuses_anything_else(args):
 
 
 @pytest.mark.parametrize("text, state", [
-    ("[raidlead]\nenabled = true\n", "on"), ("", "off"), ('[raidlead]\nenabled = "x"\n', "invalid"),
+    ("[raidlead]\nenabled = true\n", "on"), ("", "on"), ("[raidlead]\nenabled = false\n", "off"),
+    ('[raidlead]\nenabled = "x"\n', "invalid"),
     ("[raidlead]\nenabled = true\nmore = 1\n", "invalid"),
 ])
 def test_the_ops_switches_list_the_raid_lead(tmp_path, text, state):

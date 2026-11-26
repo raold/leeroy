@@ -80,11 +80,11 @@ def test_duplicate_candidate_is_redrawn_against_self_and_existing_cast():
     assert looks.distance(looks.looks_vector(first),looks.looks_vector(other)) >= looks.MIN_LOOK_DISTANCE
 
 
-@pytest.mark.parametrize("text,expected", [("",False),("[looks]\ndiversity=true",True),
+@pytest.mark.parametrize("text,expected", [("",True),("[looks]\ndiversity=true",True),
     ("[looks]\ndiversity=false",False),("[looks]\ndiversity=1",False),
     ('[looks]\ndiversity="true"',False),("looks=1",False),
     ("[looks]\ndiversity=true\nunknown=true",False),("[broken",False)])
-def test_invalid_configuration_is_off(tmp_path,text,expected):
+def test_missing_is_on_and_invalid_configuration_is_off(tmp_path,text,expected):
     (tmp_path/"mind.toml").write_text(text,encoding="utf-8")
     assert looks.enabled(tmp_path) is expected
 

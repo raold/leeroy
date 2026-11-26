@@ -20,6 +20,7 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.tuning.effective import dials_of
+from shipped_off import off
 
 KEY = "K" * 43
 CLOCK = datetime(2026, 10, 29, 20, 0, tzinfo=timezone.utc)
@@ -141,7 +142,7 @@ def test_tune_reaches_the_service_one_change_at_a_time(tmp_path, caplog):
 # -- the real service in a real app -------------------------------------------------------------
 
 def _app(root):
-    (root / "mind.toml").write_text("[talk]\nchattiness = 4\n", encoding="utf-8")
+    (root / "mind.toml").write_text(off("[talk]\nchattiness = 4\n"), encoding="utf-8")
     s = Store(open_migrated(root / "mind.db"), clock=FakeClock(CLOCK))
     try:
         seed_test_cast(s)

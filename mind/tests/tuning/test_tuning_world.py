@@ -13,6 +13,7 @@ from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_clock import FakeClock
 from leeroy_mind.testing.fake_llm import FakeLLM
 from leeroy_mind.tuning import changes as C
+from shipped_off import off
 
 CLOCK = datetime(2026, 10, 29, 20, 0, tzinfo=timezone.utc)
 
@@ -37,14 +38,14 @@ def _app(root):
 
 
 def test_the_app_starts_with_the_overrides_and_keeps_them_across_a_reload(tmp_path):
-    (tmp_path / "mind.toml").write_text("[talk]\nchattiness = 4\n", encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off("[talk]\nchattiness = 4\n"), encoding="utf-8")
     _seed(tmp_path, ("world", "", "chattiness", 9), ("world", "", "jealousy", 1))
     app = _app(tmp_path)
     try:
         assert (app.cfg.talk.chattiness, app.cfg.romance.jealousy) == (9, 1)
         assert app.engine.budget._c == 9 and app.engine.asides.jealousy == 1
         assert app.file_cfg.talk.chattiness == 4
-        (tmp_path / "mind.toml").write_text("[talk]\nchattiness = 2\n", encoding="utf-8")
+        (tmp_path / "mind.toml").write_text(off("[talk]\nchattiness = 2\n"), encoding="utf-8")
         app._reload_config()
         assert app.cfg.talk.chattiness == 9 and app.file_cfg.talk.chattiness == 2
     finally:
@@ -52,7 +53,7 @@ def test_the_app_starts_with_the_overrides_and_keeps_them_across_a_reload(tmp_pa
 
 
 def test_without_overrides_the_config_is_the_file_itself(tmp_path):
-    (tmp_path / "mind.toml").write_text("[talk]\nchattiness = 4\n", encoding="utf-8")
+    (tmp_path / "mind.toml").write_text(off("[talk]\nchattiness = 4\n"), encoding="utf-8")
     _seed(tmp_path)
     app = _app(tmp_path)
     try:
@@ -72,8 +73,8 @@ def _doctor(root, capsys):
 
 
 def _toml(root, port):
-    (root / "mind.toml").write_text(f'[bridge]\nport = {port}\n\n[human]\nnickname = "Testy"\n'
-                                    'pronouns = "he"\n', encoding="utf-8")
+    (root / "mind.toml").write_text(off(f'[bridge]\nport = {port}\n\n[human]\nnickname = "Testy"\n'
+                                    'pronouns = "he"\n'), encoding="utf-8")
     cfg = load_config(root / "mind.toml")
     (root / "mod_ollama_chat.conf").write_text(
         f'OllamaChat.Model = "{cfg.models.live}"\nOllamaChat.NumCtx = 4096\n', encoding="utf-8")

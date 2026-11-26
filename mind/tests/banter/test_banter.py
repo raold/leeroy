@@ -37,12 +37,18 @@ def human(rig,channel="guild"):
         session_id=None,origin="human",ts=rig.clock.now(),audience=(101,102,103,104,105))
 
 
-@pytest.mark.parametrize("table",["", "[banter]\nenabled=false", "[banter]\nenabled=1",
+@pytest.mark.parametrize("table",["[banter]\nenabled=false", "[banter]\nenabled=1",
     "[banter]\nenabled=true\nper_hour=-1", "[banter]\nenabled=true\nper_hour=true",
     "[banter]\nenabled=true\nunknown=1", "broken["])
-def test_invalid_and_missing_off(tmp_path,table):
+def test_invalid_and_false_off(tmp_path,table):
     path=tmp_path/"mind.toml"; path.write_text(table)
     assert not load(path).enabled
+
+
+@pytest.mark.parametrize("table",["", "[banter]\n", "[banter]\nper_hour=3"])
+def test_missing_on(tmp_path,table):
+    path=tmp_path/"mind.toml"; path.write_text(table)
+    assert load(path).enabled and load(tmp_path/"absent.toml").enabled
 
 
 def test_load_default_limit(tmp_path):

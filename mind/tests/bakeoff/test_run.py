@@ -9,6 +9,7 @@ import sqlite3
 import pytest
 
 from bakeoff.rig import CONFIG, HINT, RETRY_EVERY, SYSTEM, digest, ollama, seed, seed_discord
+from shipped_off import off
 from leeroy_mind.app import acquire_instance_lock
 from leeroy_mind.bakeoff import variants
 from leeroy_mind.bakeoff.cli import bakeoff_main
@@ -405,7 +406,7 @@ def test_beat_items_are_read_back_from_the_request():
 def test_a_candidate_beat_is_seeded_per_turn_and_candidate_with_the_live_budget(data, tmp_path, clock):
     """review-328-r2 P3-B: the beat call carries a seed per turn and candidate, and the data
     dir's [talk] think_budget as its num_predict."""
-    (data / "mind.toml").write_text("[talk]\nthink_budget = 300\n")
+    (data / "mind.toml").write_text(off("[talk]\nthink_budget = 300\n"))
     llm, admin, _ = ollama(data)
     cfg = "".join(f'[[candidate]]\nname = "{n}"\nmodel = "polite:1"\nbeat = true\n' for n in ("b1", "b2"))
     assert run(data, tmp_path, "--turns", "10", "--windows", "0", "--out", str(tmp_path / "o"),

@@ -3,6 +3,7 @@ from dataclasses import replace
 from nightly.test_night_lexicon import term, row, spoken
 from leeroy_mind.nightly import lexicon
 from leeroy_mind.culture.config import load_culture_config
+from shipped_off import off
 
 
 def enable(h):
@@ -12,9 +13,9 @@ def enable(h):
 
 def test_culture_defaults_and_invalid(tmp_path):
     path=tmp_path / "mind.toml"
-    assert not load_culture_config(path).enabled
-    path.write_text("[culture]\nenabled=true\n")
-    assert not load_culture_config(path).enabled
+    assert load_culture_config(path).enabled  # on by default (2026-11-25), [server] too
+    path.write_text("[server]\nenabled=false\n[culture]\nenabled=true\n")
+    assert not load_culture_config(path).enabled  # culture needs the server
     path.write_text("[server]\nenabled=true\n[culture]\nenabled=true\nmemes_per_week=15\n")
     assert not load_culture_config(path).enabled
 
@@ -122,7 +123,7 @@ def test_culture_is_a_startup_choice_and_hot_checks_never_read_config(h, monkeyp
     from leeroy_mind.culture import config
     path = h.settings.data_dir / 'mind.toml'
     def write(value):
-        path.write_text(f'[server]\nenabled=true\n[culture]\nenabled={str(value).lower()}\n')
+        path.write_text(off(f'[server]\nenabled=true\n[culture]\nenabled={str(value).lower()}\n'))
     write(enabled)
     app = app_for(h)
     try:

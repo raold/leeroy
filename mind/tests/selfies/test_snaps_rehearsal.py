@@ -33,6 +33,7 @@ from nightly.test_night_scenes import SCENE_REPLY, raid
 
 from .fakes import CLOCK, fake_command, planned_snap, ready, renderable_cast, tagged_jpeg, until
 from .test_selfies_rehearsal import closed
+from shipped_off import off
 
 MEMBERS = (101, 102, 103)
 SCHEMA = "matching this schema:"
@@ -77,8 +78,8 @@ def test_situational_photos_are_made_at_night_and_a_login_ends_the_worker(
         bridge_port = await bridge.start()
         out["ports"] = [bridge_port]
         (data / "mind.toml").write_text(
-            f"[bridge]\nport = {bridge_port}\n[talk]\nchattiness = 0\n"
-            "[selfies]\nenabled = true\nsnaps = true\n", encoding="utf-8")
+            off(f"[bridge]\nport = {bridge_port}\n[talk]\nchattiness = 0\n"
+            "[selfies]\nenabled = true\nsnaps = true\n"), encoding="utf-8")
         store = Store(open_db(data / "mind.db"), clock=clock)
         try:
             seed_test_cast(store)

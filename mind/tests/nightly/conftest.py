@@ -21,6 +21,7 @@ from leeroy_mind.personas.screens import names_real_name
 from leeroy_mind.protocol import (BgEnd, Boss, Chat, Group, Hello, Login, Logout, LootWon,
                                   Member, TextEmote)
 from dbtemplate import open_migrated
+from shipped_off import off
 from leeroy_mind.storage.rows import MemoryRow, pack_vec
 from leeroy_mind.storage.store import Store
 from leeroy_mind.testing.fake_llm import FakeLLM, fake_embed
@@ -208,7 +209,8 @@ def put_wow(h, guid, **cols):
 class NightHarness:
     """What a nightly test works on. `store` is a migrated mind.db on `clock`, a StepClock at
     T, holding the test cast (101-105, P1b's seed), the human (guid 1, Testmage, level 83, the
-    guild master) and meta human_guid 1. `settings` are P1b's defaults with no mind.toml. The
+    guild master) and meta human_guid 1. `settings` are P1b's defaults, from a mind.toml with
+    every switch that defaults on since 2026-11-25 off (tests/shipped_off.py). The
     helpers seed what a night reads; a time `t` is unix seconds."""
 
     T = START.timestamp()
@@ -408,6 +410,7 @@ def h(tmp_path):
                               rank=0, online=False, map=0, zone=0, spec_tab=-1)],
                       START.timestamp())
     store.set_meta("human_guid", "1")
-    settings = load_settings(load_config(tmp_path / "missing.toml"), tmp_path)
+    (tmp_path / "mind.toml").write_text(off(), encoding="utf-8")
+    settings = load_settings(load_config(tmp_path / "mind.toml"), tmp_path)
     yield NightHarness(store, settings, store.clock)
     store.close()

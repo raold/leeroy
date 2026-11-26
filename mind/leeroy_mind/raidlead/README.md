@@ -8,14 +8,14 @@ her raid icons are set server-side, so playerbots' assist-tank and assist-healer
 
 ## Switches
 
-- `[raidlead] enabled = true` in `mind.toml` (default false; a table with any other key or a
+- `[raidlead] enabled = true` in `mind.toml` (default true; a table with any other key or a
   non-boolean value, or an unreadable `mind.toml`, is off). Read at the mind's start: restart the
   mind after changing it. Off, nothing is attached: no handler, task, op or prompt, and his lines
   go to talk as before.
-- `[raidlead] briefs = true` (default false; only with `enabled`; a non-boolean value makes the
+- `[raidlead] briefs = true` (default true; only with `enabled`; a non-boolean value makes the
   whole table invalid, so the raid lead is off): the boss briefs below. Read at the mind's start.
   Off, the pre-pull call and his plan questions are exactly what they were.
-- Native `Leeroy.RaidLead.Enable = 1` in `mod_leeroy.conf` (default 0, `.reload config`); see
+- Native `Leeroy.RaidLead.Enable = 1` in `mod_leeroy.conf` (default 1, `.reload config`); see
   `modules/mod-leeroy/README.md`. The mind asks it: a `sync` at each hello (which also has native
   publish his group, so the group is known at once) and a `probe` a minute while he plays; any
   `raidlead_off` refusal counts too. While native is off or unknown, or the worldserver lacks the

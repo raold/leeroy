@@ -16,7 +16,7 @@ Enable with the following in `mind.toml`, then restart the mind and console:
 enabled = true
 ```
 
-The default is off. An invalid table disables the feature. Configuration is read
+The default is on. An invalid table disables the feature. Configuration is read
 at startup only; disabled outreach installs no hooks or night stage and preserves
 the existing topic choices and prompts. Migration `0045_outreach.sql` adds the
 durable list and delivery receipts.

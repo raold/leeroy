@@ -1,8 +1,8 @@
 # Typing fingerprint, version 1
 
 `[fingerprint] enabled = true` in `mind.toml` attaches the nightly `fingerprint`
-stage after thread extraction, with no model. A restart applies the switch;
-missing, false or malformed settings leave the stage unattached. Manual
+stage after thread extraction, with no model (the default). A restart applies the switch;
+false or malformed settings leave the stage unattached. Manual
 `nightly run` uses the same switch. Optional [learning application](../learn/README.md#applying-learning-to-live-talk)
 uses an audience-filtered numeric hint for typing arms; the measurement switch
 alone does not change prompts. `python -m leeroy_mind fingerprint show 101 --data-dir <directory>`

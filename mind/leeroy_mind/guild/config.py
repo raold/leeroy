@@ -31,7 +31,7 @@ class DkpConfig:
 
 @dataclass(frozen=True)
 class GuildConfig:
-    loot_receipts: bool = False
+    loot_receipts: bool = True
     raid_call_delay_s: int = 60
     raid_call_jitter_s: int = 15
     pick_window_min: int = 10

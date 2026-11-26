@@ -132,6 +132,9 @@ def with_reactions(conn, rows: list[dict]) -> list[dict]:
               if 'discord_attachment' in views.tables(conn) else {})
     from leeroy_mind.voice_notes.service import rows as voice_rows
     notes=voice_rows(conn,[m['id'] for m in rows])
+    # his videos (videos/files.py): their attachment is the stills, the page's poster
+    from leeroy_mind.videos.files import by_messages as video_rows
+    clips = video_rows(conn, [m['id'] for m in rows if m['id'] in photos])
     from .decisionsview import poll_cards
     polls = poll_cards(conn, [m['id'] for m in rows], human_guid(conn))
     # A server bot's post (culture.bots) names its bot; nothing else gains a field.
@@ -144,7 +147,9 @@ def with_reactions(conn, rows: list[dict]) -> list[dict]:
                  if m['id'] in notes and layout.dm_peer(m['channel']) is not None else None),
              'feedback_id': lines.get(m['id']), 'feedback': votes.get(lines.get(m['id'])),
              'image': ({'w': photos[m['id']]['width'], 'h': photos[m['id']]['height'],
-                        'kind': photos[m['id']]['kind']} if m['id'] in photos else None)} for m in rows]
+                        'kind': photos[m['id']]['kind']} if m['id'] in photos else None),
+             **({'video': {k: clips[m['id']][k] for k in ('ms', 'w', 'h', 'frames', 'bytes')}}
+                if m['id'] in clips and m.get('deleted') is None else {})} for m in rows]
 
 
 def with_items(rows: list[dict], library, *, conn=None, now: float | None = None) -> list[dict]:

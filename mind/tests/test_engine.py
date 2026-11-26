@@ -14,7 +14,7 @@ from conftest import HUMAN, TEST_CAST, make_mem, make_persona, run, seed_test_ca
 from engine_rig import (NICK, OVERLAY, REAL, FakeLibrary, chunk, engine_clock, make_rig,
                         numbered, save_member)
 from leeroy_mind.bridge import AckTimeout, ConnectionLost, NotConnected
-from leeroy_mind.config import HumanCfg, TalkCfg
+from leeroy_mind.config import HumanCfg
 from leeroy_mind.llm.presets import LIVE
 from leeroy_mind.llm.scheduler import Priority
 from leeroy_mind.memory.extract import Extractor
@@ -1648,7 +1648,7 @@ def test_apply_config_takes_effect(store, clock, tmp_path):
     async def main():
         r = make_rig(store, clock, tmp_path, chattiness=10)
         asides = r.engine.asides
-        r.engine.apply_config(replace(r.cfg, talk=TalkCfg(0, r.cfg.talk.raid_rule),
+        r.engine.apply_config(replace(r.cfg, talk=replace(r.cfg.talk, chattiness=0),
                                       human=HumanCfg("Zed", REAL, "she")))
         assert r.engine.asides is asides  # renamed in place: its hourly count carries on
         msgs, _ = await r.engine.compose(reply_to_human(101))
