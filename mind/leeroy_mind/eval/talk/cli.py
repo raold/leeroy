@@ -24,8 +24,8 @@ EMBED_MAX_CHARS = 4000
 EXCERPT_CHARS = 160
 
 
-def add_parser(parser):
-    sub = parser.add_subparsers(dest='eval_action').add_parser('talk', help='measure stored talk on a scratch copy')
+def add_parser(actions):
+    sub = actions.add_parser('talk', help='measure stored talk on a scratch copy')
     _data_arg(sub, child=True)
     sub.add_argument('--since', type=_positive, default=14, metavar='DAYS')
     sub.add_argument('--fake', action='store_true', help='offline smoke measurement, not a calibrated model')

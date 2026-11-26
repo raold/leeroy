@@ -510,19 +510,25 @@ async def _evaluate(root, store, cfg, clock, args, make_llm):
                 await asker.aclose()
 
 
-def eval_main(argv=None, *, make_llm=None):
+def eval_main(argv=None, *, make_llm=None, make_admin=None, wow_open=None):
     parser = argparse.ArgumentParser(prog="leeroy_mind eval")
     _data_arg(parser)
     parser.add_argument("--week", type=_week)
     parser.add_argument("--no-llm", action="store_true")
     parser.add_argument("--live-db", action="store_true")
     parser.add_argument("--probe-secrets", action="store_true")
+    from leeroy_mind.eval import bank
     from leeroy_mind.eval.talk.cli import add_parser as add_talk_parser, run as run_talk
-    add_talk_parser(parser)
+    actions = parser.add_subparsers(dest='eval_action')
+    add_talk_parser(actions)
+    bank.add_parser(actions)
     args = parser.parse_args(argv)
-    if args.eval_action == 'talk':
+    if args.eval_action in ('talk', 'bank'):
         if args.week or args.no_llm or args.live_db or args.probe_secrets:
-            parser.error('talk cannot use the weekly/live evaluation switches')
+            parser.error(f'{args.eval_action} cannot use the weekly/live evaluation switches')
+        if args.eval_action == 'bank':
+            return bank.main(args, SystemClock(), make_llm=make_llm, make_admin=make_admin,
+                             wow_open=wow_open)
         return run_talk(args, SystemClock(), make_llm=make_llm)
     if args.no_llm and args.probe_secrets:
         parser.error("--probe-secrets cannot be combined with --no-llm")
