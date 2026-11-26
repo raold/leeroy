@@ -212,7 +212,7 @@ def prepare_fixture(layout, log=print):
     return prepared, checkpoint.digest(checkpoint.receipt)
 
 
-def run(layout, *, target, toc_worm_support=False, log=print):
+def run(layout, *, target, toc_worm_support=False, profile=False, log=print):
     if target not in TARGETS:
         raise LayoutError("unsupported offline target")
     if toc_worm_support and TARGETS[target][0] not in {"toc", "toc-full"}:
@@ -235,6 +235,7 @@ def run(layout, *, target, toc_worm_support=False, log=print):
     report = dict(kind="dojo-offline-acceptance", format=1, ok=False, source=source, preflight=preflight,
                   token=token, target=target, toc_worm_support=toc_worm_support,
                   out=str(out), reached=False, cleanup=False, stopped=False)
+    report["profile_requested"] = profile
     if target in FULL_ROUTES:
         count, required = FULL_ROUTES[target]
         report["route"] = dict(required_bosses=required, unverified_bosses=[i for i in range(count) if i not in required],
@@ -266,6 +267,11 @@ def run(layout, *, target, toc_worm_support=False, log=print):
             raise world.WorldError(feed.error or "candidate mechanic feed timed out")
         report["mechanic_feed"] = dict(features=feed.features, rules=feed.rules)
         with world.ra(layout) as client:
+            profile_start = time.time()
+            if profile:
+                if read_conf(layout.configs / "modules/playerbots.conf").get("Playerbots.PerfMonEnabled", "0") == "0":
+                    client.command("playerbots pmon toggle")
+                client.command("playerbots pmon reset")
             scenario = TARGETS[target][0]
             if toc_worm_support:
                 scenario = "toc-full-worms" if target == "toc-full" else "toc-worms"
@@ -371,6 +377,16 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                 else:
                     client.command("dojo offline stop")
                     raise world.WorldError("offline runtime deadline exceeded")
+            if profile:
+                client.command("playerbots pmon stack")
+                stats_path = layout.logs / "pmon_total.json"
+                stats = json.loads(stats_path.read_text(encoding="utf-8"))
+                if (stats.get("enabled") is not True or type(stats.get("generatedAt")) is not int
+                        or stats["generatedAt"] < int(profile_start)
+                        or type(stats.get("fullTickCount")) is not int or stats["fullTickCount"] <= 0):
+                    raise world.WorldError("native performance sample missing or stale")
+                report["performance_file"] = "pmon_total.json"
+                shutil.copyfile(stats_path, out / report["performance_file"])
         report["ok"] = report["reached"] and report["cleanup"]
     except (world.WorldError, RaError, OSError, ValueError) as error:
         report["error"] = str(error)

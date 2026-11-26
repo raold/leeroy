@@ -30,6 +30,7 @@ def add_parser(sub) -> None:
         "icc-deathwhisper", "icc-gunship", "icc-valithria", "icc-valithria-frontier", "offline-reserves",
         "naxx-gothik-pass", "naxx-gothik-pass-control", "toc-anub-intro", "toc-anub-pass", "offline-native-stall"))
     offline.add_argument("--toc-worm-support", action="store_true", help="measure the candidate worm support in this isolated run")
+    offline.add_argument("--profile", action="store_true", help="capture isolated native bot timings without changing verdict limits")
     cmds.add_parser("lead-acceptance", help="observe native open-world leading, following, waiting and restoration")
     vehicles = cmds.add_parser("vehicle-acceptance", help="observe real raid vehicle boarding, movement and combat")
     vehicles.add_argument("--scenario", action="append", choices=("leviathan", "leviathan-reset", "malygos"))
@@ -153,7 +154,7 @@ def run(args: argparse.Namespace) -> int:
             return 0 if report["ok"] else 1
         elif command == "offline-acceptance":
             from .offline import run as run_offline
-            report = run_offline(layout, target=args.target, toc_worm_support=args.toc_worm_support)
+            report = run_offline(layout, target=args.target, toc_worm_support=args.toc_worm_support, profile=args.profile)
             print(f"Offline acceptance: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "lead-acceptance":
