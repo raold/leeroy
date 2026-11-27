@@ -1,0 +1,200 @@
+From 4f45cd28b6f865ddb14d06636097366145127208 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 02:00:02 -0500
+Subject: [PATCH 64/64] fix(Raids/Malygos): Keep drake flight legs clear of
+ Static Fields
+
+---
+ src/Ai/Raid/RaidVehicleActions.cpp | 29 ++++++++------
+ src/Ai/Raid/RaidVehiclePolicy.h    | 61 ++++++++++++++++++++++++++++++
+ tests/raid_vehicles_test.cpp       | 53 ++++++++++++++++++++++++++
+ 3 files changed, 132 insertions(+), 11 deletions(-)
+
+diff --git a/src/Ai/Raid/RaidVehicleActions.cpp b/src/Ai/Raid/RaidVehicleActions.cpp
+index 684ed39f..6d3931ac 100644
+--- a/src/Ai/Raid/RaidVehicleActions.cpp
++++ b/src/Ai/Raid/RaidVehicleActions.cpp
+@@ -86,7 +86,8 @@ bool MoveDrake(PlayerbotAI* ai)
+             fields.push_back(At(field));
+     Point const centre = At(boss);
+     Point destination = centre;
+-    bool found = false;
++    Point humanAnchor{};
++    Point const* preferred = nullptr;
+     // Follow the human's drake when it is in a safe, castable part of the ring.
+     // Without a human master (offline raid), every bot computes the same anchor.
+     for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
+@@ -97,21 +98,27 @@ bool MoveDrake(PlayerbotAI* ai)
+         Unit* anchor = member->GetVehicleBase();
+         if (anchor && anchor->IsAlive() && anchor->GetEntry() == 30161 && SafeDrakePoint(At(anchor), centre, fields))
+         {
+-            destination = At(anchor);
+-            found = true;
++            humanAnchor = At(anchor);
++            preferred = &humanAnchor;
+             break;
+         }
+     }
+-    for (unsigned i = 0; !found && i < 24; ++i)
+-    {
+-        float const angle = static_cast<float>(i) * 6.2831853f / 24.0f;
+-        destination = {centre.x + 45.0f * std::cos(angle), centre.y + 45.0f * std::sin(angle), centre.z};
+-        found = SafeDrakePoint(destination, centre, fields);
+-    }
+-    if (!found || drake->GetExactDist(destination.x, destination.y, destination.z) <= 3.0f)
+-        return false;
++    Point const current = At(drake);
++    bool const found = DrakeDestination(current, centre, fields, preferred, destination);
+     float x = 0, y = 0, z = 0;
+     auto* motion = drake->GetMotionMaster();
++    if (!found || (SafeDrakePoint(current, centre, fields) &&
++                   drake->GetExactDist(destination.x, destination.y, destination.z) <= 3.0f))
++    {
++        // A newly created field can invalidate a leg that was safe when issued.
++        if (drake->isMoving() && motion->GetDestination(x, y, z) &&
++            !SafeDrakeLeg(current, {x, y, z}, centre, fields))
++        {
++            drake->StopMoving();
++            return true;
++        }
++        return false;
++    }
+     if (drake->isMoving() && motion->GetDestination(x, y, z) &&
+         std::hypot(x - destination.x, y - destination.y) < 2.0f && std::abs(z - destination.z) < 2.0f)
+         return false;
+diff --git a/src/Ai/Raid/RaidVehiclePolicy.h b/src/Ai/Raid/RaidVehiclePolicy.h
+index e1fbf97f..06cc5ca9 100644
+--- a/src/Ai/Raid/RaidVehiclePolicy.h
++++ b/src/Ai/Raid/RaidVehiclePolicy.h
+@@ -139,6 +139,67 @@ inline bool SafeDrakePoint(Point const& point, Point const& boss, std::vector<Po
+     });
+ }
+ 
++// A safe endpoint is insufficient: a chord can cross a second Static Field.
++// When already inside a hazard, every part of the leg must move away from it.
++inline bool DrakeLegClears(Point const& from, Point const& to, Point const& centre, float radius)
++{
++    float const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
++    float const ox = from.x - centre.x, oy = from.y - centre.y, oz = from.z - centre.z;
++    float const lengthSquared = dx * dx + dy * dy + dz * dz;
++    float const initialSquared = ox * ox + oy * oy + oz * oz;
++    float const projection = ox * dx + oy * dy + oz * dz;
++    if (!std::isfinite(lengthSquared) || !std::isfinite(initialSquared) || !std::isfinite(projection))
++        return false;
++    if (initialSquared < radius * radius)
++        return projection >= 0.f;
++    float const along = lengthSquared > 0.f ? std::clamp(-projection / lengthSquared, 0.f, 1.f) : 0.f;
++    float const x = ox + along * dx, y = oy + along * dy, z = oz + along * dz;
++    return x * x + y * y + z * z >= radius * radius;
++}
++
++inline bool SafeDrakeLeg(Point const& from, Point const& to, Point const& boss, std::vector<Point> const& fields)
++{
++    if (!SafeDrakePoint(to, boss, fields) ||
++        !DrakeLegClears({from.x, from.y, 0.f}, {to.x, to.y, 0.f}, {boss.x, boss.y, 0.f}, 38.f))
++        return false;
++    return std::all_of(fields.begin(), fields.end(), [&](Point const& field)
++    {
++        return DrakeLegClears(from, to, field, StaticFieldClearance);
++    }) && std::isfinite(from.z);
++}
++
++inline bool DrakeDestination(Point const& from, Point const& boss, std::vector<Point> const& fields,
++                             Point const* anchor, Point& destination)
++{
++    if (anchor && SafeDrakeLeg(from, *anchor, boss, fields))
++    {
++        destination = *anchor;
++        return true;
++    }
++    // Do not recenter through an old field when the present position is safe.
++    if (SafeDrakePoint(from, boss, fields))
++    {
++        destination = from;
++        return true;
++    }
++    bool found = false;
++    float shortest = 0.f;
++    for (float radius : {45.f, 50.f, 55.f})
++        for (unsigned i = 0; i < 24; ++i)
++        {
++            float const angle = static_cast<float>(i) * 6.2831853f / 24.f;
++            Point const candidate{boss.x + radius * std::cos(angle), boss.y + radius * std::sin(angle), boss.z};
++            float const distance = std::hypot(candidate.x - from.x, candidate.y - from.y, candidate.z - from.z);
++            if ((!found || distance < shortest) && SafeDrakeLeg(from, candidate, boss, fields))
++            {
++                found = true;
++                shortest = distance;
++                destination = candidate;
++            }
++        }
++    return found;
++}
++
+ inline int BoardingPriority(std::uint32_t entry, bool emptyDriver, bool groupDriver, bool gunnerFree,
+                             bool melee)
+ {
+diff --git a/tests/raid_vehicles_test.cpp b/tests/raid_vehicles_test.cpp
+index e4660b8b..cc6c5e66 100644
+--- a/tests/raid_vehicles_test.cpp
++++ b/tests/raid_vehicles_test.cpp
+@@ -203,6 +203,59 @@ int main()
+     CHECK(!SafeDrakePoint({45, 0, 10}, boss, {{45, 0, 35}})); // Damage is a 30-yard sphere.
+     CHECK(SafeDrakePoint({45, 0, 10}, boss, {{13, 0, 10}}));
+     CHECK(!SafeDrakePoint({45, 0, 10}, boss, {{std::numeric_limits<float>::quiet_NaN(), 0, 10}}));
++
++    // Captured native wave: both endpoints are safe, but the old eastward
++    // recentering leg passes 13.2 yards from the north-east field's centre.
++    Point const capturedBoss{754.364868f, 1301.467773f, 261.100006f};
++    Point const north{755.055664f, 1345.769653f, 261.100006f};
++    Point const east{799.364868f, 1301.467773f, 261.100006f};
++    Point const oldField{786.184692f, 1333.287598f, 261.100006f};
++    CHECK(SafeDrakePoint(north, capturedBoss, {oldField}));
++    CHECK(SafeDrakePoint(east, capturedBoss, {oldField}));
++    CHECK(!SafeDrakeLeg(north, east, capturedBoss, {oldField}));
++    Point selected{};
++    CHECK(DrakeDestination(north, capturedBoss, {oldField}, &east, selected));
++    CHECK(selected.x == north.x && selected.y == north.y && selected.z == north.z);
++    CHECK(DrakeDestination(north, capturedBoss, {oldField}, nullptr, selected));
++    CHECK(selected.x == north.x && selected.y == north.y);
++
++    // A later field spawns on the east anchor. The old northward chord joins
++    // the two hazards and keeps both drakes exposed past four seconds.
++    std::vector<Point> overlapping{oldField, east};
++    CHECK(!SafeDrakeLeg(east, north, capturedBoss, overlapping));
++    CHECK(DrakeDestination(east, capturedBoss, overlapping, &north, selected));
++    CHECK(SafeDrakeLeg(east, selected, capturedBoss, overlapping));
++    CHECK(selected.y < east.y); // leave away from the old field, not through it
++    CHECK(std::hypot(selected.x - east.x, selected.y - east.y) / 14.f < 3.f);
++    CHECK(!SafeDrakeLeg({45, 0, 10}, {-45, 0, 10}, boss, {})); // no chord through Arcane Pulse
++    CHECK(SafeDrakeLeg({0, 0, 10}, {45, 0, 10}, boss, {})); // initial radial escape
++    CHECK(!SafeDrakeLeg({std::numeric_limits<float>::quiet_NaN(), 0, 10}, {45, 0, 10}, boss, {}));
++    CHECK(!SafeDrakeLeg({45, 0, std::numeric_limits<float>::quiet_NaN()}, {45, 0, 10}, boss, {}));
++    CHECK(!DrakeLegClears({1, 0, 0}, {-40, 0, 0}, {0, 0, 0}, 32.f));
++    CHECK(DrakeLegClears({1, 0, 0}, {40, 0, 0}, {0, 0, 0}, 32.f));
++    CHECK(!SafeDrakeLeg({45, 0, 10}, {45, 0, 10}, boss, {{45, 0, 10}}));
++    // Independently sample every accepted segment across field angles. A leg
++    // may leave a hazard it starts in, but must never move deeper or enter one.
++    for (unsigned angle = 0; angle < 24; ++angle)
++    {
++        float const radians = float(angle) * 6.2831853f / 24.f;
++        Point const field{45.f * std::cos(radians), 45.f * std::sin(radians), 10.f};
++        Point const start{45.f, 0.f, 10.f};
++        if (!DrakeDestination(start, boss, {field}, nullptr, selected)) continue;
++        CHECK(SafeDrakePoint(selected, boss, {field}));
++        float previous = std::hypot(start.x - field.x, start.y - field.y, start.z - field.z);
++        bool const inside = previous < StaticFieldClearance;
++        for (unsigned step = 1; step <= 100; ++step)
++        {
++            float const along = float(step) / 100.f;
++            Point const point{start.x + (selected.x - start.x) * along,
++                start.y + (selected.y - start.y) * along, start.z + (selected.z - start.z) * along};
++            float const clearance = std::hypot(point.x - field.x, point.y - field.y, point.z - field.z);
++            CHECK(inside ? clearance >= previous : clearance >= StaticFieldClearance);
++            CHECK(std::hypot(point.x, point.y) >= 38.f);
++            previous = clearance;
++        }
++    }
+     CHECK(BoardingPriority(33060, true, false, false, true) == 0);
+     CHECK(BoardingPriority(33109, true, false, false, false) == 0);
+     CHECK(BoardingPriority(33109, true, false, false, true) < BoardingPriority(33060, false, true, true, true));
