@@ -273,7 +273,8 @@ db = { from = "tg_pull", where = "map = 631 AND boss_id = 10 AND outcome = 'wipe
 id = "valithria_healer_focus"
 name = "Valithria: every healer but one on her, mana cooldowns spent, heroic cloud stacks capped"
 prs = [501]
-note = "Set `since` to the native release that carries playerbots patch 0021; older watch lines have no focus field."
+since = "2026-11-25T22:29"
+note = "Live since release 1125f (playerbots patch 0021)."
 
 [[feature.switch]]
 source = "playerbots"
@@ -312,7 +313,8 @@ example = "2026-11-26 21:02:10 valithria_watch instance=812 end=reset hp=63.5 fo
 id = "valithria_adds"
 name = "Valithria: tanks split her adds, skeletons and zombies die first, volleys are interrupted"
 prs = [506]
-note = "Set `since` to the native release that carries playerbots patch 0022; older watch lines have no adds field."
+since = "2026-11-27T09:28"
+note = "Live since release 1127a (playerbots patch 0022)."
 
 [[feature.switch]]
 source = "playerbots"
@@ -350,7 +352,8 @@ example = "2026-11-27 21:02:10 valithria_watch instance=812 end=reset hp=63.5 fo
 id = "valithria_portal_turns"
 name = "Valithria: on 10-player heroic her healers take the Nightmare portals one at a time"
 prs = [506]
-note = "Set `since` to the native release that carries playerbots patch 0022; older watch lines have no turns field. Live 2026-11-26 both healers on her went through every wave together (portal=2, then dream=2)."
+since = "2026-11-27T09:28"
+note = "Live since release 1127a (playerbots patch 0022). Before it, on 2026-11-26, both healers on her went through every wave together (portal=2, then dream=2)."
 
 [[feature.switch]]
 source = "playerbots"
