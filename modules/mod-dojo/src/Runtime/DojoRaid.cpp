@@ -46,6 +46,7 @@
 #include "PlayerbotFactory.h"
 #include "PlayerScript.h"
 #include "Spell.h"
+#include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include <algorithm>
 #include <array>
@@ -135,6 +136,8 @@ struct RaidRun
     bool setup = false, active = false, cleanup = false, combatObserved = false, competition = false;
     ObjectGuid target;
     json defilePaths = json::array();
+    json damageEvidence = json::array(), deaths = json::array();
+    uint64 damageSequence = 0;
     std::array<ObjectGuid, 2> actors{};
     std::recursive_mutex events;
 
@@ -146,6 +149,27 @@ struct RaidRun
 
     void Phase(std::string const& next) { state = next; phaseMs = 0; }
     void Fail(std::string const& why) { failure = why; Phase("cleanup"); }
+
+    std::size_t DiagnosticSlot(Unit* unit) const
+    {
+        if (!active || (state != "harvest" && state != "observe") ||
+            (scenario != "lk-terenas" && scenario != "lk-defile") || !unit ||
+            unit->GetMapId() != map || unit->GetInstanceId() != instance) return actors.size();
+        auto const found = std::find(actors.begin(), actors.end(), unit->GetGUID());
+        return std::size_t(found - actors.begin());
+    }
+
+    void RecordDamage(Unit* victim, Unit* attacker, uint32 damage, uint32 spell, uint32 stage)
+    {
+        std::size_t const slot = DiagnosticSlot(victim);
+        if (slot == actors.size() || !damage) return;
+        // Calculations and OnDamage precede final application. Keep their stage
+        // separate from the actual death callback; proximity is not lethal-hit proof.
+        if (damageEvidence.size() == 32) damageEvidence.erase(damageEvidence.begin());
+        damageEvidence.push_back({{"sequence", ++damageSequence}, {"elapsed_ms", elapsed},
+            {"slot", slot}, {"stage", stage}, {"spell", spell}, {"damage", damage},
+            {"health", victim->GetHealth()}, {"attacker_entry", attacker ? attacker->GetEntry() : 0}});
+    }
 
     std::string Create()
     {
@@ -205,6 +229,7 @@ struct RaidRun
         harvestSamples = strangulateSamples = 0;
         setup = cleanup = combatObserved = competition = false; target.Clear();
         defilePaths = json::array();
+        damageEvidence = json::array(); deaths = json::array(); damageSequence = 0;
         map = name == "valithria" || name == "lk-terenas" || name == "lk-defile" ? 631 : name == "twins" ? 649 : 533;
         oldTwins = sPlayerbotAIConfig.TwinValkyrInteractions;
         sPlayerbotAIConfig.TwinValkyrInteractions = !negative;
@@ -618,12 +643,19 @@ struct RaidRun
             if (Player* p = Actor(i))
             {
                 PlayerbotAI* ai = GET_PLAYERBOT_AI(p);
+                json auras = json::array();
+                for (auto const& aura : p->GetAppliedAuras())
+                {
+                    if (auras.size() == 64) break;
+                    auras.push_back(aura.second->GetBase()->GetId());
+                }
                 fixtures.push_back({{"slot", i}, {"map", p->GetMapId()}, {"instance", p->GetInstanceId()},
                     {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
                     {"health", p->GetHealth()}, {"max_health", p->GetMaxHealth()}, {"mana", p->GetPower(POWER_MANA)},
                     {"teleporting", p->IsBeingTeleported()}, {"healer", PlayerbotAI::IsHeal(p)},
                     {"icc", ai->HasStrategy("icc", BOT_STATE_COMBAT)},
                     {"combat", p->IsInCombat()}, {"self_bot", IsSelfBot(p)},
+                    {"auras", auras}, {"aura_count", p->GetAppliedAuras().size()},
                     {"controlled", ai->IsExternallyControlled()},
                     {"combat_strategies", ai->GetStrategies(BOT_STATE_COMBAT)},
                     {"idle_strategies", ai->GetStrategies(BOT_STATE_NON_COMBAT)},
@@ -663,6 +695,7 @@ struct RaidRun
             {"switch_ms", switchMs}, {"crossings", crossings}, {"hazard_samples", hazardsSeen},
             {"minimum_clearance", minimumClearance}, {"poison_hits", scenario == "poison" ? damageHits : 0},
             {"defile_hits", scenario == "lk-defile" ? damageHits : 0}, {"defile_paths", defilePaths},
+            {"damage_sequence", damageSequence}, {"damage_evidence", damageEvidence}, {"deaths", deaths},
             {"fixtures", fixtures}, {"encounter", encounter}};
     }
 };
@@ -1814,7 +1847,9 @@ public:
 class RaidEvents : public UnitScript
 {
 public:
-    RaidEvents() : UnitScript("DojoRaidEvents", true, {UNITHOOK_ON_HEAL, UNITHOOK_ON_DAMAGE}) { }
+    RaidEvents() : UnitScript("DojoRaidEvents", true, {UNITHOOK_ON_HEAL, UNITHOOK_ON_DAMAGE,
+        UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN, UNITHOOK_MODIFY_PERIODIC_DAMAGE_AURAS_TICK,
+        UNITHOOK_ON_UNIT_DEATH}) { }
     void OnHeal(Unit* healer, Unit* receiver, uint32& gain) override
     {
         std::lock_guard<std::recursive_mutex> lock(run.events);
@@ -1825,6 +1860,7 @@ public:
     void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
     {
         std::lock_guard<std::recursive_mutex> lock(run.events);
+        run.RecordDamage(victim, attacker, damage, 0, 0);
         if (run.state == "observe" && run.scenario == "poison" && attacker && victim &&
             attacker->GetEntry() == 16027 && victim->GetGUID() == run.actors[0] && damage > 0) ++run.damageHits;
         if (run.state == "observe" && run.scenario == "lk-defile" && attacker && victim &&
@@ -1833,6 +1869,30 @@ public:
             ++run.damageHits;
             if (run.escapeMs && run.phaseMs > run.hazardStartMs + run.escapeMs + 1000) ++run.lateHits;
         }
+    }
+    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, int32& damage, SpellInfo const* info) override
+    {
+        if (!info || damage <= 0) return;
+        std::lock_guard<std::recursive_mutex> lock(run.events);
+        run.RecordDamage(victim, attacker, uint32(damage), info->Id, 1);
+    }
+    void ModifyPeriodicDamageAurasTick(Unit* victim, Unit* attacker, uint32& damage, SpellInfo const* info) override
+    {
+        if (!info || !damage) return;
+        std::lock_guard<std::recursive_mutex> lock(run.events);
+        run.RecordDamage(victim, attacker, damage, info->Id, 2);
+    }
+    void OnUnitDeath(Unit* victim, Unit* killer) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(run.events);
+        std::size_t const slot = run.DiagnosticSlot(victim);
+        if (slot == run.actors.size()) return;
+        if (run.deaths.size() == 8) run.deaths.erase(run.deaths.begin());
+        run.deaths.push_back({{"elapsed_ms", run.elapsed}, {"slot", slot},
+            {"killer_entry", killer ? killer->GetEntry() : 0}, {"health", victim->GetHealth()},
+            {"max_health", victim->GetMaxHealth()}, {"x", victim->GetPositionX()},
+            {"y", victim->GetPositionY()}, {"z", victim->GetPositionZ()},
+            {"damage_sequence", run.damageSequence}});
     }
 };
 }
