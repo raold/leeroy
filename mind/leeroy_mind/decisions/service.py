@@ -90,7 +90,8 @@ class DecisionsService:
             except asyncio.CancelledError:
                 raise
             except Exception as error:
-                log.warning('decisions_kind_tick_failed kind=%s error=%s', kind, type(error).__name__)
+                log.warning('decisions_kind_tick_failed kind=%s error=%s code=%s',
+                            kind, type(error).__name__, ledger.failure_code(error))
 
     async def on_hello(self, ev) -> None:
         """A worldserver (re)connected: kinds holding state in game send it again."""

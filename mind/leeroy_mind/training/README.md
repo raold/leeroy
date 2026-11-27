@@ -69,6 +69,25 @@ measured in both kinds counts twice), `passed` at most `gate_max_ms`, `failed`
 final, after which nothing is armed. The pass time is saved (`tg_gate`
 `passed_at`).
 
+`training_gate_waiting` reports raid count, paired and unmatched boss contexts,
+the required context count and rejected fight receipts whenever those counts
+change. A growing raid count alone is not progress toward a verdict: short
+fights without two samples, incomplete routes, or visits to different raid
+sizes/difficulties may add no pairs. When a boss terminal arrives late, the
+writer discards stats whose native timestamp is after the fight ended; at
+least two in-fight samples must remain. Existing receipt validation stays
+strict, and historical invalid receipts are not repaired automatically.
+
+To finish a stalled gate, collect the missing opposite-arm measurements on
+repeat visits to the same raid kind, map and difficulty, with comparable
+machine load and enough fight duration for two 30-second samples. Inspect the
+paired-context count after each visit. Do not substitute a raid-count cutoff,
+mix his and offline runs, lower `gate_pulls`/`gate_max_ms`, or force `passed`.
+The native rolling 500-world-update mean is a coarse load screen; differences
+between unrelated nights do not isolate telemetry cost. A fresh controlled
+comparison needs an explicit evidence cohort rather than silently deleting
+old measurements or rerunning until a favorable mean appears.
+
 A raid led by a bot sends dungeon-clear's muster naming the next boss, and
 alternates by boss index as offline raids do. A raid he leads sends no muster,
 so the gate musters itself at the run's start and after every finished pull. Its

@@ -32,6 +32,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import json
+import logging
 import math
 from statistics import fmean
 from typing import Literal
@@ -50,6 +51,7 @@ MAX_SAMPLES = 256
 BASIS = "rolling_world_500_updates_v1"
 HOLD_S = 10.0  # a disarm waits this long after an armed pull's terminal, at most
 KINDS = ("offline", "his")
+log = logging.getLogger(__name__)
 
 
 def _number(value):
@@ -111,6 +113,7 @@ class Gate:
         self._fight = None
         self._last_boss_ms = -1
         self._send_lock = asyncio.Lock()
+        self._reported_progress = None
 
     def _read(self, key):
         raw = self.store.get_meta(key)
@@ -344,6 +347,13 @@ class Gate:
         changed = False
         if ours:
             self._fight = None  # An in-flight response can never finish this fight afterward.
+            # A delayed terminal can arrive after an otherwise valid stats reply
+            # sampled the idle world. It is not part of this fight's measurement.
+            before = len(fight.samples)
+            fight.samples = [s for s in fight.samples if s[1] <= ev.ts]
+            if len(fight.samples) != before:
+                log.info('training_gate_samples_outside_pull dropped=%d retained=%d',
+                         before - len(fight.samples), len(fight.samples))
         if ours and len(fight.samples) >= 2 and fight.generation == self._generation:
             mean = fmean(s[2] for s in fight.samples)
             receipt = dict(basis=BASIS, fight=fight.id, generation=fight.generation,
@@ -472,13 +482,22 @@ class Gate:
         # Pairs stay within one kind: his raids and offline raids never meet.
         contexts = defaultdict(lambda: defaultdict(list))
         seen = set()
+        rejected = 0
         for kind in KINDS:
             for row in perf_rows(self.ports.conn, kind=kind):
                 if row["fight"] not in seen and self._eligible(row):
                     contexts[kind, row["context"]][row["armed"]].append(row["mean_ms"])
                     seen.add(row["fight"])
+                else:
+                    rejected += 1
         differences = [fmean(sides[1]) - fmean(sides[0]) for sides in contexts.values()
                        if sides[0] and sides[1]]
+        progress = (self._raids, len(differences), self.ports.cfg.gate_pulls,
+                    len(contexts) - len(differences), rejected)
+        if len(differences) < self.ports.cfg.gate_pulls and progress != self._reported_progress:
+            log.info('training_gate_waiting raids=%d paired_contexts=%d required_contexts=%d '
+                     'unmatched_contexts=%d rejected_fights=%d', *progress)
+            self._reported_progress = progress
         if len(differences) >= self.ports.cfg.gate_pulls:
             self._verdict_ms = fmean(differences)
             self._phase = "passed" if self._verdict_ms <= self.ports.cfg.gate_max_ms else "failed"

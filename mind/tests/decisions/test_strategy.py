@@ -1,7 +1,9 @@
 import asyncio
 import dataclasses
+import json
 from types import SimpleNamespace as NS
 
+from conftest import make_persona
 from leeroy_mind.decisions import ledger, strategy
 from leeroy_mind.training import store as training_store
 from tests.training.test_tg_store import context, record
@@ -46,6 +48,26 @@ def test_training_off_is_talk_only(store, guild, clock):
     asyncio.run(rules.tick(app, clock.now()))
     asyncio.run(rules.tick(app, clock.now()+3*3600))
     assert ledger.history(store.conn)[0]["status"] == "talk_only"
+
+
+def test_large_guild_strategy_is_proposed_and_settled_for_the_actual_raiders(store, guild, clock):
+    wipes(store, clock)
+    cast = store.cast()
+    people = dict(guild)
+    for guid in range(1000, 1151):
+        cast[guid] = dataclasses.replace(cast[101], guid=guid, name='Synthetic')
+        people[guid] = make_persona(guid, 'Synthetic')
+    app = NS(store=store, clock=clock, human_guid=1, world=NS(members=cast),
+             personas=NS(get=people.get), training=None, engine=NS(raid=None))
+    rules = strategy.strategy_rules()
+    asyncio.run(rules.tick(app, clock.now()))
+    rows = ledger.history(store.conn)
+    assert len(rows) == 1 and rows[0]['status'] == 'proposed'
+    assert {p['guid'] for p in json.loads(rows[0]['positions'])} == {101, 102}
+    assert len(rows[0]['positions']) <= ledger.MAX_JSON
+    asyncio.run(rules.tick(app, clock.now() + 3 * 3600))
+    assert ledger.history(store.conn)[0]['status'] == 'talk_only'
+    assert len(ledger.history(store.conn)) == 1
 
 
 def test_stale_wipe_proposal_expires_without_a_new_wipe(store,guild,clock):

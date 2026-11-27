@@ -127,6 +127,23 @@ def test_each_service_holds_its_own_kinds(store, clock):
     assert first.rules_for('loot_rule') is first.rules['loot_rule']
 
 
+@pytest.mark.parametrize('error,code', [
+    (ledger.DecisionError('decision_value_too_long'), 'decision_value_too_long'),
+    (ledger.DecisionError('private_payload'), 'unknown'),
+    (RuntimeError('private_payload'), 'unknown'),
+])
+def test_kind_failure_logs_only_a_catalogued_code(store, clock, caplog, error, code):
+    async def fail(app, now):
+        raise error
+
+    svc = service(store, [clock.now()])
+    svc.kinds_on = frozenset({'strategy'})
+    svc.rules['strategy'] = SimpleNamespace(tick=fail)
+    asyncio.run(svc.kinds(clock.now()))
+    assert f'kind=strategy error={type(error).__name__} code={code}' in caplog.text
+    assert 'private_payload' not in caplog.text
+
+
 def test_presence_is_the_servers_without_its_database_reads(store, clock):
     personas = seed_test_cast(store)
     members = {g: Member(guid=g, name=p.character_name, race=1, class_=1, gender=0, level=80, rank=3,

@@ -111,8 +111,14 @@ class StrategyRules:
                 v = propose_strategy(conn, context, now=now)
                 if not v or v["lead"] not in cast:
                     continue
-                people = {g: app.personas.get(g) for g in cast}
-                positions = strategy_positions(conn, context, v, cast, people)
+                # The latest wiped pull's raiders and its lead discuss the change.
+                # Including the whole guild overflows the bounded decision ledger
+                # and gives absent members positions on a fight they did not attend.
+                raiders = {g for g, in conn.execute('SELECT guid FROM tg_member WHERE pull=?',
+                                                    (v['wipes'][0],)) if g in cast}
+                raiders.add(v['lead'])
+                people = {g: app.personas.get(g) for g in raiders}
+                positions = strategy_positions(conn, context, v, raiders, people)
                 ledger.propose(app.store, kind="strategy", subject=subject, value=v, positions=positions, now=now)
             elif row["status"] == "proposed" and now >= row["proposed"] + SETTLE_AFTER_S:
                 v = json.loads(row["value"])

@@ -9,6 +9,7 @@ import asyncio
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, replace
 import logging
+import sqlite3
 import uuid
 
 from leeroy_mind.bodies import BodyLedger
@@ -42,7 +43,9 @@ log = logging.getLogger(__name__)
 # stay INFO; any other is a WARNING.
 REJECTION_LOG_S = 60.0
 EXPECTED_REJECTIONS = frozenset({"private_evidence", "capped", "ineligible", "topic_mismatch",
-                                 "unsupported_text", "real_name", "romance"})
+                                 "unsupported_text", "real_name", "romance", "self_kill"})
+SOURCE_WRITE_ATTEMPTS = 4
+SOURCE_WRITE_RETRY_S = 0.05
 
 JOB_COMMANDS = frozenset({
     "realm_move", "rpg_status", "leave_pvp", "rearm", "wg_join", "arena_queue",
@@ -477,33 +480,52 @@ class Realm:
                          for (where, name, reason), n in sorted(counts.items())))
 
     async def _on_source_observation(self, observation):
-        # There is deliberately no await from the final current-state barrier
-        # through reducer validation and commit of the original Store unit.
-        try:
-            with self._source_store.transaction():
-                if not self._source_context_current(observation.context,
-                                                    observation.receipt.wire.transport_epoch):
-                    return Rejected("proof_changed")
-                human = self.ports.human()
-                ev = observation.event
-                if type(ev) is not protocol.RealmKill:
-                    # A 5-man kill is a fact or nothing: never retained privately, never announced.
-                    return self._facts.put_fact_in_unit(observation, human=human)
-                existing = self._source_store.conn.execute(
-                    "SELECT fact FROM realm_kill WHERE kill_id=?", (ev.kill_id,)).fetchone()
-                public = (existing["fact"] is not None if existing is not None else
-                          ev.human_present or len(set(ev.cast_members) & set(observation.qualification.cast)) >= 5)
-                if not public:
-                    return self._private_kills.record_in_unit(observation, human=human)
-                fact = self._facts.record_verified_kill_in_unit(observation, human=human)
-                # The announcement decision commits with the kill's own fact.
-                plan = self.announcer.prepare_in_unit(observation, fact)
-        except (FactWriteRejected, PrivateKillRejected) as error:
-            # Semantic exceptions must leave the complete Store unit first.
-            return error.rejection
+        for attempt in range(SOURCE_WRITE_ATTEMPTS):
+            try:
+                result, plan = self._store_source_observation(observation)
+                break
+            except (FactWriteRejected, PrivateKillRejected) as error:
+                # Semantic exceptions must leave the complete Store unit first.
+                return error.rejection
+            except sqlite3.OperationalError as error:
+                code = getattr(error, "sqlite_errorcode", 0) & 0xff
+                if (code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                        or attempt + 1 == SOURCE_WRITE_ATTEMPTS):
+                    raise
+                log.info("realm_source_write_retry type=%s attempt=%d code=%s",
+                         event_type(observation.event), attempt + 1,
+                         "busy" if code == sqlite3.SQLITE_BUSY else "locked")
+                # The failed unit has rolled back. Yield without holding a transaction,
+                # then take a fresh snapshot and recheck the original observation's owner.
+                await asyncio.sleep(SOURCE_WRITE_RETRY_S * (2 ** attempt))
         if plan is not None:
             self._announce(plan)
-        return fact
+        return result
+
+    def _store_source_observation(self, observation):
+        # There is deliberately no await from the final current-state barrier
+        # through reducer validation and commit of the original Store unit.
+        with self._source_store.transaction():
+            # Read-then-write can fail with SQLITE_BUSY_SNAPSHOT even when the other
+            # writer already committed. Reserve the writer before reading any proof.
+            self._source_store.write_first(wait_s=0)
+            if not self._source_context_current(observation.context,
+                                                observation.receipt.wire.transport_epoch):
+                return Rejected("proof_changed"), None
+            human = self.ports.human()
+            ev = observation.event
+            if type(ev) is not protocol.RealmKill:
+                # A 5-man kill is a fact or nothing: never retained privately, never announced.
+                return self._facts.put_fact_in_unit(observation, human=human), None
+            existing = self._source_store.conn.execute(
+                "SELECT fact FROM realm_kill WHERE kill_id=?", (ev.kill_id,)).fetchone()
+            public = (existing["fact"] is not None if existing is not None else
+                      ev.human_present or len(set(ev.cast_members) & set(observation.qualification.cast)) >= 5)
+            if not public:
+                return self._private_kills.record_in_unit(observation, human=human), None
+            fact = self._facts.record_verified_kill_in_unit(observation, human=human)
+            # The announcement decision commits with the kill's own fact.
+            return fact, self.announcer.prepare_in_unit(observation, fact)
 
     def _announce(self, plan):
         """Send one committed plan from its own owned child, so event dispatch never waits on
