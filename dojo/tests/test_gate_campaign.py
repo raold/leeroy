@@ -45,6 +45,8 @@ class CampaignTest(unittest.TestCase):
             o["token"] = f"token-{self.calls}-{negative}"
             cases.append(dict(name=name, source=copy.deepcopy(self.source), observation=o,
                               **validate(o, token=o["token"], negative=negative, **options)))
+            if family in {"yogg", "vehicle"}:
+                cases[-1]["fixture_checkpoint_sha256"] = "a" * 64
         report = dict(kind=f"dojo-{family}-acceptance", format=1, ok=True, stopped=True,
                       source=copy.deepcopy(self.source), out=str(out), cases=cases)
         return self.save(report)
@@ -82,6 +84,39 @@ class CampaignTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(self.calls, 3)
         self.assertEqual(result["illusion_counts"], {"1": 3, "2": 0, "3": 0})
+
+    def test_checkpoint_must_match_across_both_cases_and_all_runs(self):
+        for gate in ("yogg", "malygos"):
+            for changed_run, changed_case in ((1, 1), (2, 0)):
+                with self.subTest(gate=gate, run=changed_run, case=changed_case):
+                    before = self.calls
+                    def changed(*args):
+                        report = self.child(*args)
+                        if self.calls - before == changed_run:
+                            report["cases"][changed_case]["fixture_checkpoint_sha256"] = "b" * 64
+                        return self.save(report)
+                    with patch.object(campaign, "_execute", side_effect=changed):
+                        result = campaign.run(self.layout, gate=gate, runs=3, log=lambda _: None)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(self.calls - before, changed_run)
+                    self.assertEqual(result["fixture_checkpoint_sha256"], "a" * 64)
+                    self.assertTrue(any("checkpoint changed" in p for p in result["plumbing_problems"]))
+
+    def test_checkpoint_evidence_cannot_be_missing_or_malformed(self):
+        for digest in (None, "", "a" * 63, "z" * 64, 123):
+            with self.subTest(digest=digest):
+                before = self.calls
+                def changed(*args):
+                    report = self.child(*args)
+                    if digest is None:
+                        del report["cases"][0]["fixture_checkpoint_sha256"]
+                    else:
+                        report["cases"][0]["fixture_checkpoint_sha256"] = digest
+                    return self.save(report)
+                result = self.run_campaign(changed)
+                self.assertFalse(result["ok"])
+                self.assertEqual(self.calls - before, 1)
+                self.assertTrue(any("checkpoint hash missing or invalid" in p for p in result["plumbing_problems"]))
 
     def test_behavior_and_plumbing_failures_stop_without_retry(self):
         for field, value, category in (("brain_hits", 0, "behavior_problems"),

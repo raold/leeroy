@@ -260,6 +260,8 @@ boarding and combat retain the same cadence and effect requirements.
 complete control/enabled pairs on the same committed source, built and staged
 binary, layout and configuration. It stops at the first failed pair, including
 an infrastructure failure; it never retries or replaces a failed receipt.
+Yogg and vehicle campaigns also require the same valid synthetic fixture
+checkpoint hash in every control and enabled case, across all repetitions.
 The campaign retains and hashes each fresh child report and rechecks its native
 observations, cleanup and shutdown. Reports separate infrastructure and behavior
 failures; either fails the campaign. A run count of 3-100 can be selected.
@@ -294,6 +296,11 @@ link partners and failed approaches to be checked without changing tactics.
 Sampling follows the actual map-update clock. Native Charge uses the core's
 ground speed cap only with a real charge spell, charge state and matching active spline;
 ordinary movement retains the original speed bound and distance margin.
+Knockback requires the actor's native packet, a matching effect spline and
+packet-origin continuity. Its path must follow the packet direction within the
+collision-clipped range, and each position must match the native parabolic arc.
+Spline identity, duration and elapsed time remain bound across samples; a stale
+packet, replacement spline or unrelated jump cannot supply this proof.
 A constrictor grab requires its native ride-aura callback after boarding, summon and spell
 witnesses, and arrival at a witnessed seat transform. The observer retains the
 boarding destination because the base can turn before the next sample without

@@ -88,6 +88,7 @@ def run(layout, *, gate, runs=3, log=print):
                   illusion_counts={str(i): 0 for i in (1, 2, 3)}, stopped=False)
     plumbing, behavior = report["plumbing_problems"], report["behavior_problems"]
     tokens = set()
+    checkpoint = None
     try:
         source = report["source"] = raids.provenance(layout)
         for index in range(1, runs + 1):
@@ -113,6 +114,15 @@ def run(layout, *, gate, runs=3, log=print):
                     trial_plumbing.append("native observation token missing or reused")
                 else:
                     tokens.add(token)
+                if GATES[gate][0] in {"yogg", "vehicle"}:
+                    digest = case.get("fixture_checkpoint_sha256") if isinstance(case, dict) else None
+                    if (not isinstance(digest, str) or len(digest) != 64
+                            or any(c not in "0123456789abcdef" for c in digest)):
+                        trial_plumbing.append("fixture checkpoint hash missing or invalid")
+                    elif checkpoint is None:
+                        checkpoint = report["fixture_checkpoint_sha256"] = digest
+                    elif digest != checkpoint:
+                        trial_plumbing.append("fixture checkpoint changed between cases or runs")
             entry = dict(index=index, out=str(child_dir), report_sha256=raids.fingerprint(receipt),
                          plumbing_problems=trial_plumbing, behavior_problems=trial_behavior, ok=False)
             report["runs"].append(entry)

@@ -3,6 +3,56 @@
 #include "TestHarness.h"
 #include <limits>
 
+DOJO_TEST(knockback_packet_ray_matches_the_captured_displacement)
+{
+    // Stormwind control: 2.465 yards in 123 ms, with a native 15 yd/s
+    // horizontal impulse and upward arc. Walking must still reject it.
+    CHECK(!Dojo::ContinuousMovement(2.464977f, 7.f, 7.f, 123));
+    float const dx = 1974.036865f - 1974.805908f, dy = -39.172913f + 37.499611f;
+    CHECK(Dojo::KnockbackPoint(dx, dy, -0.4175422f, -0.9086576f, 15.f * 0.123f));
+    CHECK(!Dojo::KnockbackPoint(-dx, -dy, -0.4175422f, -0.9086576f, 15.f * 0.123f));
+    CHECK(!Dojo::KnockbackPoint(dx + 1.f, dy, -0.4175422f, -0.9086576f, 15.f * 0.123f));
+    CHECK(!Dojo::KnockbackPoint(2.f * dx, 2.f * dy, -0.4175422f, -0.9086576f, 15.f * 0.123f));
+    CHECK(!Dojo::KnockbackPoint(dx, dy, 0.f, 0.f, 2.f));
+    CHECK(!Dojo::KnockbackPoint(dx, dy, -0.4f, -0.9f, 2.f));
+    for (float invalid : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()})
+    {
+        CHECK(!Dojo::KnockbackPoint(invalid, 0.f, 1.f, 0.f, 2.f));
+        CHECK(!Dojo::KnockbackPoint(0.f, invalid, 1.f, 0.f, 2.f));
+        CHECK(!Dojo::KnockbackPoint(0.f, 0.f, invalid, 0.f, 2.f));
+        CHECK(!Dojo::KnockbackPoint(0.f, 0.f, 1.f, invalid, 2.f));
+        CHECK(!Dojo::KnockbackPoint(0.f, 0.f, 1.f, 0.f, invalid));
+    }
+}
+
+DOJO_TEST(knockback_proof_cannot_adopt_a_stale_or_replaced_spline)
+{
+    Dojo::KnockbackSplineProof proof;
+    CHECK(!proof.Bound());
+    CHECK(!proof.Advance(1, 123, 1400, 124, 123));
+    CHECK(!proof.Advance(1, 124, 1400, 57, 123));
+    CHECK(!proof.Advance(0, 123, 1400, 57, 123));
+    CHECK(!proof.Advance(1, 0, 0, 0, 123));
+    CHECK(!proof.Advance(1, 0, 1400, 0, 0));
+    CHECK(!proof.Advance(1, 1401, 1400, 57, 1500));
+    CHECK(proof.Advance(1, 123, 1400, 57, 123));
+    CHECK(proof.Bound());
+    CHECK(!proof.Advance(2, 161, 1400, 95, 38));
+    CHECK(!proof.Advance(1, 161, 1401, 95, 38));
+    CHECK(!proof.Advance(1, 122, 1400, 95, 38));
+    CHECK(!proof.Advance(1, 162, 1400, 95, 38));
+    CHECK(proof.Advance(1, 161, 1400, 95, 38));
+    CHECK(!proof.Advance(1, 199, 1400, 1601, 38));
+    CHECK(proof.Advance(1, 199, 1400, 133, 38));
+    CHECK(proof.Advance(1, 1400, 1400, 1334, 1201));
+    proof = {};
+    CHECK(!proof.Advance(1, 1400, 1400, 1334, 38));
+    CHECK(!proof.Advance(1, 1400, 1400, 1334, 38, true));
+    CHECK(proof.Advance(1, 1370, 1400, 1334, 38, true));
+    CHECK(!proof.Advance(2, 1400, 1400, 1372, 38, true));
+    CHECK(proof.Advance(1, 1400, 1400, 1372, 38));
+}
+
 DOJO_TEST(constrictor_cast_proof_survives_the_captured_proc_burst)
 {
     Dojo::ConstrictorCastProof proof;

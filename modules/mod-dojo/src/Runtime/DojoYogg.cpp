@@ -139,11 +139,13 @@ struct Trial
     struct KnockbackPacket
     {
         Position origin;
+        Dojo::KnockbackSplineProof spline;
         uint32 when = 0;
         float directionX = 0.f, directionY = 0.f, horizontal = 0.f, vertical = 0.f;
         bool observed = false;
     };
     std::array<KnockbackPacket, Names.size()> knockbacks{};
+    uint32 nativeKnockbackSamples = 0;
     uint32 nativeSpellTeleports = 0;
     json failureFacts = json::object();
     std::array<uint32, Names.size()> portalCasts{}, exitCasts{}, minimumSanity{};
@@ -233,6 +235,56 @@ struct Trial
         ++nativeSpellTeleports;
         return true;
     }
+    bool NativeKnockback(Player* p, std::size_t i, uint32 diff, float speed)
+    {
+        auto& proof = knockbacks[i];
+        auto const* movement = p->movespline;
+        if (!proof.observed || !movement || !movement->Initialized() || movement->onTransport
+            || movement->isCyclic() || movement->isFalling() || p->GetVehicle() || p->GetTransport()
+            || Below(p) || wasBelow[i] || !std::isfinite(proof.horizontal) || !std::isfinite(proof.vertical)
+            || proof.horizontal <= 0.1f || proof.vertical >= 0.f
+            || std::abs(movement->Velocity() - Dojo::GroundChargeSpeed(proof.horizontal, speed)) > 0.1f)
+            return false;
+        auto const motion = p->GetMotionMaster()->GetCurrentMovementGeneratorType();
+        if (motion != EFFECT_MOTION_TYPE && !(proof.spline.Bound() && movement->Finalized()
+                && previousMotion[i] == EFFECT_MOTION_TYPE)) return false;
+        int32 const duration = movement->Duration(), passed = movement->timePassed();
+        if (duration <= 0 || passed < 0 || passed > duration) return false;
+        auto const& path = movement->_Spline();
+        if (path.empty() || path.last() - path.first() > 128) return false;
+        auto const& start = path.getPoint(path.first());
+        float const originError = proof.origin.GetExactDist(start.x, start.y, start.z);
+        if (!std::isfinite(originError) || originError > 0.1f) return false;
+        if (!proof.spline.Bound() && positioned[i] && !Dojo::ContinuousMovement(proof.origin.GetExactDist(previous[i]),
+                previousSpeed[i], speed, diff)) return false;
+        // MoveKnockbackFrom clips the landing point to collision, then adds a
+        // parabola to that path. Verify the packet's ray and vertical impulse;
+        // a recent packet alone must not excuse unrelated movement.
+        float const halfTime = -proof.vertical / float(Movement::gravity);
+        float const distance = 2.f * halfTime * proof.horizontal;
+        float const height = -Movement::computeFallElevation(halfTime, false, proof.vertical);
+        if (!std::isfinite(height) || height <= 0.f) return false;
+        for (int32 point = path.first(); point <= path.last(); ++point)
+        {
+            auto const& position = path.getPoint(point);
+            if (!std::isfinite(position.z) || !Dojo::KnockbackPoint(position.x - start.x, position.y - start.y,
+                    proof.directionX, proof.directionY, distance)) return false;
+        }
+        int32 segment = path.first();
+        while (segment + 1 < path.last() && path.length(segment + 1) < passed) ++segment;
+        int32 const span = path.length(segment, segment + 1);
+        float const fraction = span > 0 ? float(passed - path.length(segment)) / float(span) : 1.f;
+        G3D::Vector3 expected;
+        path.evaluate_percent(segment, fraction, expected);
+        float const phase = float(passed) / float(duration);
+        expected.z += 4.f * height * phase * (1.f - phase);
+        float const positionError = p->GetExactDist(expected.x, expected.y, expected.z);
+        if (!std::isfinite(positionError) || positionError > 0.1f
+            || !proof.spline.Advance(movement->GetId(), uint32(passed), uint32(duration),
+                elapsed - proof.when, diff, !positioned[i])) return false;
+        ++nativeKnockbackSamples;
+        return true;
+    }
     float MotionSpeed(Player* p, std::size_t i)
     {
         float const running = p->GetSpeed(MOVE_RUN);
@@ -276,7 +328,7 @@ struct Trial
         observedConstrictors = {}; constrictorAttachments = 0;
         constrictorOrigins = {}; constrictorCasts = {}; constrictorSeats = {};
         spellTeleports = {}; nativeSpellTeleports = 0;
-        knockbacks = {};
+        knockbacks = {}; nativeKnockbackSamples = 0;
         portalCasts = {}; exitCasts = {}; minimumSanity.fill(100); influenceDeaths.clear();
         failureFacts = json::object();
         ready = cleanup = humanGone = false; active = true;
@@ -460,16 +512,21 @@ struct Trial
                 if (!p->IsBeingTeleported())
                 {
                     float const speed = MotionSpeed(p, i);
+                    bool const nativeKnockback = NativeKnockback(p, i, diff, speed);
                     bool const portalTransition = downstairs != wasBelow[i] &&
                         (downstairs ? portalCasts[i] > 0 : exitCasts[i] > 0);
                     if (positioned[i] && !portalTransition &&
                         !Dojo::ContinuousMovement(p->GetExactDist(previous[i]), previousSpeed[i], speed, diff)
-                        && !NativeConstrictorAttachment(p, i, diff, speed) && !NativeSpellTeleport(p, i, diff))
+                        && !NativeConstrictorAttachment(p, i, diff, speed) && !NativeSpellTeleport(p, i, diff)
+                        && !nativeKnockback)
                     {
                         failureFacts = {{"slot", i}, {"distance", p->GetExactDist(previous[i])},
                             {"delta_ms", diff}, {"run_speed", p->GetSpeed(MOVE_RUN)},
                             {"motion_speed", speed}, {"previous_speed", previousSpeed[i]},
                             {"spline_speed", p->movespline ? p->movespline->Velocity() : 0.f},
+                            {"spline_id", p->movespline ? p->movespline->GetId() : 0u},
+                            {"spline_passed", p->movespline ? p->movespline->timePassed() : 0},
+                            {"spline_duration", p->movespline ? p->movespline->Duration() : 0},
                             {"charging", p->HasUnitState(UNIT_STATE_CHARGING)},
                             {"motion", uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType())},
                             {"previous_motion", previousMotion[i]}, {"moving", p->isMoving()},
@@ -618,7 +675,8 @@ struct Trial
             {"influence_deaths", influenceDeaths.size()}, {"brain_hits", brainHits},
             {"brain_start_health", brainStart}, {"brain_least_health", brainLeast}, {"exit_remaining_ms", exitRemaining},
             {"failure_facts", failureFacts}, {"native_constrictor_attachments", constrictorAttachments},
-            {"native_spell_teleports", nativeSpellTeleports}, {"bodies", bodies}, {"room", room}};
+            {"native_spell_teleports", nativeSpellTeleports}, {"native_knockback_samples", nativeKnockbackSamples},
+            {"bodies", bodies}, {"room", room}};
     }
     char const* controlStrategy() const
     { return "-stay,-passive,-follow,+ulduar"; }
