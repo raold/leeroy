@@ -25,6 +25,24 @@ Beasts, Jaraxxus, Champions and Twins before three Anub'arak wipes. The restack
 behind main's Valithria patch needs its own candidate verification. This change
 does not claim to fix Icehowl charges or every source of Slime Pool damage.
 
+The contact-safety follow-up preserves casts and Auto Shot when a cure or spacing
+move is refused, and ignores a non-combat-only `stay` during combat. Combat `stay`
+and `passive` still hold the bot. The shared held-order check also applies to the
+existing Anub'arak actions.
+
+Cure actions try eight contact points. Native pool auras supply the growing
+damage radius, with two ticks of growth plus a two-yard margin and actor reach.
+Waiting and every route leg must respect that clearance, even in bot raids with
+no mod-leeroy responder. Existing responder escapes and move refusals still win.
+Routes use navmesh paths when enabled, or the core's collision and ground checks
+on the encounter's floor when map 649 disables navmesh. Only half a second of a
+checked route is committed before pools are checked again.
+
+This follow-up needs its own isolated worm encounter and before/after performance
+receipt before release. Portable policy tests and a production-header MSVC check
+pass; they do not replace that runtime gate. The current-main full ToC release
+gate remains separate and must run before these additional changes are included.
+
 Failing baseline: `20261124_213821-offline-dojo-152ecd20dcc1402c815e940bfba5816b`,
 source `beebc340`, playerbots `072d8a7a`, dungeon-clear `e6654f52`. The run recorded
 `boss_wipe_cap`, zero kills, three wipes, 92 Slime Pool damage events, and confirmed
