@@ -571,7 +571,8 @@ class OfflineRaids:
             reason = stop["reason"] if stop else "operator_stopped"
         else:
             reason = ("operator_stopped" if stop and stop.get("reason") == "operator_stopped" else
-                      "stalled" if now - progress["last"] >= self.cfg.offline_stall_minutes * 60 else None)
+                      "stalled" if not self._owned.get("native_stall")
+                      and now - progress["last"] >= self.cfg.offline_stall_minutes * 60 else None)
         if reason is None or stop and stop["reason"] != reason:
             return  # New progress cancels automatic stall retries; still watch for their terminal.
         if not stop:
@@ -810,6 +811,7 @@ class OfflineRaids:
             self._owned["day"] = self._day()  # Acquisition may have crossed midnight in an overnight window.
             self._owned["sent_at"] = self.ports.clock.now()
             self._owned["deadline"] = self.ports.clock.now() + self.cfg.offline_timeout_min * 60
+            self._owned["native_stall"] = "offline_raid_native_stall" in self._features
             self._save()
             state = self._day_state(self._owned["day"])
             self._update_day(attempts=state["attempts"] + 1, next_try=self.ports.clock.now() + RETRY_S)
@@ -822,7 +824,9 @@ class OfflineRaids:
                                        max_wipes=self.cfg.offline_max_wipes,
                                        max_wipes_per_boss=self.cfg.offline_max_wipes_per_boss,
                                        timeout_min=self.cfg.offline_timeout_min, min_members=plan.size * 4 // 5,
-                                       reserves=tuple(reserves))
+                                       reserves=tuple(reserves),
+                                       stall_timeout_min=self.cfg.offline_stall_minutes
+                                       if self._owned["native_stall"] else None)
             runner = getattr(getattr(getattr(self.ports, "app", None), "realm", None), "parts", {}).get("day")
             async def send_original(original, **guard):
                 self._owned["phase"] = "awaiting_ack"

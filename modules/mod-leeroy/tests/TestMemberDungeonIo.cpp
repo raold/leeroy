@@ -540,6 +540,7 @@ struct Job
     uint64 admissionSerial=7;bool admissionPending=false;
     uint32 guild=21,human=1;OfflineRaidCmd command;
     uint32 elapsed=0,stageElapsed=0,progressElapsed=0,mutations=0,teardownVisits=0;
+    OfflineProgressClock noProgress;
     uint64 rewardToken=0,trainingToken=0;
     bool trainingSealed=false,announced=false,pinsInstalled=false;
     bool dcIssued=false,ownsGroup=true,present=true;

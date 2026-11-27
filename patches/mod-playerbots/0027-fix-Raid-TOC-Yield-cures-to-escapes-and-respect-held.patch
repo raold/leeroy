@@ -1,0 +1,138 @@
+From e1d0e271296ae22bed0e5cbd1522c888e0f67b5a Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 17:36:04 -0500
+Subject: [PATCH 27/63] fix(Raid/TOC): Yield cures to escapes and respect held
+ carriers
+
+---
+ src/Ai/Raid/TOC/TocStrategy.cpp | 18 +++++++++++++++---
+ src/Ai/Raid/TOC/TocWormPolicy.h | 12 +++++++-----
+ tests/toc_worm_test.cpp         | 10 ++++++++++
+ 3 files changed, 32 insertions(+), 8 deletions(-)
+
+diff --git a/src/Ai/Raid/TOC/TocStrategy.cpp b/src/Ai/Raid/TOC/TocStrategy.cpp
+index 79552949..f2bcf973 100644
+--- a/src/Ai/Raid/TOC/TocStrategy.cpp
++++ b/src/Ai/Raid/TOC/TocStrategy.cpp
+@@ -11,6 +11,7 @@
+ #include "InstanceScript.h"
+ #include "Map.h"
+ #include "ObjectAccessor.h"
++#include "PlayerbotMechanicGuard.h"
+ #include "Playerbots.h"
+ #include "RaidInteractionPolicy.h"
+ #include "RaidTocStrategy.h"
+@@ -95,13 +96,18 @@ Colour NeededEssence(PlayerbotAI* ai)
+     return wanted == current ? Colour::None : wanted;
+ }
+ 
++bool WormHeld(PlayerbotAI* ai)
++{
++    return ai && (ai->HasStrategy("stay", BOT_STATE_COMBAT) || ai->HasStrategy("stay", BOT_STATE_NON_COMBAT) ||
++                  ai->HasStrategy("passive", BOT_STATE_COMBAT));
++}
++
+ bool WormPhase(PlayerbotAI* ai)
+ {
+     Player* bot = ai->GetBot();
+     if (!sPlayerbotAIConfig.TocWormSupport || bot->GetMapId() != MAP_TRIAL_OF_THE_CRUSADER || !bot->IsAlive() ||
+         IsSelfBot(bot) || !bot->GetGroup() || !bot->GetGroup()->isRaidGroup() || bot->IsBeingTeleported() ||
+-        bot->GetVehicle() || bot->GetTransport() || ai->HasStrategy("stay", BOT_STATE_COMBAT) ||
+-        ai->HasStrategy("passive", BOT_STATE_COMBAT))
++        bot->GetVehicle() || bot->GetTransport() || WormHeld(ai))
+         return false;
+     auto* instance = bot->GetInstanceScript();
+     if (!instance || instance->GetBossState(BOSS_BEASTS) != IN_PROGRESS)
+@@ -120,6 +126,11 @@ Player* WormTarget(PlayerbotAI* ai, bool spacing)
+     if (!WormPhase(ai))
+         return nullptr;
+     Player* bot = ai->GetBot();
++    PlayerbotMechanicGuard* guard = PlayerbotMechanicGuard::Get();
++    float escapeX = 0, escapeY = 0, escapeZ = 0;
++    // Even waiting beside a carrier must yield to a pending Slime Pool escape.
++    if (guard && guard->Active() && guard->MechanicSpot(bot, escapeX, escapeY, escapeZ))
++        return nullptr;
+     std::vector<TocWorms::Member> members;
+     for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
+     {
+@@ -131,7 +142,8 @@ Player* WormTarget(PlayerbotAI* ai, bool spacing)
+         members.push_back({member->GetGUID().GetCounter(), member->GetPositionX(), member->GetPositionY(),
+                            GET_PLAYERBOT_AI(member) && !IsSelfBot(member), PlayerbotAI::IsTank(member),
+                            HasToxin(member), member->HasAura(SPELL_BURNING_BILE),
+-                           member->HasUnitState(UNIT_STATE_ROOT | UNIT_STATE_STUNNED)});
++                           member->HasUnitState(UNIT_STATE_ROOT | UNIT_STATE_STUNNED),
++                           WormHeld(GET_PLAYERBOT_AI(member))});
+     }
+     auto const self = std::find_if(members.begin(), members.end(),
+                                    [bot](auto const& member) { return member.guid == bot->GetGUID().GetCounter(); });
+diff --git a/src/Ai/Raid/TOC/TocWormPolicy.h b/src/Ai/Raid/TOC/TocWormPolicy.h
+index 0ef733cb..686fdbf7 100644
+--- a/src/Ai/Raid/TOC/TocWormPolicy.h
++++ b/src/Ai/Raid/TOC/TocWormPolicy.h
+@@ -19,6 +19,7 @@ struct Member
+     std::uint64_t guid = 0;
+     float x = 0, y = 0;
+     bool bot = true, tank = false, toxin = false, bile = false, rooted = false;
++    bool held = false;
+ };
+ 
+ inline float Distance(Member const& a, Member const& b) { return std::hypot(a.x - b.x, a.y - b.y); }
+@@ -27,7 +28,7 @@ inline float Distance(Member const& a, Member const& b) { return std::hypot(a.x
+ // paralysed victim instead gets one elected carrier, preferring a non-tank.
+ inline std::uint64_t Contact(Member const& self, std::vector<Member> const& members)
+ {
+-    if (self.rooted)
++    if (self.rooted || self.held)
+         return 0;
+     Member const* chosen = nullptr;
+     if (self.toxin)
+@@ -46,8 +47,8 @@ inline std::uint64_t Contact(Member const& self, std::vector<Member> const& memb
+                 continue;
+             Member const* carrier = nullptr;
+             for (auto const& other : members)
+-                if (other.bot && other.bile && !other.rooted && !other.toxin && other.guid != victim.guid &&
+-                    Distance(victim, other) <= 120.0f &&
++                if (other.bot && other.bile && !other.rooted && !other.held && !other.toxin &&
++                    other.guid != victim.guid && Distance(victim, other) <= 120.0f &&
+                     (!carrier || std::make_tuple(other.tank, Distance(victim, other), other.guid) <
+                                      std::make_tuple(carrier->tank, Distance(victim, *carrier), carrier->guid)))
+                     carrier = &other;
+@@ -64,14 +65,15 @@ inline std::uint64_t Contact(Member const& self, std::vector<Member> const& memb
+ // so a tank can keep its worm while other carriers move away from it.
+ inline std::uint64_t Avoid(Member const& self, std::vector<Member> const& members)
+ {
+-    if (self.rooted || self.toxin || Contact(self, members))
++    if (self.rooted || self.held || self.toxin || Contact(self, members))
+         return 0;
+     Member const* chosen = nullptr;
+     for (auto const& other : members)
+     {
+         if (other.guid == self.guid || !other.bile || Distance(self, other) >= 12.0f)
+             continue;
+-        if (self.bile && other.bot && std::make_pair(!self.tank, self.guid) < std::make_pair(!other.tank, other.guid))
++        if (self.bile && other.bot && !other.held &&
++            std::make_pair(!self.tank, self.guid) < std::make_pair(!other.tank, other.guid))
+             continue;
+         if (!chosen ||
+             std::make_pair(Distance(self, other), other.guid) < std::make_pair(Distance(self, *chosen), chosen->guid))
+diff --git a/tests/toc_worm_test.cpp b/tests/toc_worm_test.cpp
+index 38a9dff1..98b3b56d 100644
+--- a/tests/toc_worm_test.cpp
++++ b/tests/toc_worm_test.cpp
+@@ -30,6 +30,16 @@ int main()
+     group.push_back(healer);
+     check(Contact(tank, group) == 0);  // Prefer a mobile non-tank carrier to moving the worm.
+     check(Contact(healer, group) == victim.guid);
++    group[2].held = true;
++    check(Contact(tank, group) == victim.guid);  // A held non-tank cannot displace the available tank rescuer.
++    check(Contact(group[2], group) == 0);
++    victim.rooted = false;
++    group[1] = victim;
++    group[2].x = 41;
++    check(Contact(victim, group) == healer.guid);  // Held carriers remain valid cure destinations.
++    victim.rooted = true;
++    group[1] = victim;
++    group[2] = healer;
+     group[2].bot = false;
+     check(Contact(tank, group) == victim.guid);  // Never elect a human to execute a bot rescue.
+     group[2].rooted = true;

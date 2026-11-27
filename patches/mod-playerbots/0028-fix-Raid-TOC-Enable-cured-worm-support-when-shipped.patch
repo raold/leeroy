@@ -1,0 +1,39 @@
+From b894e0bcce38c821716e35b4f70fa2bd29fc90e6 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 00:31:09 -0500
+Subject: [PATCH 28/63] fix(Raid/TOC): Enable cured-worm support when shipped
+
+---
+ conf/playerbots.conf.dist | 4 ++--
+ src/PlayerbotAIConfig.cpp | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index 3c422e1d..27a0f06c 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -526,9 +526,9 @@ Playerbots.ValithriaAdds = 1
+ Playerbots.ValithriaPortalTurns = 1
+ 
+ # Meet a Burning Bile carrier before Paralytic Toxin roots the victim, rescue
+-# paralysed victims and separate carriers after the cure. Opt in after a dojo gate.
++# paralysed victims and separate carriers after the cure. Default: 1 (enabled).
+ # Uses ordinary movement and the core's Bile effect; never removes an aura itself.
+-Playerbots.TocWormSupport = 0
++Playerbots.TocWormSupport = 1
+ 
+ # Opt-in Malygos drake positioning/rotation and human-led Flame Leviathan vehicles.
+ # Uses normal boarding and spell costs; never moves the human or skips a boss.
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index 82c168cf..9cd3e0c0 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -316,7 +316,7 @@ bool PlayerbotAIConfig::Initialize()
+     ValithriaPortals = sConfigMgr->GetOption<bool>("Playerbots.ValithriaPortals", true);
+     ValithriaAdds = sConfigMgr->GetOption<bool>("Playerbots.ValithriaAdds", true);
+     ValithriaPortalTurns = sConfigMgr->GetOption<bool>("Playerbots.ValithriaPortalTurns", true);
+-    TocWormSupport = sConfigMgr->GetOption<bool>("Playerbots.TocWormSupport", false);
++    TocWormSupport = sConfigMgr->GetOption<bool>("Playerbots.TocWormSupport", true);
+     RaidVehicleSupport = sConfigMgr->GetOption<bool>("Playerbots.RaidVehicleSupport", false);
+     LichKingMechanics = sConfigMgr->GetOption<bool>("Playerbots.LichKingMechanics", false);
+ 

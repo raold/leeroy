@@ -257,6 +257,7 @@ std::optional<OfflineRaidCmd> ParseOfflineRaid(json const& j, std::string& error
     f.Number("max_wipes", out.maxWipes, 1, 20, true);
     f.Number("max_wipes_per_boss", out.maxWipesPerBoss, 1, 10, true);
     f.Number("timeout_min", out.timeoutMin, 10, 360, true);
+    f.Number("stall_timeout_min", out.stallTimeoutMin, 10, 360, true);
     auto count = static_cast<std::uint32_t>(out.members.size()) + 1;
     out.minMembers = std::min(out.size * 4 / 5, count);
     f.Number("min_members", out.minMembers, 1, count, true);

@@ -76,6 +76,8 @@ struct OfflineRaidCmd
     std::vector<std::uint32_t> members, assistants;
     std::uint32_t lootMasterGuid = 0, maxWipes = 6, maxWipesPerBoss = 3, timeoutMin = 180, minMembers = 0;
     std::vector<std::uint32_t> reserves;
+    // Omitted by older minds; their existing watchdog remains authoritative.
+    std::uint32_t stallTimeoutMin = 0;
 };
 struct GearUpCmd
 {

@@ -38,8 +38,22 @@ unvisited boss grid or repeatedly seeing the same state is not progress. Kills,
 wipes, the participant manifest and instance id remain the existing fields.
 Unknown encounter state omits `boss_engaged`; it never means disengaged.
 
-The mind defaults to 30 minutes without progress (`[guild] offline_stall_minutes`,
-10-360). Members leaving the instance is native's own too_few stop, which fires
+The configured limit defaults to 30 minutes without progress (`[guild] offline_stall_minutes`,
+10-360). When hello advertises `offline_raid_native_stall`, the mind sends that
+limit as `start_offline_raid.stall_timeout_min`. The native job measures elapsed
+world time from its encounter baseline, resetting on a new engagement, completion
+or wipe. It stops only with known disengaged boss state, after the existing
+stop/restart, reachable-clear and route-hold rules. It keeps working when the
+mind's heartbeat is delayed; a changed wall clock cannot reset or expire it.
+The native terminal remains `stalled`, with a `no_progress idle_ms= limit_ms=`
+log line. Benchmark and member-dungeon jobs do not use this stop.
+
+An older mind omits the field, disabling this native timer so its own configured
+watchdog still governs. An older native omits the feature and receives the old
+command; the updated mind retains its existing heartbeat watchdog for that run.
+Operator stops still use the existing command and safety checks.
+
+Members leaving the instance is native's own too_few stop, which fires
 before a heartbeat is sent, so the mind has no scatter rule. Stale,
 malformed or engaged observations never authorize a stop. The run closes through
 the existing terminal path as `stalled`, with its cause in the log (below); native cleanup
