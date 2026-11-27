@@ -22,6 +22,16 @@ math(EXPR hazard_size "${hazard_end}-${hazard_begin}")
 string(SUBSTRING "${hazard_text}" ${hazard_begin} ${hazard_size} hazard_body)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/HazardTelemetry.inc" "${hazard_body}")
 
+# Exercise the actual per-connection table admission, including its capacity and reset.
+set(mechanic_source "${CMAKE_CURRENT_SOURCE_DIR}/../src/Guild/MechanicJob.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mechanic_source}")
+file(READ "${mechanic_source}" mechanic_text)
+string(FIND "${mechanic_text}" "void RegisterMechanicsHandler()" mechanic_begin)
+string(SUBSTRING "${mechanic_text}" ${mechanic_begin} -1 mechanic_tail)
+string(FIND "${mechanic_tail}" "\nnamespace" mechanic_size)
+string(SUBSTRING "${mechanic_tail}" 0 ${mechanic_size} mechanic_body)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/MechanicTables.inc" "${mechanic_body}")
+
 # Exercise the production loot receipt adapter with delayed database/bridge boundaries.
 set(loot_receipt_source "${CMAKE_CURRENT_SOURCE_DIR}/../src/Guild/LootReceipts.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${loot_receipt_source}")

@@ -25,10 +25,29 @@ SUBJECTS = {'lineup': re.compile(r'raid:[1-9][0-9]{0,18}\Z'),
 CODE = re.compile(r'[a-z0-9_]{1,40}\Z')
 MAX_JSON = 4000
 _STORED_EFFECT_REF = object()
+ERROR_CODES = frozenset({
+    'decision_value_invalid', 'decision_value_too_long', 'decision_time_invalid',
+    'decision_positions_invalid', 'decision_kind_invalid', 'decision_subject_invalid',
+    'decision_limit_invalid', 'decision_ref_invalid', 'decision_unknown', 'decision_state',
+    'decision_settler_invalid', 'decision_effect_invalid', 'decision_reason_invalid',
+    'poll_channel_invalid', 'poll_question_invalid', 'poll_options_invalid', 'poll_subject_invalid',
+    'poll_closes_invalid', 'poll_voters_invalid', 'poll_positions_invalid', 'poll_why_invalid',
+    'poll_message_invalid',
+})
 
 
 class DecisionError(ValueError):
     """A write the ledger refuses: its words are a fixed code, never data."""
+
+
+def failure_code(error: Exception) -> str:
+    # Even a DecisionError from an extension may contain stored text. Only the
+    # built-in catalogue can reach diagnostics, not merely code-shaped strings.
+    if isinstance(error, DecisionError) and len(error.args) == 1:
+        code = error.args[0]
+        if type(code) is str and code in ERROR_CODES:
+            return code
+    return 'unknown'
 
 
 def _json(value, *, escape_surrogates=False) -> str:

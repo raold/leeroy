@@ -1,6 +1,8 @@
 // This file is part of leeroy (mod-leeroy), released under the GNU GPL v2. See LICENSE.
 #ifndef MOD_LEEROY_DUMMY_LIFECYCLE_H
 #define MOD_LEEROY_DUMMY_LIFECYCLE_H
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -94,12 +96,48 @@ inline DummyMoveStep DecideDummyMove(DummyMoveState const& state)
     if (!state.setUp) return DummyMoveStep::Setup;
     return state.reasserted || state.sinceSetupMs >= kDummySettleMs ? DummyMoveStep::Arrived : DummyMoveStep::Settle;
 }
+// The return. onTrialMap: in the world on the trial's map, outside any instance, wherever on it. A member a fight
+// let walk, blink, flee or fall anywhere there is still ours to send home; on 2026-11-25 1618 ended 54 yd from the
+// dummy and 24 yd below it, and the old 150 yd / 15 yd box blocked it, so it was never returned. Another map, an
+// instance or a body no longer ours still blocks.
 struct DummyReturnState
 {
     bool prepared = false, connected = false, sameSession = false, online = false, teleporting = false,
-        atOrigin = false, released = false, resetDone = false, owned = false, atTrial = false,
+        atOrigin = false, released = false, resetDone = false, owned = false, onTrialMap = false,
         groupReleased = true, leaderRestored = true, finalResetDone = true, loggingOut = false;
 };
+// In the fight, where a member is. A near teleport on the trial's map, outside any instance, on a body still ours (a
+// mage's stock "blink back", a charge) is waited out: on 2026-11-27 the fight blocked 2349's Blink 35 ms in. Once it
+// lands, the fight's 30 yd / 5 s rule still drops it if it ended too far. A far teleport, another map, an instance or
+// a body no longer ours blocks it.
+struct DummyFightPlaceState
+{
+    bool owned = false, nearTeleport = false, farTeleport = false, onTrialMap = false, instance = false;
+};
+enum class DummyFightPlace { Fight, Wait, Block };
+inline DummyFightPlace DecideDummyFightPlace(DummyFightPlaceState const& state)
+{
+    if (!state.owned || state.farTeleport || !state.onTrialMap || state.instance) return DummyFightPlace::Block;
+    return state.nearTeleport ? DummyFightPlace::Wait : DummyFightPlace::Fight;
+}
+// Where members stand around the dummy. Melee share a ring 4 yd apart; ranged stand outside melee reach, where a
+// caster's "enemy too close for spell" (blink back, flee) never fires, and inside the fight's 30 yd drop rule.
+inline constexpr double kDummyRangedRingYd = 13.0;
+inline double DummyRingRadius(std::size_t count, bool ranged)
+{
+    if (ranged) return kDummyRangedRingYd;
+    constexpr double pi = 3.14159265358979323846;
+    return count > 1 ? 2.0 / std::sin(pi / static_cast<double>(count)) : 0.0;
+}
+// A member's word in the terminal: its cleanup error keeps the `cleanup_failed` prefix the mind reads as an unproved
+// cleanup, and the first drop reason rides along (`;dropped=`) instead of being overwritten by it.
+inline std::string DummyDropReport(std::string_view dropped, std::string_view cleanupError)
+{
+    if (cleanupError.empty()) return std::string(dropped);
+    std::string report = "cleanup_failed:" + std::string(cleanupError);
+    if (!dropped.empty()) report += ";dropped=" + std::string(dropped);
+    return report;
+}
 inline DummyReturnStep DecideDummyReturn(DummyReturnState const& state)
 {
     if (!state.prepared) return DummyReturnStep::Complete;
@@ -109,7 +147,7 @@ inline DummyReturnStep DecideDummyReturn(DummyReturnState const& state)
     if (state.released && state.resetDone && state.groupReleased && state.leaderRestored && state.finalResetDone
         && state.atOrigin)
         return DummyReturnStep::Complete;
-    if (!state.owned || (!state.atOrigin && !state.atTrial)) return DummyReturnStep::Block;
+    if (!state.owned || (!state.atOrigin && !state.onTrialMap)) return DummyReturnStep::Block;
     if (!state.resetDone) return DummyReturnStep::ResetStrategies;
     if (!state.groupReleased) return DummyReturnStep::ReleaseGroup;
     if (!state.leaderRestored) return DummyReturnStep::RestoreLeaderFlag;

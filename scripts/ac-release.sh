@@ -64,6 +64,35 @@ if not valid or held:
     sys.exit(1)'
 
 native_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s\n' "$1"; fi; }
+# A native build runs as many compilers as the free commit charge allows once the services are
+# stopped: 4 GB each with 16 GB kept back, between 4 and 16 (16 is the PCH-safe cap, build trap 3
+# in CLAUDE.md). AC_RELEASE_FREE_COMMIT_GB replaces the measurement; tests use it.
+release_build_jobs() {
+    local gb="${AC_RELEASE_FREE_COMMIT_GB:-}" jobs
+    if [[ -z $gb ]]; then
+        gb=$("$python" -c 'import ctypes
+class M(ctypes.Structure):
+    _fields_ = [("n", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [(f, ctypes.c_ulonglong) for f in ("tp", "ap", "tf", "af", "tv", "av", "ae")]
+m = M(); m.n = ctypes.sizeof(M)
+print(m.af >> 30 if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)) else 0)' 2>/dev/null) || gb=0
+    fi
+    gb=${gb//$'\r'/} # Windows python may end its line with CRLF; not every bash strips the CR
+    [[ $gb =~ ^[0-9]+$ ]] || gb=0
+    jobs=$(((gb - 16) / 4))
+    ((jobs >= 4)) || jobs=4
+    ((jobs <= 16)) || jobs=16
+    printf '%s' "$jobs"
+}
+
+# MSVC's out-of-memory errors in a build log written after the marker file (an older log proves nothing).
+build_ran_out_of_memory() {
+    local log
+    for log in "$AC_BUILD"/build-*.log; do
+        [[ -f $log && $log -nt $1 ]] && grep -qE 'C3859|C1076' "$log" && return 0
+    done
+    return 1
+}
+
 ok() { printf 'ok: %s\n' "$*"; }
 bad() { printf 'FAIL: %s\n' "$*" >&2; failed=1; }
 quote() { printf '%q' "$1"; }
@@ -261,7 +290,7 @@ stamp="$(date -u +%Y%m%d-%H%M%S)-$$"
 snapshot="$data/snapshots/pre-release-$stamp.db"
 binary_backup="$data/snapshots/pre-release-$stamp-binaries"
 printf 'Plan: stop services; snapshot %s; cherry-pick %s commit(s); ' "$snapshot" "$planned_changes"
-((native == 0)) || printf 'save old binaries; apply %s missing module patch(es); verify pin guard; build with AC_JOBS=4; ' "$pending_patches"
+((native == 0)) || printf 'save old binaries; apply %s missing module patch(es); verify pin guard; build with AC_JOBS sized to free memory (4-16); ' "$pending_patches"
 printf 'migrate; start services; restart leeroy-console; health summary\n'
 if ((dry)); then ok 'dry-run complete; no release changes'; exit 0; fi
 
@@ -301,7 +330,19 @@ if ((native)); then
     # Do not start rollback while compilers are still writing the build tree.
     # Ignored signals are inherited by the build wrapper and its children.
     trap '' INT TERM
-    AC_JOBS=4 bash "$AC_ROOT/scripts/ac-build.sh"
+    build_jobs=$(release_build_jobs)
+    ok "building with AC_JOBS=$build_jobs (sized to free commit memory)"
+    build_mark=$(mktemp)
+    build_rc=0
+    AC_JOBS=$build_jobs bash "$AC_ROOT/scripts/ac-build.sh" || build_rc=$?
+    # Out of memory is parallelism, not code: rebuild once at the old fixed 4 (no reconfigure).
+    if ((build_rc != 0 && build_jobs > 4)) && build_ran_out_of_memory "$build_mark"; then
+        printf 'note: compilers ran out of memory at AC_JOBS=%s; rebuilding at AC_JOBS=4\n' "$build_jobs"
+        build_rc=0
+        AC_JOBS=4 bash "$AC_ROOT/scripts/ac-build.sh" --no-configure || build_rc=$?
+    fi
+    rm -f "$build_mark"
+    ((build_rc == 0)) || exit "$build_rc"
     trap 'exit 2' INT TERM
 fi
 (cd "$AC_ROOT/mind" && "$python" -m leeroy_mind db --data-dir "$(native_path "$data")" migrate)

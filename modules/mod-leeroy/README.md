@@ -745,7 +745,7 @@ unavailable and nobody moves). Hello lists `features: [..., "mechanics"]`.
 
 - **`raid_mechanics {map, difficulty, mechanics: [{id, kind, area, roles, spells, radius, range, angle,
   duration, landing}]}`**: one instance's whole table (difficulty 0 10, 1 25, 2 10 heroic, 3 25 heroic),
-  replacing the last one for that map and difficulty; at most 64 rules of at most 16 spell ids each, 16 tables,
+  replacing the last one for that map and difficulty; at most 64 rules of at most 16 spell ids each, 36 tables,
   yards up to 100, `duration` up to 120 seconds. Kinds and their areas: `avoid_ground` (`dest`: a circle round the
   cast's destination, else its target; `caster`: round the caster, following it, ending with it; `line`: a band
   `radius` either side and `range` long from the caster toward its target, else its destination, else its facing;

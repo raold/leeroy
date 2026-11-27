@@ -117,6 +117,7 @@ constexpr std::array<char const*, 2> Names{"Dojopaladin", "Dojoreserve"};
 constexpr std::array<uint8, 2> Classes{CLASS_PALADIN, CLASS_DRUID};
 constexpr std::array<uint8, 2> Races{RACE_HUMAN, RACE_NIGHTELF};
 constexpr uint32 Timeout = 120000;
+int8 PremadeSpec(uint8 cls, char const* name);
 
 struct RaidRun
 {
@@ -129,6 +130,8 @@ struct RaidRun
     uint32 roomSamples = 0, escapeMs = 0, outsideSamples = 0, hazardStartMs = 0;
     uint32 insideSamples = 0, lateHits = 0, encounterSamples = 0;
     uint32 harvestSamples = 0, strangulateSamples = 0;
+    uint32 anchorCombatSamples = 0, anchorArmor = 0;
+    float anchorItemLevel = 0.f;
     float finalHazardClearance = 0.f;
     uint64 effectiveHealing = 0;
     uint64 ownerEpoch = 0;
@@ -137,6 +140,7 @@ struct RaidRun
     ObjectGuid target;
     json defilePaths = json::array();
     json damageEvidence = json::array(), deaths = json::array();
+    json fixtureFailure = json::object();
     uint64 damageSequence = 0;
     std::array<ObjectGuid, 2> actors{};
     std::recursive_mutex events;
@@ -147,8 +151,79 @@ struct RaidRun
         return p && p->IsInWorld() && !p->IsDuringRemoveFromWorld() && GET_PLAYERBOT_AI(p) ? p : nullptr;
     }
 
+    json LichKingState(Player* p) const
+    {
+        json result = json::object();
+        if ((scenario != "lk-terenas" && scenario != "lk-defile") || !p || !p->IsInWorld() ||
+            p->IsDuringRemoveFromWorld() || p->GetMapId() != map || p->GetInstanceId() != instance)
+            return result;
+        InstanceScript* script = p->GetInstanceScript();
+        if (!script) return result;
+        result["boss_state"] = uint32(script->GetBossState(12));
+        for (uint32 data : {12u, 39u}) // native Lich King and Terenas
+        {
+            Creature* c = p->GetMap()->GetCreature(script->GetGuidData(data));
+            json npc = {{"exists", c != nullptr}};
+            if (c)
+            {
+                Unit* victim = c->GetVictim();
+                uint32 spell = 0;
+                if (Spell* current = c->GetCurrentSpell(CURRENT_GENERIC_SPELL)) spell = current->GetSpellInfo()->Id;
+                else if (Spell* channel = c->GetCurrentSpell(CURRENT_CHANNELED_SPELL)) spell = channel->GetSpellInfo()->Id;
+                npc.update({{"entry", c->GetEntry()}, {"alive", c->IsAlive()}, {"combat", c->IsInCombat()},
+                    {"engaged", c->IsEngaged()}, {"evading", c->IsInEvadeMode()},
+                    {"immune_to_pc", c->IsImmuneToPC()}, {"react_state", uint32(c->GetReactState())},
+                    {"health", c->GetHealth()}, {"max_health", c->GetMaxHealth()}, {"spell", spell},
+                    {"x", c->GetPositionX()}, {"y", c->GetPositionY()}, {"z", c->GetPositionZ()},
+                    {"victim_slot", victim ? std::size_t(std::find(actors.begin(), actors.end(), victim->GetGUID()) - actors.begin()) : actors.size()}});
+            }
+            result[std::to_string(data)] = std::move(npc);
+        }
+        return result;
+    }
+
     void Phase(std::string const& next) { state = next; phaseMs = 0; }
-    void Fail(std::string const& why) { failure = why; Phase("cleanup"); }
+    void Fail(std::string const& why)
+    {
+        // Actor() deliberately hides actors leaving the world. Preserve raw
+        // connectivity and life state before cleanup, which resurrects and logs
+        // them out before the next status poll can distinguish these failures.
+        if (fixtureFailure.empty() && (scenario == "lk-terenas" || scenario == "lk-defile") &&
+            (state == "arrive" || state == "harvest" || state == "observe"))
+        {
+            json fixtures = json::array();
+            for (std::size_t i = 0; i < actors.size(); ++i)
+            {
+                Player* p = ObjectAccessor::FindConnectedPlayer(actors[i]);
+                json actor = {{"slot", i}, {"connected", p != nullptr}};
+                if (p)
+                {
+                    actor.update({{"alive", p->IsAlive()}, {"in_world", p->IsInWorld()},
+                        {"removing", p->IsDuringRemoveFromWorld()}, {"ai_present", GET_PLAYERBOT_AI(p) != nullptr},
+                        {"teleport_near", p->IsBeingTeleportedNear()}, {"teleport_far", p->IsBeingTeleportedFar()},
+                        {"health", p->GetHealth()}, {"max_health", p->GetMaxHealth()},
+                        {"armor", p->GetArmor()},
+                        {"map", p->GetMapId()}, {"instance", p->GetInstanceId()},
+                        {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
+                        {"combat", p->IsInCombat()}});
+                    json auras = json::array();
+                    for (auto const& aura : p->GetAppliedAuras())
+                    {
+                        if (auras.size() == 64) break;
+                        auras.push_back(aura.second->GetBase()->GetId());
+                    }
+                    actor["auras"] = std::move(auras);
+                    actor["aura_count"] = p->GetAppliedAuras().size();
+                    actor["native_encounter"] = LichKingState(p);
+                }
+                fixtures.push_back(std::move(actor));
+            }
+            fixtureFailure = {{"elapsed_ms", elapsed}, {"phase_ms", phaseMs}, {"state", state},
+                {"damage_sequence", damageSequence}, {"fixtures", std::move(fixtures)}};
+        }
+        failure = why;
+        Phase("cleanup");
+    }
 
     std::size_t DiagnosticSlot(Unit* unit) const
     {
@@ -168,7 +243,9 @@ struct RaidRun
         if (damageEvidence.size() == 32) damageEvidence.erase(damageEvidence.begin());
         damageEvidence.push_back({{"sequence", ++damageSequence}, {"elapsed_ms", elapsed},
             {"slot", slot}, {"stage", stage}, {"spell", spell}, {"damage", damage},
-            {"health", victim->GetHealth()}, {"attacker_entry", attacker ? attacker->GetEntry() : 0}});
+            {"health", victim->GetHealth()}, {"max_health", victim->GetMaxHealth()},
+            {"armor", victim->GetArmor()}, {"attacker_enraged", attacker && attacker->HasAura(72143)},
+            {"attacker_entry", attacker ? attacker->GetEntry() : 0}});
     }
 
     std::string Create()
@@ -227,9 +304,11 @@ struct RaidRun
         roomSamples = escapeMs = outsideSamples = hazardStartMs = 0; finalHazardClearance = 0.f;
         insideSamples = lateHits = encounterSamples = 0;
         harvestSamples = strangulateSamples = 0;
+        anchorCombatSamples = anchorArmor = 0; anchorItemLevel = 0.f;
         setup = cleanup = combatObserved = competition = false; target.Clear();
         defilePaths = json::array();
         damageEvidence = json::array(); deaths = json::array(); damageSequence = 0;
+        fixtureFailure = json::object();
         map = name == "valithria" || name == "lk-terenas" || name == "lk-defile" ? 631 : name == "twins" ? 649 : 533;
         oldTwins = sPlayerbotAIConfig.TwinValkyrInteractions;
         sPlayerbotAIConfig.TwinValkyrInteractions = !negative;
@@ -281,9 +360,30 @@ struct RaidRun
         // Stock Valithria allocation reserves the restoration druid for the
         // raid, leaving the measured paladin on the dragon even when the distant
         // raid member is hurt enough to qualify for stock heal-reach selection.
-        owner->resetTalents(true);
-        owner->LearnTalent(823, 2); // Nature's Focus, 3/3 (Talent.dbc, restoration)
-        if (!owner->HasTalent(17066, owner->GetActiveSpec())) { Fail("restoration fixture talent refused"); return false; }
+        if (scenario == "lk-terenas")
+        {
+            // The outside reference holds the native encounter while the tested
+            // healer is in Frostmourne. An unarmoured, frozen restoration druid
+            // was killed by a real 159644-damage Horror hit despite the existing
+            // 100000-HP reserve. Give this support actor the stock raid tank
+            // spec/equipment; the tested healer and all damage checks stay intact.
+            int8 const spec = PremadeSpec(CLASS_DRUID, "bear pve");
+            if (spec < 0) { Fail("lk_anchor_tank_spec_missing"); return false; }
+            PlayerbotFactory::InitTalentsBySpecNo(owner, spec, true);
+            GET_PLAYERBOT_AI(owner)->ResetStrategies(false);
+            PlayerbotFactory factory(owner, 80, ITEM_QUALITY_EPIC,
+                PlayerbotFactory::CalcMixedGearScore(245, ITEM_QUALITY_EPIC));
+            factory.InitSkills();
+            factory.InitAvailableSpells();
+            // Keep one real equipment set across the disabled/enabled pair.
+            if (std::abs(owner->GetAverageItemLevel() - 245.f) > 8.f) factory.InitEquipment(false);
+        }
+        else
+        {
+            owner->resetTalents(true);
+            owner->LearnTalent(823, 2); // Nature's Focus, 3/3 (Talent.dbc, restoration)
+            if (!owner->HasTalent(17066, owner->GetActiveSpec())) { Fail("restoration fixture talent refused"); return false; }
+        }
         GET_PLAYERBOT_AI(owner)->ResetStrategies(false);
         PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
         ai->ResetStrategies(false);
@@ -328,6 +428,18 @@ struct RaidRun
         ownerEpoch = GET_PLAYERBOT_AI(owner)->AcquireExternalControl("dojo-raid-leader");
         if (!ownerEpoch) { Fail("could not hold the scripted leader"); return; }
         owner->StopMoving();
+        if (scenario == "lk-terenas")
+        {
+            // Apply the native form after teleport/strategy reconstruction and
+            // under the existing external hold, so the support actor stays a tank.
+            owner->CastSpell(owner, 9634, true); // Dire Bear Form
+            anchorArmor = owner->GetArmor();
+            anchorItemLevel = owner->GetAverageItemLevel();
+            if (!owner->HasAura(9634) || anchorArmor < 20000 || anchorItemLevel < 230.f)
+            { Fail("lk_anchor_tank_preparation_failed"); return; }
+            owner->SetMaxHealth(100000);
+            owner->SetFullHealth();
+        }
         // Far-teleport acknowledgement may have rebuilt the strategies.
         ai->SetMaster(owner);
         ai->ChangeStrategy("-stay,-passive,+heal", BOT_STATE_COMBAT);
@@ -391,8 +503,16 @@ struct RaidRun
                 // Hold a real active encounter outside while the healer is inside.
                 // The stock control may leave the room; that must not reset the
                 // encounter and invalidate the comparison before it is measured.
+                // Use the native intro's final platform position, rather than
+                // asking a seated boss on the throne to chase down its steps.
+                lichKing->NearTeleportTo(465.073f, -2123.470f, 840.8569f, 0.f);
+                lichKing->SetStandState(UNIT_STAND_STATE_STAND);
                 lichKing->SetImmuneToPC(false);
+                lichKing->SetReactState(REACT_AGGRESSIVE); // native post-intro state
+                lichKing->EngageWithTarget(owner);
                 lichKing->AI()->AttackStart(owner);
+                if (!lichKing->IsEngaged() || !owner->IsInCombat())
+                { Fail("native_lk_anchor_not_engaged"); return; }
                 bot->GetMap()->LoadGrid(495.708f, -2523.76f);
                 // Use the actual hostile Harvest Soul, including its damage,
                 // native strangulate vehicle and delayed teleport. Calling only
@@ -454,6 +574,13 @@ struct RaidRun
         if (bot->IsBeingTeleported() || owner->IsBeingTeleported()) return;
         if (bot->GetMapId() != map || bot->GetInstanceId() != instance ||
             owner->GetMap() != bot->GetMap()) { Fail("fixture left the measured instance"); return; }
+        if (scenario == "lk-terenas")
+        {
+            Creature* lichKing = bot->GetMap()->GetCreature(bot->GetInstanceScript()->GetGuidData(12));
+            if (!lichKing || !lichKing->IsEngaged() || !owner->IsInCombat())
+            { Fail("native_lk_anchor_engagement_lost"); return; }
+            ++anchorCombatSamples;
+        }
         ++samples;
         maxGap = std::max(maxGap, diff);
         combatObserved = combatObserved || bot->IsInCombat();
@@ -652,6 +779,7 @@ struct RaidRun
                 fixtures.push_back({{"slot", i}, {"map", p->GetMapId()}, {"instance", p->GetInstanceId()},
                     {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
                     {"health", p->GetHealth()}, {"max_health", p->GetMaxHealth()}, {"mana", p->GetPower(POWER_MANA)},
+                    {"armor", p->GetArmor()},
                     {"teleporting", p->IsBeingTeleported()}, {"healer", PlayerbotAI::IsHeal(p)},
                     {"icc", ai->HasStrategy("icc", BOT_STATE_COMBAT)},
                     {"combat", p->IsInCombat()}, {"self_bot", IsSelfBot(p)},
@@ -667,6 +795,8 @@ struct RaidRun
             InstanceScript* script = p->GetInstanceScript();
             encounter["boss_state"] = uint32(script->GetBossState(scenario == "valithria" ? 10 : scenario == "twins" ? 3 :
                 scenario == "lk-terenas" || scenario == "lk-defile" ? 12 : 0));
+            if (scenario == "lk-terenas" || scenario == "lk-defile")
+                encounter["native_encounter"] = LichKingState(p);
             if (Player* owner = Actor(1))
             {
                 encounter["leader_distance"] = p->GetDistance(owner);
@@ -690,12 +820,14 @@ struct RaidRun
             {"heal_events", heals}, {"light_samples", lightSamples}, {"dark_samples", darkSamples},
             {"room_samples", roomSamples}, {"escape_ms", escapeMs}, {"outside_samples", outsideSamples},
             {"harvest_samples", harvestSamples}, {"strangulate_samples", strangulateSamples},
+            {"anchor_combat_samples", anchorCombatSamples}, {"anchor_armor", anchorArmor}, {"anchor_item_level", anchorItemLevel},
             {"inside_samples", insideSamples}, {"late_hits", lateHits}, {"encounter_samples", encounterSamples},
             {"final_hazard_clearance", finalHazardClearance},
             {"switch_ms", switchMs}, {"crossings", crossings}, {"hazard_samples", hazardsSeen},
             {"minimum_clearance", minimumClearance}, {"poison_hits", scenario == "poison" ? damageHits : 0},
             {"defile_hits", scenario == "lk-defile" ? damageHits : 0}, {"defile_paths", defilePaths},
             {"damage_sequence", damageSequence}, {"damage_evidence", damageEvidence}, {"deaths", deaths},
+            {"fixture_failure", fixtureFailure},
             {"fixtures", fixtures}, {"encounter", encounter}};
     }
 };
