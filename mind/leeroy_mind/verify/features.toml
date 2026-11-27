@@ -309,6 +309,73 @@ pattern = '^valithria_watch instance=\d+ end=reset hp=[\d.]+ focus=1'
 example = "2026-11-26 21:02:10 valithria_watch instance=812 end=reset hp=63.5 focus=1"
 
 [[feature]]
+id = "valithria_adds"
+name = "Valithria: tanks split her adds, skeletons and zombies die first, volleys are interrupted"
+prs = [506]
+note = "Set `since` to the native release that carries playerbots patch 0022; older watch lines have no adds field."
+
+[[feature.switch]]
+source = "playerbots"
+key = "Playerbots.ValithriaAdds"
+default = true
+
+[[feature.evidence]]
+id = "adds_pull"
+kind = "observed"
+what = "a watched Valithria pull ran with the adds handling on (valithria_watch adds=1)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ diff=\d+ focus=\d adds=1 '
+example = "2026-11-27 21:04:05 valithria_watch instance=812 diff=2 focus=1 adds=1 turns=1 hp=71.2 healers=3 dragon=2 raid=1 casts=11"
+
+[[feature.evidence]]
+id = "adds_done"
+kind = "working"
+what = "a watched Valithria pull with the adds handling ended with her healed (end=done ... adds=1)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ end=done hp=[\d.]+ focus=\d adds=1'
+example = "2026-11-27 21:09:40 valithria_watch instance=812 end=done hp=100.0 focus=1 adds=1 turns=1"
+
+[[feature.evidence]]
+id = "adds_reset"
+kind = "failed"
+what = "a watched Valithria pull with the adds handling reset (end=reset ... adds=1)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ end=reset hp=[\d.]+ focus=\d adds=1'
+example = "2026-11-27 21:02:10 valithria_watch instance=812 end=reset hp=63.5 focus=1 adds=1 turns=1"
+
+[[feature]]
+id = "valithria_portal_turns"
+name = "Valithria: on 10-player heroic her healers take the Nightmare portals one at a time"
+prs = [506]
+note = "Set `since` to the native release that carries playerbots patch 0022; older watch lines have no turns field. Live 2026-11-26 both healers on her went through every wave together (portal=2, then dream=2)."
+
+[[feature.switch]]
+source = "playerbots"
+key = "Playerbots.ValithriaPortalTurns"
+default = true
+
+[[feature.evidence]]
+id = "turns_pull"
+kind = "observed"
+what = "a watched Valithria pull ran with portal turns on (valithria_watch turns=1)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ diff=\d+ focus=\d adds=\d turns=1 '
+example = "2026-11-27 21:04:05 valithria_watch instance=812 diff=2 focus=1 adds=1 turns=1 hp=71.2 healers=3 dragon=1 dream=1 raid=1 casts=9"
+
+[[feature.evidence]]
+id = "two_dreaming"
+kind = "failed"
+what = "two healers were in the dream at once on 10-player heroic, the only place turns apply (diff=2 ... turns=1 ... dream=2)"
+log = "playerbots"
+token = "valithria_watch "
+pattern = '^valithria_watch instance=\d+ diff=2 focus=\d adds=\d turns=1 .* dream=[2-9]'
+example = "2026-11-27 21:05:05 valithria_watch instance=812 diff=2 focus=1 adds=1 turns=1 hp=70.2 healers=3 dream=2 raid=1 casts=3"
+
+[[feature]]
 id = "living_poison"
 name = "Naxxramas: his group keeps clear of the Living Poison slimes"
 prs = [424]

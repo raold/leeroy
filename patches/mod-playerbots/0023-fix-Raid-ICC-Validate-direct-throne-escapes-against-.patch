@@ -1,7 +1,7 @@
-From 0192f3c4cad31a43f25af649a3cc8e1f4cc659ce Mon Sep 17 00:00:00 2001
+From f72c2e20c57c4b07a958c82a3208cc068b2115e4 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Wed, 25 Nov 2026 08:55:09 -0500
-Subject: [PATCH 22/46] fix(Raid/ICC): Validate direct throne escapes against
+Subject: [PATCH 23/63] fix(Raid/ICC): Validate direct throne escapes against
  actual ground
 
 ---

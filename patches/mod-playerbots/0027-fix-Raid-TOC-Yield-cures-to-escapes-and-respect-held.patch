@@ -1,7 +1,7 @@
-From 0c34c6746dd4cc6f09d303b41bd615ecf5da7867 Mon Sep 17 00:00:00 2001
+From e1d0e271296ae22bed0e5cbd1522c888e0f67b5a Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Wed, 25 Nov 2026 17:36:04 -0500
-Subject: [PATCH 26/46] fix(Raid/TOC): Yield cures to escapes and respect held
+Subject: [PATCH 27/63] fix(Raid/TOC): Yield cures to escapes and respect held
  carriers
 
 ---
