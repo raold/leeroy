@@ -27,7 +27,7 @@ reset() {
     BASE=main DRAFT=false MERGE=CLEAN
     LEAVE_OUT="" FAIL_CHECK="" THREAD=true
     REVIEW_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb REVIEWER="chatgpt-codex-connector[bot]" LOCAL_BODY="" TOP_MERGE=false
-    ISSUE_BODY="" INLINE_SHA="" REVIEWER_TYPE=Bot LOCAL_ASSOC=OWNER LOCAL_USER=raold NO_REVIEW=false
+    ISSUE_BODY="" INLINE_SHA="" INLINE_NOW="" REVIEWER_TYPE=Bot LOCAL_ASSOC=OWNER LOCAL_USER=raold NO_REVIEW=false
 }
 
 write() {
@@ -66,7 +66,9 @@ JSON
 {"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","parents":[{"sha":"a"}],"commit":{"committer":{"date":"2026-11-25T09:00:00Z"}}}$merge_entry]]
 JSON
     if [ -n "$INLINE_SHA" ]; then
-        echo "[[{\"user\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"commit_id\":\"$INLINE_SHA\"}]]" >"$fix/rcomments.json"
+        # GitHub keeps original_commit_id at the commit the comment was written on and moves
+        # commit_id to the newest head while the commented line is unchanged.
+        echo "[[{\"user\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"original_commit_id\":\"$INLINE_SHA\",\"commit_id\":\"${INLINE_NOW:-$INLINE_SHA}\"}]]" >"$fix/rcomments.json"
     else
         echo '[[]]' >"$fix/rcomments.json"
     fi
@@ -110,6 +112,7 @@ reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa LOCAL_USER=helper LOC
 reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa LOCAL_BODY="claude-local reviewed bbbbbbb"; run "claude-local prefix accepted" 0 ""
 reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa LOCAL_BODY="claude-local reviewed aaaaaaa"; run "claude-local for another commit rejected" 1 "no review of that commit"
 reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa INLINE_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; run "inline comment on the commit accepted" 0 ""
+reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa INLINE_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa INLINE_NOW=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; run "inline comment carried forward to an unreviewed commit rejected" 1 "no review of that commit"
 reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ISSUE_BODY='"<!-- codex-review-state:v1 {\"code_review\":{\"status\":\"completed\",\"commit_sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}} -->"'; run "completed codex state receipt accepted" 0 ""
 reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ISSUE_BODY='"<!-- codex-review-receipt:v1 --> - Reviewed commit:** `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`"'; run "codex receipt marker accepted" 0 ""
 reset; REVIEW_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ISSUE_BODY='"<!-- codex-review-state:v1 {\"code_review\":{\"status\":\"running\",\"commit_sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}} -->"'; run "running codex state rejected" 1 "no review of that commit"
