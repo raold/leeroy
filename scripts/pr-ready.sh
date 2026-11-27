@@ -147,8 +147,10 @@ else:
         if is_codex(r.get("user")) and r.get("commit_id"):
             seen.append(r["commit_id"])
     for c in rcomments:
-        if is_codex(c.get("user")):
-            seen += [c[k] for k in ("commit_id", "original_commit_id") if c.get(k)]
+        # Only original_commit_id: GitHub moves commit_id to the newest head while the
+        # commented line is unchanged, so it would vouch for commits the bot never saw.
+        if is_codex(c.get("user")) and c.get("original_commit_id"):
+            seen.append(c["original_commit_id"])
     for c in flatten(load("icomments")):
         body = c.get("body") or ""
         if is_codex(c.get("user")):
