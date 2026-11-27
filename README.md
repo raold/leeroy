@@ -495,6 +495,17 @@ output in `patches/`:
   `ValithriaAdds = 0` alone still takes heroic portals in turns, and
   `ValithriaPortalTurns = 0` alone sends the healers on her through each heroic
   wave together.
+- **ToC worm cures** (playerbots patches 0024-0028, `Playerbots.TocWormSupport`,
+  default `1`): in Northrend Beasts' Jormungar phase a bot with Paralytic
+  Toxin walks to a Burning Bile carrier and waits inside the cure radius. For a
+  victim already rooted, one mobile bot carrier (a non-tank first) goes to it.
+  Afterwards the unaffected bots spread out of the Bile. Bots on `stay` or
+  `passive` are never sent to rescue but can still be cured, and a human is
+  never sent. The cure moves at normal priority, so the mechanic guard refuses
+  a cure spot inside a Slime Pool; that protection needs mod-leeroy's mechanic
+  responder, which runs for his group and offline raids. Nothing removes an
+  aura or teleports anyone. `0` turns the cure and spacing actions off. Notes
+  and limits: `patches/mod-playerbots/TOC_WORMS.md`.
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.

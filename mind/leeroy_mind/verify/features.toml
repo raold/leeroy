@@ -456,6 +456,29 @@ pattern = '^raidplay_respond_cast_radius_unsupported\b'
 example = '{"ts": "2026-11-23T20:01:02.123-05:00", "level": "INFO", "event": "raidplay_respond_cast_radius_unsupported"}'
 
 [[feature]]
+id = "toc_worm_cures"
+name = "Northrend Beasts: toxin victims reach a Burning Bile carrier, held bots are never sent to rescue"
+prs = [471]
+note = "Set `since` to the native release that carries playerbots patches 0024-0028. The patches log nothing, so this reads the Beasts pulls."
+
+[[feature.switch]]
+source = "playerbots"
+key = "Playerbots.TocWormSupport"
+default = true
+
+[[feature.evidence]]
+id = "killed"
+kind = "working"
+what = "a Northrend Beasts pull ended in a kill (tg_pull 649:0 killed)"
+db = { from = "tg_pull", where = "map = 649 AND boss_id = 0 AND outcome = 'killed'", time = "end_ms", unit = "ms", code = "kind" }
+
+[[feature.evidence]]
+id = "wiped"
+kind = "failed"
+what = "a Northrend Beasts pull ended in a wipe (tg_pull 649:0 wiped)"
+db = { from = "tg_pull", where = "map = 649 AND boss_id = 0 AND outcome = 'wiped'", time = "end_ms", unit = "ms", code = "kind" }
+
+[[feature]]
 id = "mechanic_responder"
 name = "Mechanic responder: cast members moved out of boss mechanics"
 prs = [301, 392, 396, 428]
