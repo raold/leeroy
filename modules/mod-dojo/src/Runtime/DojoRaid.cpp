@@ -10,6 +10,7 @@
 #if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
 #include "DojoRuntime.h"
 #include "AccountMgr.h"
+#include "AllSpellScript.h"
 #include "DatabaseEnv.h"
 #include "RBAC.h"
 #include "CharacterCache.h"
@@ -35,6 +36,7 @@
 #include "UnitScript.h"
 #include "World.h"
 #include "WorldScript.h"
+#include "WorldPacket.h"
 #include "WorldSession.h"
 #include "Guild/HazardJob.h"
 #include "LeeroyIntegrations.h"
@@ -48,8 +50,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <list>
 #include <map>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -701,6 +705,64 @@ constexpr uint32 EncounterCapMs = 15 * 60 * 1000;
 constexpr uint32 DreamState = 70766;
 constexpr uint32 EmeraldVigor = 70873;
 constexpr uint32 TwistedNightmares = 71941;
+constexpr std::size_t TankSlots[] = {3, 4};
+// The owner's own auras on his fire mage (`owner_buffs`): 200% haste, +2000 and +1000 spell power, +50%
+// spell crit. They approximate his raid; they never replace the plain runs.
+constexpr std::array<uint32, 4> OwnerAuras{6560, 51040, 31750, 23434};
+
+// Her adds by base entry (a heroic add keeps its base entry; its stats come from the difficulty template).
+struct AddKind
+{
+    uint32 entry;
+    char const* name;
+};
+constexpr std::array<AddKind, 6> AddKinds{{{37886, "abomination"}, {37934, "zombie"}, {37907, "worm"},
+    {37868, "archmage"}, {36791, "skeleton"}, {37863, "suppresser"}}};
+
+int AddKindOf(uint32 entry)
+{
+    for (std::size_t i = 0; i < AddKinds.size(); ++i)
+        if (AddKinds[i].entry == entry) return int(i);
+    return -1;
+}
+
+std::string KindName(uint32 entry)
+{
+    int const kind = AddKindOf(entry);
+    if (kind >= 0) return AddKinds[kind].name;
+    return entry ? "c" + std::to_string(entry) : "other";
+}
+
+// Where an add's victim was, sampled every 250 ms.
+enum AddVictim : std::size_t { OnTank, OnHealer, OnDps, OnHer, OnNobody, AddVictims };
+constexpr std::array<char const*, AddVictims> AddVictimNames{"tank", "healer", "dps", "her", "none"};
+
+struct EncounterAdd
+{
+    uint32 entry = 0, seenMs = 0, lastMs = 0, tankedMs = 0;
+    bool alive = true;
+    std::array<uint32, AddVictims> onMs{};
+    std::array<uint32, 10> onSlotMs{};
+    uint64 dealt = 0, taken = 0;
+};
+
+// One hit on a fixture: final damage after mitigation and absorbs, its source and her health before it.
+struct EncounterHit
+{
+    uint32 ms = 0, entry = 0, spell = 0, amount = 0;
+    float hpBefore = 0.f;
+};
+
+struct EncounterDeath
+{
+    uint32 ms = 0, slot = 0, killer = 0, load = 0;
+    std::vector<EncounterHit> recap;
+};
+
+struct AddCasts
+{
+    uint32 prepared = 0, cast = 0, cancelled = 0;
+};
 
 int8 PremadeSpec(uint8 cls, char const* name)
 {
@@ -740,18 +802,30 @@ struct EncounterMember
     // The raid as pulled, kept for the report after the fixtures log out.
     uint32 level = 0, itemLevel = 0, maxHealth = 0, maxMana = 0;
     bool isHeal = false;
+    // What hurt this fixture (final damage by source entry and by spell, 0 = melee), who healed it (by
+    // fixture slot), how many adds were on it, what it cast and its damage on each kind of add.
+    std::map<uint32, uint64> takenBy, takenBySpell;
+    std::array<uint64, 10> healedBy{};
+    uint32 load = 0, maxLoad = 0, multiMs = 0;
+    std::map<uint32, uint32> casts;
+    std::map<std::string, uint32> castsOnAdds;
+    std::array<uint64, AddKinds.size()> doneToAdds{};
+    std::vector<EncounterHit> recent;
 };
 
 struct EncounterRun
 {
     std::string token, difficulty, mode, state = "idle", failure, outcome;
     bool active = false, setup = false, cleanup = false, engaged = false, earlyPull = false, oldFocus = true,
-        oldPortals = true;
+        oldPortals = true, oldAdds = true, oldTurns = true, ownerBuffs = false;
     uint32 elapsed = 0, phaseMs = 0, pullMs = 0, sampleMs = 0, instance = 0, mapDifficulty = 0, samples = 0;
     uint32 itemLevel = EncounterItemLevel;
     std::size_t prepared = 0;
     float startHp = 0.f, hp = 0.f, peakHp = 0.f;
     uint64 damageToHer = 0;
+    uint32 leaderTeleportAcks = 0;
+    // Healer time with two or more of them in the dream, and with none of them out of it in reach of her.
+    uint32 twoInDreamMs = 0, noneOnHerMs = 0;
     ObjectGuid valithria;
     std::array<ObjectGuid, 10> actors{};
     std::array<EncounterMember, 10> members{};
@@ -760,6 +834,14 @@ struct EncounterRun
     std::map<uint32, uint64> damageTaken;
     std::vector<std::pair<uint32, uint32>> killers;  // (pull ms, killer creature entry; 0 = not a creature)
     std::vector<std::pair<uint32, float>> timeline;
+    // Her adds as they came and went, deaths with the hits before them, the adds' own casts, the raid's
+    // final damage taken by spell and a 10 s timeline of living adds by kind.
+    std::map<ObjectGuid, EncounterAdd> adds;
+    std::vector<EncounterDeath> deaths;
+    std::map<uint32, AddCasts> addCasts;
+    std::map<uint32, uint64> finalBySpell;
+    std::map<ObjectGuid, uint32> pendingSpell;
+    std::vector<json> addTimeline;
     std::recursive_mutex events;
 
     Player* Actor(std::size_t i) const
@@ -820,7 +902,7 @@ struct EncounterRun
     }
 
     std::string Start(std::string const& id, std::string const& diff, std::string const& how, uint32 gear,
-                      bool checkRunning)
+                      bool buffs, bool checkRunning)
     {
         if (gear < 200 || gear > 284) return "refused: item level is 200-284";
         if (active || state == "cleanup_failed") return "refused: an encounter run or unproved cleanup is active";
@@ -828,21 +910,27 @@ struct EncounterRun
         if (Dojo::State().plan.state != Dojo::RuntimeState::Armed || Dojo::State().manifest)
             return "refused: use an armed isolated training realm with no arena manifest";
         if (diff != "10n" && diff != "10h") return "refused: difficulty is 10n or 10h";
-        if (how != "before" && how != "after" && how != "noportals")
-            return "refused: mode is before, after or noportals";
+        if (how != "before" && how != "after" && how != "noportals" && how != "adds" && how != "turns")
+            return "refused: mode is before, after, noportals, adds or turns";
         if (id.empty() || id.size() > 64 ||
             id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != std::string::npos)
             return "refused: invalid run token";
         std::string error = Create();
         if (!error.empty()) return "refused: " + error;
         std::lock_guard<std::recursive_mutex> lock(events);
-        token = id; difficulty = diff; mode = how; itemLevel = gear; failure.clear(); outcome.clear();
+        token = id; difficulty = diff; mode = how; itemLevel = gear; ownerBuffs = buffs; failure.clear();
+        outcome.clear();
         setup = cleanup = engaged = earlyPull = false;
         elapsed = phaseMs = pullMs = sampleMs = instance = mapDifficulty = samples = 0;
-        prepared = 0; startHp = hp = peakHp = 0.f; damageToHer = 0; valithria.Clear();
+        prepared = 0; startHp = hp = peakHp = 0.f; damageToHer = 0; leaderTeleportAcks = 0; valithria.Clear();
+        twoInDreamMs = noneOnHerMs = 0;
         members = {}; forcedLogout = {}; timeline.clear(); damageTaken.clear(); killers.clear();
+        adds.clear(); deaths.clear(); addCasts.clear(); finalBySpell.clear(); pendingSpell.clear();
+        addTimeline.clear();
         oldFocus = sPlayerbotAIConfig.ValithriaHealerFocus;
         oldPortals = sPlayerbotAIConfig.ValithriaPortals;
+        oldAdds = sPlayerbotAIConfig.ValithriaAdds;
+        oldTurns = sPlayerbotAIConfig.ValithriaPortalTurns;
         active = true;
         Phase("login");
         for (ObjectGuid guid : actors) sRandomPlayerbotMgr.AddPlayerBot(guid, 0);
@@ -857,6 +945,8 @@ struct EncounterRun
         Player* p = Actor(i);
         EncounterSlot const& slot = Roster[i];
         if (p->GetGroup()) p->RemoveFromGroup();
+        // The owner's auras are permanent and saved with the character: only a buffed run may start with them.
+        ClearOwnerBuffs(p);
         if (!p->IsAlive()) { p->ResurrectPlayer(1.f); p->SpawnCorpseBones(); }
         int8 const spec = PremadeSpec(slot.cls, slot.spec);
         if (spec < 0) { Fail(std::string("premade spec missing: ") + slot.spec); return false; }
@@ -962,6 +1052,9 @@ struct EncounterRun
         }
         sPlayerbotAIConfig.ValithriaHealerFocus = mode != "before";
         sPlayerbotAIConfig.ValithriaPortals = mode != "noportals";
+        sPlayerbotAIConfig.ValithriaAdds = mode == "adds" || mode == "turns";
+        sPlayerbotAIConfig.ValithriaPortalTurns = mode == "turns";
+        if (ownerBuffs) OwnerBuffs(leader);
         setup = true;
         Phase("prepull");
         return true;
@@ -1006,6 +1099,99 @@ struct EncounterRun
         Phase("observe");
     }
 
+    // The owner's client acknowledges his own near teleports (his Blink). The self-bot leader has no client: playerbots
+    // leaves a self-bot's acknowledgement to its client, and while the leader waits every bot with him as master skips
+    // its turn (PlayerbotAI::DoNextAction), so one Blink froze the whole raid for 30 s or to the wipe. This is the
+    // acknowledgement his client sends; it moves nobody.
+    void AckLeaderTeleport()
+    {
+        Player* leader = Actor(EncounterLeader);
+        if (!leader || !leader->IsBeingTeleportedNear()) return;
+        Player* mover = leader->m_mover ? leader->m_mover->ToPlayer() : nullptr;
+        if (!mover) return;
+        WorldPacket ack(MSG_MOVE_TELEPORT_ACK, 20);
+        ack << mover->GetPackGUID();
+        ack << uint32(0);
+        ack << uint32(0);
+        leader->GetSession()->HandleMoveTeleportAck(ack);
+        ++leaderTeleportAcks;
+    }
+
+    // The owner's auras on the leader, again whenever one is gone (none survives a death).
+    static void OwnerBuffs(Player* leader)
+    {
+        if (!leader || !leader->IsAlive()) return;
+        for (uint32 spell : OwnerAuras)
+            if (!leader->HasAura(spell)) leader->AddAura(spell, leader);
+    }
+
+    static void ClearOwnerBuffs(Player* p)
+    {
+        for (uint32 spell : OwnerAuras)
+            p->RemoveAurasDueToSpell(spell);
+    }
+
+    static AddVictim VictimOf(int slot)
+    {
+        if (slot < 0) return OnNobody;
+        if (std::find(std::begin(TankSlots), std::end(TankSlots), std::size_t(slot)) != std::end(TankSlots))
+            return OnTank;
+        return Healer(std::size_t(slot)) ? OnHealer : OnDps;
+    }
+
+    // Her adds in this sample: when each came and went, whom it was on, and how many were on each fixture.
+    void SampleAdds(uint32 step, Creature* dragon)
+    {
+        for (EncounterMember& m : members) m.load = 0;
+        std::array<uint32, AddKinds.size()> living{};
+        std::set<ObjectGuid> seen;
+        if (dragon)
+            for (AddKind const& kind : AddKinds)
+            {
+                std::list<Creature*> found;
+                dragon->GetCreatureListWithEntryInGrid(found, kind.entry, 150.f);
+                for (Creature* c : found)
+                {
+                    // A blistering zombie never dies: it keeps 1 health, bursts, turns unselectable and despawns.
+                    if (!c || !c->IsAlive() || c->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE)) continue;
+                    EncounterAdd& a = adds[c->GetGUID()];
+                    if (!a.entry) { a.entry = kind.entry; a.seenMs = pullMs; }
+                    a.lastMs = pullMs;
+                    seen.insert(c->GetGUID());
+                    ++living[AddKindOf(kind.entry)];
+                    Unit* victim = c->GetVictim();
+                    int const slot = Slot(victim);
+                    AddVictim const on = victim && victim == dragon ? OnHer : VictimOf(slot);
+                    a.onMs[on] += step;
+                    if (slot >= 0) { a.onSlotMs[slot] += step; ++members[slot].load; }
+                    if (on == OnTank && !a.tankedMs) a.tankedMs = pullMs;
+                }
+            }
+        for (auto& [guid, a] : adds)
+            if (a.alive && !seen.count(guid)) a.alive = false;
+        for (EncounterMember& m : members)
+        {
+            m.maxLoad = std::max(m.maxLoad, m.load);
+            if (m.load >= 2) m.multiMs += step;
+        }
+        if (addTimeline.empty() || pullMs - addTimeline.back()[0].get<uint32>() >= 10000)
+        {
+            json counts = json::object();
+            for (std::size_t k = 0; k < AddKinds.size(); ++k)
+                if (living[k]) counts[AddKinds[k].name] = living[k];
+            json tanks = json::array();
+            for (std::size_t t : TankSlots)
+            {
+                Player* p = Actor(t);
+                tanks.push_back(p && p->IsAlive() ? std::round(p->GetHealthPct()) : 0.f);
+            }
+            uint32 up = 0;
+            for (std::size_t i = 0; i < actors.size(); ++i)
+                if (Player* p = Actor(i); p && p->IsAlive()) ++up;
+            addTimeline.push_back(json::array({pullMs, std::round(hp * 10.f) / 10.f, up, tanks, counts}));
+        }
+    }
+
     void Sample(uint32 step, Creature* dragon)
     {
         ++samples;
@@ -1015,7 +1201,9 @@ struct EncounterRun
             peakHp = std::max(peakHp, hp);
         }
         if (timeline.empty() || pullMs - timeline.back().first >= 10000) timeline.emplace_back(pullMs, hp);
-        uint32 alive = 0;
+        SampleAdds(step, dragon);
+        if (ownerBuffs) OwnerBuffs(Actor(EncounterLeader));
+        uint32 alive = 0, dreamers = 0, onHer = 0;
         for (std::size_t i = 0; i < actors.size(); ++i)
         {
             Player* p = Actor(i);
@@ -1031,7 +1219,7 @@ struct EncounterRun
             bool const dreaming = p->HasAura(DreamState);
             if (dreaming && !m.dreaming) ++m.dreamEntries;
             m.dreaming = dreaming;
-            if (dreaming) m.dreamMs += step;
+            if (dreaming) { m.dreamMs += step; ++dreamers; }
             if (Aura* a = p->GetAura(EmeraldVigor)) m.maxVigor = std::max<uint32>(m.maxVigor, a->GetStackAmount());
             if (Aura* a = p->GetAura(TwistedNightmares))
                 m.maxTwisted = std::max<uint32>(m.maxTwisted, a->GetStackAmount());
@@ -1039,8 +1227,13 @@ struct EncounterRun
             m.minMana = std::min(m.minMana, mana);
             if (mana < 10.f) m.lowManaMs += step;
             if (!dreaming && dragon && p->IsWithinDistInMap(dragon, 40.f) && p->IsWithinLOSInMap(dragon))
+            {
                 m.inReachMs += step;
+                ++onHer;
+            }
         }
+        if (dreamers >= 2) twoInDreamMs += step;
+        if (alive && !onHer) noneOnHerMs += step;
         if (!alive && engaged && outcome.empty()) outcome = "wipe";
     }
 
@@ -1090,6 +1283,7 @@ struct EncounterRun
         elapsed += diff; phaseMs += diff;
         if ((state == "login" || state == "prepare" || state == "arrive") && elapsed > EncounterSetupMs)
             Fail("setup deadline");
+        if (state == "prepull" || state == "observe") AckLeaderTeleport();
         if (state == "login")
         {
             bool all = true;
@@ -1128,10 +1322,13 @@ struct EncounterRun
         {
             sPlayerbotAIConfig.ValithriaHealerFocus = oldFocus;
             sPlayerbotAIConfig.ValithriaPortals = oldPortals;
+            sPlayerbotAIConfig.ValithriaAdds = oldAdds;
+            sPlayerbotAIConfig.ValithriaPortalTurns = oldTurns;
             for (std::size_t i = 0; i < actors.size(); ++i)
                 if (Player* p = Actor(i))
                 {
                     p->CombatStop(true);
+                    ClearOwnerBuffs(p);
                     GET_PLAYERBOT_AI(p)->SetCheat(BotCheatMask::none);
                     GET_PLAYERBOT_AI(p)->SetMaster(nullptr);
                     GET_PLAYERBOT_AI(p)->ChangeStrategy("+passive,+stay", BOT_STATE_NON_COMBAT);
@@ -1208,11 +1405,15 @@ struct EncounterRun
                 if (Engine* engine = ai->GetCurrentEngine())
                     row["last_action"] = std::string(engine->GetLastAction()).substr(0, 160);
                 row["icc"] = ai->HasStrategy("icc", BOT_STATE_COMBAT);
+                if (Unit* victim = p->GetVictim()) row["target"] = Label(victim);
             }
             roster.push_back(row);
         }
         json out = {{"format", 1}, {"kind", "dojo-valithria-encounter"}, {"token", token},
             {"difficulty", difficulty}, {"mode", mode}, {"focus", mode != "before"}, {"portals", mode != "noportals"},
+            {"adds", mode == "adds" || mode == "turns"}, {"portal_turns", mode == "turns"},
+            {"owner_buffs", ownerBuffs}, {"leader_teleport_acks", leaderTeleportAcks},
+            {"two_in_dream_ms", twoInDreamMs}, {"none_on_her_ms", noneOnHerMs},
             {"raid_cheat", true},
             {"state", state},
             {"setup", setup}, {"cleanup", cleanup}, {"failure", failure}, {"outcome", outcome},
@@ -1227,7 +1428,19 @@ struct EncounterRun
                 if (Creature* trigger = map->GetCreature(script->GetGuidData(35)))
                     out["trigger_combat"] = trigger->IsInCombat();
                 if (Creature* dragon = map->GetCreature(valithria))
+                {
                     out["her_position"] = {dragon->GetPositionX(), dragon->GetPositionY(), dragon->GetPositionZ()};
+                    out["live_adds"] = LiveAdds(dragon);
+                }
+                if (Player* leader = Actor(EncounterLeader))
+                    if (Group* group = leader->GetGroup())
+                    {
+                        json marks = json::object();
+                        for (auto const& [icon, name] : {std::pair<uint8, char const*>{7, "skull"}, {6, "cross"}})
+                            if (Unit* marked = ObjectAccessor::GetUnit(*leader, group->GetTargetIcon(icon)))
+                                marks[name] = Label(marked);
+                        out["marks"] = marks;
+                    }
             }
         if (full)
         {
@@ -1243,8 +1456,172 @@ struct EncounterRun
             json deaths = json::array();
             for (auto const& [ms, entry] : killers) deaths.push_back({ms, entry});
             out["killers"] = deaths;
+            AddDetail(out);
         }
         return out;
+    }
+
+    // "<kind>#<counter>" for an add, "<name>" for a fixture, "her", or "c<entry>" for another creature.
+    std::string Label(Unit const* unit) const
+    {
+        if (!unit) return "-";
+        if (unit->GetGUID() == valithria) return "her";
+        if (int const slot = Slot(unit); slot >= 0) return Roster[slot].name;
+        if (unit->IsCreature())
+            return KindName(unit->GetEntry()) + "#" + std::to_string(unit->GetGUID().GetCounter());
+        return unit->IsPlayer() ? "player" : "unit";
+    }
+
+    // Every living add now: label, position, health and victim (the trace's per-poll positions).
+    json LiveAdds(Creature* dragon) const
+    {
+        json rows = json::array();
+        for (AddKind const& kind : AddKinds)
+        {
+            std::list<Creature*> found;
+            dragon->GetCreatureListWithEntryInGrid(found, kind.entry, 150.f);
+            for (Creature* c : found)
+                if (c && c->IsAlive() && !c->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
+                    rows.push_back(json::array({Label(c), std::round(c->GetPositionX() * 10.f) / 10.f,
+                        std::round(c->GetPositionY() * 10.f) / 10.f, std::round(c->GetHealthPct()),
+                        Label(c->GetVictim())}));
+        }
+        return rows;
+    }
+
+    template <typename Map, typename Name>
+    static json Top(Map const& values, std::size_t limit, Name name)
+    {
+        std::vector<std::pair<uint64, typename Map::key_type>> top;
+        for (auto const& [key, amount] : values) top.emplace_back(uint64(amount), key);
+        std::sort(top.rbegin(), top.rend());
+        json rows = json::object();
+        for (std::size_t i = 0; i < top.size() && i < limit; ++i) rows[name(top[i].second)] = top[i].first;
+        return rows;
+    }
+
+    static json Hits(std::vector<EncounterHit> const& hits)
+    {
+        json rows = json::array();
+        for (EncounterHit const& h : hits)
+            rows.push_back({h.ms, KindName(h.entry), h.spell, h.amount, std::round(h.hpBefore)});
+        return rows;
+    }
+
+    // The add detail of a full status: per fixture, per add and per death.
+    void AddDetail(json& out)
+    {
+        auto spellName = [](uint32 spell) { return std::to_string(spell); };
+        auto keyName = [](std::string const& key) { return key; };
+        for (std::size_t i = 0; i < actors.size(); ++i)
+        {
+            EncounterMember const& m = members[i];
+            json& row = out["members"][i];
+            row["taken_by"] = Top(m.takenBy, 8, KindName);
+            row["taken_by_spell"] = Top(m.takenBySpell, 10, spellName);
+            json healed = json::object();
+            for (std::size_t h = 0; h < actors.size(); ++h)
+                if (m.healedBy[h]) healed[Roster[h].name] = m.healedBy[h];
+            row["healed_by"] = healed;
+            row["max_adds_on"] = m.maxLoad;
+            row["two_plus_adds_ms"] = m.multiMs;
+            row["casts"] = Top(m.casts, 25, spellName);
+            row["casts_on_adds"] = Top(m.castsOnAdds, 25, keyName);
+            json done = json::object();
+            for (std::size_t k = 0; k < AddKinds.size(); ++k)
+                if (m.doneToAdds[k]) done[AddKinds[k].name] = m.doneToAdds[k];
+            row["damage_to_adds"] = done;
+        }
+        json addRows = json::array();
+        for (auto const& [guid, a] : adds)
+        {
+            json on = json::object();
+            for (std::size_t v = 0; v < AddVictims; ++v)
+                if (a.onMs[v]) on[AddVictimNames[v]] = a.onMs[v];
+            json onSlot = json::object();
+            for (std::size_t s = 0; s < actors.size(); ++s)
+                if (a.onSlotMs[s]) onSlot[Roster[s].name] = a.onSlotMs[s];
+            addRows.push_back({{"kind", KindName(a.entry)}, {"seen_ms", a.seenMs}, {"last_ms", a.lastMs},
+                {"alive", a.alive}, {"tanked_ms", a.tankedMs}, {"on_ms", on}, {"on_member_ms", onSlot},
+                {"dealt", a.dealt}, {"taken", a.taken}});
+        }
+        out["add_list"] = addRows;
+        json deathRows = json::array();
+        for (EncounterDeath const& d : deaths)
+            deathRows.push_back({{"ms", d.ms}, {"name", Roster[d.slot].name}, {"killer", KindName(d.killer)},
+                {"adds_on", d.load}, {"recap", Hits(d.recap)}});
+        out["deaths"] = deathRows;
+        json casts = json::object();
+        for (auto const& [spell, c] : addCasts)
+            casts[std::to_string(spell)] = {{"prepared", c.prepared}, {"cast", c.cast}, {"cancelled", c.cancelled}};
+        out["add_casts"] = casts;
+        out["final_damage_by_spell"] = Top(finalBySpell, 16, spellName);
+        out["add_timeline"] = addTimeline;
+    }
+
+    // Damage on a fixture, after mitigation and absorbs, with the spell its own hook named (0 = melee).
+    void Hurt(Unit* attacker, Unit* victim, uint32 damage)
+    {
+        int const slot = Slot(victim);
+        if (slot >= 0)
+        {
+            auto pending = pendingSpell.find(victim->GetGUID());
+            uint32 const spell = pending == pendingSpell.end() ? 0 : pending->second;
+            if (pending != pendingSpell.end()) pendingSpell.erase(pending);
+            uint32 const entry = attacker && attacker->IsCreature() ? attacker->GetEntry() : 0;
+            EncounterMember& m = members[slot];
+            m.takenBy[entry] += damage;
+            m.takenBySpell[spell] += damage;
+            finalBySpell[spell] += damage;
+            m.recent.push_back({pullMs, entry, spell, damage, victim->GetHealthPct()});
+            if (m.recent.size() > 10) m.recent.erase(m.recent.begin());
+            if (attacker)
+                if (auto add = adds.find(attacker->GetGUID()); add != adds.end()) add->second.dealt += damage;
+            return;
+        }
+        Unit* const owner = attacker ? attacker->GetCharmerOrOwnerOrSelf() : nullptr;
+        int const from = Slot(owner);
+        if (from < 0 || !victim) return;
+        if (auto add = adds.find(victim->GetGUID()); add != adds.end())
+        {
+            add->second.taken += damage;
+            members[from].doneToAdds[AddKindOf(add->second.entry)] += damage;
+        }
+    }
+
+    void Died(Unit* unit, Unit* killer)
+    {
+        int const slot = Slot(unit);
+        if (slot < 0) return;
+        uint32 const entry = killer && killer->IsCreature() ? killer->GetEntry() : 0;
+        killers.emplace_back(pullMs, entry);
+        deaths.push_back({pullMs, uint32(slot), entry, members[slot].load, members[slot].recent});
+    }
+
+    void Cast(Player* player, Spell* spell)
+    {
+        int const slot = Slot(player);
+        if (slot < 0) return;
+        SpellInfo const* info = spell->GetSpellInfo();
+        EncounterMember& m = members[slot];
+        ++m.casts[info->Id];
+        if (Unit* target = spell->m_targets.GetUnitTarget())
+            if (auto add = adds.find(target->GetGUID()); add != adds.end())
+                ++m.castsOnAdds[std::to_string(info->Id) + ">" + KindName(add->second.entry)];
+        if (IsManaCooldown(info->Id))
+            ++m.manaCooldowns;
+        else if (spell->m_CastItem && info->Effects[0].Effect == SPELL_EFFECT_ENERGIZE &&
+                 info->Effects[0].MiscValue == POWER_MANA)
+            ++m.potions;
+    }
+
+    // An add's own cast in the measured instance: begun, finished or cancelled (an interrupt cancels it).
+    AddCasts* AddCast(Unit* caster, SpellInfo const* info)
+    {
+        if (state != "observe" || !caster || !info || !caster->IsCreature() || caster->GetInstanceId() != instance ||
+            AddKindOf(caster->GetEntry()) < 0)
+            return nullptr;
+        return &addCasts[info->Id];
     }
 
     int Slot(Unit const* unit) const
@@ -1264,17 +1641,27 @@ public:
     void OnHeal(Unit* healer, Unit* receiver, uint32& gain) override
     {
         std::lock_guard<std::recursive_mutex> lock(encounter.events);
-        if (encounter.state != "observe" || !receiver || receiver->GetGUID() != encounter.valithria || !gain) return;
+        if (encounter.state != "observe" || !receiver || !gain) return;
+        // A fixture's healing on another, its totems' included; on her, its own (as 0021 counted it).
+        if (int const to = encounter.Slot(receiver); to >= 0)
+        {
+            if (int const from = encounter.Slot(healer ? healer->GetCharmerOrOwnerOrSelf() : nullptr); from >= 0)
+                encounter.members[to].healedBy[from] += gain;
+            return;
+        }
         int const slot = encounter.Slot(healer);
-        if (slot < 0) return;
+        if (slot < 0 || receiver->GetGUID() != encounter.valithria) return;
         ++encounter.members[slot].heals;
         encounter.members[slot].healing += gain;
     }
-    void OnDamage(Unit* /*attacker*/, Unit* victim, uint32& damage) override
+    void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
     {
         std::lock_guard<std::recursive_mutex> lock(encounter.events);
-        if (encounter.state == "observe" && victim && victim->GetGUID() == encounter.valithria)
+        if (encounter.state != "observe" || !victim) return;
+        if (victim->GetGUID() == encounter.valithria)
             encounter.damageToHer += damage;
+        else if (damage)
+            encounter.Hurt(attacker, victim, damage);
     }
 };
 
@@ -1282,24 +1669,56 @@ class EncounterHurt : public UnitScript
 {
 public:
     EncounterHurt() : UnitScript("DojoEncounterHurt", true,
-        {UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN, UNITHOOK_MODIFY_MELEE_DAMAGE, UNITHOOK_ON_UNIT_DEATH}) { }
+        {UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN, UNITHOOK_MODIFY_MELEE_DAMAGE, UNITHOOK_MODIFY_PERIODIC_DAMAGE_AURAS_TICK,
+         UNITHOOK_ON_UNIT_DEATH}) { }
+    // Before mitigation (kept as damage_taken_by_spell); each also names the spell of the hit that follows.
     void ModifySpellDamageTaken(Unit* target, Unit* /*attacker*/, int32& damage, SpellInfo const* spellInfo) override
     {
         std::lock_guard<std::recursive_mutex> lock(encounter.events);
-        if (encounter.state == "observe" && damage > 0 && encounter.Slot(target) >= 0)
-            encounter.damageTaken[spellInfo ? spellInfo->Id : 0] += uint64(damage);
+        if (encounter.state != "observe" || encounter.Slot(target) < 0) return;
+        encounter.pendingSpell[target->GetGUID()] = spellInfo ? spellInfo->Id : 0;
+        if (damage > 0) encounter.damageTaken[spellInfo ? spellInfo->Id : 0] += uint64(damage);
     }
     void ModifyMeleeDamage(Unit* target, Unit* /*attacker*/, uint32& damage) override
     {
         std::lock_guard<std::recursive_mutex> lock(encounter.events);
-        if (encounter.state == "observe" && damage && encounter.Slot(target) >= 0)
-            encounter.damageTaken[0] += damage;
+        if (encounter.state != "observe" || encounter.Slot(target) < 0) return;
+        encounter.pendingSpell[target->GetGUID()] = 0;
+        if (damage) encounter.damageTaken[0] += damage;
+    }
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* /*attacker*/, uint32& /*damage*/,
+                                       SpellInfo const* spellInfo) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(encounter.events);
+        if (encounter.state == "observe" && encounter.Slot(target) >= 0)
+            encounter.pendingSpell[target->GetGUID()] = spellInfo ? spellInfo->Id : 0;
     }
     void OnUnitDeath(Unit* unit, Unit* killer) override
     {
         std::lock_guard<std::recursive_mutex> lock(encounter.events);
-        if (encounter.state == "observe" && encounter.Slot(unit) >= 0)
-            encounter.killers.emplace_back(encounter.pullMs, killer && killer->IsCreature() ? killer->GetEntry() : 0);
+        if (encounter.state == "observe") encounter.Died(unit, killer);
+    }
+};
+
+class EncounterAddCasts : public AllSpellScript
+{
+public:
+    EncounterAddCasts() : AllSpellScript("DojoEncounterAddCasts",
+        {ALLSPELLHOOK_ON_PREPARE, ALLSPELLHOOK_ON_CAST, ALLSPELLHOOK_ON_CAST_CANCEL}) { }
+    void OnSpellPrepare(Spell* /*spell*/, Unit* caster, SpellInfo const* spellInfo) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(encounter.events);
+        if (AddCasts* c = encounter.AddCast(caster, spellInfo)) ++c->prepared;
+    }
+    void OnSpellCast(Spell* /*spell*/, Unit* caster, SpellInfo const* spellInfo, bool /*skipCheck*/) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(encounter.events);
+        if (AddCasts* c = encounter.AddCast(caster, spellInfo)) ++c->cast;
+    }
+    void OnSpellCastCancel(Spell* /*spell*/, Unit* caster, SpellInfo const* spellInfo, bool /*bySelf*/) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(encounter.events);
+        if (AddCasts* c = encounter.AddCast(caster, spellInfo)) ++c->cancelled;
     }
 };
 
@@ -1310,15 +1729,7 @@ public:
     void OnPlayerSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
     {
         std::lock_guard<std::recursive_mutex> lock(encounter.events);
-        if (encounter.state != "observe" || !spell) return;
-        int const slot = encounter.Slot(player);
-        if (slot < 0) return;
-        SpellInfo const* info = spell->GetSpellInfo();
-        if (IsManaCooldown(info->Id))
-            ++encounter.members[slot].manaCooldowns;
-        else if (spell->m_CastItem && info->Effects[0].Effect == SPELL_EFFECT_ENERGIZE &&
-                 info->Effects[0].MiscValue == POWER_MANA)
-            ++encounter.members[slot].potions;
+        if (encounter.state == "observe" && spell) encounter.Cast(player, spell);
     }
 };
 
@@ -1359,15 +1770,15 @@ public:
     static bool EncounterStart(ChatHandler* handler, Tail args)
     {
         std::istringstream in{std::string(args)};
-        std::string token, difficulty, mode, extra;
+        std::string token, difficulty, mode, buffs, extra;
         uint32 gear = EncounterItemLevel;
-        in >> token >> difficulty >> mode;
-        if (!(in >> gear)) gear = EncounterItemLevel;
-        in >> extra;
-        if (!extra.empty() || mode.empty())
-            handler->SendSysMessage("usage: dojo raid encounter start <token> 10n|10h before|after|noportals [ilvl]");
+        in >> token >> difficulty >> mode >> gear >> buffs >> extra;
+        if (!extra.empty() || mode.empty() || (!buffs.empty() && buffs != "buffed"))
+            handler->SendSysMessage("usage: dojo raid encounter start <token> 10n|10h before|after|noportals|adds "
+                                    "<ilvl> [buffed]");
         else
-            handler->SendSysMessage("dojo encounter: " + encounter.Start(token, difficulty, mode, gear, run.active));
+            handler->SendSysMessage("dojo encounter: " +
+                                    encounter.Start(token, difficulty, mode, gear, buffs == "buffed", run.active));
         return true;
     }
     static bool EncounterStatus(ChatHandler* handler, Tail args)
@@ -1434,6 +1845,7 @@ void AddSC_dojo_raid()
     new EncounterEvents();
     new EncounterCasts();
     new EncounterHurt();
+    new EncounterAddCasts();
     new EncounterTicks();
     AddSC_dojo_offline();
     AddSC_dojo_human();
