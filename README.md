@@ -465,8 +465,9 @@ output in `patches/`:
   away from the raid, the second holds the archmages, skeletons and blistering
   zombies, and both share the rot worms (a tank takes another stray worm only
   while it holds no more than the other; a lone bot tank, or one whose partner
-  is a human, dead or far away, holds them all); a ranked tank's own target
-  leaves out the adds it does not hold. One skull marks the kill order there: a
+  is a human, dead or far away, holds them all, and leaves an add that is on a
+  human or out-of-reach tank with him); a ranked tank's own target leaves out
+  the adds it does not hold. One skull marks the kill order there: a
   skeleton (Lay Waste reaches the whole room), a zombie, the worms, the
   suppressers, the archmages and a lone abomination last (with two up, one of
   them right after the worms), with worms and suppressers marked where the most
