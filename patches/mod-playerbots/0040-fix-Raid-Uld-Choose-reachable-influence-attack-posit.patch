@@ -1,0 +1,113 @@
+From 0363026c64f80f51a30302a2770d14ef4a5f7c23 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 21:07:39 -0500
+Subject: [PATCH 40/63] fix(Raid/Uld): Choose reachable influence attack
+ positions
+
+Choose the nearest gaze-safe attack point with a complete navmesh route.
+
+The portal team otherwise retries one unreachable point until the exit deadline. Route checks run only when executing movement, with at most 24 melee or 48 ranged candidates; triggers retain their existing geometric selection.
+---
+ src/Ai/Raid/Uld/YoggBrainActions.cpp | 48 +++++++++++++++++++++++-----
+ 1 file changed, 40 insertions(+), 8 deletions(-)
+
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index 75c90b5b..e4321ecc 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -178,7 +178,7 @@ std::vector<float> GazesAt(Player* bot, std::vector<GazeSource> const& sources,
+ }
+ std::vector<float> Gazes(Player* bot, bool below) { return GazesAt(bot, Sources(bot, below), bot->GetPosition()); }
+ 
+-bool AttackPoint(Player* bot, Unit* target, unsigned illusion, Position& best)
++bool AttackPoint(Player* bot, Unit* target, unsigned illusion, Position& best, bool requirePath = false)
+ {
+     if (illusion < 1 || illusion > 3) return false;
+     auto const sources = Sources(bot, true);
+@@ -186,9 +186,12 @@ bool AttackPoint(Player* bot, Unit* target, unsigned illusion, Position& best)
+         illusion == 2 ? ULDUAR_YOGG_SARON_ICECROWN_CITADEL_MIDDLE : ULDUAR_YOGG_SARON_STORMWIND_KEEPER_MIDDLE;
+     float distance = 100000.0f;
+     bool found = false;
+-    for (float radius : {3.0f, PlayerbotAI::IsMelee(bot) ? 3.0f : 20.0f})
++    std::vector<std::pair<float, Position>> candidates;
++    unsigned const rings = PlayerbotAI::IsMelee(bot) ? 1 : 2;
++    for (unsigned ring = 0; ring < rings; ++ring)
+         for (unsigned i = 0; i < 24; ++i)
+         {
++            float const radius = ring ? 20.0f : 3.0f;
+             float const angle = i * 2 * YoggBrain::Pi / 24;
+             Position point(target->GetPositionX() + radius * std::cos(angle),
+                 target->GetPositionY() + radius * std::sin(angle), bot->GetPositionZ());
+@@ -198,10 +201,31 @@ bool AttackPoint(Player* bot, Unit* target, unsigned illusion, Position& best)
+                 std::abs(point.GetPositionZ() - bot->GetPositionZ()) > 8.0f ||
+                 !target->IsWithinLOS(point.GetPositionX(), point.GetPositionY(), point.GetPositionZ()) ||
+                 !YoggBrain::CombatFacing(point.GetAngle(target), GazesAt(bot, sources, point))) continue;
++            if (requirePath)
++            {
++                candidates.emplace_back(travel, point);
++                continue;
++            }
+             best = point;
+             distance = travel;
+             found = true;
+         }
++    if (requirePath)
++    {
++        std::sort(candidates.begin(), candidates.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
++        for (auto const& [travel, point] : candidates)
++        {
++            PathGenerator path(bot);
++            path.SetPathLengthLimit(250.0f);
++            if (path.CalculatePath(point.GetPositionX(), point.GetPositionY(), point.GetPositionZ()) &&
++                path.GetPathType() == PATHFIND_NORMAL)
++            {
++                best = point;
++                return true;
++            }
++        }
++        return false;
++    }
+     return found;
+ }
+ 
+@@ -484,18 +508,22 @@ bool YoggBrainAction::Execute(Event /*event*/)
+     Plan const plan = Decide(botAI);
+     if (plan.mode == Mode::None) return false;
+     Note(static_cast<unsigned>(plan.mode), plan.target);
++    auto const walkToAttack = [&](Unit* target)
++    {
++        Creature* brain = bot->GetInstanceScript()->GetCreature(761);
++        unsigned const illusion = brain && brain->IsAIEnabled ? brain->AI()->GetData(2) : 0;
++        Position point;
++        // Check routes only when executing movement, not while evaluating the
++        // trigger. A clear firing angle alone can select an unreachable point.
++        return AttackPoint(bot, target, illusion, point, true) && Walk(point);
++    };
+     if (plan.mode == Mode::Fight)
+     {
+         if (!bot->IsWithinLOSInMap(plan.target) || bot->GetDistance(plan.target) > (PlayerbotAI::IsMelee(bot) ? 3.0f : 25.0f))
+         {
+             if (plan.target->GetEntry() == 33890)
+                 return Walk(ULDUAR_YOGG_SARON_BRAIN_ROOM_MIDDLE);
+-            Position point = plan.target->GetPosition();
+-            float const angle = plan.target->GetAngle(bot);
+-            point.m_positionX += 2.0f * std::cos(angle);
+-            point.m_positionY += 2.0f * std::sin(angle);
+-            bot->UpdateAllowedPositionZ(point.m_positionX, point.m_positionY, point.m_positionZ);
+-            return Walk(point);
++            return walkToAttack(plan.target);
+         }
+         bot->SetFacingToObject(plan.target);
+         return Attack(plan.target);
+@@ -524,7 +552,11 @@ bool YoggBrainAction::Execute(Event /*event*/)
+         return true;
+     }
+     if (plan.mode == Mode::Route)
++    {
++        if (plan.target && plan.target->GetEntry() != 33890)
++            return walkToAttack(plan.target);
+         return Walk(plan.destination);
++    }
+     bot->StopMoving();
+     bot->SetFacingTo(plan.facing);
+     return true;

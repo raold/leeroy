@@ -1,0 +1,25 @@
+From c2610c5a0128aca26e276cf720174403de577e11 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 20:31:38 -0500
+Subject: [PATCH 39/63] fix(AI): Keep mechanic escapes active between combat
+ targets
+
+---
+ src/Ai/Base/Strategy/NonCombatStrategy.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/Ai/Base/Strategy/NonCombatStrategy.cpp b/src/Ai/Base/Strategy/NonCombatStrategy.cpp
+index ca21d8c8..a501c4e0 100644
+--- a/src/Ai/Base/Strategy/NonCombatStrategy.cpp
++++ b/src/Ai/Base/Strategy/NonCombatStrategy.cpp
+@@ -8,6 +8,10 @@
+ 
+ void NonCombatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+ {
++    // DropTargetAction enters this engine while a boss submerges or between
++    // encounter waves. Its ground hazards remain active; keep the same guarded
++    // escape available without manufacturing a combat target or engine switch.
++    triggers.push_back(new TriggerNode("mechanic move", { NextAction("mechanic move", ACTION_RAID + 9) }));
+     triggers.push_back(new TriggerNode("random", { NextAction("clean quest log", 1.0f) }));
+     triggers.push_back(new TriggerNode("timer", { NextAction("check mount state", 1.0f) }));
+ }

@@ -1,0 +1,54 @@
+From 803ac1afb945054d91136ab1ca34ee122a94e576 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 17:25:22 -0500
+Subject: [PATCH 35/63] fix(Ulduar): Try safe alternate illusion targets
+
+---
+ src/Ai/Raid/Uld/YoggBrainActions.cpp | 23 ++++++++++++++++++++---
+ 1 file changed, 20 insertions(+), 3 deletions(-)
+
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index 85bf6d61..fc32c963 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -195,7 +195,6 @@ bool AttackPoint(Player* bot, Unit* target, unsigned illusion, Position& best)
+             float const travel = bot->GetExactDist2d(point);
+             if (travel >= distance || point.GetExactDist2d(center) > 75.0f ||
+                 std::abs(point.GetPositionZ() - bot->GetPositionZ()) > 8.0f ||
+-                !bot->IsWithinLOS(point.GetPositionX(), point.GetPositionY(), point.GetPositionZ()) ||
+                 !target->IsWithinLOS(point.GetPositionX(), point.GetPositionY(), point.GetPositionZ()) ||
+                 !YoggBrain::CombatFacing(point.GetAngle(target), GazesAt(bot, sources, point))) continue;
+             best = point;
+@@ -288,12 +287,30 @@ Plan Decide(PlayerbotAI* ai)
+         std::list<Creature*> adds;
+         for (uint32 entry : {33943u, 33716u, 33717u, 33718u, 33719u, 33720u, 33567u, 33433u})
+             bot->GetCreatureListWithEntryInGrid(adds, entry, 180.0f);
+-        float best = 100000.0f;
++        std::vector<std::pair<float, Creature*>> candidates;
+         for (Creature* add : adds)
+         {
+             if (!add->IsAlive() || add->GetPositionZ() >= 300.0f || !bot->IsValidAttackTarget(add)) continue;
+             float const score = 50.0f * YoggBrain::Exposure(bot->GetAngle(add), gazes) + bot->GetExactDist2d(add);
+-            if (score < best) { best = score; plan.target = add; }
++            candidates.emplace_back(score, add);
++        }
++        std::sort(candidates.begin(), candidates.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
++        for (auto const& candidate : candidates)
++        {
++            Creature* add = candidate.second;
++            if (YoggBrain::CombatFacing(bot->GetAngle(add), gazes))
++            {
++                plan.target = add;
++                break;
++            }
++            // A nearer add without a safe attack position must not stall the room.
++            // Walk validates the full navmesh route, including corners out of sight.
++            if (AttackPoint(bot, add, illusion, plan.destination))
++            {
++                plan.target = add;
++                plan.mode = Mode::Route;
++                return plan;
++            }
+         }
+     }
+     if (!plan.target)

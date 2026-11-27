@@ -1,0 +1,101 @@
+From 2259db4be899e98414bbd2d9f446b3be0364e026 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 15:53:45 -0500
+Subject: [PATCH 33/63] fix(Raid/EoE): Recover injured damage drakes without
+ spending shield reserve
+
+---
+ src/Ai/Raid/RaidVehicleActions.cpp |  3 +++
+ src/Ai/Raid/RaidVehiclePolicy.h    |  8 +++++++-
+ tests/raid_vehicles_test.cpp       | 31 ++++++++++++++++++++++++++++++
+ 3 files changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/src/Ai/Raid/RaidVehicleActions.cpp b/src/Ai/Raid/RaidVehicleActions.cpp
+index 8d674f0c..684ed39f 100644
+--- a/src/Ai/Raid/RaidVehicleActions.cpp
++++ b/src/Ai/Raid/RaidVehicleActions.cpp
+@@ -163,7 +163,10 @@ bool CastDrake(PlayerbotAI* ai)
+     if (Aura* dot = boss->GetAura(56092, drake->GetGUID()))
+         facts.dotMs = dot->GetDuration();
+     if (Aura* hot = drake->GetAura(57090, drake->GetGUID()))
++    {
+         facts.hotMs = hot->GetDuration();
++        facts.hotStacks = hot->GetStackAmount();
++    }
+     DrakeSpell const pick = NextDrakeSpell(facts);
+     if (pick == DrakeSpell::None)
+         return false;
+diff --git a/src/Ai/Raid/RaidVehiclePolicy.h b/src/Ai/Raid/RaidVehiclePolicy.h
+index 2c4db056..0ab19fa7 100644
+--- a/src/Ai/Raid/RaidVehiclePolicy.h
++++ b/src/Ai/Raid/RaidVehiclePolicy.h
+@@ -54,10 +54,14 @@ struct DrakeFacts
+     unsigned health = 100;
+     int dotMs = 0;
+     int hotMs = 0;
++    unsigned hotStacks = 0;
+ };
+ 
+ inline DrakeSpell NextDrakeSpell(DrakeFacts const& f)
+ {
++    // Repeated Surges can consume the healer's finishers. A damaged damage
++    // drake builds its own native HoT while retaining energy for Flame Shield.
++    bool const recover = !f.healer && f.health < 60 && (f.hotStacks < 5 || f.hotMs <= 3000);
+     // The boss retains warning GUIDs until its next selection. Reserve points
+     // and energy for that target, but shield only the actual damage aura: a
+     // short shield on the warning can expire before the damage even starts.
+@@ -66,9 +70,11 @@ inline DrakeSpell NextDrakeSpell(DrakeFacts const& f)
+         if (f.points && f.energy >= 25 && f.surgeActive)
+             return DrakeSpell::Shield;
+         if (f.points < 5 && f.energy >= 35)
+-            return f.healer ? DrakeSpell::Revivify : DrakeSpell::Spike;
++            return f.healer || recover ? DrakeSpell::Revivify : DrakeSpell::Spike;
+         return DrakeSpell::None;
+     }
++    if (recover && f.energy >= 35)
++        return DrakeSpell::Revivify;
+     if (f.healer)
+     {
+         if (f.selfPoints >= 5 && (f.energy >= 75 || (f.health < 60 && f.energy >= 50)))
+diff --git a/tests/raid_vehicles_test.cpp b/tests/raid_vehicles_test.cpp
+index 0887fee2..7051dc73 100644
+--- a/tests/raid_vehicles_test.cpp
++++ b/tests/raid_vehicles_test.cpp
+@@ -92,6 +92,37 @@ int main()
+     f.targetPoints = 5;
+     CHECK(NextDrakeSpell(f) == DrakeSpell::Revivify); // points on boss cannot fund targeted heal
+ 
++    DrakeFacts recovery;
++    recovery.health = 30;
++    recovery.energy = 35;
++    CHECK(NextDrakeSpell(recovery) == DrakeSpell::Revivify);
++    for (unsigned stacks = 0; stacks < 5; ++stacks)
++    {
++        recovery.hotStacks = stacks;
++        recovery.hotMs = 6000;
++        CHECK(NextDrakeSpell(recovery) == DrakeSpell::Revivify);
++    }
++    recovery.hotStacks = 5;
++    CHECK(NextDrakeSpell(recovery) != DrakeSpell::Revivify);  // Healthy HoT keeps ticking while damage resumes.
++    recovery.hotMs = 3000;
++    CHECK(NextDrakeSpell(recovery) == DrakeSpell::Revivify);
++    recovery.health = 60;
++    CHECK(NextDrakeSpell(recovery) == DrakeSpell::Spike);
++    recovery.health = 30;
++    recovery.surge = recovery.surgeActive = recovery.shieldReady = true;
++    recovery.points = 2;
++    CHECK(NextDrakeSpell(recovery) == DrakeSpell::Shield);  // Active Surge still wins over healing.
++    recovery.points = 0;
++    CHECK(NextDrakeSpell(recovery) == DrakeSpell::Revivify);  // Self points can fund the same native shield.
++    for (bool warning : {false, true})
++        for (unsigned energy = 0; energy < 35; ++energy)
++        {
++            recovery.surge = warning;
++            recovery.surgeActive = false;
++            recovery.energy = energy;
++            CHECK(NextDrakeSpell(recovery) != DrakeSpell::Revivify);  // Never spend the 25-energy shield reserve.
++        }
++
+     // Across every affordable energy/point boundary, never pick a spell whose
+     // base cost or combo-point requirement cannot be paid.
+     for (unsigned energy = 0; energy <= 100; ++energy)

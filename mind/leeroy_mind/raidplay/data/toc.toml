@@ -127,6 +127,40 @@ explain = "Dreadscale's bile burns, but it also removes Paralytic Toxin from pla
 check = "toc.beasts.check_toxin"
 
 [[boss.mechanic]]
+id = "toc.beasts.acid_spew"
+name = "Acid Spew"
+kind = "move_out_cone"
+phase = "worms"
+roles = ["healer", "melee", "ranged"]
+spells = [66818]
+hits = { "10" = [66819], "25" = [67609], "10h" = [67610], "25h" = [67611] }
+handled_by = "none"
+range = 55
+angle = 60
+explain = "Acidmaw's spew repeatedly hits his front; everyone except the tank moves to his side or rear."
+check = "toc.beasts.check_spew"
+every = 22
+# The native 66818 aura lasts 2.5 seconds and pulses every 250 ms. Respond to
+# its start, not the instant damage pulses; native retains the aura's duration.
+
+[[boss.mechanic]]
+id = "toc.beasts.molten_spew"
+name = "Molten Spew"
+kind = "move_out_cone"
+phase = "worms"
+roles = ["healer", "melee", "ranged"]
+spells = [66821]
+hits = { "10" = [66820], "25" = [67635], "10h" = [67636], "25h" = [67637] }
+handled_by = "none"
+range = 55
+angle = 60
+explain = "Dreadscale's spew repeatedly hits his front; everyone except the tank moves to his side or rear."
+check = "toc.beasts.check_spew"
+every = 22
+# Same 2.5-second aura and 250 ms cadence as Acid Spew. Both damage spells use
+# a 55-yard radius and a 60-degree spell_cone; do not move the boss's tank.
+
+[[boss.mechanic]]
 id = "toc.beasts.worms_together"
 name = "Acidmaw and Dreadscale"
 kind = "kill_order"
@@ -195,6 +229,14 @@ kind = "debuff"
 since = 1
 names = ["Paralytic Toxin", "Burning Bile"]
 max_count = 1
+
+[[boss.check]]
+id = "toc.beasts.check_spew"
+kind = "avoid"
+since = 2
+names = ["Acid Spew", "Molten Spew"]
+roles = ["healer", "melee", "ranged"]
+max_hits = 1
 
 [[boss]]
 index = 1

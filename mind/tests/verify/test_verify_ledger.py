@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -214,19 +215,80 @@ def test_every_db_signature_runs_on_the_current_schema(install):
                 assert e["count"] == 0
 
 
+def patched_defaults(patches, key):
+    """Track introduced getters through ordered additions/removals, not diff context."""
+    pattern = re.compile(r'GetOption<bool>\("' + re.escape(key) + r'",\s*(true|false)\)')
+    live = Counter()
+    def move_path(previous, current):
+        if previous and previous != current:
+            for (filename, value), count in list(live.items()):
+                if filename == previous:
+                    live[(current, value)] += count
+                    del live[(filename, value)]
+    for patch in patches:
+        path, previous, hunk = None, None, False
+        for line in patch.splitlines():
+            if line.startswith("diff --git "):
+                path, previous, hunk = None, None, False
+            elif line.startswith("rename from "):
+                previous = line[12:]
+            elif line.startswith("rename to "):
+                path = line[10:]
+                move_path(previous, path)
+            elif line.startswith("--- a/"):
+                previous = line[6:]
+            elif line.startswith("+++ b/"):
+                path = line[6:]
+                move_path(previous, path)
+            elif line == "+++ /dev/null":
+                path = previous
+            elif line.startswith("@@ "):
+                hunk = True
+            elif hunk and path and line[:1] in {"+", "-"}:
+                for value in pattern.findall(line[1:]):
+                    identity = (path, value)
+                    live[identity] += 1 if line[0] == "+" else -1
+                    assert live[identity] >= 0, (key, path, "getter removed before introduction")
+    return {value for (_, value), count in live.items() if count}
+
+
+def test_playerbots_defaults_follow_replacements_and_keep_conflicting_getters():
+    key = "Playerbots.Example"
+    getter = lambda value: f'    enabled = sConfigMgr->GetOption<bool>("{key}", {value});'
+    def patch(path, *lines):
+        return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n" + "\n".join(lines)
+    initial = patch("src/Config.cpp", "+" + getter("false"))
+    enabled = patch("src/Config.cpp", "-" + getter("false"), "+" + getter("true"))
+    context = patch("src/Other.cpp", " " + getter("false"), "+// unrelated change")
+    assert patched_defaults([initial, enabled, context], key) == {"true"}
+    second = patch("src/Other.cpp", "+" + getter("false"))
+    assert patched_defaults([initial, enabled, second], key) == {"false", "true"}
+    disabled = patch("src/Config.cpp", "-" + getter("true"), "+" + getter("false"))
+    assert patched_defaults([initial, enabled, disabled], key) == {"false"}
+    renamed = "diff --git a/src/Config.cpp b/src/NewConfig.cpp\nrename from src/Config.cpp\nrename to src/NewConfig.cpp"
+    replacement = patch("src/NewConfig.cpp", "-" + getter("true"), "+" + getter("false"))
+    assert patched_defaults([initial, enabled, renamed, replacement], key) == {"false"}
+    deleted = patch("src/Config.cpp", "-" + getter("true")).replace("+++ b/src/Config.cpp", "+++ /dev/null")
+    assert patched_defaults([initial, enabled, deleted], key) == set()
+    with pytest.raises(AssertionError, match="removed before introduction"):
+        patched_defaults([enabled], key)
+
+
 def test_native_and_playerbots_defaults_are_the_compiled_ones():
     sources = {"native": sorted((REPO / "modules" / "mod-leeroy" / "src").rglob("*.cpp")),
                "playerbots": sorted((REPO / "patches" / "mod-playerbots").glob("*.patch"))}
     if not all(sources.values()):
         pytest.skip("not a full checkout: modules/ and patches/ are absent")
     text = {k: "\n".join(p.read_text("utf-8", errors="replace") for p in v) for k, v in sources.items()}
+    patches = [p.read_text("utf-8") for p in sources["playerbots"]]
     checked = 0
     for f in L.load_features():
         for s in f.switches:
             if s.source == "mind":
                 continue
-            found = set(re.findall(r'GetOption<bool>\("' + re.escape(s.key) + r'",\s*(true|false)\)',
-                                   text[s.source]))
+            found = (patched_defaults(patches, s.key) if s.source == "playerbots" else
+                     set(re.findall(r'GetOption<bool>\("' + re.escape(s.key) + r'",\s*(true|false)\)',
+                                    text[s.source])))
             assert found == {"true" if s.default else "false"}, (f.id, s.key, found)
             checked += 1
     assert checked >= 10

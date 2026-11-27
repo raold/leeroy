@@ -1,0 +1,209 @@
+From 4b0f0cb529dfedf19924eea96f60892aa7ddbabf Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 05:30:34 -0500
+Subject: [PATCH 53/63] fix(Raid/Yogg): Minimize the longest portal approach
+
+---
+ src/Ai/Raid/Uld/YoggBrainActions.cpp | 24 +++++++++--
+ src/Ai/Raid/Uld/YoggBrainPolicy.h    | 58 ++++++++++++++++++++++++++
+ tests/yogg_brain_test.cpp            | 62 ++++++++++++++++++++++++++++
+ 3 files changed, 140 insertions(+), 4 deletions(-)
+
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index dc52232f..d168434b 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -157,6 +157,7 @@ Creature* AssignedPortal(PlayerbotAI* ai, Creature* brain)
+     {
+         if (waves.size() >= 128) return nullptr;
+         std::vector<YoggBrain::Member> members;
++        std::map<uint64, Player*> present;
+         Creature* yogg = bot->GetInstanceScript()->GetCreature(12);
+         for (GroupReference* ref = bot->GetGroup()->GetFirstMember(); ref; ref = ref->next())
+         {
+@@ -176,15 +177,30 @@ Creature* AssignedPortal(PlayerbotAI* ai, Creature* brain)
+                                  !memberAI->HasStrategy("passive", BOT_STATE_COMBAT)));
+             members.push_back({member->GetGUID().GetRawValue(), controlled, PlayerbotAI::IsTank(member),
+                 PlayerbotAI::IsHeal(member), PlayerbotAI::IsMelee(member), available, Sanity(member)});
++            present.emplace(member->GetGUID().GetRawValue(), member);
+         }
+         auto const team = YoggBrain::Team(members, bot->GetMap()->Is25ManRaid());
+         nearby.sort([](Creature* a, Creature* b) { return a->GetGUID() < b->GetGUID(); });
++        std::vector<Creature*> portals(nearby.begin(), nearby.end());
++        if (portals.size() > 10)
++            portals.resize(10);
++        std::vector<std::vector<float>> distances;
++        for (unsigned member = 0; member < std::min(team.size(), portals.size()); ++member)
++        {
++            std::vector<float> row;
++            for (Creature* portal : portals)
++                row.push_back(present.at(team[member])->GetExactDist2d(portal));
++            distances.push_back(std::move(row));
++        }
++        auto const assignment = YoggBrain::AssignPortals(distances);
+         Wave wave{now + std::chrono::seconds(60), {}, {}};
+-        auto portal = nearby.begin();
+-        for (uint64 guid : team)
++        for (unsigned member = 0; member < assignment.size(); ++member)
+         {
+-            if (portal == nearby.end()) break;
+-            wave.portals.emplace(guid, (*portal++)->GetGUID());
++            unsigned const portal = assignment[member];
++            wave.portals.emplace(team[member], portals[portal]->GetGUID());
++            LOG_INFO("playerbots", "yogg_brain assignment instance={} bot={} portal={} distance={}", key.first,
++                     present.at(team[member])->GetGUID().GetCounter(), portals[portal]->GetGUID().GetCounter(),
++                     distances[member][portal]);
+         }
+         it = waves.emplace(key, std::move(wave)).first;
+         LOG_INFO("playerbots", "yogg_brain wave instance={} team={} portals={}", key.first, it->second.portals.size(), nearby.size());
+diff --git a/src/Ai/Raid/Uld/YoggBrainPolicy.h b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+index c98b2a17..d6daaa13 100644
+--- a/src/Ai/Raid/Uld/YoggBrainPolicy.h
++++ b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+@@ -4,8 +4,10 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <bit>
+ #include <cmath>
+ #include <cstdint>
++#include <limits>
+ #include <utility>
+ #include <vector>
+ 
+@@ -74,6 +76,62 @@ inline std::vector<std::uint64_t> Team(std::vector<Member> members, bool large)
+     return result;
+ }
+ 
++// One assignment per wave, at most ten portals. Minimize the longest approach
++// so GUID order cannot spend one member's entire admission window walking.
++inline std::vector<unsigned> AssignPortals(std::vector<std::vector<float>> const& distances)
++{
++    unsigned const members = distances.size();
++    if (!members || members > 10)
++        return {};
++    unsigned const portals = distances.front().size();
++    if (portals < members || portals > 10)
++        return {};
++    for (auto const& row : distances)
++    {
++        if (row.size() != portals)
++            return {};
++        for (float distance : row)
++            if (!std::isfinite(distance) || distance < 0.0f)
++                return {};
++    }
++    std::array<float, 1024> longest;
++    longest.fill(std::numeric_limits<float>::infinity());
++    std::array<unsigned, 1024> selected{};
++    longest[0] = 0.0f;
++    unsigned best = 0;
++    for (unsigned mask = 0; mask < (1u << portals); ++mask)
++    {
++        unsigned const member = std::popcount(mask);
++        if (member == members)
++        {
++            if (!best || longest[mask] < longest[best])
++                best = mask;
++            continue;
++        }
++        if (member > members)
++            continue;
++        for (unsigned portal = 0; portal < portals; ++portal)
++        {
++            if (mask & (1u << portal))
++                continue;
++            unsigned const next = mask | (1u << portal);
++            float const distance = std::max(longest[mask], distances[member][portal]);
++            if (distance < longest[next])
++            {
++                longest[next] = distance;
++                selected[next] = portal;
++            }
++        }
++    }
++    std::vector<unsigned> result(members);
++    for (unsigned member = members; member > 0; --member)
++    {
++        result[member - 1] = selected[best];
++        best &= ~(1u << selected[best]);
++    }
++    return result;
++}
++
+ inline bool Influence(std::uint32_t entry)
+ {
+     return entry == 33943 || (entry >= 33716 && entry <= 33720) || entry == 33567 || entry == 33433;
+diff --git a/tests/yogg_brain_test.cpp b/tests/yogg_brain_test.cpp
+index ca9a6079..eaeb87f1 100644
+--- a/tests/yogg_brain_test.cpp
++++ b/tests/yogg_brain_test.cpp
+@@ -25,6 +25,68 @@ int main()
+     CHECK(!InBrainArea(0, 0, 240));
+     CHECK(!InBrainArea(1980, 500, 240));
+     CHECK(Team({}, false).empty());
++    CHECK(AssignPortals({}).empty());
++    CHECK(AssignPortals({{}}).empty());
++    CHECK(AssignPortals({{1.0f}, {2.0f}}).empty());
++    CHECK(AssignPortals({{1.0f, 2.0f}, {3.0f}}).empty());
++    CHECK(AssignPortals({{-1.0f}}).empty());
++    CHECK(AssignPortals({{std::numeric_limits<float>::infinity()}}).empty());
++    CHECK(AssignPortals({{std::numeric_limits<float>::quiet_NaN()}}).empty());
++    CHECK(AssignPortals(std::vector<std::vector<float>>(11, std::vector<float>(11, 1.0f))).empty());
++    // Actual Dragon-wave positions: GUID assignment sent the delayed warrior
++    // 74 yards; a one-to-one assignment keeps all four approaches below 39.
++    std::vector<std::pair<float, float>> locations{{1980.3306f, -43.7764f}, {1958.8120f, -60.7764f},
++                                                 {1964.3016f, -76.7460f}, {2012.3925f, -36.5226f}};
++    std::vector<std::pair<float, float>> portals{{1964.60f, -42.71f}, {1986.94f, -46.21f},
++                                               {1989.50f, -6.70f}, {1965.52f, -8.09f}};
++    std::vector<std::vector<float>> distances;
++    for (auto const& member : locations)
++    {
++        std::vector<float> row;
++        for (auto const& portal : portals)
++            row.push_back(std::hypot(member.first - portal.first, member.second - portal.second));
++        distances.push_back(std::move(row));
++    }
++    auto assignment = AssignPortals(distances);
++    CHECK(assignment.size() == 4);
++    for (unsigned i = 0; i < assignment.size(); ++i)
++        CHECK(distances[i][assignment[i]] < 39.0f);
++    // Compare with every injective assignment, including spare portals and
++    // ties, rather than copying the dynamic program into the test oracle.
++    for (unsigned seed = 0; seed < 32; ++seed)
++        for (unsigned count = 1; count <= 4; ++count)
++        {
++            distances.assign(count, std::vector<float>(4));
++            for (unsigned i = 0; i < count; ++i)
++                for (unsigned j = 0; j < 4; ++j)
++                    distances[i][j] = float((seed * 13 + i * 7 + j * 11 + i * j * 17) % 41);
++            assignment = AssignPortals(distances);
++            CHECK(assignment.size() == count);
++            CHECK(assignment == AssignPortals(distances));
++            float worst = 0.0f;
++            unsigned used = 0;
++            for (unsigned i = 0; i < assignment.size(); ++i)
++            {
++                CHECK(assignment[i] < 4 && !(used & (1u << assignment[i])));
++                used |= 1u << assignment[i];
++                worst = std::max(worst, distances[i][assignment[i]]);
++            }
++            std::vector<unsigned> permutation{0, 1, 2, 3};
++            do
++            {
++                float alternative = 0.0f;
++                for (unsigned i = 0; i < count; ++i)
++                    alternative = std::max(alternative, distances[i][permutation[i]]);
++                CHECK(worst <= alternative);
++            } while (std::next_permutation(permutation.begin(), permutation.end()));
++        }
++    distances.assign(10, std::vector<float>(10, 100.0f));
++    for (unsigned i = 0; i < 10; ++i)
++        distances[i][9 - i] = 1.0f;
++    assignment = AssignPortals(distances);
++    CHECK(assignment.size() == 10);
++    for (unsigned i = 0; i < assignment.size(); ++i)
++        CHECK(assignment[i] == 9 - i);
+     CHECK(CanReservePortal(false, 0));
+     CHECK(CanReservePortal(true, 33983));
+     CHECK(!CanReservePortal(true, 0));

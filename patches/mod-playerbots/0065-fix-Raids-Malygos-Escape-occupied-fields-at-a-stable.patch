@@ -1,0 +1,98 @@
+From e0343898a913b7a7f211662fb765d51cf9ed5de7 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 02:45:35 -0500
+Subject: [PATCH 65/65] fix(Raids/Malygos): Escape occupied fields at a stable
+ altitude
+
+Keep an already valid flight altitude. If the casting ring blocks every monotonic route, use the shortest exit from an occupied field while rejecting every leg through a different field. Cover the captured height offset and preserve the existing route guards.
+---
+ src/Ai/Raid/RaidVehiclePolicy.h | 23 +++++++++++++++++++++--
+ tests/raid_vehicles_test.cpp    | 26 ++++++++++++++++++++++++++
+ 2 files changed, 47 insertions(+), 2 deletions(-)
+
+diff --git a/src/Ai/Raid/RaidVehiclePolicy.h b/src/Ai/Raid/RaidVehiclePolicy.h
+index 06cc5ca9..d58129e8 100644
+--- a/src/Ai/Raid/RaidVehiclePolicy.h
++++ b/src/Ai/Raid/RaidVehiclePolicy.h
+@@ -168,6 +168,20 @@ inline bool SafeDrakeLeg(Point const& from, Point const& to, Point const& boss,
+     }) && std::isfinite(from.z);
+ }
+ 
++// The casting ring can rule out every monotonic exit from an occupied field.
++// A fallback may cross that field, but must never enter a different one.
++inline bool DrakeEscapeLeg(Point const& from, Point const& to, Point const& boss, std::vector<Point> const& fields)
++{
++    if (!SafeDrakePoint(to, boss, fields) || !std::isfinite(from.z) ||
++        !DrakeLegClears({from.x, from.y, 0.f}, {to.x, to.y, 0.f}, {boss.x, boss.y, 0.f}, 38.f))
++        return false;
++    return std::all_of(fields.begin(), fields.end(), [&](Point const& field)
++    {
++        return std::hypot(from.x - field.x, from.y - field.y, from.z - field.z) < StaticFieldClearance ||
++            DrakeLegClears(from, to, field, StaticFieldClearance);
++    });
++}
++
+ inline bool DrakeDestination(Point const& from, Point const& boss, std::vector<Point> const& fields,
+                              Point const* anchor, Point& destination)
+ {
+@@ -183,16 +197,21 @@ inline bool DrakeDestination(Point const& from, Point const& boss, std::vector<P
+         return true;
+     }
+     bool found = false;
++    bool monotonic = false;
+     float shortest = 0.f;
++    float const altitude = std::isfinite(from.z) && std::abs(from.z - boss.z) <= 10.f ? from.z : boss.z;
+     for (float radius : {45.f, 50.f, 55.f})
+         for (unsigned i = 0; i < 24; ++i)
+         {
+             float const angle = static_cast<float>(i) * 6.2831853f / 24.f;
+-            Point const candidate{boss.x + radius * std::cos(angle), boss.y + radius * std::sin(angle), boss.z};
++            Point const candidate{boss.x + radius * std::cos(angle), boss.y + radius * std::sin(angle), altitude};
+             float const distance = std::hypot(candidate.x - from.x, candidate.y - from.y, candidate.z - from.z);
+-            if ((!found || distance < shortest) && SafeDrakeLeg(from, candidate, boss, fields))
++            bool const outward = SafeDrakeLeg(from, candidate, boss, fields);
++            if ((outward || (!monotonic && DrakeEscapeLeg(from, candidate, boss, fields))) &&
++                (!found || (outward && !monotonic) || distance < shortest))
+             {
+                 found = true;
++                monotonic = outward;
+                 shortest = distance;
+                 destination = candidate;
+             }
+diff --git a/tests/raid_vehicles_test.cpp b/tests/raid_vehicles_test.cpp
+index cc6c5e66..92561ed0 100644
+--- a/tests/raid_vehicles_test.cpp
++++ b/tests/raid_vehicles_test.cpp
+@@ -234,6 +234,32 @@ int main()
+     CHECK(!DrakeLegClears({1, 0, 0}, {-40, 0, 0}, {0, 0, 0}, 32.f));
+     CHECK(DrakeLegClears({1, 0, 0}, {40, 0, 0}, {0, 0, 0}, 32.f));
+     CHECK(!SafeDrakeLeg({45, 0, 10}, {45, 0, 10}, boss, {{45, 0, 10}}));
++    // A field on one drake may be a little below another. Recentring its
++    // altitude first turns every candidate toward the field and strands it.
++    Point const offsetBoss{754.403076f, 1301.469849f, 261.100006f};
++    Point const offsetField{754.403076f, 1256.469849f, 261.100006f};
++    for (float altitude : {-9.f, -1.113006f, 1.113006f, 9.f})
++    {
++        Point const start{754.403076f, 1256.467407f, offsetBoss.z + altitude};
++        bool const found = DrakeDestination(start, offsetBoss, {offsetField}, nullptr, selected);
++        CHECK(found);
++        if (found)
++        {
++            CHECK(selected.z == start.z);
++            CHECK(DrakeEscapeLeg(start, selected, offsetBoss, {offsetField}));
++            CHECK(std::hypot(selected.x - start.x, selected.y - start.y, selected.z - start.z) / 14.f < 3.f);
++            for (unsigned step = 1; step <= 100; ++step)
++            {
++                float const along = float(step) / 100.f;
++                Point const point{start.x + (selected.x - start.x) * along,
++                    start.y + (selected.y - start.y) * along, start.z + (selected.z - start.z) * along};
++                CHECK(std::hypot(point.x - offsetBoss.x, point.y - offsetBoss.y) >= 38.f);
++            }
++        }
++    }
++    CHECK(!DrakeEscapeLeg(north, east, capturedBoss, {oldField}));
++    CHECK(!DrakeEscapeLeg(east, north, capturedBoss, overlapping));
++    CHECK(!DrakeEscapeLeg({45, 0, 10}, {-45, 0, 10}, boss, {}));
+     // Independently sample every accepted segment across field angles. A leg
+     // may leave a hazard it starts in, but must never move deeper or enter one.
+     for (unsigned angle = 0; angle < 24; ++angle)

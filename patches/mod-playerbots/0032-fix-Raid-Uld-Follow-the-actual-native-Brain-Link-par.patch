@@ -1,0 +1,377 @@
+From 87f79749ddcdc6a4c1d79952c7a2bf7705a6f460 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 15:41:21 -0500
+Subject: [PATCH 32/63] fix(Raid/Uld): Follow the actual native Brain Link
+ partner
+
+---
+ src/Ai/Raid/Uld/UldActions.cpp       |  15 +++-
+ src/Ai/Raid/Uld/UldTriggers.cpp      |  10 ++-
+ src/Ai/Raid/Uld/YoggBrainActions.cpp | 125 ++++++++++++++++++++++++---
+ src/Ai/Raid/Uld/YoggBrainActions.h   |   6 ++
+ src/Script/Playerbots.cpp            |  41 +++++----
+ 5 files changed, 163 insertions(+), 34 deletions(-)
+
+diff --git a/src/Ai/Raid/Uld/UldActions.cpp b/src/Ai/Raid/Uld/UldActions.cpp
+index 20fea91b..db5c08a7 100644
+--- a/src/Ai/Raid/Uld/UldActions.cpp
++++ b/src/Ai/Raid/Uld/UldActions.cpp
+@@ -5,6 +5,9 @@
+  */
+ 
+ #include "UldActions.h"
++
++#include <cmath>
++
+ #include "AiObjectContext.h"
+ #include "CombatStrategy.h"
+ #include "DBCEnums.h"
+@@ -17,6 +20,8 @@
+ #include "PlayerbotAIConfig.h"
+ #include "Playerbots.h"
+ #include "Position.h"
++#include "RaidVehicleActions.h"
++#include "RaidVehiclePolicy.h"
+ #include "RtiTargetValue.h"
+ #include "RtiValue.h"
+ #include "ScriptedCreature.h"
+@@ -28,9 +33,7 @@
+ #include "UldScripts.h"
+ #include "Unit.h"
+ #include "Vehicle.h"
+-#include "RaidVehicleActions.h"
+-#include "RaidVehiclePolicy.h"
+-#include <cmath>
++#include "YoggBrainActions.h"
+ 
+ namespace
+ {
+@@ -2794,6 +2797,12 @@ bool YoggSaronMarkTargetAction::Execute(Event /*event*/)
+ 
+ bool YoggSaronBrainLinkAction::Execute(Event /*event*/)
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport)
++    {
++        Player* partner = YoggBrainLinkedPartner(bot);
++        return partner && MoveNear(partner, 10.0f, MovementPriority::MOVEMENT_FORCED);
++    }
++
+     Group* group = bot->GetGroup();
+     if (!group)
+         return false;
+diff --git a/src/Ai/Raid/Uld/UldTriggers.cpp b/src/Ai/Raid/Uld/UldTriggers.cpp
+index 9ca86885..c448e1e7 100644
+--- a/src/Ai/Raid/Uld/UldTriggers.cpp
++++ b/src/Ai/Raid/Uld/UldTriggers.cpp
+@@ -5,12 +5,14 @@
+  */
+ 
+ #include "UldTriggers.h"
++
+ #include "FollowMasterStrategy.h"
+ #include "GameObject.h"
+ #include "MovementActions.h"
+ #include "Object.h"
+ #include "PlayerbotAI.h"
+ #include "Playerbots.h"
++#include "RaidVehicleActions.h"
+ #include "RtiTargetValue.h"
+ #include "ScriptedCreature.h"
+ #include "SharedDefines.h"
+@@ -18,7 +20,7 @@
+ #include "UldBossHelper.h"
+ #include "UldScripts.h"
+ #include "Vehicle.h"
+-#include "RaidVehicleActions.h"
++#include "YoggBrainActions.h"
+ 
+ const std::vector<uint32> availableVehicles = {NPC_VEHICLE_CHOPPER, NPC_SALVAGED_DEMOLISHER,
+                                                NPC_SALVAGED_DEMOLISHER_TURRET, NPC_SALVAGED_SIEGE_ENGINE,
+@@ -1910,6 +1912,12 @@ bool YoggSaronMarkTargetTrigger::IsActive()
+ 
+ bool YoggSaronBrainLinkTrigger::IsActive()
+ {
++    if (sPlayerbotAIConfig.YoggBrainSupport)
++    {
++        Player* partner = IsPhase2() ? YoggBrainLinkedPartner(bot) : nullptr;
++        return partner && bot->GetDistance(partner) > 18.0f;
++    }
++
+     TooFarFromPlayerWithAuraTrigger tooFarFromPlayerWithAuraTrigger(botAI);
+     return IsPhase2() && bot->HasAura(SPELL_BRAIN_LINK) &&
+            tooFarFromPlayerWithAuraTrigger.TooFarFromPlayerWithAura(SPELL_BRAIN_LINK, 20.0f, false);
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index 361b6f0a..afdd9cb8 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -1,6 +1,11 @@
+ /* GPL-2.0-or-later; part of mod-playerbots. */
+ #include "YoggBrainActions.h"
+-#include "YoggBrainPolicy.h"
++
++#include <chrono>
++#include <map>
++#include <mutex>
++#include <unordered_map>
++
+ #include "CreatureAI.h"
+ #include "GameObject.h"
+ #include "GenericSpellActions.h"
+@@ -8,19 +13,37 @@
+ #include "InstanceScript.h"
+ #include "Log.h"
+ #include "MotionMaster.h"
++#include "ObjectAccessor.h"
+ #include "PathGenerator.h"
+ #include "Pet.h"
+ #include "Playerbots.h"
+ #include "Spell.h"
+ #include "Timer.h"
+ #include "UldBossHelper.h"
+-#include <chrono>
+-#include <map>
+-#include <mutex>
++#include "YoggBrainPolicy.h"
+ 
+ namespace
+ {
+ using Clock = std::chrono::steady_clock;
++struct BrainLink
++{
++    ObjectGuid owner, partner;
++    uint32 instance;
++    Clock::time_point expires;
++};
++std::mutex brainLinkMutex;
++std::unordered_map<uint64, BrainLink> brainLinks;
++
++void PruneBrainLinks(Clock::time_point now)
++{
++    for (auto it = brainLinks.begin(); it != brainLinks.end();)
++        if (it->second.expires <= now)
++            it = brainLinks.erase(it);
++        else
++            ++it;
++}
++
++bool BrainLinked(Player* player) { return player->HasAura(63802) || YoggBrainLinkedPartner(player); }
+ bool Enabled(PlayerbotAI* ai)
+ {
+     Player* bot = ai->GetBot();
+@@ -55,7 +78,7 @@ std::map<std::pair<uint32, uint64>, Wave> waves;
+ Creature* AssignedPortal(PlayerbotAI* ai, Creature* brain)
+ {
+     Player* bot = ai->GetBot();
+-    if (Below(bot) || Sanity(bot) < YoggBrain::EnterSanity || bot->HasAura(63802) || bot->HasAura(63830))
++    if (Below(bot) || Sanity(bot) < YoggBrain::EnterSanity || BrainLinked(bot) || bot->HasAura(63830))
+         return nullptr;
+     Spell* cast = brain ? brain->GetCurrentSpell(CURRENT_GENERIC_SPELL) : nullptr;
+     if (!cast || cast->GetSpellInfo()->Id != 64059 || cast->GetCastTimeRemaining() < 35000)
+@@ -84,10 +107,11 @@ Creature* AssignedPortal(PlayerbotAI* ai, Creature* brain)
+             PlayerbotAI* memberAI = GET_PLAYERBOT_AI(member);
+             bool const controlled = memberAI && !IsRealPlayer(member) && !IsSelfBot(member);
+             bool const available = yogg && member->IsWithinDistInMap(yogg, 150.0f) && member->GetPositionZ() > 300.0f &&
+-                !member->GetVehicle() && !member->IsBeingTeleported() && !member->IsCharmed() &&
+-                !member->HasAura(63802) && !member->HasAura(63830) &&
+-                (!controlled || (!memberAI->HasStrategy("stay", BOT_STATE_COMBAT) &&
+-                    !memberAI->HasStrategy("stay", BOT_STATE_NON_COMBAT) && !memberAI->HasStrategy("passive", BOT_STATE_COMBAT)));
++                                   !member->GetVehicle() && !member->IsBeingTeleported() && !member->IsCharmed() &&
++                                   !BrainLinked(member) && !member->HasAura(63830) &&
++                                   (!controlled || (!memberAI->HasStrategy("stay", BOT_STATE_COMBAT) &&
++                                                    !memberAI->HasStrategy("stay", BOT_STATE_NON_COMBAT) &&
++                                                    !memberAI->HasStrategy("passive", BOT_STATE_COMBAT)));
+             members.push_back({member->GetGUID().GetRawValue(), controlled, PlayerbotAI::IsTank(member),
+                 PlayerbotAI::IsHeal(member), PlayerbotAI::IsMelee(member), available, Sanity(member)});
+         }
+@@ -304,6 +328,83 @@ void Stop(PlayerbotAI* ai)
+ }
+ }
+ 
++void ObserveYoggBrainLink(Player* owner, Spell* spell)
++{
++    if (!sPlayerbotAIConfig.YoggBrainSupport || !spell)
++        return;
++    uint32 const id = spell->GetSpellInfo()->Id;
++    if (id != 63803 && id != 63804)
++        return;
++    if (!owner || !owner->IsInWorld() || owner->GetMapId() != 603 || !owner->IsAlive() || !owner->HasAura(63802) ||
++        !owner->GetGroup())
++        return;
++    Unit* target = spell->m_targets.GetUnitTarget();
++    Player* partner = target ? target->ToPlayer() : nullptr;
++    auto* instance = owner->GetInstanceScript();
++    if (!partner || partner == owner || !partner->IsInWorld() || !partner->IsAlive() ||
++        partner->GetMap() != owner->GetMap() || partner->GetGroup() != owner->GetGroup() || !instance ||
++        instance->GetBossState(12) != IN_PROGRESS || Below(owner) || Below(partner))
++        return;
++    auto const now = Clock::now();
++    auto const ownerKey = owner->GetGUID().GetRawValue();
++    auto const partnerKey = partner->GetGUID().GetRawValue();
++    bool changed = false;
++    {
++        std::lock_guard<std::mutex> lock(brainLinkMutex);
++        PruneBrainLinks(now);
++        auto const it = brainLinks.find(ownerKey);
++        auto const missing = (it == brainLinks.end() ? 1 : 0) + (brainLinks.contains(partnerKey) ? 0 : 1);
++        if (brainLinks.size() + missing > 256)
++            return;
++        changed = it == brainLinks.end() || it->second.partner != partner->GetGUID();
++        BrainLink const link{owner->GetGUID(), partner->GetGUID(), owner->GetInstanceId(),
++                             now + std::chrono::seconds(3)};
++        brainLinks[ownerKey] = link;
++        brainLinks[partnerKey] = link;
++    }
++    if (changed)
++        LOG_INFO("playerbots", "yogg_brain link instance={} owner={} partner={} spell={}", owner->GetInstanceId(),
++                 owner->GetGUID().GetCounter(), partner->GetGUID().GetCounter(), id);
++}
++
++Player* YoggBrainLinkedPartner(Player* player)
++{
++    if (!sPlayerbotAIConfig.YoggBrainSupport || !player || !player->IsInWorld() || !player->IsAlive() ||
++        player->GetMapId() != 603 || !player->GetGroup() || player->GetVehicle() || player->IsBeingTeleported() ||
++        player->IsCharmed() || Below(player))
++        return nullptr;
++    auto* instance = player->GetInstanceScript();
++    if (!instance || instance->GetBossState(12) != IN_PROGRESS)
++        return nullptr;
++    BrainLink link;
++    {
++        std::lock_guard<std::mutex> lock(brainLinkMutex);
++        auto const it = brainLinks.find(player->GetGUID().GetRawValue());
++        if (it == brainLinks.end() || it->second.expires <= Clock::now() ||
++            it->second.instance != player->GetInstanceId())
++            return nullptr;
++        link = it->second;
++        // Both endpoints must still describe this pair. A new cast can replace
++        // a link; the old partner's cached entry must not follow the new pair.
++        for (auto const guid : {link.owner, link.partner})
++        {
++            auto const endpoint = brainLinks.find(guid.GetRawValue());
++            if (endpoint == brainLinks.end() || endpoint->second.owner != link.owner ||
++                endpoint->second.partner != link.partner || endpoint->second.instance != link.instance)
++                return nullptr;
++        }
++    }
++    auto* owner = ObjectAccessor::GetPlayer(*player, link.owner);
++    auto* partner = ObjectAccessor::GetPlayer(*player, link.partner);
++    if (!owner || !partner || !owner->IsAlive() || !partner->IsAlive() || !owner->HasAura(63802) ||
++        owner->GetMap() != player->GetMap() || partner->GetMap() != player->GetMap() ||
++        owner->GetGroup() != player->GetGroup() || partner->GetGroup() != player->GetGroup() ||
++        owner->IsBeingTeleported() || partner->IsBeingTeleported() || owner->IsCharmed() || partner->IsCharmed() ||
++        std::abs(owner->GetPositionZ() - partner->GetPositionZ()) > 10.0f || Below(owner) || Below(partner))
++        return nullptr;
++    return owner == player ? partner : owner;
++}
++
+ bool YoggBrainTrigger::IsActive() { return Decide(botAI).needsAction; }
+ bool YoggBrainEmergencyTrigger::IsActive()
+ {
+@@ -406,8 +507,10 @@ float YoggBrainMultiplier::GetValue(Action* action)
+         auto const assigned = wave->second.portals.find(bot->GetGUID().GetRawValue());
+         if (assigned == wave->second.portals.end()) return 1.0f;
+         Creature* portal = bot->GetMap()->GetCreature(assigned->second);
+-        return portal && portal->HasNpcFlag(UNIT_NPC_FLAG_SPELLCLICK) &&
+-            Sanity(bot) >= YoggBrain::EnterSanity && !bot->HasAura(63802) && !bot->HasAura(63830) ? 0.0f : 1.0f;
++        return portal && portal->HasNpcFlag(UNIT_NPC_FLAG_SPELLCLICK) && Sanity(bot) >= YoggBrain::EnterSanity &&
++                       !BrainLinked(bot) && !bot->HasAura(63830)
++                   ? 0.0f
++                   : 1.0f;
+     }
+     // A portal/exit/deadline/gaze move must not be undone by follow, charge,
+     // assist, a legacy raid action, or a cast that automatically turns us back.
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.h b/src/Ai/Raid/Uld/YoggBrainActions.h
+index 2266282e..1b096a6c 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.h
++++ b/src/Ai/Raid/Uld/YoggBrainActions.h
+@@ -5,6 +5,12 @@
+ #include "Multiplier.h"
+ #include "Trigger.h"
+ 
++class Spell;
++// The native Brain Link aura exists only on its owner; the second player is
++// identified by the owner's periodic damage/beam cast, never by guessing.
++void ObserveYoggBrainLink(Player* owner, Spell* spell);
++Player* YoggBrainLinkedPartner(Player* player);
++
+ class YoggBrainAction : public AttackAction
+ {
+ public:
+diff --git a/src/Script/Playerbots.cpp b/src/Script/Playerbots.cpp
+index 024f255b..9d82cbc4 100644
+--- a/src/Script/Playerbots.cpp
++++ b/src/Script/Playerbots.cpp
+@@ -5,17 +5,18 @@
+  */
+ 
+ #include "Playerbots.h"
++
++#include <mysqld_error.h>
++
++#include "AllMapScript.h"
+ #include "BattleGroundTactics.h"
+ #include "BattlefieldScript.h"
++#include "BuiltInConfig.h"
+ #include "Channel.h"
+ #include "CheckMountStateAction.h"
+ #include "Config.h"
+-#include "BuiltInConfig.h"
+ #include "DBUpdater.h"
+ #include "DatabaseEnv.h"
+-#include "PlayerbotsDatabase.h"
+-#include <mysqld_error.h>
+-#include "AllMapScript.h"
+ #include "GatherNodeMgr.h"
+ #include "GlobalScript.h"
+ #include "GuildTaskMgr.h"
+@@ -25,11 +26,13 @@
+ #include "PlayerbotGuildMgr.h"
+ #include "PlayerbotSpellRepository.h"
+ #include "PlayerbotWorldThreadProcessor.h"
++#include "PlayerbotsDatabase.h"
+ #include "RandomPlayerbotMgr.h"
+ #include "ScriptMgr.h"
+ #include "ServerScript.h"
+ #include "SessionScript.h"
+ #include "WorldScript.h"
++#include "YoggBrainActions.h"
+ #include "cmath"
+ 
+ class PlayerbotsDatabaseScript : public DatabaseScript
+@@ -127,21 +130,21 @@ public:
+ class PlayerbotsPlayerScript : public PlayerScript
+ {
+ public:
+-    PlayerbotsPlayerScript() : PlayerScript("PlayerbotsPlayerScript", {
+-        PLAYERHOOK_ON_LOGIN,
+-        PLAYERHOOK_ON_BEFORE_LOGOUT,
+-        PLAYERHOOK_ON_AFTER_UPDATE,
+-        PLAYERHOOK_ON_CREATURE_KILL_CREDIT,
+-        PLAYERHOOK_ON_BEFORE_PETITION_SIGN,
+-        PLAYERHOOK_ON_BEFORE_CRITERIA_PROGRESS,
+-        PLAYERHOOK_ON_BEFORE_ACHI_COMPLETE,
+-        PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT,
+-        PLAYERHOOK_CAN_PLAYER_USE_GROUP_CHAT,
+-        PLAYERHOOK_CAN_PLAYER_USE_GUILD_CHAT,
+-        PLAYERHOOK_CAN_PLAYER_USE_CHANNEL_CHAT,
+-        PLAYERHOOK_ON_GIVE_EXP,
+-        PLAYERHOOK_ON_BEFORE_TELEPORT
+-    }) {}
++    PlayerbotsPlayerScript()
++        : PlayerScript("PlayerbotsPlayerScript",
++                       {PLAYERHOOK_ON_LOGIN, PLAYERHOOK_ON_BEFORE_LOGOUT, PLAYERHOOK_ON_AFTER_UPDATE,
++                        PLAYERHOOK_ON_CREATURE_KILL_CREDIT, PLAYERHOOK_ON_BEFORE_PETITION_SIGN,
++                        PLAYERHOOK_ON_BEFORE_CRITERIA_PROGRESS, PLAYERHOOK_ON_BEFORE_ACHI_COMPLETE,
++                        PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT, PLAYERHOOK_CAN_PLAYER_USE_GROUP_CHAT,
++                        PLAYERHOOK_CAN_PLAYER_USE_GUILD_CHAT, PLAYERHOOK_CAN_PLAYER_USE_CHANNEL_CHAT,
++                        PLAYERHOOK_ON_GIVE_EXP, PLAYERHOOK_ON_SPELL_CAST, PLAYERHOOK_ON_BEFORE_TELEPORT})
++    {
++    }
++
++    void OnPlayerSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
++    {
++        ObserveYoggBrainLink(player, spell);
++    }
+ 
+     void OnPlayerLogin(Player* player) override
+     {

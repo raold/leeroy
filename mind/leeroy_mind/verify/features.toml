@@ -213,7 +213,7 @@ since = "2026-11-21T11:26"
 [[feature.switch]]
 source = "playerbots"
 key = "Playerbots.TwinValkyrInteractions"
-default = false
+default = true
 
 [[feature.evidence]]
 id = "killed"
