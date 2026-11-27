@@ -14,7 +14,8 @@ into patches/mod-playerbots/, which scripts/ac-snapshot.sh owns.
 
 Verification compares the series with the layout's roots.playerbots: the
 checkout's tracked files must be clean, and its commits since the playerbots
-baseline in the provenance manifest must be exactly the series, in order, by
+baseline in the provenance manifest must be exactly the uninstalled production
+patches followed by the dojo series, in order, by
 stable patch id (git patch-id --stable, which ignores line numbers and
 whitespace). -Apply first applies the missing tail of the series with
 git am --3way when the checkout's commits are a prefix of it, so a fresh
@@ -63,6 +64,49 @@ function Get-DojoPatchId([string] $Repo, [string] $File) {
     $line = @($out | Where-Object { $_ }) | Select-Object -First 1
     if (-not $line) { return $null }
     return ("$line".Trim() -split '\s+')[0]
+}
+
+# Snapshot exports use either Git's default context or the one-line context
+# needed when upstream has reordered adjacent loader declarations. Context is
+# not a code change, but Git includes it in a stable patch id.
+function Get-DojoCommitPatchId([string] $Repo, [string] $Commit, [int] $Context) {
+    $out = & git -c core.fsmonitor=false -C $Repo show --format=email --binary "--unified=$Context" $Commit |
+        & git -c core.fsmonitor=false -C $Repo patch-id --stable
+    if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
+    return ("$out".Trim() -split '\s+')[0]
+}
+
+function Get-DojoHistoryIds([string] $Repo, [string] $File) {
+    # Stream large histories without materializing all diffs or feeding each
+    # line through PowerShell's object pipeline. Drain both output pipes while
+    # writing input, and check the actual Git exit code.
+    $start = [System.Diagnostics.ProcessStartInfo]::new('git')
+    foreach ($arg in @('-c', 'core.fsmonitor=false', '-C', $Repo, 'patch-id', '--stable')) { $start.ArgumentList.Add($arg) }
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    $inputStream = $null
+    try {
+        if (-not $process.Start()) { throw 'cannot start Git patch reader' }
+        $outputTask = $process.StandardOutput.ReadToEndAsync()
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        $inputStream = [System.IO.File]::OpenRead($File)
+        $inputStream.CopyTo($process.StandardInput.BaseStream)
+        $process.StandardInput.Close()
+        $process.WaitForExit()
+        $output = $outputTask.GetAwaiter().GetResult()
+        $null = $errorTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) { throw 'Git patch reader failed' }
+        return @($output -split "`n" | Where-Object { $_.Trim() } | ForEach-Object { ($_.Trim() -split '\s+')[0] })
+    } finally {
+        if ($inputStream) { $inputStream.Dispose() }
+        if ($process.Id -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
+        $process.Dispose()
+    }
 }
 
 $result = [ordered]@{ kind = 'leeroy-dojo-patches'; format = 1; ok = $false; series = @(); commits = @(); applied = @();
@@ -119,6 +163,75 @@ if ((Invoke-DojoGit $playerbots @('merge-base', '--is-ancestor', $baseline, 'HEA
     $result.problems.Add("$playerbots does not descend from the baseline $($baseline.Substring(0, 12))")
     Stop-DojoPatches 1
 }
+$merges = Invoke-DojoGit $playerbots @('rev-list', '--merges', "$baseline..HEAD")
+if ($merges.code -ne 0 -or $merges.text.Trim()) {
+    $result.problems.Add('candidate history must be a linear patch series')
+    Stop-DojoPatches 1
+}
+
+# Keep the production provenance immutable when testing an unreleased module
+# candidate. Only the committed release series may precede the dojo hook; an
+# arbitrary extra commit still fails the exact ordered comparison below.
+$productionDir = "$source/patches/mod-playerbots"
+$production = @(if (Test-Path -LiteralPath $productionDir -PathType Container) {
+        Get-ChildItem -LiteralPath $productionDir -Filter '*.patch' -File | Sort-Object Name
+    })
+$missingProduction = [System.Collections.Generic.List[object]]::new()
+$productionIds = [System.Collections.Generic.HashSet[string]]::new()
+$productionNumbers = [System.Collections.Generic.HashSet[string]]::new()
+$baselineIds = $null
+$result.production = @()
+foreach ($f in $production) {
+    if ($f.LinkType -or $f.Name -notmatch '^([0-9]{4})-.+\.patch$' -or
+        -not $productionNumbers.Add($Matches[1])) {
+        $result.problems.Add('invalid or duplicate production patch filename')
+        Stop-DojoPatches 1
+    }
+    $first = Get-Content -LiteralPath $f.FullName -TotalCount 1
+    if ($first -notmatch '^From ([0-9a-f]{40}) Mon Sep 17 00:00:00 2001$') {
+        $result.problems.Add("$($f.Name) is not a format-patch entry")
+        Stop-DojoPatches 1
+    }
+    $original = $Matches[1]
+    $id = Get-DojoPatchId $playerbots $f.FullName
+    if (-not $id -or -not $productionIds.Add($id)) {
+        $result.problems.Add('unreadable or duplicate production patch content')
+        Stop-DojoPatches 1
+    }
+    $known = (Invoke-DojoGit $playerbots @('merge-base', '--is-ancestor', $original, $baseline)).code -eq 0
+    if ($known) {
+        if ((Get-DojoCommitPatchId $playerbots $original 3) -cne $id -and
+            (Get-DojoCommitPatchId $playerbots $original 1) -cne $id) {
+            $result.problems.Add("$($f.Name) differs from its installed commit")
+            Stop-DojoPatches 1
+        }
+    } else {
+        if ($null -eq $baselineIds) {
+            $baselineIds = [System.Collections.Generic.HashSet[string]]::new()
+            $historyFile = Join-Path ([System.IO.Path]::GetTempPath()) "dojo-patch-history-$PID-$([guid]::NewGuid().ToString('N'))"
+            try {
+                foreach ($context in @(3, 1)) {
+                    $logged = Invoke-DojoGit $playerbots @('log', '--no-merges', '-p', '--binary', "--unified=$context", "--output=$historyFile", $baseline)
+                    if ($logged.code -ne 0) { throw 'cannot read baseline history' }
+                    foreach ($historyId in (Get-DojoHistoryIds $playerbots $historyFile)) { $null = $baselineIds.Add($historyId) }
+                }
+            } catch {
+                $result.problems.Add('cannot identify installed production patches')
+            } finally {
+                if (Test-Path -LiteralPath $historyFile -PathType Leaf) { Remove-Item -LiteralPath $historyFile -Force }
+            }
+            if ($result.problems.Count -gt 0) { Stop-DojoPatches 1 }
+        }
+        $known = $baselineIds.Contains($id)
+    }
+    if ($known -and $missingProduction.Count -gt 0) {
+        $result.problems.Add('installed production patches are not an ordered prefix')
+        Stop-DojoPatches 1
+    }
+    $result.production += [ordered]@{ file = $f.Name; patch_id = $id; installed = $known }
+    if (-not $known) { $missingProduction.Add($f) }
+}
+$files = @($missingProduction) + $files
 
 $seriesIds = [System.Collections.Generic.List[string]]::new()
 $result.series = @(foreach ($f in $files) {
@@ -139,7 +252,14 @@ function Get-DojoCommitIds {
         $patches = @(Get-ChildItem -LiteralPath $tmp -Filter '*.patch' -File | Sort-Object Name)
         $list = [System.Collections.Generic.List[object]]::new()
         for ($i = 0; $i -lt $patches.Count; $i++) {
-            $list.Add([ordered]@{ commit = $(if ($i -lt $commits.Count) { $commits[$i] } else { '' }); patch_id = (Get-DojoPatchId $playerbots $patches[$i].FullName) })
+            $commit = if ($i -lt $commits.Count) { $commits[$i] } else { '' }
+            $id = Get-DojoPatchId $playerbots $patches[$i].FullName
+            $context = 3
+            if ($i -lt $seriesIds.Count -and $id -cne $seriesIds[$i] -and $commit) {
+                $shortId = Get-DojoCommitPatchId $playerbots $commit 1
+                if ($shortId -ceq $seriesIds[$i]) { $id = $shortId; $context = 1 }
+            }
+            $list.Add([ordered]@{ commit = $commit; patch_id = $id; context = $context })
         }
         return , $list
     } finally {
@@ -168,7 +288,7 @@ $same = $commits.Count -eq $seriesIds.Count
 for ($i = 0; $same -and $i -lt $commits.Count; $i++) { $same = $commits[$i].patch_id -eq $seriesIds[$i] }
 if (-not $same) {
     $hint = if ($isPrefix -and -not $Apply) { '; -Apply applies the missing tail' } else { '' }
-    $result.problems.Add("$playerbots carries $($commits.Count) commits since $($baseline.Substring(0, 12)) that are not the $($seriesIds.Count) patches of $DojoSeries$hint")
+    $result.problems.Add("$playerbots carries $($commits.Count) commits since $($baseline.Substring(0, 12)) that are not the $($seriesIds.Count) patches of the production candidate and $DojoSeries$hint")
     Stop-DojoPatches 1
 }
 # The gate must stay where the plan puts it: in PlayerbotAI::UpdateAI after the state checks and fall information,
