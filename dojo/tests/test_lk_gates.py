@@ -11,6 +11,7 @@ def evidence(scenario, negative=False):
                 heal_events=0 if negative else 3, light_samples=0, dark_samples=0, switch_ms=0,
                 crossings=0, hazard_samples=100, minimum_clearance=0, poison_hits=0,
                 room_samples=100, harvest_samples=100, strangulate_samples=100,
+                anchor_combat_samples=500, anchor_armor=30000, anchor_item_level=245.0,
                 escape_ms=0 if negative else 2200, outside_samples=0 if negative else 100,
                 inside_samples=10, late_hits=0, encounter_samples=100, defile_hits=4 if negative else 1,
                 final_hazard_clearance=-5.0 if negative else 4.0)
@@ -47,6 +48,17 @@ class LichKingEvidenceTest(unittest.TestCase):
                 for value in (None, True, -1, 0, 1.5, "1"):
                     with self.subTest(negative=negative, field=field, value=value):
                         self.assertFalse(self.check(evidence("lk-terenas", negative) | {field: value}))
+
+    def test_inactive_or_unprepared_anchor_cannot_certify_terenas(self):
+        for negative in (True, False):
+            for field, values in (("anchor_combat_samples", (None, True, -1, 0, 499, 501, 500.0)),
+                                  ("anchor_armor", (None, True, -1, 0, 19999, "30000")),
+                                  ("anchor_item_level", (None, True, 0, 229, float("nan"), float("inf")))):
+                for value in values:
+                    with self.subTest(negative=negative, field=field, value=value):
+                        self.assertFalse(self.check(evidence("lk-terenas", negative) | {field: value}))
+            # A real death still fails even with every anchor-preparation witness.
+            self.assertFalse(self.check(evidence("lk-terenas", negative) | {"failure": "fixture died or disconnected"}))
 
     def test_invalid_counters_never_pass_either_control(self):
         for scenario in ("lk-terenas", "lk-defile"):

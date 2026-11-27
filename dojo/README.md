@@ -408,6 +408,22 @@ The Terenas setup casts the actual Harvest Soul on the healer and observes its
 damage aura and native strangulate vehicle before the core teleports the actor.
 Both controls must then supply the existing room-exposure evidence; a direct
 teleport or manually summoned Terenas cannot establish this entry.
+The scripted outside anchor uses the stock `bear pve` talent template, native
+epic equipment capped at item level 245 and Dire Bear Form. It retains the same
+100,000-health reserve used by the other mechanic probes; all native damage and
+death checks remain active. The measured paladin is unchanged. The boss starts
+at the native intro's final platform point with its post-intro aggression, and
+every observation requires the anchor and boss to remain engaged. The receipt
+requires the anchor's actual armour/item-level preparation and continuous combat.
+
+This fixes a supporting-fixture defect: diagnostic run
+`20261127_091419-lk-diagnostic-c202e29b` reproduced the original failure class in
+its third disabled control. At 33,072 ms a Shambling Horror (37698) killed the
+ungeared, externally held restoration anchor (slot 1), after 3,553 ghoul damage
+and a 159,644 Horror hit in the same update. The measured healer (slot 0) remained
+alive. The native death callback and terminal snapshot agree. This is evidence
+about the probe's supporting actor, not a stock playerbots healer defect or proof
+of a full raid kill; the older trace cannot identify its attacker retroactively.
 Lich King receipts retain the last 32 damage observations with sequence, actor,
 spell and current/maximum health counters: stage 0 is `OnDamage`, 1 is spell calculation and 2
 is periodic calculation. These precede final application and are not lethal-hit
