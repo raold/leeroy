@@ -146,6 +146,7 @@ struct Trial
                     bool const splineReady = base->movespline->Initialized();
                     auto* speed = base->GetAura(57092);
                     body["vehicle"] = {{"entry", base->GetEntry()}, {"alive", base->IsAlive()},
+                    {"x", base->GetPositionX()}, {"y", base->GetPositionY()}, {"z", base->GetPositionZ()},
                     {"health", base->GetHealth()}, {"max_health", base->GetMaxHealth()},
                     {"energy", base->GetPower(POWER_ENERGY)}, {"combo_points", base->GetComboPoints()},
                     {"combat", base->IsInCombat()}, {"moving", base->isMoving()},
