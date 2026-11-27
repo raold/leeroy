@@ -408,12 +408,38 @@ The Terenas setup casts the actual Harvest Soul on the healer and observes its
 damage aura and native strangulate vehicle before the core teleports the actor.
 Both controls must then supply the existing room-exposure evidence; a direct
 teleport or manually summoned Terenas cannot establish this entry.
+The scripted outside anchor uses the stock `bear pve` talent template, native
+epic equipment capped at item level 245 and Dire Bear Form. It retains the same
+100,000-health reserve used by the other mechanic probes; all native damage and
+death checks remain active. The measured paladin is unchanged. The boss starts
+at the native intro's final platform point with its post-intro aggression, and
+every observation requires the anchor and boss to remain engaged. The receipt
+requires the anchor's actual armour/item-level preparation and continuous combat.
+
+This fixes a supporting-fixture defect: diagnostic run
+`20261127_091419-lk-diagnostic-c202e29b` reproduced the original failure class in
+its third disabled control. At 33,072 ms a Shambling Horror (37698) killed the
+ungeared, externally held restoration anchor (slot 1), after 3,553 ghoul damage
+and a 159,644 Horror hit in the same update. The measured healer (slot 0) remained
+alive. The native death callback and terminal snapshot agree. This is evidence
+about the probe's supporting actor, not a stock playerbots healer defect or proof
+of a full raid kill; the older trace cannot identify its attacker retroactively.
 Lich King receipts retain the last 32 damage observations with sequence, actor,
-spell and health counters: stage 0 is `OnDamage`, 1 is spell calculation and 2
+spell and current/maximum health counters: stage 0 is `OnDamage`, 1 is spell calculation and 2
 is periodic calculation. These precede final application and are not lethal-hit
 assertions. Separate native death callbacks retain the actual victim and killer
 entry, position and clock. Up to 64 aura IDs per actor accompany each snapshot,
-with the full count to expose truncation. None of these diagnostics changes a verdict.
+with the full count to expose truncation. On a failure during Harvest Soul or
+observation, `fixture_failure` preserves both actors' connection, life, world-removal,
+AI and teleport state, health, position, aura IDs and available boss state before
+cleanup resurrects or logs them out. It survives cleanup and resets at the next run.
+Native Lich King and Terenas snapshots also record engagement, combat, victim slot,
+health and current spell. A forced `IN_PROGRESS` boss state alone does not prove
+that the outside anchor actually engaged the native boss; inspect these facts when
+comparing control failures with later diagnostic runs.
+An empty death list alone cannot rule out a lost actor; use this terminal snapshot
+to distinguish a dead actor from one that is disconnected or leaving the world.
+None of these diagnostics changes a verdict or makes a failed control acceptable.
 Each selected scenario always runs both controls. These probes establish specific
 mechanics only; they do not certify an entire Lich King kill, heroic Frostmourne,
 Val'kyr rescue or spirit handling. Release acceptance requires passing campaign

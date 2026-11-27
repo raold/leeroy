@@ -69,6 +69,13 @@ def verdict(observation, *, scenario, token, negative=False):
         if o["encounter_samples"] < 10:
             plumbing.append("native Lich King encounter was not active")
         if scenario == "lk-terenas":
+            if (type(o.get("anchor_combat_samples")) is not int or
+                    o["anchor_combat_samples"] != o["samples"]):
+                plumbing.append("native outside anchor engagement was not continuous")
+            if (type(o.get("anchor_armor")) is not int or o["anchor_armor"] < 20000 or
+                    type(o.get("anchor_item_level")) not in (int, float) or
+                    not math.isfinite(o["anchor_item_level"]) or o["anchor_item_level"] < 230):
+                plumbing.append("outside anchor lacked native raid tank preparation")
             if any(type(o.get(k)) is not int or o[k] < 1 for k in ("harvest_samples", "strangulate_samples")):
                 plumbing.append("native Harvest Soul and strangulate vehicle were not observed")
             if o["room_samples"] < 10 or o.get("reach_competitor") is not True:
