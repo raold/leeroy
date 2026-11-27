@@ -1,0 +1,86 @@
+From c10e38125d95cb3c4f0b1a19eba21d9ef0a9b666 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 22:25:12 -0500
+Subject: [PATCH 62/62] fix(Raids/Yogg): Search close attack angles between
+ skulls
+
+---
+ src/Ai/Raid/Uld/YoggBrainActions.cpp |  8 ++++----
+ src/Ai/Raid/Uld/YoggBrainPolicy.h    |  4 ++++
+ tests/yogg_brain_test.cpp            | 27 +++++++++++++++++++++++++++
+ 3 files changed, 35 insertions(+), 4 deletions(-)
+
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index bd63140d..52ef676b 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -279,12 +279,12 @@ bool AttackPoint(Player* bot, Unit* target, unsigned illusion, Position& best, b
+     float distance = 100000.0f;
+     bool found = false;
+     std::vector<std::pair<float, Position>> candidates;
+-    unsigned const rings = PlayerbotAI::IsMelee(bot) ? 1 : 2;
++    unsigned const rings = PlayerbotAI::IsMelee(bot) ? 2 : YoggBrain::InfluenceAttackRadii.size();
+     for (unsigned ring = 0; ring < rings; ++ring)
+-        for (unsigned i = 0; i < 24; ++i)
++        for (unsigned i = 0; i < YoggBrain::InfluenceAttackDirections; ++i)
+         {
+-            float const radius = ring ? 20.0f : 3.0f;
+-            float const angle = i * 2 * YoggBrain::Pi / 24;
++            float const radius = YoggBrain::InfluenceAttackRadii[ring];
++            float const angle = i * 2 * YoggBrain::Pi / YoggBrain::InfluenceAttackDirections;
+             Position point(target->GetPositionX() + radius * std::cos(angle),
+                            target->GetPositionY() + radius * std::sin(angle), bot->GetPositionZ());
+             bot->UpdateAllowedPositionZ(point.m_positionX, point.m_positionY, point.m_positionZ);
+diff --git a/src/Ai/Raid/Uld/YoggBrainPolicy.h b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+index 11aea50c..728742de 100644
+--- a/src/Ai/Raid/Uld/YoggBrainPolicy.h
++++ b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+@@ -17,6 +17,10 @@ namespace YoggBrain
+ constexpr unsigned EnterSanity = 40;
+ constexpr unsigned LeaveSanity = 25;
+ constexpr float Pi = 3.141592654f;
++// Some Dragon influences sit just outside the skulls' gaze envelope. Their
++// safe firing angle can require standing closer than the usual melee ring.
++constexpr std::array<float, 3> InfluenceAttackRadii{3.0f, 0.1f, 20.0f};
++constexpr unsigned InfluenceAttackDirections = 24;
+ inline bool InBrainArea(float x, float y, float z)
+ {
+     return x > 1830.0f && x < 2160.0f && y > -190.0f && y < 125.0f && z > 225.0f && z < 285.0f;
+diff --git a/tests/yogg_brain_test.cpp b/tests/yogg_brain_test.cpp
+index 5b87afb5..69f617b4 100644
+--- a/tests/yogg_brain_test.cpp
++++ b/tests/yogg_brain_test.cpp
+@@ -255,6 +255,33 @@ int main()
+     CHECK(!CastFits(12000, 12000, 0));
+     CHECK(!CastFits(1, 12000, 0));
+     CHECK(!CastFits(60000, 12000, std::numeric_limits<unsigned>::max()));
++    // Captured Dragon wave: the influence at (2139.83, -50.2865) stayed
++    // untouched after the old 3/20-yard rings provided no valid candidate.
++    // This checks only angular feasibility; native LOS/terrain/path checks
++    // still have to accept a proposed point in the running-world gate.
++    std::array<std::pair<float, float>, 4> const capturedSkulls{{{2139.1298828125f, -59.0848007202f},
++                                                                 {2133.0900878906f, 15.3409996033f},
++                                                                 {2126.2199707031f, -25.8600006104f},
++                                                                 {2065.8300781250f, 12.3772001266f}}};
++    unsigned legacyAngles = 0, closeAngles = 0;
++    for (float radius : InfluenceAttackRadii)
++        for (unsigned i = 0; i < InfluenceAttackDirections; ++i)
++        {
++            float const angle = i * 2 * Pi / InfluenceAttackDirections;
++            float const x = 2139.830078125f + radius * std::cos(angle);
++            float const y = -50.2864990234f + radius * std::sin(angle);
++            std::vector<float> gazes;
++            for (auto const& [skullX, skullY] : capturedSkulls)
++                gazes.push_back(std::atan2(skullY - y, skullX - x));
++            if (!CombatFacing(std::atan2(-50.2864990234f - y, 2139.830078125f - x), gazes))
++                continue;
++            if (radius >= 3.0f)
++                ++legacyAngles;
++            else
++                ++closeAngles;
++        }
++    CHECK(legacyAngles == 0);
++    CHECK(closeAngles > 0);
+     for (unsigned step = 0; step < 64; ++step)
+     {
+         float const current = step * 2 * Pi / 64;
