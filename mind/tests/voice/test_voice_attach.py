@@ -303,6 +303,35 @@ def test_a_stop_after_a_login_that_found_it_up_still_holds(tmp_path, fast_clock,
     assert calls == [] and voice_hold(voice_data) is not None
 
 
+@pytest.mark.parametrize("already_up", [True, False])
+def test_new_stop_wins_with_an_older_or_reused_filesystem_timestamp(
+        tmp_path, fast_clock, voice_data, fake_repo, monkeypatch, already_up):
+    ext, calls = supervised(tmp_path, fast_clock, fake_repo, monkeypatch)
+    hold_voice(voice_data, "console")
+    old = time.time() - 600
+    os.utime(voice_data / VOICE_HOLD_FILE, (old, old))
+
+    async def go():
+        ext.client.greeted = already_up
+        if already_up:
+            await ext.on_connection(True)
+        await ext._on_login(SimpleNamespace(human=True, guid=1))
+        hold_voice(voice_data, "console")
+        # A new stop can share an old mtime on a coarse filesystem. It must not
+        # be removed as the stop observed before the greeting/login.
+        os.utime(voice_data / VOICE_HOLD_FILE, (old, old))
+        ext.client.greeted = False
+        await ext.on_connection(False)
+        await fast_clock.advance(3600, step=3600)
+        await ext._supervise_once()
+        assert calls == [] and voice_hold(voice_data) is not None
+        await ext._on_login(SimpleNamespace(human=True, guid=1))
+        await ext._supervise_once()
+        assert len(calls) == 1 and voice_hold(voice_data) is None
+
+    run(go())
+
+
 def test_a_stop_after_his_login_cancels_the_logins_pending_start(tmp_path, fast_clock,
                                                                  voice_data, fake_repo,
                                                                  monkeypatch):

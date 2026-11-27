@@ -175,6 +175,9 @@ struct Job
     bool rewardBound = false, groupReleased = false;
     std::vector<Member> members;
     std::vector<uint8> previousBossStates;
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+    std::vector<uint8> dojoPreparedBossStates;
+#endif
     std::vector<uint32> bossWipes;
     uint32 dcPasses = 0, dcPassCheckMs = 0;
     uint32 elapsed = 0, stageElapsed = 0, dcOff = 0, restarts = 0;
@@ -207,6 +210,9 @@ struct Job
 // World-thread only. Store identifiers and value snapshots; every Player/Group is resolved anew on each tick.
 std::unique_ptr<Job> active;
 std::string lastFinishedOffline;
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+nlohmann::json dojoLastTerminal;
+#endif
 uint64 nextRewardToken = 1; // Independent of the later instance-bound training-run token.
 
 ObjectGuid Guid(uint32 low) { return ObjectGuid::Create<HighGuid::Player>(low); }
@@ -1105,6 +1111,11 @@ bool ReadBosses(Job& job, Player* leader, bool baseline)
             ++job.event.wipes;
         }
         job.previousBossStates[index] = current;
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+        // Prepared frontier prerequisites are fixture setup, never earned kills.
+        if (index < job.dojoPreparedBossStates.size() && job.dojoPreparedBossStates[index] == DONE)
+            continue;
+#endif
         if (EarnedRaidKill(leader->GetMapId(), index, current, instance->GetCompletedEncounterMask()))
             ++job.event.kills;
     }
@@ -1943,6 +1954,10 @@ bool RunTeardown(Job& job)
         event.state = failed ? "failed" : job.terminalState;
         event.stage.clear();
         event.reason = failed ? "cleanup_failed:" + job.terminalReason : job.terminalReason;
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+        dojoLastTerminal = {{"event", MakeJobEvent(event)}, {"cleanup", complete}, {"active", !complete},
+            {"map", job.command.mapId}, {"boss_states", job.previousBossStates}};
+#endif
         LOG_INFO("module.leeroy", "leeroy: {} {} {}: {} ({} kills, {} wipes); recovery retained={}",
             event.kind, event.id, event.state, event.reason, event.kills, event.wipes, !complete);
         if (Dungeon(job)) job.pendingTerminal = std::move(event);
@@ -2312,6 +2327,95 @@ std::string MemberDungeonFor([[maybe_unused]] uint32 guid)
 #endif
     return {};
 }
+
+#if defined(DOJO_OFFLINE_ACCEPTANCE) && DOJO_OFFLINE_ACCEPTANCE
+nlohmann::json DojoOfflineSnapshot()
+{
+    if (!active) return dojoLastTerminal.is_object() ? dojoLastTerminal : nlohmann::json{{"active", false}};
+    auto const& job = *active;
+    nlohmann::json bodies = nlohmann::json::array();
+    for (auto const& member : job.members)
+    {
+        auto* p = FindOnline(member.guid);
+        bodies.push_back({{"guid", member.guid}, {"present", Present(job, p)},
+            {"alive", p && p->IsAlive()}, {"teleport", p && p->IsBeingTeleported()},
+            {"restart_issued", member.restartIssued}, {"restart_dropped", member.restartDropped},
+            {"map", p ? p->GetMapId() : 0}, {"instance", p ? p->GetInstanceId() : 0}});
+    }
+    auto* leader = FindOnline(job.command.leaderGuid);
+    auto* elected = leader ? DcLeaderSignal::FindLeaderTank(leader) : nullptr;
+    nlohmann::json observation = {{"active", true}, {"event", MakeJobEvent(job.event)}, {"stage", Name(job.stage)},
+        {"map", job.command.mapId}, {"boss_states", job.previousBossStates},
+        {"stage_ms", job.stageElapsed}, {"elapsed_ms", job.elapsed}, {"restarts", job.restarts},
+        {"driver", Driver(job) != nullptr}, {"leader", job.command.leaderGuid},
+        {"elected", elected ? elected->GetGUID().GetCounter() : 0}, {"bodies", bodies},
+        {"cleanup", false}};
+#if __has_include("DcRouteStall.h")
+    observation["route_passes"] = job.dcPasses;
+#endif
+    return observation;
+}
+
+bool DojoConfigureNaxxPass([[maybe_unused]] std::string const& id, [[maybe_unused]] bool suppress)
+{
+#if __has_include("DcRouteStall.h")
+    if (!active || active->event.id != id || active->command.mapId != 533 || active->elapsed
+        || active->mode != RaidJobMode::Offline) return false;
+    // Exhaust the existing bound only for the explicitly named negative control.
+    // No production flag, fake stall, altered hold time, or skip command is added.
+    active->dcPasses = suppress ? OfflineDcPassLimit : 0;
+    return true;
+#else
+    return false; // The baseline lacks #476; never claim to test its pass path.
+#endif
+}
+
+bool DojoPrimeNaxxStates(std::string const& id)
+{
+    if (!active || active->event.id != id || active->command.mapId != 533
+        || active->stage != Stage::Running || active->stageElapsed > 10000) return false;
+    auto* leader = FindOnline(active->command.leaderGuid);
+    auto* instance = leader ? leader->GetInstanceScript() : nullptr;
+    if (!instance || instance->GetEncounterCount() != 15) return false;
+    std::vector<uint8> states;
+    for (uint32 i = 0; i < 15; ++i)
+    {
+        bool const prepared = (i >= 3 && i <= 8) || i == 10;
+        auto const state = instance->GetBossState(i);
+        if (state != (prepared ? DONE : NOT_STARTED)) return false;
+        states.push_back(static_cast<uint8>(state));
+    }
+    active->previousBossStates = states;
+    active->dojoPreparedBossStates = states;
+    return true;
+}
+
+bool DojoPrimeTocStates(std::string const& id)
+{
+    if (!active || active->event.id != id || active->command.mapId != 649
+        || active->stage != Stage::Running || active->stageElapsed > 10000) return false;
+    auto* leader = FindOnline(active->command.leaderGuid);
+    auto* instance = leader ? leader->GetInstanceScript() : nullptr;
+    if (!instance || instance->GetEncounterCount() != 5) return false;
+    std::vector<uint8> states;
+    for (uint32 i = 0; i < 5; ++i)
+    {
+        auto const state = instance->GetBossState(i);
+        if (state != (i < 4 ? DONE : NOT_STARTED)) return false;
+        states.push_back(static_cast<uint8>(state));
+    }
+    active->previousBossStates = states;
+    active->dojoPreparedBossStates = states;
+    return true;
+}
+
+bool DojoStopOffline(std::string const& id)
+{
+    if (!active || active->event.id != id) return false;
+    Stop(*active, "dojo_stop");
+    return true;
+}
+#endif
 
 bool CanProjectDungeonBody([[maybe_unused]] std::string const& start, [[maybe_unused]] uint32 guid)
 {

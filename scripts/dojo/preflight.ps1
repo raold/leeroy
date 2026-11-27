@@ -308,7 +308,9 @@ $Layout = ConvertTo-DojoPath $Layout
 
 $roots = [ordered]@{}
 $resolved = [ordered]@{}
-foreach ($name in 'source', 'core', 'playerbots', 'build', 'runtime', 'data') {
+$rootNames = @('source', 'core', 'playerbots', 'build', 'runtime', 'data')
+if ('mod-dungeon-clear' -in @(Get-DojoValue $DojoLayout 'modules' @())) { $rootNames += 'dungeonclear' }
+foreach ($name in $rootNames) {
     $raw = Get-DojoValue $DojoLayout "roots.$name"
     if (-not $raw -or -not [System.IO.Path]::IsPathFullyQualified([string] $raw)) {
         Add-DojoCheck 'FAIL' "root $name" "missing or not an absolute path: '$raw'"
@@ -653,7 +655,8 @@ $modules = @(Get-DojoValue $DojoLayout 'modules' @('mod-playerbots', 'mod-dojo')
 foreach ($required in 'mod-dojo', 'mod-playerbots') {
     if ($required -notin $modules) { Add-DojoCheck 'FAIL' 'module set' "layout modules must include $required" }
 }
-$isolatedRoots = @(@($resolved.source, $resolved.playerbots, $resolved.core) | Where-Object { $_ })
+$extraRoot = Get-DojoValue $resolved 'dungeonclear'
+$isolatedRoots = @(@($resolved.source, $resolved.playerbots, $resolved.core, $extraRoot) | Where-Object { $_ })
 $liveAreas = @(@($prod.core, $prod.build, $prod.configs, $prod.modules) + $protected | Where-Object { $_ })
 # A link target outside every isolated checkout, or inside a live area, takes the dojo somewhere it must not go.
 function Test-DojoLeaves([string] $Target) {
@@ -694,7 +697,7 @@ function Get-DojoModuleProblems([string] $Name, [string] $Root) {
 
 $scanned = [System.Collections.Generic.List[object]]::new()
 if ($resolved.core -and (Test-Path -LiteralPath "$($resolved.core)/modules" -PathType Container)) {
-    $moduleRoots = @(@("$($resolved.source)/modules", $resolved.playerbots, $resolved.core) | Where-Object { $_ })
+    $moduleRoots = @(@("$($resolved.source)/modules", $resolved.playerbots, $resolved.core, $extraRoot) | Where-Object { $_ })
     $present = @{}
     foreach ($dir in Get-ChildItem -LiteralPath "$($resolved.core)/modules" -Directory -Force) {
         $name = $dir.Name
@@ -712,6 +715,8 @@ if ($resolved.core -and (Test-Path -LiteralPath "$($resolved.core)/modules" -Pat
             Add-DojoCheck 'FAIL' "module $name" "$entry resolves to $target, not the source root's modules/mod-dojo"
         } elseif ($name -eq 'mod-playerbots' -and -not (Test-DojoSame $target $resolved.playerbots)) {
             Add-DojoCheck 'FAIL' "module $name" "$entry resolves to $target, not the playerbots root"
+        } elseif ($name -eq 'mod-dungeon-clear' -and -not (Test-DojoSame $target $extraRoot)) {
+            Add-DojoCheck 'FAIL' "module $name" "$entry resolves to $target, not the dungeonclear root"
         } elseif ($name -notin 'mod-dojo', 'mod-playerbots') {
             Add-DojoCheck 'note' "module $name" "extra module $target; it belongs in a versioned experiment"
         } else {

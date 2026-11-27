@@ -138,6 +138,144 @@ class PatchesTest(unittest.TestCase):
             self.assertNotIn(forbidden, lowered)
         self.assertNotIn("ReadLines(", text)
 
+    def production_candidate(self):
+        """Build real Git history: production baseline, new release patch, dojo hook."""
+        self.git("reset", "-q", "--hard", self.baseline)
+        (self.pb / "policy.txt").write_text("candidate behavior\n", encoding="utf-8")
+        self.git("add", "policy.txt")
+        self.git("commit", "-q", "-m", "production candidate")
+        candidate = self.git("rev-parse", "HEAD").strip()
+        series = self.source / "patches" / "mod-playerbots"
+        series.mkdir(parents=True)
+        self.git("format-patch", "--quiet", "--no-signature", "-1", "-o", str(series))
+        self.git("am", "--quiet", *map(str, sorted((self.source / "patches" / "dojo" / "mod-playerbots").glob("*.patch"))))
+        return candidate, next(series.glob("*.patch"))
+
+    def set_provenance_baseline(self, commit):
+        layout = json.loads(self.layout.read_text())
+        path = Path(layout["provenance"])
+        data = json.loads(path.read_text())
+        data["baseline"]["playerbots"]["head"] = commit
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_unreleased_production_then_dojo_is_verified_without_rewriting_baseline(self):
+        self.production_candidate()
+        code, report = self.run_script()
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["baseline"], self.baseline)
+        self.assertFalse(report["production"][0]["installed"])
+        self.assertEqual(len(report["series"]), 2)
+        self.assertEqual([p["patch_id"] for p in report["series"]],
+                         [c["patch_id"] for c in report["commits"]])
+
+    def test_apply_adds_production_before_dojo(self):
+        self.production_candidate()
+        self.git("reset", "-q", "--hard", self.baseline)
+        code, report = self.run_script("-Apply")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(len(report["applied"]), 2)
+        self.assertEqual((self.pb / "policy.txt").read_text(), "candidate behavior\n")
+        self.assertIn("IsExternallyControlled", self.ai.read_text())
+
+    def test_wrong_order_is_refused_without_changing_checkout(self):
+        _, patch = self.production_candidate()
+        self.git("reset", "-q", "--hard", self.baseline)
+        self.git("am", "--quiet", *map(str, sorted((self.source / "patches" / "dojo" / "mod-playerbots").glob("*.patch"))))
+        self.git("am", "--quiet", str(patch))
+        before = self.git("rev-parse", "HEAD")
+        code, report = self.run_script("-Apply")
+        self.assertEqual(code, 1, report)
+        self.assertIn("are not the 2 patches", " ".join(report["problems"]))
+        self.assertEqual(self.git("rev-parse", "HEAD"), before)
+
+    def test_installed_production_is_not_reapplied(self):
+        candidate, _ = self.production_candidate()
+        self.set_provenance_baseline(candidate)
+        code, report = self.run_script("-Apply")
+        self.assertEqual(code, 0, report)
+        self.assertTrue(report["production"][0]["installed"])
+        self.assertEqual(len(report["series"]), 1)
+        self.assertEqual(report["applied"], [])
+
+    def test_rewritten_installed_patch_is_refused(self):
+        candidate, patch = self.production_candidate()
+        self.set_provenance_baseline(candidate)
+        patch.write_text(patch.read_text().replace("+candidate behavior", "+rewritten behavior"), encoding="utf-8")
+        code, report = self.run_script()
+        self.assertEqual(code, 1, report)
+        self.assertIn("differs from its installed commit", " ".join(report["problems"]))
+
+    def test_rebased_installed_patch_is_recognized_by_content(self):
+        _, _ = self.production_candidate()
+        self.git("reset", "-q", "--hard", self.baseline)
+        (self.pb / "policy.txt").write_text("candidate behavior\n", encoding="utf-8")
+        self.git("add", "policy.txt")
+        self.git("commit", "-q", "-m", "same production change with a different commit id")
+        installed = self.git("rev-parse", "HEAD").strip()
+        self.set_provenance_baseline(installed)
+        self.git("am", "--quiet", *map(str, sorted((self.source / "patches" / "dojo" / "mod-playerbots").glob("*.patch"))))
+        code, report = self.run_script()
+        self.assertEqual(code, 0, report)
+        self.assertTrue(report["production"][0]["installed"])
+
+    def test_duplicate_production_content_is_refused(self):
+        _, patch = self.production_candidate()
+        patch.with_name("0002-duplicate.patch").write_bytes(patch.read_bytes())
+        code, report = self.run_script()
+        self.assertEqual(code, 1, report)
+        self.assertIn("duplicate production patch content", " ".join(report["problems"]))
+
+    def test_installed_prefix_hole_is_refused(self):
+        candidate, installed = self.production_candidate()
+        self.set_provenance_baseline(candidate)
+        self.git("reset", "-q", "--hard", candidate)
+        (self.pb / "policy.txt").write_text("new candidate behavior\n", encoding="utf-8")
+        self.git("commit", "-q", "-am", "new candidate")
+        out = self.tmp / "new-patch"
+        out.mkdir()
+        self.git("format-patch", "--quiet", "--no-signature", "-1", "-o", str(out))
+        installed.rename(installed.with_name("0002-installed.patch"))
+        installed.with_name("0001-missing.patch").write_bytes(next(out.glob("*.patch")).read_bytes())
+        self.git("am", "--quiet", *map(str, sorted((self.source / "patches" / "dojo" / "mod-playerbots").glob("*.patch"))))
+        code, report = self.run_script()
+        self.assertEqual(code, 1, report)
+        self.assertIn("not an ordered prefix", " ".join(report["problems"]))
+
+    def test_merge_commits_are_refused(self):
+        self.git("checkout", "-q", "-b", "side", self.baseline)
+        (self.pb / "side.txt").write_text("unreviewed side branch\n", encoding="utf-8")
+        self.git("add", "side.txt")
+        self.git("commit", "-q", "-m", "side")
+        self.git("checkout", "-q", "master")
+        self.git("merge", "--no-ff", "-q", "side", "-m", "merge side")
+        code, report = self.run_script("-Apply")
+        self.assertEqual(code, 1, report)
+        self.assertIn("linear patch series", " ".join(report["problems"]))
+
+    def test_one_line_snapshot_context_matches_the_same_commit(self):
+        # A change surrounded by several existing lines has different Git patch
+        # ids at context 1 and context 3, although it makes the same code change.
+        self.git("reset", "-q", "--hard", self.baseline)
+        (self.pb / "policy.txt").write_text("1\n2\n3\nold\n5\n6\n7\n", encoding="utf-8")
+        self.git("add", "policy.txt")
+        self.git("commit", "-q", "-m", "policy baseline")
+        self.baseline = self.git("rev-parse", "HEAD").strip()
+        self.set_provenance_baseline(self.baseline)
+        (self.pb / "policy.txt").write_text("1\n2\n3\nnew\n5\n6\n7\n", encoding="utf-8")
+        self.git("commit", "-q", "-am", "candidate")
+        candidate = self.git("rev-parse", "HEAD").strip()
+        series = self.source / "patches" / "mod-playerbots"
+        series.mkdir(parents=True)
+        self.git("format-patch", "--quiet", "--no-signature", "--unified=1", "-1", "-o", str(series))
+        self.git("am", "--quiet", *map(str, sorted((self.source / "patches" / "dojo" / "mod-playerbots").glob("*.patch"))))
+        code, report = self.run_script()
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["commits"][0]["context"], 1)
+        self.set_provenance_baseline(candidate)
+        code, report = self.run_script()
+        self.assertEqual(code, 0, report)
+        self.assertTrue(report["production"][0]["installed"])
+
 
 if __name__ == "__main__":
     unittest.main()

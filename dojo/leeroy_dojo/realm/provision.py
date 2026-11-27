@@ -116,6 +116,14 @@ def write_configs(layout: Layout, manifest: tuple[Path, str] | None = None, only
         if not dist_path.is_file():
             raise LayoutError(f"no {dist_path}; build the dojo core first")
         dist_text = dist_path.read_text(encoding="utf-8")
+        if name == "worldserver.conf":
+            # Module loggers are valid core logging registrations, but do not
+            # appear in the core .dist. Add only these two reviewed slots;
+            # conf.render still refuses every other missing override.
+            present = conf.parse(dist_text)
+            for key in ("Appender.DungeonClear", "Logger.playerbots.dungeonclear"):
+                if key not in present:
+                    dist_text = dist_text.rstrip() + f'\n{key} = ""\n'
         overrides = dict(file_rules.training)
         overrides.update(values[name])
         text = conf.render(dist_text, overrides)
@@ -141,6 +149,27 @@ def write_configs(layout: Layout, manifest: tuple[Path, str] | None = None, only
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
             written.append(norm(target))
+    if configure.is_file() and json.loads(configure.read_text(encoding="utf-8")).get("offline_acceptance"):
+        port = layout.ports.get("leeroy")
+        if not port:
+            raise LayoutError("offline acceptance requires a separate ports.leeroy endpoint")
+        extras = {
+            "modules/mod_dungeon_clear.conf": {
+                "DungeonClear.TestRun.DriverCharacter": "Dojodriver",
+                "DungeonClear.TestRun.DriverAccount": "DOJODRIVER",
+                "DungeonClear.OfflineValithria": "0",
+                "Appender.DungeonClear": "2,4,1,DungeonClear.log"},
+            "modules/mod_leeroy.conf": {
+                "Leeroy.Enable": "0", "Leeroy.GuildId": "0", "Leeroy.HumanGuid": "0",
+                "Leeroy.Bridge.Host": "127.0.0.1", "Leeroy.Bridge.Port": str(port)}}
+        for name, overrides in extras.items():
+            if only is not None and name not in only:
+                continue
+            target = layout.configs / name
+            template = target if target.exists() else dist_dir / (name + ".dist")
+            target.write_text(conf.render(template.read_text(encoding="utf-8"), overrides), encoding="utf-8")
+            if norm(target) not in written:
+                written.append(norm(target))
     mysql.restrict_to_owner(layout.secrets)
     mysql.restrict_to_owner(layout.tmp)
     note = mysql.restrict_to_owner(layout.configs)

@@ -25,6 +25,145 @@ no Torch or Gymnasium dependency, and no learned policy is claimed.
 
 ## Running-world raid acceptance
 
+### Offline jobs with dungeon-clear
+
+The separate `-OfflineAcceptance -RaidAcceptance -Variant training` build also
+admits an isolated `mod-dungeon-clear` checkout. Add its absolute path as
+`roots.dungeonclear`, its module name to `modules`, and a dedicated unused
+`ports.leeroy` to the layout. Preflight refuses live links; configure/build
+attest this fourth checkout alongside source, core and playerbots.
+
+`realm --layout <layout> offline-acceptance --target naxx-gothik-pass` tests
+the #476 route starting in Razuvious' room. Setup marks only Anub'Rekhan,
+Faerlina, Maexxna, Noth, Heigan, Loatheb and Razuvious done and restores
+ordinary bot strategies before measurement. These seven are fixture
+prerequisites, excluded from earned kill accounting. Setup kills their real
+creatures and Razuvious' two summoned understudies without player credit;
+setting only instance states would leave a live boss on the return route.
+The 45 explicitly listed trash spawns on the upper Military Quarter approach
+and ramp before Razuvious are also prepared dead, with their spawn IDs recorded.
+Leaving them fresh would require reclearing the prerequisite wing on the return
+route. The lower Gothik corridor and Construct Quarter remain fresh. Missing,
+changed or respawned prerequisite spawns fail setup or observation.
+Any prerequisite reactivation fails the gate. The real offline job
+must skip Gothik once and engage the real Patchwerk within 600 seconds;
+Gothik must remain undefeated. No movement, healing, attack or skip command
+is supplied during observation. The separate `naxx-gothik-pass-control`
+exhausts the candidate's existing pass allowance before the job's first tick;
+it must leave Gothik unskipped and terminate `dc_unreachable` through the
+ordinary five-minute route-stall hold. Both require cleanup and shutdown.
+Both refuse a candidate without #476. Neither proves a full Naxx clear.
+
+`realm --layout <layout> offline-acceptance --target toc-beasts` prepares a
+synthetic guild on `DOJORAID` and `RNDBOTDOJO`, using dungeon-clear's actual
+level-80 spec/gear factory capped at item level 245. It restarts only its owned
+world, enables the synthetic guild, sends the candidate mind's real playbook
+through the real bridge/command handler, and starts the production offline job.
+No model or live mind service is used. The connection must remain acknowledged
+and alive throughout the pull. Targets also include `ulduar-xt`,
+`icc-deathwhisper`, `icc-gunship`, and `icc-valithria`.
+
+The trace includes native restart readiness, actual instance boss states,
+positions and requested-damage counts by creature entry. A target needs the
+named encounter DONE in the owned leader's actual instance, followed by real
+job cleanup and world shutdown. A command acknowledgement, an arbitrary kill
+count, missing telemetry, setup failure, or a wipe cap is a failure. Gunship
+DONE is a scripted pass, not a boss kill. The Valithria target enables its
+switch only in the isolated configuration, then restores it to off.
+
+`--target ulduar-restart` waits for the actual XT-002 encounter to engage, then
+uses a token-scoped native command to kill the ten owned synthetic raid actors.
+This is a recorded test stimulus, not an earned combat outcome. The ordinary
+offline job must enter `restarting`, revive and return the complete roster, then
+remain `running` for five seconds with the actual driver and elected tank intact.
+It exercises the recovery path behind `setup:restarting:timeout` without waiting
+for an accidental wipe. The existing setup timeout and cleanup requirements apply.
+
+`--target ulduar-tank-restart` separately waits for Razorscale's real main-tank
+reassignment before applying that wipe. Recovery must restore the job's designated
+tank as well as the complete roster and driver; it does not replace the XT check.
+
+`--target ulduar-forced-tank-restart` is a separate deterministic role-recovery
+check. After real Razorscale engagement it explicitly assigns the other tank's
+ordinary group main-tank flag and records that setup before the full wipe.
+Recovery must restore the designated job tank and satisfy the same restart gate.
+The report marks the forced assignment; it cannot pass either natural-role or
+XT target. This avoids depending on a role change that correct initial grouping
+can prevent. It does not claim Razorscale was defeated.
+The forced stimulus also declines pending self-resurrection offers after the
+real deaths. Otherwise automatic Ankh/Soulstone use turns the intended full wipe
+into a partial wipe. It records the number suppressed; Spirit of Redemption
+expires normally, and the offline job alone performs the restart and revival.
+
+`--target toc-full` and `--target ulduar-full` wait for the production job to
+finish naturally. They require every encounter DONE, the earned kill count,
+the `cleared` terminal, cleanup and shutdown; reaching the first boss or a
+scripted restart cannot pass. These longer runs use a three-hour job limit with
+the same three-wipe caps. The terminal retains the actual encounter-state vector
+after actors return home. `--toc-worm-support` also works with `toc-full`.
+
+`--target toc-anub-intro` prepares the first four ToC encounters complete,
+without earned kill credit, and lets the native Twins outro break the arena
+floor and summon Anub'arak. After setup, ordinary strategies and dungeon-clear
+alone must descend, enter the actual 5475 trigger volume, surface the same
+native boss and engage him within two minutes. The receipt requires trigger
+exposure, attackability and combat state, zero wipes, restored strategies,
+cleanup and shutdown. This checks the chamber transition on either core
+version; it does not certify an Anub'arak kill or a full ToC clear.
+
+Ulduar's current offline route only covers Ignis, Razorscale, XT-002, Kologarn and
+Auriaya. `--target ulduar-route` checks completion of that entire supported route
+with the native `cleared_reachable` terminal. Its receipt explicitly lists the
+nine unverified encounters. A route pass cannot pass `ulduar-full` or establish
+that all Ulduar bosses work.
+
+Run both `--target toc-slime-pools-control` and `--target toc-slime-pools` to check
+Slime Pool avoidance during the actual Northrend Beasts pull. The control disables
+only the isolated mechanic responder and must take real pool damage. The enabled
+case requires a successfully cast pool to grow by at least four yards over twenty
+seconds, an observed entry and escape, three seconds with all ten owned actors
+outside the current pool radii, and no damage after each pool's initial two-second
+reaction window. Unknown damage sources, missing cast evidence, sampling gaps over
+200 ms, lost actors, cleanup failure or shutdown failure cannot pass. The native
+observer reads the spell's actual radius multiplier; it never moves a bot or
+changes a pool. These checks do not claim the whole Beasts encounter was cleared.
+
+Add `--toc-worm-support` to a ToC target to test the candidate toxin/Bile support.
+The native fixture refuses if that feature is absent from the compiled candidate,
+enables it only in this owned run, records active samples, and must restore the
+previous value during cleanup. Both the full Beasts target and the two Slime Pool
+cases accept the option. It never changes the runtime configuration files or a
+live feature switch.
+
+ToC observations include at most sixteen nearby Beasts actors and pools with health,
+enrage, current cast/channel, target and position. Raid actor observations also retain
+health/mana limits, healer role, casts/channels and targets. Movement diagnostics retain
+the AI state, ability to move, root and spline state, and the last movement's destination,
+priority, age and delay; they never call the movement planner or issue an action.
+A ring keeps the last thirty-two spell-damage
+calculations against the synthetic raid. Each calculation carries a sequence,
+run-relative time, instance, actor slot and spell ID. Sort by sequence and deduplicate
+across observations; the ring can overwrite events between polls. These calculations
+precede final damage application and are diagnostic evidence, not landed-hit or
+lethal-damage assertions. They do not change an acceptance verdict or any actor.
+
+`--target offline-reserves` starts with nine primary members and offers the
+fixed benched healer through the production reserve field. Its gate requires
+ten distinct owned members, including that reserve, alive in the same running
+instance for five seconds with the correct elected leader. Cleanup must return
+the reserve to the open world without a group, master or offline-job ownership.
+This proves reserve admission and return, not an encounter kill.
+
+After preparation and shutdown, the runner checkpoints the synthetic auth,
+character and playerbots schemas under `secrets/offline-fixture`. Each later
+pull restores that same guild, equipment and unbound instance state while the
+owned world is stopped. Realm identity and every dump hash must match before
+any import. These dumps contain synthetic account credentials and must remain
+private. The report records the checkpoint hash for comparison. These runs are
+10-player normal checks; they do not certify other difficulties or enable live
+features. Automatic random population remains disabled; only `RNDBOTDOJO` gets
+the type-1 account assignment that ordinary guild pinning requires.
+
 The separate raid acceptance build exercises the real playerbots strategies,
 core encounter scripts and mod-leeroy hazard filter. It uses a dedicated dojo
 layout, MySQL instance, synthetic `DOJORAID` account and two fixture characters.
@@ -457,9 +596,16 @@ inert until a caller acquires a bot:
 
 `scripts/dojo/patches.ps1 -Layout <layout.json> [-Apply] [-Json]` checks the
 isolated checkout against the series: tracked files clean, and its commits
-since the provenance baseline exactly the series by stable patch id; `-Apply`
-applies a missing tail with `git am --3way` and never resets or drops a
-commit. It also checks the gate's place in `UpdateAI` on every run, as the pin
+since the unchanged production provenance baseline exactly the uninstalled tail
+of `patches/mod-playerbots`, followed by the dojo series, by stable patch id.
+Installed production entries are recognized by commit ancestry and content or
+by stable patch id in baseline history. A rewritten installed entry, a hole in
+the installed prefix, duplicate patches, merge commits, unrelated changes or
+the wrong order are refused. `-Apply` applies a missing tail with `git am
+--3way` and never resets or drops a commit. Keep unreleased production fixes in
+the committed production series before building their isolated candidate;
+do not rewrite the provenance baseline to make a candidate pass.
+It also checks the gate's place in `UpdateAI` on every run, as the pin
 guard check does. The nightly `patches` workflow applies the series on top of
 `patches/mod-playerbots` and runs the playerbots codestyle check.
 
