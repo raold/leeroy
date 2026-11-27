@@ -79,6 +79,7 @@ struct Trial
     uint32 elapsed = 0, phaseMs = 0, samples = 0, maxGap = 0, deathAt = 0;
     uint32 startingBossHealth = 0, leastBossHealth = 0;
     json lastBodies = json::array(), lastBoss = json::object(), recentEffects = json::array();
+    json lastFields = json::array();
     json recentCasts = json::array();
     json failureFacts = json::object();
     bool active = false, negative = false, ready = false, humanBoarded = false, cleanup = false, humanGone = false;
@@ -138,17 +139,44 @@ struct Trial
                     {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
                     {"combat_strategy", ai->HasStrategy(scenario == "malygos" ? "wotlk-eoe" : "ulduar", BOT_STATE_COMBAT)},
                     {"idle_strategy", ai->HasStrategy(scenario == "malygos" ? "wotlk-eoe" : "ulduar", BOT_STATE_NON_COMBAT)}};
-                if (base) body["vehicle"] = {{"entry", base->GetEntry()}, {"alive", base->IsAlive()},
+                if (base)
+                {
+                    float goalX = 0, goalY = 0, goalZ = 0;
+                    bool const hasGoal = base->GetMotionMaster()->GetDestination(goalX, goalY, goalZ);
+                    auto* speed = base->GetAura(57092);
+                    body["vehicle"] = {{"entry", base->GetEntry()}, {"alive", base->IsAlive()},
                     {"health", base->GetHealth()}, {"max_health", base->GetMaxHealth()},
                     {"energy", base->GetPower(POWER_ENERGY)}, {"combo_points", base->GetComboPoints()},
                     {"combat", base->IsInCombat()}, {"moving", base->isMoving()},
-                    {"flight_speed", base->GetSpeed(MOVE_FLIGHT)}, {"run_speed", base->GetSpeed(MOVE_RUN)}};
+                    {"flight_speed", base->GetSpeed(MOVE_FLIGHT)}, {"run_speed", base->GetSpeed(MOVE_RUN)},
+                    {"motion", uint32(base->GetMotionMaster()->GetCurrentMovementGeneratorType())},
+                    {"has_goal", hasGoal}, {"goal", {goalX, goalY, goalZ}},
+                    {"spline_velocity", base->movespline->Velocity()},
+                    {"spline_time_ms", base->movespline->timePassed()}, {"spline_duration_ms", base->movespline->Duration()},
+                    {"speed_aura_ms", speed ? speed->GetDuration() : 0},
+                    {"speed_cooldown", base->HasSpellCooldown(57092)}};
+                }
                 lastBodies.push_back(std::move(body));
             }
-        if (auto* boss = Boss()) lastBoss = {{"health", boss->GetHealth()}, {"combat", boss->IsInCombat()},
+        lastFields = json::array();
+        if (auto* boss = Boss())
+        {
+            lastBoss = {{"health", boss->GetHealth()}, {"combat", boss->IsInCombat()},
             {"x", boss->GetPositionX()}, {"y", boss->GetPositionY()}, {"z", boss->GetPositionZ()},
             {"boss_state", uint32(boss->GetInstanceScript()->GetBossState(0))},
             {"non_attackable", boss->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE)}, {"immune_pc", boss->IsImmuneToPC()}};
+            if (scenario == "malygos")
+            {
+                std::list<Creature*> fields;
+                boss->GetCreatureListWithEntryInGrid(fields, 30592, 200.f);
+                auto const* damage = sSpellMgr->GetSpellInfo(57429);
+                for (auto* field : fields)
+                    if (field && lastFields.size() < 32)
+                        lastFields.push_back({{"guid", field->GetGUID().GetCounter()},
+                            {"x", field->GetPositionX()}, {"y", field->GetPositionY()}, {"z", field->GetPositionZ()},
+                            {"radius", damage ? damage->Effects[EFFECT_0].CalcRadius(field) : 0.f}});
+            }
+        }
     }
     void Fail(std::string const& why) { Capture(); failure = why; Phase("cleanup"); }
     std::string Start(std::string const& encounter, std::string const& id, bool control)
@@ -172,6 +200,7 @@ struct Trial
         token = id; scenario = encounter; negative = control; failure.clear(); group.Clear(); bossGuid.Clear(); mounts = {};
         failureFacts = json::object();
         lastBodies = json::array(); lastBoss = json::object(); recentEffects = json::array(); recentCasts = json::array();
+        lastFields = json::array();
         elapsed = samples = maxGap = deathAt = startingBossHealth = leastBossHealth = 0;
         travelled = {}; hits = {}; movingHits = {}; afterDeathHits = {}; seats = {};
         surgeSamples = {}; shieldSamples = {}; ringSamples = {};
@@ -585,7 +614,8 @@ struct Trial
             {"setup_add_kills", setupKills}, {"heal_events", healEvents}, {"effective_healing", effectiveHealing},
             {"dot_samples", dotSamples}, {"field_samples", fieldSamples}, {"surge_samples", surgeSamples},
             {"shield_samples", shieldSamples}, {"safe_ring_samples", ringSamples},
-            {"field_escapes", fieldEscapes}, {"longest_field_ms", longestFieldMs},
+            {"field_escapes", fieldEscapes}, {"longest_field_ms", longestFieldMs}, {"field_ms", fieldMs},
+            {"elapsed_ms", elapsed}, {"phase_ms", phaseMs}, {"static_fields", lastFields},
             {"bodies", lastBodies}, {"boss", lastBoss}, {"recent_effects", recentEffects}, {"recent_casts", recentCasts}};
     }
 };

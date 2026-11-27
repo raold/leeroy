@@ -235,6 +235,10 @@ rejects observation gaps above 200 ms, and requires cleanup and world shutdown.
 Movement uses the map-update interval and both observed endpoint speeds, so
 expiry of a native speed aura cannot apply the slower final rate retroactively.
 The original distance margin is unchanged, and unexplained jumps still fail.
+Numeric vehicle snapshots include the active Static Field positions/radii,
+current exposure timers, movement destination and spline timing, and the native
+speed aura/cooldown. These read-only diagnostics distinguish slow flight from a
+route through another field; they do not change the four-second escape verdict.
 These are mechanic probes, not full boss kills. They do not certify Leviathan's
 opening gauntlet, nested gunners, pyrite supply, hard modes or 25-player coverage.
 Adding them or passing their verdict tests does not authorize live enablement.
