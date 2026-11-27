@@ -143,6 +143,7 @@ struct Trial
                 {
                     float goalX = 0, goalY = 0, goalZ = 0;
                     bool const hasGoal = base->GetMotionMaster()->GetDestination(goalX, goalY, goalZ);
+                    bool const splineReady = base->movespline->Initialized();
                     auto* speed = base->GetAura(57092);
                     body["vehicle"] = {{"entry", base->GetEntry()}, {"alive", base->IsAlive()},
                     {"health", base->GetHealth()}, {"max_health", base->GetMaxHealth()},
@@ -151,8 +152,10 @@ struct Trial
                     {"flight_speed", base->GetSpeed(MOVE_FLIGHT)}, {"run_speed", base->GetSpeed(MOVE_RUN)},
                     {"motion", uint32(base->GetMotionMaster()->GetCurrentMovementGeneratorType())},
                     {"has_goal", hasGoal}, {"goal", {goalX, goalY, goalZ}},
+                    {"spline_initialized", splineReady},
                     {"spline_velocity", base->movespline->Velocity()},
-                    {"spline_time_ms", base->movespline->timePassed()}, {"spline_duration_ms", base->movespline->Duration()},
+                    {"spline_time_ms", base->movespline->timePassed()},
+                    {"spline_duration_ms", splineReady ? base->movespline->Duration() : 0},
                     {"speed_aura_ms", speed ? speed->GetDuration() : 0},
                     {"speed_cooldown", base->HasSpellCooldown(57092)}};
                 }
