@@ -302,6 +302,19 @@ bool HazardApplies(HazardZone const& zone, std::uint32_t phaseMask, bool tank)
     return !(zone.held && tank);
 }
 
+std::string_view HazardKindCode(HazardKind kind)
+{
+    switch (kind)
+    {
+        case HazardKind::Dynamic: return "dynamic";
+        case HazardKind::Trap: return "trap";
+        case HazardKind::Trigger: return "trigger";
+        case HazardKind::HeldAura: return "held_aura";
+        case HazardKind::Proximity: return "proximity";
+        default: return "unknown";
+    }
+}
+
 std::vector<HazardZone> HazardZonesFor(std::vector<HazardZone> const& zones, std::uint32_t phaseMask, bool tank)
 {
     std::vector<HazardZone> out;
@@ -599,7 +612,10 @@ HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> c
     return HazardExitYielded(guard, zones, now) ? HazardEntry::YieldStarts : HazardEntry::Exit;
 }
 
-HazardEntry NoteHazardZoneEntry(HazardExitGuard& guard, std::vector<HazardZone> const& inside, std::uint64_t now)
+namespace
+{
+HazardEntry NoteZoneEntry(HazardExitGuard& guard, std::vector<HazardZone> const& inside,
+    std::vector<std::uint64_t> const& overtook, std::uint64_t now)
 {
     std::vector<std::uint64_t> standing;
     std::vector<std::uint64_t> fixed;
@@ -608,7 +624,7 @@ HazardEntry NoteHazardZoneEntry(HazardExitGuard& guard, std::vector<HazardZone> 
     for (HazardZone const& zone : inside)
     {
         standing.push_back(zone.id);
-        if (zone.moving)
+        if (zone.moving || std::find(overtook.begin(), overtook.end(), zone.id) != overtook.end())
         {
             moving = true;
             continue;
@@ -622,6 +638,30 @@ HazardEntry NoteHazardZoneEntry(HazardExitGuard& guard, std::vector<HazardZone> 
     if (moving || !HazardExitYielded(guard, fixed, now))
         return HazardEntry::Exit;
     return started ? HazardEntry::YieldStarts : HazardEntry::Yielded;
+}
+}
+
+HazardEntry NoteHazardZoneEntry(HazardExitGuard& guard, std::vector<HazardZone> const& inside, std::uint64_t now)
+{
+    return NoteZoneEntry(guard, inside, {}, now);
+}
+
+HazardEntry NoteHazardPosition(HazardExitGuard& guard, std::vector<HazardZone> const& zones,
+    HazardPoint at, float reach, std::uint64_t now)
+{
+    std::vector<HazardZone> inside;
+    std::vector<std::uint64_t> overtook;
+    for (HazardZone const& zone : zones)
+    {
+        if (!InHazard(at, zone, reach)) continue;
+        inside.push_back(zone);
+        auto const previous = std::find_if(guard.observed.begin(), guard.observed.end(),
+            [&](HazardZone const& old) { return old.id == zone.id; });
+        if (previous != guard.observed.end() && !InHazard(at, *previous, reach))
+            overtook.push_back(zone.id);
+    }
+    guard.observed = zones; // bounded to this scan, not a growing history of despawned objects
+    return NoteZoneEntry(guard, inside, overtook, now);
 }
 
 bool HazardEligible(HazardMemberFacts const& facts)

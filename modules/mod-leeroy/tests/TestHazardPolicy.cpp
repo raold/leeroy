@@ -406,6 +406,68 @@ LEEROY_TEST(Hazard_SlowEntriesNeverYield)
     CHECK(!HazardExitYielded(guard, seven, 4 * kHazardExitWindowMs + 2));
 }
 
+LEEROY_TEST(Hazard_GrowingCloudOvertakesAreNotRepeatedWalksBackIntoIt)
+{
+    HazardExitGuard guard, oldGuard;
+    HazardZone cloud{0, 0, 0, 2, 7};
+    HazardPoint at{5, 0, 0};
+    float const reach = 1.0f;
+    NoteHazardPosition(guard, {cloud}, at, reach, 0);
+    HazardEntry oldAnswer = HazardEntry::Exit;
+    for (std::uint64_t now : {8000u, 15000u, 22000u})
+    {
+        // The core's Grobbulus cloud grows 0.00025 yards/ms. The bot waits at its safe exit;
+        // each later contact comes from growth, without walking toward the cloud at all.
+        cloud.radius = 2.0f + 0.00025f * now;
+        CHECK(InHazard(at, cloud, reach));
+        oldAnswer = NoteHazardZoneEntry(oldGuard, {cloud}, now);
+        CHECK(NoteHazardPosition(guard, {cloud}, at, reach, now) == HazardEntry::Exit);
+        at.x = cloud.radius + reach + kHazardMarginYards + 0.1f;
+        CHECK(!InHazard(at, cloud, reach));
+        oldGuard.standing.clear();
+        NoteHazardPosition(guard, {cloud}, at, reach, now + 1);
+    }
+    CHECK(oldAnswer == HazardEntry::YieldStarts); // reproduces the old false loop diagnosis
+    CHECK(!HazardExitYielded(guard, {7}, 22000));
+}
+
+LEEROY_TEST(Hazard_RealReturnsStillYieldEvenWhileTheCloudGrows)
+{
+    HazardExitGuard guard;
+    HazardZone cloud{0, 0, 0, 2, 7};
+    for (std::uint64_t now : {1000u, 3000u, 5000u})
+    {
+        NoteHazardPosition(guard, {cloud}, {20, 0, 0}, 1.0f, now - 1);
+        cloud.radius += 0.5f;
+        auto const answer = NoteHazardPosition(guard, {cloud}, {0, 0, 0}, 1.0f, now);
+        CHECK(answer == (now == 5000 ? HazardEntry::YieldStarts : HazardEntry::Exit));
+    }
+    CHECK(HazardExitYielded(guard, {7}, 5000));
+    CHECK(NoteHazardPosition(guard, {cloud}, {0, 0, 0}, 1.0f, 6000) == HazardEntry::Yielded);
+    // A new danger overlapping the yielded cloud must still be escaped.
+    CHECK(NoteHazardPosition(guard, {cloud, HazardZone{0, 0, 0, 1, 8}}, {0, 0, 0}, 1.0f, 7000)
+        == HazardEntry::Exit);
+    NoteHazardPosition(guard, {}, {20, 0, 0}, 1.0f, 8000);
+    CHECK(guard.observed.empty() && guard.standing.empty());
+}
+
+LEEROY_TEST(Hazard_SourceCodesAndMotionPreserveMeasuredIdentity)
+{
+    HazardZone zone{0, 0, 0, 2, 7};
+    zone.spell = 54363;
+    zone.entry = 16363;
+    zone.kind = HazardKind::Trigger;
+    auto const led = HazardLeadZone(zone, HazardPoint{10, 0, 0}, 2.0f);
+    CHECK_EQ(led.spell, zone.spell);
+    CHECK_EQ(led.entry, zone.entry);
+    CHECK(HazardKindCode(led.kind) == "trigger");
+    CHECK(HazardKindCode(HazardKind::Dynamic) == "dynamic");
+    CHECK(HazardKindCode(HazardKind::Trap) == "trap");
+    CHECK(HazardKindCode(HazardKind::HeldAura) == "held_aura");
+    CHECK(HazardKindCode(HazardKind::Proximity) == "proximity");
+    CHECK(HazardKindCode(static_cast<HazardKind>(255)) == "unknown");
+}
+
 // Re-review of #296, R-P3-1: a route through two overlapping hazards enters them by turns; each is counted on
 // its own, so both yield and the bot is let through.
 LEEROY_TEST(Hazard_OverlappingHazardsEnteredByTurnsBothYield)

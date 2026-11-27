@@ -98,6 +98,9 @@ struct HazardPoint
     float x = 0, y = 0, z = 0;
 };
 
+enum class HazardKind : std::uint8_t { Unknown, Dynamic, Trap, Trigger, HeldAura, Proximity };
+std::string_view HazardKindCode(HazardKind kind);
+
 struct HazardZone
 {
     float x = 0, y = 0, z = 0, radius = 0;
@@ -107,6 +110,8 @@ struct HazardZone
     bool moving = false;     // it walks, and is led along its path (HazardLeadZone)
     // moving: where it is, its own radius before the lead, its velocity (yards a second) and how long it keeps it
     float px = 0, py = 0, core = 0, vx = 0, vy = 0, until = 0;
+    std::uint32_t spell = 0, entry = 0; // measured damage spell and source entry; 0 when not applicable
+    HazardKind kind = HazardKind::Unknown;
     bool operator==(HazardZone const&) const = default;
 };
 
@@ -216,6 +221,7 @@ struct HazardExitGuard
 {
     std::map<std::uint64_t, HazardExitCount> zones;
     std::vector<std::uint64_t> standing; // the zones the bot stood in at its last answer (none once it stood clear)
+    std::vector<HazardZone> observed; // previous geometry, including zones the bot stood outside
 };
 // Every zone the bot stands in is yielded: its own movers take it through.
 bool HazardExitYielded(HazardExitGuard const& guard, std::vector<std::uint64_t> const& zones, std::uint64_t now);
@@ -234,6 +240,10 @@ HazardEntry NoteHazardEntry(HazardExitGuard& guard, std::vector<std::uint64_t> c
 // walked onto the bot (no mover walked the bot back into it): never counted, never yielded, and Exit whenever the
 // bot stands in one. Otherwise Yielded / YieldStarts once every zone it stands in is yielded, as NoteHazardEntry.
 HazardEntry NoteHazardZoneEntry(HazardExitGuard& guard, std::vector<HazardZone> const& inside, std::uint64_t now);
+// Observe even a clear position. An expanding/moving boundary that newly covers this position is not a bot
+// walking back into the old footprint. Actual returns inside that footprint still count toward the same guard.
+HazardEntry NoteHazardPosition(HazardExitGuard& guard, std::vector<HazardZone> const& zones,
+    HazardPoint at, float reach, std::uint64_t now);
 
 // A body the tick looks at: one of the owner's group, or one whose non-combat avoid aoe it added.
 struct HazardMemberFacts

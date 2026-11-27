@@ -110,6 +110,34 @@ def test_all_rez_reasons_and_hazards_stay_unassigned_and_counts_are_lower_bounds
     assert "unassigned" in r["evidence"]["hazards"]
 
 
+def test_hazard_source_details_survive_without_counting_overlaps_as_more_yields(sample):
+    _, root = sample
+    source = 'map=631 instance=77 spell=72754 kind=trigger entry=38757 hazard=17379390965131100001'
+    other = 'map=631 instance=77 spell=70825 kind=dynamic entry=0 hazard=17379390965131100002'
+    lines = [native(START+40, f'hazard_exit_yield guid=101 zones=2 {source} details=2'),
+             native(START+40, f'hazard_exit_zone guid=101 {other}'),
+             native(START+41, f'hazard_exit_yield guid=101 zones=1 {other} details=1')]
+    (root/'native'/'Server.log').write_text(''.join(lines), encoding='utf-8')
+    hazards = report(sample)['hazards']
+    assert len(hazards) == 3
+    assert sum(h['records'] for h in hazards if h['event'] == 'hazard_exit_yield') == 2
+    assert {(h['spell'], h['kind'], h['map'], h['instance']) for h in hazards} == {
+        (72754, 'trigger', 631, 77), (70825, 'dynamic', 631, 77)}
+    assert hazards[0]['hazard'] == 17379390965131100001
+
+
+@pytest.mark.parametrize('suffix', ['kind=private_payload entry=0 hazard=1',
+                                   'kind=trigger entry=0 hazard=18446744073709551616',
+                                   'kind=trigger entry=0 hazard=1 extra=private_payload'])
+def test_hazard_diagnostics_reject_unrecognised_text_and_overflow(sample, suffix):
+    _, root = sample
+    (root/'native'/'Server.log').write_text(native(START+40,
+        f'hazard_exit_zone guid=101 map=631 instance=77 spell=72754 {suffix}'), encoding='utf-8')
+    result = report(sample)
+    assert result['hazards'] == []
+    assert 'private_payload' not in json.dumps(result)
+
+
 def test_rotations_mind_native_bound_stop_short_full_wipe_and_terminal(sample):
     fake, root = sample
     fake.conn.execute("DELETE FROM meta WHERE key='guild:offline:owned'")
