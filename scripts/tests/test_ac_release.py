@@ -56,6 +56,10 @@ fi
 ''',
             "scripts/ac-build.sh": '''#!/usr/bin/env bash
 printf 'build jobs=%s\\n' "$AC_JOBS" >> "$AC_ROOT/actions.log"
+if [[ -n ${BUILD_OOM:-} && $AC_JOBS -gt 4 ]]; then
+    printf 'cl : error C3859: Failed to create virtual memory for PCH\\n' > "$AC_ROOT/build/build-oom.log"
+    exit 1
+fi
 printf 'new binary' > "$AC_ROOT/build/bin/RelWithDebInfo/worldserver.exe"
 printf 'new dll' > "$AC_ROOT/build/bin/RelWithDebInfo/new.dll"
 case "${BUILD_OWNER_CHANGE:-}" in
@@ -165,6 +169,7 @@ exit "${FAIL_CONSOLE:-0}"
         for path in stub.iterdir():
             path.chmod(0o755)
         self.env = dict(os.environ, AC_ROOT=self.root.as_posix(),
+                        AC_RELEASE_FREE_COMMIT_GB="0",
                         AC_RELEASE_PYTHON=Path(sys.executable).as_posix(),
                         AC_RELEASE_MYSQL=(stub / "mysql").as_posix(),
                         LEEROY_MIND_DATA=self.db.parent.as_posix(),
@@ -431,6 +436,37 @@ exit "${FAIL_CONSOLE:-0}"
         self.assertFalse((self.root / ".superpowers/live-build.lock").exists())
         self.assertNotIn("migrate", self.actions())
         self.original()
+
+    def test_native_build_uses_sixteen_jobs_with_ample_free_memory(self):
+        output = self.run_release("--native", self.native, AC_RELEASE_FREE_COMMIT_GB="84")
+        self.assertIn("building with AC_JOBS=16", output)
+        self.assertEqual(self.actions().count("build jobs="), 1)
+        self.assertIn("build jobs=16\n", self.actions())
+
+    def test_native_build_jobs_shrink_with_free_memory(self):
+        output = self.run_release("--native", self.native, AC_RELEASE_FREE_COMMIT_GB="40")
+        self.assertIn("building with AC_JOBS=6", output)
+        self.assertIn("build jobs=6\n", self.actions())
+
+    def test_out_of_memory_build_retries_once_at_four_jobs(self):
+        output = self.run_release("--native", self.native, AC_RELEASE_FREE_COMMIT_GB="84", BUILD_OOM="1")
+        self.assertIn("ran out of memory at AC_JOBS=16; rebuilding at AC_JOBS=4", output)
+        self.assertLess(self.actions().index("build jobs=16"), self.actions().index("build jobs=4"))
+        self.assertIn("started binary: new binary", self.actions())
+
+    def test_other_build_failure_is_not_retried(self):
+        output = self.run_release("--native", self.native, rc=2, AC_RELEASE_FREE_COMMIT_GB="84", FAIL_BUILD="1")
+        self.assertNotIn("rebuilding at AC_JOBS=4", output)
+        self.assertEqual(self.actions().count("build jobs="), 1)
+        self.assertIn("started binary: old binary", self.actions())
+
+    def test_stale_out_of_memory_log_does_not_trigger_a_retry(self):
+        stale = self.root / "build" / "build-old.log"
+        stale.write_text("cl : error C3859: Failed to create virtual memory for PCH\n")
+        os.utime(stale, (1_000_000_000, 1_000_000_000))
+        output = self.run_release("--native", self.native, rc=2, AC_RELEASE_FREE_COMMIT_GB="84", FAIL_BUILD="1")
+        self.assertNotIn("rebuilding at AC_JOBS=4", output)
+        self.assertEqual(self.actions().count("build jobs="), 1)
 
     def test_failed_migration_restores_database(self):
         self.run_release(self.single, rc=2, FAIL_MIGRATE="1")
