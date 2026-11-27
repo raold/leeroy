@@ -473,11 +473,12 @@ output in `patches/`:
   a tank under her adds uses its own defensive cooldowns (stock Shield Wall sat
   under the rotation). `valithria_watch` lines carry `adds=`. `0` restores the
   patch 0021 behaviour exactly. `Playerbots.ValithriaPortalTurns` (default `1`)
-  sends the healers on her through the portals one at a time: at most one is
-  in the dream or on the way to a portal, never so many that fewer than one
-  (two with four or more healers) stay on her, and the turn goes to the healer
-  with the fewest trips (live on 2026-11-26 both went through every wave
-  together and she stalled). A healer back from a heroic dream carrying
+  sends the healers on her through heroic's Nightmare portals one at a time: at
+  most one is in the dream or on the way to a portal, never so many that fewer
+  than one (two with four or more healers) stay on her, and the turn goes to the
+  healer with the fewest trips (live on 2026-11-26 both went through every wave
+  together and she stalled). On normal they all still go: the Dream clouds hurt
+  nobody and their Emerald Vigor stacks are the healing. A healer back from a heroic dream carrying
   Twisted Nightmares (200 Nature a second per stack for 40 s, the largest
   damage either healer on her takes) heals itself first below 70% and steps
   out of Mana Voids even while stacked, and the walk to a portal steps out of

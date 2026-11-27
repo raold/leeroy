@@ -1,6 +1,6 @@
-From 2ec62b771470bff3a9897552d4f14aee657c6cf5 Mon Sep 17 00:00:00 2001
+From 21c3bf77d7d37ec93c4f48e2f2e7b457cada8587 Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
-Date: Thu, 26 Nov 2026 05:55:59 -0500
+Date: Thu, 26 Nov 2026 19:48:36 -0500
 Subject: [PATCH] Split Valithria's adds between the tanks and kill them in
  order
 
@@ -32,9 +32,11 @@ the whole pull.
   Protection, Lay on Hands; Vampiric Blood, Icebound Fortitude; Barkskin, Survival Instincts, each
   below its health line (stock Shield Wall sat at ACTION_MEDIUM_HEAL, under the rotation).
 - No crowd control on a zombie a tank holds.
-- ValithriaPortalTurns: the healers on her take the portals one at a time. Live on 2026-11-26 both went
-  through every wave together (portal=2, then dream=2), leaving one or none healing her for 20-25 s a
-  cycle. At most one healer is in the dream or holds a live portal claim, never so many that fewer
+- ValithriaPortalTurns, on heroic: the healers on her take the Nightmare portals one at a time. Live on
+  2026-11-26 both went through every wave together (portal=2, then dream=2), leaving one or none
+  healing her for 20-25 s a cycle. On normal they still all go: the Dream clouds hurt nobody and their
+  Emerald Vigor is the healing engine (with turns the dojo 10-normal raid peaked at 8-10 stacks instead
+  of 18-38 and lost her at 96%). At most one healer is in the dream or holds a live portal claim, never so many that fewer
   than one (two with four or more healers) stay on her, and the turn goes to the healer with the
   fewest trips, then the oldest trip (RaidInteractions::TakesPortalTurn). A healer back from a heroic
   dream carries Twisted Nightmares for 40 s (200 Nature a second per stack, 43-146k per healer per
@@ -43,32 +45,32 @@ the whole pull.
   portal steps out of Columns and Voids (the portal action outranked the group action's sidestep).
 - valithria_watch gains adds= and turns= (also on its end line).
 - ValithriaAdds = 0 restores the 0021 behaviour exactly; ValithriaPortalTurns = 0 sends the healers
-  on her through each wave together, as 0021 does.
+  on her through each heroic wave together, as 0021 does.
 ---
- conf/playerbots.conf.dist                |  15 +
+ conf/playerbots.conf.dist                |  16 ++
  src/Ai/Raid/ICC/Action/ICCActions.h      |  18 ++
- src/Ai/Raid/ICC/Action/ICCActions_VT.cpp | 217 ++++++++++++++-
+ src/Ai/Raid/ICC/Action/ICCActions_VT.cpp | 217 +++++++++++++-
  src/Ai/Raid/ICC/ICCActionContext.h       |   4 +
  src/Ai/Raid/ICC/ICCMultipliers.cpp       |  11 +
  src/Ai/Raid/ICC/ICCScripts.h             |   7 +
- src/Ai/Raid/ICC/ICCShared.cpp            | 187 ++++++++++++-
+ src/Ai/Raid/ICC/ICCShared.cpp            | 189 ++++++++++++-
  src/Ai/Raid/ICC/ICCShared.h              |  13 +
  src/Ai/Raid/ICC/ICCStrategy.cpp          |  44 +++
  src/Ai/Raid/ICC/ICCStrategy.h            |   2 +
  src/Ai/Raid/ICC/ICCTriggerContext.h      |   7 +
  src/Ai/Raid/ICC/ICCTriggers.cpp          |   6 +-
  src/Ai/Raid/ICC/ICCTriggers.h            |  14 +
- src/Ai/Raid/RaidInteractionPolicy.h      | 337 +++++++++++++++++++++++
+ src/Ai/Raid/RaidInteractionPolicy.h      | 345 +++++++++++++++++++++++
  src/PlayerbotAIConfig.cpp                |   2 +
  src/PlayerbotAIConfig.h                  |   2 +
- tests/raid_interactions_test.cpp         | 307 +++++++++++++++++++++
- 17 files changed, 1179 insertions(+), 14 deletions(-)
+ tests/raid_interactions_test.cpp         | 312 ++++++++++++++++++++
+ 17 files changed, 1195 insertions(+), 14 deletions(-)
 
 diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
-index c8838cf8..2184168c 100644
+index c8838cf8..ae88c20d 100644
 --- a/conf/playerbots.conf.dist
 +++ b/conf/playerbots.conf.dist
-@@ -503,6 +503,21 @@ Playerbots.ValithriaHealerFocus = 1
+@@ -503,6 +503,22 @@ Playerbots.ValithriaHealerFocus = 1
  # hurting her. 0 keeps every healer out of the dream. Default: 1.
  Playerbots.ValithriaPortals = 1
  
@@ -80,11 +82,12 @@ index c8838cf8..2184168c 100644
 +# cooldowns. 0 restores the ValithriaHealerFocus behaviour exactly. Default: 1.
 +Playerbots.ValithriaAdds = 1
 +
-+# With ValithriaPortals: the healers on her take the portals in turn. At most one healer is in the dream or on the
-+# way to a portal at a time, never so many that fewer than one (two with four or more healers) stay on her, and the
-+# turn goes to the healer with the fewest trips. A healer back from a heroic dream with Twisted Nightmares heals
-+# itself first below 70% and steps out of Mana Voids even while stacked; the walk to a portal steps out of Columns
-+# of Frost and Mana Voids. 0 sends every healer on her through each portal wave together, as before. Default: 1.
++# With ValithriaPortals, on heroic: the healers on her take the Nightmare portals in turn. At most one healer is in the
++# dream or on the way to a portal at a time, never so many that fewer than one (two with four or more healers) stay
++# on her, and the turn goes to the healer with the fewest trips (on normal they all go: Emerald Vigor stacks are the
++# healing engine there). A healer back from a heroic dream with Twisted Nightmares heals itself first below 70% and
++# steps out of Mana Voids even while stacked; the walk to a portal steps out of Columns of Frost and Mana Voids.
++# 0 sends every healer on her through each heroic wave together, as before. Default: 1.
 +Playerbots.ValithriaPortalTurns = 1
 +
  # Opt-in Malygos drake positioning/rotation and human-led Flame Leviathan vehicles.
@@ -524,7 +527,7 @@ index 60eef5c3..fe89127b 100644
  
          Position gsbLastStarPos;
 diff --git a/src/Ai/Raid/ICC/ICCShared.cpp b/src/Ai/Raid/ICC/ICCShared.cpp
-index b08011d7..af73f7ec 100644
+index b08011d7..df7e8e9d 100644
 --- a/src/Ai/Raid/ICC/ICCShared.cpp
 +++ b/src/Ai/Raid/ICC/ICCShared.cpp
 @@ -7,6 +7,8 @@
@@ -548,7 +551,7 @@ index b08011d7..af73f7ec 100644
  #include "StringFormat.h"
  #include "ThreatManager.h"
  #include "Timer.h"
-@@ -332,6 +337,51 @@ bool IccValithriaCanUsePortal(Player* bot)
+@@ -332,6 +337,53 @@ bool IccValithriaCanUsePortal(Player* bot)
                                            sPlayerbotAIConfig.ValithriaHealerFocus, sPlayerbotAIConfig.ValithriaPortals);
  }
  
@@ -557,7 +560,9 @@ index b08011d7..af73f7ec 100644
 +    if (!IccValithriaCanUsePortal(bot))
 +        return false;
 +    Group* group = bot->GetGroup();
-+    if (!sPlayerbotAIConfig.ValithriaPortalTurns || !group)
++    Difficulty const difficulty = bot->GetMap()->GetDifficulty();
++    bool const heroic = difficulty == RAID_DIFFICULTY_10MAN_HEROIC || difficulty == RAID_DIFFICULTY_25MAN_HEROIC;
++    if (!RaidInteractions::PortalTurnsApply(sPlayerbotAIConfig.ValithriaPortalTurns, heroic) || !group)
 +        return true;
 +    IcecrownHelpers::IccInstanceState& state = IcecrownHelpers::IccState(bot->GetMap()->GetInstanceId());
 +    uint32 const now = getMSTime();
@@ -600,7 +605,7 @@ index b08011d7..af73f7ec 100644
  bool IccValithriaTakesCloud(Player* bot)
  {
      Difficulty const difficulty = bot->GetMap()->GetDifficulty();
-@@ -341,6 +391,115 @@ bool IccValithriaTakesCloud(Player* bot)
+@@ -341,6 +393,115 @@ bool IccValithriaTakesCloud(Player* bot)
                                          twisted ? twisted->GetStackAmount() : 0);
  }
  
@@ -716,7 +721,7 @@ index b08011d7..af73f7ec 100644
  namespace
  {
  RaidInteractions::HealerClass ValithriaHealerKind(uint8 playerClass)
-@@ -381,6 +540,18 @@ Unit* ValithriaFiendTarget(Player* bot, PlayerbotAI* botAI)
+@@ -381,6 +542,18 @@ Unit* ValithriaFiendTarget(Player* bot, PlayerbotAI* botAI)
  }
  }  // namespace
  
@@ -735,7 +740,7 @@ index b08011d7..af73f7ec 100644
  uint32 IccValithriaManaCooldown(Player* bot, PlayerbotAI* botAI, Unit*& target)
  {
      target = nullptr;
-@@ -474,11 +645,13 @@ void IccValithriaWatch(Creature* valithria)
+@@ -474,11 +647,13 @@ void IccValithriaWatch(Creature* valithria)
      if (encounter != IN_PROGRESS || !valithria->IsAlive())
      {
          if (watch.engaged)
@@ -751,7 +756,7 @@ index b08011d7..af73f7ec 100644
          return;
      }
  
-@@ -524,7 +697,7 @@ void IccValithriaWatch(Creature* valithria)
+@@ -524,7 +699,7 @@ void IccValithriaWatch(Creature* valithria)
          in.kited = ValithriaChases(zombies, member);
          in.wormed = ValithriaChases(worms, member);
          in.portal = portalUp && alive && (!twisted || twisted->GetStackAmount() < 25) &&
@@ -760,7 +765,7 @@ index b08011d7..af73f7ec 100644
          in.lowHealth = member->HealthBelowPct(50);
          in.dragon = alive && IccValithriaHealsDragon(member).value_or(false);
          char const* duty = RaidInteractions::ValithriaDuty(in);
-@@ -550,9 +723,11 @@ void IccValithriaWatch(Creature* valithria)
+@@ -550,9 +725,11 @@ void IccValithriaWatch(Creature* valithria)
      std::string summary;
      for (auto const& [duty, count] : duties)
          summary += " " + duty + "=" + std::to_string(count);
@@ -960,10 +965,10 @@ index 508d7a5c..67dc8fe4 100644
  {
  public:
 diff --git a/src/Ai/Raid/RaidInteractionPolicy.h b/src/Ai/Raid/RaidInteractionPolicy.h
-index f4cea035..940e48eb 100644
+index f4cea035..cdda8c70 100644
 --- a/src/Ai/Raid/RaidInteractionPolicy.h
 +++ b/src/Ai/Raid/RaidInteractionPolicy.h
-@@ -163,6 +163,66 @@ inline bool CanUsePortal(std::uint64_t guid, std::vector<Healer> const& healers,
+@@ -163,6 +163,74 @@ inline bool CanUsePortal(std::uint64_t guid, std::vector<Healer> const& healers,
      return healers.size() > 1 && raidHealer.has_value() && !*raidHealer;
  }
  
@@ -983,6 +988,14 @@ index f4cea035..940e48eb 100644
 +inline std::size_t PortalFloor(std::size_t healers)
 +{
 +    return healers >= 4 ? 2 : 1;
++}
++
++// Turns are for heroic's Nightmare portals. On normal the Dream clouds hurt nobody and their Emerald Vigor stacks
++// are the healing engine: with turns the dojo 10-normal raid at item level 264 peaked at 8-10 stacks instead of
++// 18-38, needed 352 s instead of 249 s and lost her at 96% to the adds.
++inline bool PortalTurnsApply(bool turns, bool heroic)
++{
++    return turns && heroic;
 +}
 +
 +// `takers` are the healers on her who may portal (CanUsePortal), this one included; `healers` all her healers.
@@ -1030,7 +1043,7 @@ index f4cea035..940e48eb 100644
  // Heroic Nightmare clouds: each one taken stacks Twisted Nightmares for 40 s (+10% healing, 200 mana every
  // 3 s, and 200 Nature damage a second, stacking); each one left hurts her for 1,000 a second until taken.
  // Bots took 14 and 19 stacks in the 10-heroic dojo pull and died of the damage, as both portal healers did
-@@ -228,6 +288,24 @@ std::uint32_t PickManaCooldown(HealerClass healer, float manaPct, Ready ready)
+@@ -228,6 +296,24 @@ std::uint32_t PickManaCooldown(HealerClass healer, float manaPct, Ready ready)
      return 0;
  }
  
@@ -1055,7 +1068,7 @@ index f4cea035..940e48eb 100644
  inline bool AffordableHeal(std::int32_t cost, std::uint32_t mana)
  {
      return cost >= 0 && static_cast<std::uint32_t>(cost) <= mana;
-@@ -241,6 +319,265 @@ std::uint32_t FirstReadyHeal(std::vector<std::uint32_t> const& choices, Ready re
+@@ -241,6 +327,265 @@ std::uint32_t FirstReadyHeal(std::vector<std::uint32_t> const& choices, Ready re
              return spell;
      return 0;
  }
@@ -1348,16 +1361,21 @@ index 953970e1..8b8640ca 100644
      bool LichKingMechanics;
      bool AllowAccountBots, AllowGuildBots, AllowTrustedAccountBots;
 diff --git a/tests/raid_interactions_test.cpp b/tests/raid_interactions_test.cpp
-index c671372b..62648693 100644
+index c671372b..d34ec3f7 100644
 --- a/tests/raid_interactions_test.cpp
 +++ b/tests/raid_interactions_test.cpp
-@@ -147,6 +147,83 @@ int main()
+@@ -147,6 +147,88 @@ int main()
      }
      CHECK(NightmareStackCap > 0 && NightmareStackCap < 25);  // below the old 25-stack portal refusal
  
 +    // Portal turns: at most one healer in the dream or on the way, never below the floor of healers on her
 +    // (one, two with four or more healers), the turn to the fewest trips, then the oldest trip, then the guid.
 +    CHECK(PortalFloor(1) == 1 && PortalFloor(3) == 1 && PortalFloor(4) == 2 && PortalFloor(10) == 2);
++    // Turns only on heroic: normal Dream clouds are harmless and their Emerald Vigor is the healing engine.
++    CHECK(PortalTurnsApply(true, true));
++    CHECK(!PortalTurnsApply(true, false));
++    CHECK(!PortalTurnsApply(false, true));
++    CHECK(!PortalTurnsApply(false, false));
 +    {
 +        // The 2026-11-26 live raid: druid raid healer, paladin and priest on her.
 +        std::vector<PortalTaker> takers = {{2753, 0, UINT32_MAX, false}, {2786, 0, UINT32_MAX, false}};
@@ -1435,7 +1453,7 @@ index c671372b..62648693 100644
      // Mana cooldowns: each class's own, below its threshold, only when ready; the first that fits wins.
      {
          auto always = [](std::uint32_t) { return true; };
-@@ -266,6 +343,236 @@ int main()
+@@ -266,6 +348,236 @@ int main()
      CHECK(!AffordableHeal(-1, 40));
      CHECK(FirstReadyHeal({1001, 1002},
                           [](std::uint32_t spell) { return AffordableHeal(spell == 1001 ? 130 : 40, 50); }) == 1002);

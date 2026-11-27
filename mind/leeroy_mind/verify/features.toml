@@ -348,7 +348,7 @@ example = "2026-11-27 21:02:10 valithria_watch instance=812 end=reset hp=63.5 fo
 
 [[feature]]
 id = "valithria_portal_turns"
-name = "Valithria: her healers take the portals one at a time"
+name = "Valithria: on heroic her healers take the Nightmare portals one at a time"
 prs = [506]
 note = "Set `since` to the native release that carries playerbots patch 0022; older watch lines have no turns field. Live 2026-11-26 both healers on her went through every wave together (portal=2, then dream=2)."
 
