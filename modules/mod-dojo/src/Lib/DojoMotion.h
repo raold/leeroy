@@ -7,6 +7,24 @@
 
 namespace Dojo
 {
+class ConstrictorCastProof
+{
+public:
+    void Record(std::uint32_t spell, std::uint64_t caster, std::uint64_t target, std::uint32_t now)
+    {
+        if (spell == 64133) { _spawnActor = caster; _spawnMs = now; }
+        else if (spell == 64123) { _lungeActor = caster; _lungeTarget = target; _lungeMs = now; }
+    }
+    bool Matches(std::uint64_t actor, std::uint64_t vehicle, std::uint32_t now) const
+    {
+        return actor && vehicle && _spawnActor == actor && _lungeActor == actor && _lungeTarget == vehicle
+            && now - _spawnMs <= 250 && now - _lungeMs <= 250;
+    }
+private:
+    std::uint64_t _spawnActor = 0, _lungeActor = 0, _lungeTarget = 0;
+    std::uint32_t _spawnMs = 0, _lungeMs = 0;
+};
+
 inline bool BlinkDestination(float dx, float dy, float facing, float radius)
 {
     if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(facing)

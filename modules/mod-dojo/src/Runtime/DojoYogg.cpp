@@ -114,7 +114,7 @@ struct Trial
     uint32 nativeChargeSamples = 0;
     std::array<ObjectGuid, Names.size()> observedConstrictors{};
     std::array<Position, Names.size()> constrictorOrigins{};
-    std::array<uint32, Names.size()> constrictorCastMs{};
+    std::array<Dojo::ConstrictorCastProof, Names.size()> constrictorCasts{};
     struct SeatArrival
     {
         ObjectGuid base;
@@ -124,8 +124,7 @@ struct Trial
     std::array<SeatArrival, Names.size()> constrictorSeats{};
     uint32 constrictorAttachments = 0;
     std::array<bool, Names.size()> previousMoving{};
-    // A native grab emits spawn, lunge, squeeze and duplicate ride effects in
-    // one update. Keep the spawn evidence until the seat position is sampled.
+    // Diagnostic history only; movement witnesses survive unrelated proc casts.
     std::array<std::array<uint32, 8>, Names.size()> recentSpells{}, recentSpellMs{};
     std::array<std::array<uint64, 8>, Names.size()> recentSpellTargets{};
     struct SpellTeleport
@@ -178,6 +177,7 @@ struct Trial
         auto* summon = creature ? creature->ToTempSummon() : nullptr;
         auto const* spell = sSpellMgr->GetSpellInfo(64133);
         return {{"summoned_by_actor", summon && summon->GetSummonerGUID() == p->GetGUID()},
+            {"cast_pair", constrictorCasts[i].Matches(p->GetGUID().GetRawValue(), base->GetGUID().GetRawValue(), elapsed)},
             {"already_observed", observedConstrictors[i] == base->GetGUID()},
             {"lunge_aura", base->HasAura(64123, p->GetGUID())}, {"squeeze_aura", p->HasAura(64125)},
             {"spawn_radius", spell ? spell->Effects[EFFECT_0].CalcRadius(p) : 0.f},
@@ -199,17 +199,10 @@ struct Trial
         if (!kit || !summon || base->GetEntry() != 33983 || base->GetMap() != p->GetMap()
             || summon->GetSummonerGUID() != p->GetGUID() || observedConstrictors[i] == base->GetGUID()
             || !base->HasAura(64123, p->GetGUID()) || !p->HasAura(64125) || Below(p)) return false;
-        bool lunge = false, spawn = false;
-        for (std::size_t n = 0; n < recentSpells[i].size(); ++n)
-            if (elapsed - recentSpellMs[i][n] <= 250)
-            {
-                lunge = lunge || recentSpells[i][n] == 64123;
-                spawn = spawn || recentSpells[i][n] == 64133;
-            }
         auto const* spell = sSpellMgr->GetSpellInfo(64133);
         // TARGET_DEST_CASTER_RADIUS offsets X/Y, then collision adjusts Z.
         // Use the witnessed cast origin, not a previous tick's walking position.
-        if (!lunge || !spawn || !spell || elapsed - constrictorCastMs[i] > 250
+        if (!spell || !constrictorCasts[i].Matches(p->GetGUID().GetRawValue(), base->GetGUID().GetRawValue(), elapsed)
             || !Dojo::ContinuousMovement(constrictorOrigins[i].GetExactDist(previous[i]), previousSpeed[i], speed, diff)
             || base->GetExactDist2d(constrictorOrigins[i]) >
                 std::max(spell->Effects[EFFECT_0].CalcRadius(p), p->GetCombatReach()) + 0.1f)
@@ -281,7 +274,7 @@ struct Trial
         recentSpellTargets = {};
         previousSpeed = {}; chargeSpeed = {}; chargeMs = {}; nativeChargeSamples = 0;
         observedConstrictors = {}; constrictorAttachments = 0;
-        constrictorOrigins = {}; constrictorCastMs = {}; constrictorSeats = {};
+        constrictorOrigins = {}; constrictorCasts = {}; constrictorSeats = {};
         spellTeleports = {}; nativeSpellTeleports = 0;
         knockbacks = {};
         portalCasts = {}; exitCasts = {}; minimumSanity.fill(100); influenceDeaths.clear();
@@ -752,12 +745,12 @@ public:
         trial.recentSpells[i][0] = id; trial.recentSpellMs[i][0] = trial.elapsed;
         auto* castTarget = spell->m_targets.GetUnitTarget();
         trial.recentSpellTargets[i][0] = castTarget ? castTarget->GetGUID().GetRawValue() : 0;
+        trial.constrictorCasts[i].Record(id, player->GetGUID().GetRawValue(), trial.recentSpellTargets[i][0], trial.elapsed);
         if (id == 63997 || id == 63998 || id == 63989) ++trial.portalCasts[i];
         if (id == 63992) ++trial.exitCasts[i];
         if (id == 64133)
         {
             trial.constrictorOrigins[i] = player->GetPosition();
-            trial.constrictorCastMs[i] = trial.elapsed;
         }
         if (spell->GetSpellInfo()->HasEffect(SPELL_EFFECT_CHARGE))
         {
