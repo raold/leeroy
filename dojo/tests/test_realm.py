@@ -386,6 +386,63 @@ class RaTest(unittest.TestCase):
 
 
 class WorldTest(unittest.TestCase):
+    def stopped_layout(self):
+        synthetic = Synthetic()
+        self.addCleanup(synthetic.close)
+        candidate = synthetic.load()
+        candidate.run_dir.mkdir(parents=True)
+        candidate.tmp.mkdir(parents=True)
+        record = candidate.run_dir / "worldserver.pid"
+        record.write_text("4242\n", encoding="ascii")
+        return candidate, record
+
+    def test_stopped_pid_cannot_be_mistaken_for_a_reused_process(self):
+        candidate, record = self.stopped_layout()
+        with mock.patch.object(mysql, "port_listening", return_value=False), \
+                mock.patch.object(mysql, "pid_alive", return_value=False):
+            world.stop(candidate, log=lambda _: None)
+        self.assertFalse(record.exists())
+        with mock.patch.object(mysql, "port_listening", return_value=False), \
+                mock.patch.object(mysql, "pid_alive", side_effect=lambda pid: pid == 4242):
+            self.assertFalse(world.running(candidate))
+
+    def test_ra_shutdown_retires_its_pid_only_after_exit(self):
+        candidate, record = self.stopped_layout()
+        with mock.patch.object(mysql, "port_listening", side_effect=[True, False]), \
+                mock.patch.object(mysql, "pid_alive", return_value=False), \
+                mock.patch.object(world, "ra") as connect:
+            world.stop(candidate, log=lambda _: None)
+        connect.return_value.__enter__.return_value.command.assert_called_once_with("server shutdown 1")
+        self.assertFalse(record.exists())
+
+    def test_a_live_pid_without_ra_still_blocks_and_keeps_its_record(self):
+        candidate, record = self.stopped_layout()
+        with mock.patch.object(mysql, "port_listening", return_value=False), \
+                mock.patch.object(mysql, "pid_alive", return_value=True):
+            with self.assertRaisesRegex(world.WorldError, "RA is closed"):
+                world.stop(candidate, log=lambda _: None)
+        self.assertEqual(record.read_text(encoding="ascii"), "4242\n")
+
+    def test_shutdown_cannot_remove_a_replacement_pid_record(self):
+        candidate, record = self.stopped_layout()
+        with mock.patch.object(mysql, "port_listening", side_effect=[True, False]), \
+                mock.patch.object(mysql, "pid_alive", return_value=False), \
+                mock.patch.object(world, "ra") as connect:
+            connect.return_value.__enter__.return_value.command.side_effect = \
+                lambda _: record.write_text("4343\n", encoding="ascii")
+            with self.assertRaisesRegex(world.WorldError, "PID record changed"):
+                world.stop(candidate, log=lambda _: None)
+        self.assertEqual(record.read_text(encoding="ascii"), "4343\n")
+
+    def test_unproved_shutdown_retains_its_pid_record(self):
+        candidate, record = self.stopped_layout()
+        with mock.patch.object(mysql, "port_listening", return_value=True), \
+                mock.patch.object(mysql, "pid_alive", return_value=True), \
+                mock.patch.object(world, "ra"):
+            with self.assertRaisesRegex(world.WorldError, "still running"):
+                world.stop(candidate, timeout=0, log=lambda _: None)
+        self.assertEqual(record.read_text(encoding="ascii"), "4242\n")
+
     def test_child_env_drops_azerothcore_overrides(self):
         with mock.patch.dict(os.environ, {"AC_WORLD_DATABASE_INFO": "live", "ac_rate_health": "9", "PATH": "x"}):
             env = world.child_env()

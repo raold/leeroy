@@ -126,6 +126,16 @@ def running(layout: Layout) -> bool:
     return mysql.port_listening(layout.ports["ra"]) or mysql.pid_alive(pid(layout))
 
 
+def _clean_stopped(layout: Layout, stopped_pid: int) -> None:
+    """After proving shutdown, retire only that world's PID record."""
+    current = pid(layout)
+    if current and current != stopped_pid:
+        raise WorldError("worldserver PID record changed during shutdown")
+    if stopped_pid > 0 and current == stopped_pid:
+        (layout.run_dir / "worldserver.pid").unlink(missing_ok=True)
+    clean_tmp(layout)
+
+
 def start(layout: Layout, timeout: float = 900, log=print) -> int:
     preflight(layout)
     _require_mysql(layout)
@@ -161,15 +171,15 @@ def stop(layout: Layout, timeout: float = 180, log=print) -> None:
     if not mysql.port_listening(layout.ports["ra"]):
         if mysql.pid_alive(p):
             raise WorldError(f"worldserver pid {p} runs but RA is closed; stop it by hand")
+        _clean_stopped(layout, p)
         log("not running")
-        clean_tmp(layout)
         return
     with ra(layout) as client:
         log(client.command("server shutdown 1") or "shutdown requested")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not mysql.pid_alive(p) and not mysql.port_listening(layout.ports["ra"]):
-            clean_tmp(layout)
+            _clean_stopped(layout, p)
             log("worldserver stopped")
             return
         time.sleep(1)
