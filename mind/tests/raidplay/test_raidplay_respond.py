@@ -4,6 +4,7 @@ every table at hello and an instance's again when his group enters it."""
 
 import asyncio
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -82,6 +83,10 @@ def test_each_kind_carries_what_native_needs():
 def test_every_table_is_bounded_and_fits_one_bridge_line():
     respond.register_command("raid_mechanics", RaidMechanics)
     found = tables(raidplay.load())
+    # The native admission test must exercise the keys the real hello feed sends,
+    # not a small fake guild/raid list that never reaches the native capacity.
+    fixture = Path(__file__).resolve().parents[3] / 'modules/mod-leeroy/tests/fixtures/mechanic_table_keys.json'
+    assert json.loads(fixture.read_text()) == [list(key) for key in sorted(found)]
     assert set(found) == {(533, 0), (533, 1), (631, 0), (631, 1), (631, 2), (631, 3),
                           (649, 0), (649, 1), (649, 2), (649, 3), (724, 0), (724, 1), (724, 2), (724, 3),
                           (603, 0), (603, 1), (616, 0), (616, 1)}

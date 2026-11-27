@@ -22,7 +22,9 @@ namespace Leeroy::Guild
 
 inline constexpr std::size_t kMechanicMaxRules = 64;  // per map and difficulty
 inline constexpr std::size_t kMechanicMaxSpells = 16; // per rule
-inline constexpr std::size_t kMechanicMaxTables = 16; // map and difficulty pairs held at once
+// A connection receives every covered map/difficulty at hello, not just the active raid.
+// Reserve all nine Wrath raid maps at all four supported difficulties; the shipped feed already has 18.
+inline constexpr std::size_t kMechanicMaxTables = 9 * 4;
 inline constexpr std::size_t kMechanicMaxIdBytes = 64;
 inline constexpr float kMechanicMaxYards = 100.0f;
 inline constexpr float kMechanicMaxDurationSeconds = 120.0f;
