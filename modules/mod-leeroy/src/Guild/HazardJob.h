@@ -13,7 +13,9 @@ void ReloadHazards();
 // OnStartup: hands playerbots the follow-spot and exit filter; a playerbots without the hook keeps only the
 // non-combat avoid aoe.
 void InstallHazardFilter();
+void AddHazardScripts();
 void TickHazards(std::uint32_t diffMs);
+void FlushHazardSummary();
 // RaidHabits, after its strategy reset: a member who qualifies gets its non-combat avoid aoe back at once.
 void ApplyHazards(Player* bot);
 #if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
