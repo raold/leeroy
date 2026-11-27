@@ -76,6 +76,7 @@ class M(ctypes.Structure):
 m = M(); m.n = ctypes.sizeof(M)
 print(m.af >> 30 if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)) else 0)' 2>/dev/null) || gb=0
     fi
+    gb=${gb//$'\r'/} # Windows python may end its line with CRLF; not every bash strips the CR
     [[ $gb =~ ^[0-9]+$ ]] || gb=0
     jobs=$(((gb - 16) / 4))
     ((jobs >= 4)) || jobs=4

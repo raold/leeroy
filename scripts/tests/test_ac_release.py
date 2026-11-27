@@ -443,6 +443,10 @@ exit "${FAIL_CONSOLE:-0}"
         self.assertEqual(self.actions().count("build jobs="), 1)
         self.assertIn("build jobs=16\n", self.actions())
 
+    def test_native_build_jobs_read_a_crlf_measurement(self):
+        output = self.run_release("--native", self.native, AC_RELEASE_FREE_COMMIT_GB="84\r")
+        self.assertIn("building with AC_JOBS=16", output)
+
     def test_native_build_jobs_shrink_with_free_memory(self):
         output = self.run_release("--native", self.native, AC_RELEASE_FREE_COMMIT_GB="40")
         self.assertIn("building with AC_JOBS=6", output)
