@@ -4,6 +4,10 @@
 #include "LeeroyDummyDamage.h"
 #include "LeeroyTrainingProtocol.h"
 #include "TestHarness.h"
+#include <cmath>
+#include <cstddef>
+#include <string>
+#include <vector>
 
 using namespace Leeroy::Training;
 
@@ -114,7 +118,7 @@ LEEROY_TEST(Training_DummyReturnProofRejectsNewOwnerOrSessionBeforeAnyReset)
     state.sameSession = false;
     CHECK(DecideDummyReturn(state) == DummyReturnStep::Block);
     state.sameSession = true;
-    state.atTrial = false;
+    state.onTrialMap = false; // Another map or an instance.
     CHECK(DecideDummyReturn(state) == DummyReturnStep::Block);
 }
 
@@ -123,7 +127,7 @@ LEEROY_TEST(Training_DummyReturnRequiresResetAndArrivalDespiteAcceptedTeleport)
     DummyReturnState state{true, true, true, true, false, true, true, false, true, false};
     CHECK(DecideDummyReturn(state) == DummyReturnStep::ResetStrategies);
     state.atOrigin = false;
-    state.atTrial = true;
+    state.onTrialMap = true;
     state.resetDone = true;
     CHECK(DecideDummyReturn(state) == DummyReturnStep::Teleport);
     state.teleporting = true;
@@ -361,7 +365,7 @@ LEEROY_TEST(Training_DummyLetGoReleasesOurControlWhereItStandsAndNeverTeleports)
     DummyReturnState moved;
     moved.prepared = moved.connected = moved.sameSession = moved.online = moved.owned = true;
     moved.groupReleased = moved.leaderRestored = moved.finalResetDone = false;
-    CHECK(DecideDummyReturn(moved) == DummyReturnStep::Block); // The return still refuses the teleport home.
+    CHECK(DecideDummyReturn(moved) == DummyReturnStep::Block); // Off the trial map: the return refuses the teleport.
     CHECK(DecideDummyLetGo(moved) == DummyReturnStep::ResetStrategies);
     moved.resetDone = true;
     CHECK(DecideDummyLetGo(moved) == DummyReturnStep::ReleaseMaster); // Before the party: see the next test.
@@ -519,7 +523,7 @@ LEEROY_TEST(Training_DummyPartyFormedBeforeAFarTeleportIsLostOnArrival)
     for (int bits = 0; bits < 16; ++bits)
     {
         DummyReturnState home;
-        home.prepared = home.connected = home.sameSession = home.online = home.owned = home.atTrial = true;
+        home.prepared = home.connected = home.sameSession = home.online = home.owned = home.onTrialMap = true;
         home.groupReleased = false;
         home.released = (bits & 1) != 0;
         home.resetDone = (bits & 2) != 0;
@@ -529,7 +533,7 @@ LEEROY_TEST(Training_DummyPartyFormedBeforeAFarTeleportIsLostOnArrival)
         CHECK(DecideDummyReturn(home) != DummyReturnStep::Complete);
     }
     DummyReturnState done;
-    done.prepared = done.connected = done.sameSession = done.online = done.owned = done.atTrial = true;
+    done.prepared = done.connected = done.sameSession = done.online = done.owned = done.onTrialMap = true;
     done.released = done.resetDone = true;
     CHECK(DecideDummyReturn(done) == DummyReturnStep::Teleport); // Every release done: now it may go home.
 }
@@ -578,4 +582,96 @@ LEEROY_TEST(Training_DummyOwnerMissingNamesEachFailedFact)
     both.groupOwned = false;
     both.masterOwned = false;
     CHECK_EQ(DummyOwnerMissing(both), "group,master");
+}
+
+LEEROY_TEST(Training_DummyOwnedMemberAnywhereOnTheTrialMapIsReturnedHome)
+{
+    // 2026-11-25: 1618 (elemental) was dropped `moved` 54 yd from the dummy and 24 yd below it, every ownership fact
+    // intact, on the trial's map outside any instance. The return accepted only the 150 yd / 15 yd box around the
+    // dummy, so it blocked the member (location_changed) and never took it home: native_cleanup_unproved.
+    DummyReturnState state;
+    state.prepared = state.connected = state.sameSession = state.online = state.owned = state.onTrialMap = true;
+    state.released = state.resetDone = false;
+    state.groupReleased = state.leaderRestored = state.finalResetDone = false;
+    std::vector<DummyReturnStep> steps;
+    for (int i = 0; i < 8; ++i)
+    {
+        auto const step = DecideDummyReturn(state);
+        steps.push_back(step);
+        if (step == DummyReturnStep::ResetStrategies) state.resetDone = true;
+        else if (step == DummyReturnStep::ReleaseGroup) state.groupReleased = true;
+        else if (step == DummyReturnStep::RestoreLeaderFlag) state.leaderRestored = true;
+        else if (step == DummyReturnStep::ReleaseMaster) state.released = true;
+        else if (step == DummyReturnStep::FinalStockReset) state.finalResetDone = true;
+        else break;
+    }
+    CHECK(steps == (std::vector<DummyReturnStep>{DummyReturnStep::ResetStrategies, DummyReturnStep::ReleaseGroup,
+        DummyReturnStep::RestoreLeaderFlag, DummyReturnStep::ReleaseMaster, DummyReturnStep::FinalStockReset,
+        DummyReturnStep::Teleport}));
+    state.teleporting = true; // Our own return teleport: waited for, never a block.
+    CHECK(DecideDummyReturn(state) == DummyReturnStep::Wait);
+    state.teleporting = false;
+    state.atOrigin = true;
+    CHECK(DecideDummyReturn(state) == DummyReturnStep::Complete);
+
+    // Another map or an instance (not on the trial map), or a body no longer ours, still blocks before any step.
+    DummyReturnState fresh;
+    fresh.prepared = fresh.connected = fresh.sameSession = fresh.online = fresh.owned = fresh.onTrialMap = true;
+    fresh.groupReleased = fresh.leaderRestored = fresh.finalResetDone = false;
+    CHECK(DecideDummyReturn(fresh) == DummyReturnStep::ResetStrategies);
+    auto elsewhere = fresh;
+    elsewhere.onTrialMap = false;
+    CHECK(DecideDummyReturn(elsewhere) == DummyReturnStep::Block);
+    auto taken = fresh;
+    taken.owned = false;
+    CHECK(DecideDummyReturn(taken) == DummyReturnStep::Block);
+    auto session = fresh;
+    session.sameSession = false;
+    CHECK(DecideDummyReturn(session) == DummyReturnStep::Block);
+}
+
+LEEROY_TEST(Training_DummyFightWaitsOutASameMapNearTeleport)
+{
+    // 2026-11-27: 2349 (arcane) cast its stock "blink back" 35 ms into the fight, on the trial's map with every
+    // ownership fact intact; the fight blocked it on the spot (location_changed teleporting=1 trial_yd=1).
+    DummyFightPlaceState blink{true, true, false, true, false};
+    CHECK(DecideDummyFightPlace(blink) == DummyFightPlace::Wait);
+    DummyFightPlaceState landed{true, false, false, true, false};
+    CHECK(DecideDummyFightPlace(landed) == DummyFightPlace::Fight); // Then the 30 yd / 5 s rule judges where it is.
+    auto with = [&blink](auto change) { auto copy = blink; change(copy); return DecideDummyFightPlace(copy); };
+    CHECK(with([](DummyFightPlaceState& s) { s.owned = false; }) == DummyFightPlace::Block);
+    CHECK(with([](DummyFightPlaceState& s) { s.farTeleport = true; }) == DummyFightPlace::Block);
+    CHECK(with([](DummyFightPlaceState& s) { s.onTrialMap = false; }) == DummyFightPlace::Block);
+    CHECK(with([](DummyFightPlaceState& s) { s.instance = true; }) == DummyFightPlace::Block);
+    CHECK(DecideDummyFightPlace({true, false, true, true, false}) == DummyFightPlace::Block);   // A far teleport.
+    CHECK(DecideDummyFightPlace({true, false, false, false, false}) == DummyFightPlace::Block); // Another map.
+    CHECK(DecideDummyFightPlace({true, false, false, true, true}) == DummyFightPlace::Block);   // An instance.
+    CHECK(DecideDummyFightPlace({false, false, false, true, false}) == DummyFightPlace::Block); // Not ours.
+}
+
+LEEROY_TEST(Training_DummyRangedRingStandsOutsideMeleeReach)
+{
+    // Inside melee reach a caster's "enemy too close for spell" fires (a mage's blink back, others flee).
+    constexpr double pi = 3.14159265358979323846;
+    for (std::size_t count = 1; count <= 5; ++count)
+    {
+        double const ranged = DummyRingRadius(count, true);
+        CHECK(ranged > 8.0);
+        CHECK(ranged < 30.0); // Inside the fight's 30 yd drop rule and the 45 yd arrival box.
+        double const melee = count > 1 ? 2.0 / std::sin(pi / static_cast<double>(count)) : 0.0;
+        CHECK(std::abs(DummyRingRadius(count, false) - melee) < 1e-9); // Melee keep their ring.
+        if (count > 1) CHECK(2.0 * ranged * std::sin(pi / static_cast<double>(count)) >= 2.0); // No stacking.
+    }
+}
+
+LEEROY_TEST(Training_DummyFirstDropReasonSurvivesTheCleanupError)
+{
+    // 2026-11-25: the terminal said only cleanup_failed:location_changed, so the `moved` drop that led to it was lost.
+    std::string const report = DummyDropReport("moved", "location_changed");
+    CHECK_EQ(report, "cleanup_failed:location_changed;dropped=moved");
+    CHECK(report.starts_with("cleanup_failed")); // The mind's unproved-cleanup rule reads this prefix.
+    CHECK_EQ(DummyDropReport("moved", ""), "moved");
+    CHECK_EQ(DummyDropReport("", ""), "");
+    CHECK_EQ(DummyDropReport("", "return_pending"), "cleanup_failed:return_pending");
+    CHECK_EQ(DummyDropReport("human_login", "teleport_pending"), "cleanup_failed:teleport_pending;dropped=human_login");
 }
