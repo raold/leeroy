@@ -1,0 +1,223 @@
+From 4919d842412425277ebacf1fa37678619e404b92 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 02:26:53 -0500
+Subject: [PATCH 48/63] fix(Raid/Yogg): Spread influence targets across damage
+ dealers
+
+Keep a bounded GUID-only preference per portal wave so melee bots do not walk together to the same influence target while others remain untouched. Claimed targets remain valid fallbacks; gaze, path, sanity and exit budgets are unchanged.
+---
+ src/Ai/Raid/Uld/YoggBrainActions.cpp | 45 ++++++++++++++++++++++++++--
+ src/Ai/Raid/Uld/YoggBrainPolicy.h    | 39 ++++++++++++++++++++++++
+ tests/yogg_brain_test.cpp            | 20 +++++++++++++
+ 3 files changed, 102 insertions(+), 2 deletions(-)
+
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index 5826ec55..1ead6ec5 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -97,6 +97,7 @@ struct Wave
+ {
+     Clock::time_point expires;
+     std::map<uint64, ObjectGuid> portals;
++    YoggBrain::InfluenceClaims influence;
+ };
+ // Only GUIDs cross calls; no Creature/Player pointers survive a map update.
+ // Map updates can run on different workers. Freeze the roster until the 25s
+@@ -104,6 +105,33 @@ struct Wave
+ std::mutex waveMutex;
+ std::map<std::pair<uint32, uint64>, Wave> waves;
+ 
++YoggBrain::InfluenceClaims ReadInfluenceClaims(Player* bot)
++{
++    if (!bot->GetGroup())
++        return {};
++    auto const key = std::make_pair(bot->GetInstanceId(), bot->GetGroup()->GetGUID().GetRawValue());
++    std::lock_guard<std::mutex> lock(waveMutex);
++    auto const wave = waves.find(key);
++    return wave != waves.end() && wave->second.expires > Clock::now() ? wave->second.influence
++                                                                      : YoggBrain::InfluenceClaims{};
++}
++
++void ClaimInfluence(Player* bot, Unit* target)
++{
++    if (!bot->IsInWorld() || bot->GetMapId() != 603 || !bot->GetGroup())
++        return;
++    auto const key = std::make_pair(bot->GetInstanceId(), bot->GetGroup()->GetGUID().GetRawValue());
++    std::lock_guard<std::mutex> lock(waveMutex);
++    auto const wave = waves.find(key);
++    if (wave == waves.end() || wave->second.expires <= Clock::now() ||
++        !wave->second.portals.contains(bot->GetGUID().GetRawValue()))
++        return;
++    wave->second.influence.Assign(bot->GetGUID().GetRawValue(),
++                                  target && !PlayerbotAI::IsHeal(bot) && YoggBrain::Influence(target->GetEntry())
++                                      ? target->GetGUID().GetRawValue()
++                                      : 0);
++}
++
+ Creature* AssignedPortal(PlayerbotAI* ai, Creature* brain)
+ {
+     Player* bot = ai->GetBot();
+@@ -148,7 +176,7 @@ Creature* AssignedPortal(PlayerbotAI* ai, Creature* brain)
+         }
+         auto const team = YoggBrain::Team(members, bot->GetMap()->Is25ManRaid());
+         nearby.sort([](Creature* a, Creature* b) { return a->GetGUID() < b->GetGUID(); });
+-        Wave wave{now + std::chrono::seconds(60), {}};
++        Wave wave{now + std::chrono::seconds(60), {}, {}};
+         auto portal = nearby.begin();
+         for (uint64 guid : team)
+         {
+@@ -289,6 +317,7 @@ Plan Decide(PlayerbotAI* ai)
+     plan.facing = YoggBrain::SafeFacing(bot->GetOrientation(), gazes);
+     if (!plan.below)
+     {
++        ClaimInfluence(bot, nullptr);
+         if (!gazes.empty())
+         {
+             plan.mode = Mode::Face;
+@@ -315,6 +344,7 @@ Plan Decide(PlayerbotAI* ai)
+                             plan.exit ? bot->GetExactDist(plan.exit) : 1000.0f, bot->GetSpeed(MOVE_RUN));
+     if (support->HoldExit(bot->GetInstanceId(), true, exitRequired))
+     {
++        ClaimInfluence(bot, nullptr);
+         plan.mode = Mode::Exit;
+         return plan;
+     }
+@@ -334,6 +364,7 @@ Plan Decide(PlayerbotAI* ai)
+             return plan;
+         }
+         plan.target = brain;
++        ClaimInfluence(bot, nullptr);
+     }
+     else
+     {
+@@ -342,11 +373,18 @@ Plan Decide(PlayerbotAI* ai)
+         std::list<Creature*> adds;
+         for (uint32 entry : {33943u, 33716u, 33717u, 33718u, 33719u, 33720u, 33567u, 33433u})
+             bot->GetCreatureListWithEntryInGrid(adds, entry, 180.0f);
++        auto const claims = ReadInfluenceClaims(bot);
++        bool const damageDealer = !PlayerbotAI::IsHeal(bot);
++        constexpr float claimedPenalty = 1000.0f;  // larger than any in-room distance/gaze score
+         std::vector<std::pair<float, Creature*>> candidates;
+         for (Creature* add : adds)
+         {
+             if (!add->IsAlive() || add->GetPositionZ() >= 300.0f || !bot->IsValidAttackTarget(add)) continue;
+-            float const score = 50.0f * YoggBrain::Exposure(bot->GetAngle(add), gazes) + bot->GetExactDist2d(add);
++            float const score =
++                50.0f * YoggBrain::Exposure(bot->GetAngle(add), gazes) + bot->GetExactDist2d(add) +
++                (damageDealer && claims.Taken(add->GetGUID().GetRawValue(), bot->GetGUID().GetRawValue())
++                     ? claimedPenalty
++                     : 0.0f);
+             candidates.emplace_back(score, add);
+         }
+         std::sort(candidates.begin(), candidates.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
+@@ -364,17 +402,20 @@ Plan Decide(PlayerbotAI* ai)
+             {
+                 plan.target = add;
+                 plan.mode = Mode::Route;
++                ClaimInfluence(bot, add);
+                 return plan;
+             }
+         }
+     }
+     if (!plan.target)
+     {
++        ClaimInfluence(bot, nullptr);
+         plan.mode = Mode::Wait;
+         plan.needsAction = bot->GetVictim() || bot->IsNonMeleeSpellCast(false) ||
+             YoggBrain::AngleDistance(bot->GetOrientation(), plan.facing) > 0.1f;
+         return plan;
+     }
++    ClaimInfluence(bot, plan.target);
+     if (!YoggBrain::CombatFacing(bot->GetAngle(plan.target), gazes))
+     {
+         // Never spend the entire rotation facing a skull merely because that add
+diff --git a/src/Ai/Raid/Uld/YoggBrainPolicy.h b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+index d1353268..dfac47bd 100644
+--- a/src/Ai/Raid/Uld/YoggBrainPolicy.h
++++ b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+@@ -3,8 +3,10 @@
+ #define PLAYERBOTS_YOGGBRAINPOLICY_H
+ 
+ #include <algorithm>
++#include <array>
+ #include <cmath>
+ #include <cstdint>
++#include <utility>
+ #include <vector>
+ 
+ namespace YoggBrain
+@@ -64,6 +66,43 @@ inline bool Influence(std::uint32_t entry)
+ {
+     return entry == 33943 || (entry >= 33716 && entry <= 33720) || entry == 33567 || entry == 33433;
+ }
++
++// A portal wave has at most ten bots. Claims are preferences, never permission
++// to attack: callers still check the creature, gaze, path and exit deadline.
++class InfluenceClaims
++{
++public:
++    bool Taken(std::uint64_t target, std::uint64_t bot) const
++    {
++        for (auto const& claim : _claims)
++            if (target && claim.second == target && claim.first != bot)
++                return true;
++        return false;
++    }
++
++    void Assign(std::uint64_t bot, std::uint64_t target)
++    {
++        if (!bot)
++            return;
++        for (auto& claim : _claims)
++            if (claim.first == bot)
++            {
++                claim = target ? std::make_pair(bot, target) : std::pair<std::uint64_t, std::uint64_t>{};
++                return;
++            }
++        if (target)
++            for (auto& claim : _claims)
++                if (!claim.first)
++                {
++                    claim = {bot, target};
++                    return;
++                }
++    }
++
++private:
++    std::array<std::pair<std::uint64_t, std::uint64_t>, 10> _claims{};
++};
++
+ inline bool BrainAllowed(unsigned illusion, bool doorOpen, bool casting, unsigned remaining, float health)
+ {
+     return illusion >= 1 && illusion <= 3 && doorOpen && casting && remaining > 12000 && health > 30.0f;
+diff --git a/tests/yogg_brain_test.cpp b/tests/yogg_brain_test.cpp
+index 50dc2e1a..ae6dc780 100644
+--- a/tests/yogg_brain_test.cpp
++++ b/tests/yogg_brain_test.cpp
+@@ -63,6 +63,26 @@ int main()
+                             (illusion >= 1 && illusion <= 3 && door && cast && remaining > 12000 && health > 30));
+     for (unsigned entry : {33943u,33716u,33717u,33718u,33719u,33720u,33567u,33433u}) CHECK(Influence(entry));
+     for (unsigned entry : {0u,33990u,33890u,33288u,33535u,33441u}) CHECK(!Influence(entry));
++    InfluenceClaims claims;
++    // Equally placed damage dealers spread over available targets, retain their
++    // own assignment, and can assist a claimed target once none is unclaimed.
++    auto choose = [&](std::uint64_t bot, std::vector<std::uint64_t> targets)
++    {
++        auto chosen =
++            std::find_if(targets.begin(), targets.end(), [&](auto target) { return !claims.Taken(target, bot); });
++        auto target = chosen == targets.end() ? targets.front() : *chosen;
++        claims.Assign(bot, target);
++        return target;
++    };
++    CHECK(choose(20, {100, 101, 102}) == 100);
++    CHECK(choose(23, {100, 101, 102}) == 101);
++    CHECK(choose(24, {100, 101, 102}) == 102);
++    CHECK(choose(23, {100, 101, 102}) == 101);
++    claims.Assign(20, 0);  // exiting/dead/unavailable planner releases its target
++    CHECK(choose(24, {100, 101}) == 100);
++    CHECK(!claims.Taken(102, 23));    // changing targets releases the old one
++    CHECK(choose(23, {100}) == 100);  // soft preference never stalls the last kill
++    CHECK(!claims.Taken(0, 20));
+     CHECK(ExitBudget(0, 7) == 12000);
+     CHECK(ExitBudget(140, 7) == 35000);
+     CHECK(ExitBudget(140, 3.5f) > ExitBudget(140, 7));

@@ -1,0 +1,130 @@
+From 589592d778f96b85b06f1c5a4f4b983f36e5ccf9 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 03:44:54 -0500
+Subject: [PATCH 51/63] chore(Raid/ToC): Record rejected permafrost route
+ segments
+
+---
+ src/Ai/Raid/TOC/RaidTocStrategy.h |  1 +
+ src/Ai/Raid/TOC/TocStrategy.cpp   | 48 +++++++++++++++++++++++++------
+ 2 files changed, 41 insertions(+), 8 deletions(-)
+
+diff --git a/src/Ai/Raid/TOC/RaidTocStrategy.h b/src/Ai/Raid/TOC/RaidTocStrategy.h
+index b047a227..b52f9718 100644
+--- a/src/Ai/Raid/TOC/RaidTocStrategy.h
++++ b/src/Ai/Raid/TOC/RaidTocStrategy.h
+@@ -62,6 +62,7 @@ public:
+ private:
+     uint32 _lastEscape = 0;
+     uint32 _lastRouteLog = 0;
++    uint32 _lastFrostRouteLog = 0;
+ };
+ 
+ class TocFrostSphereAction : public AttackAction
+diff --git a/src/Ai/Raid/TOC/TocStrategy.cpp b/src/Ai/Raid/TOC/TocStrategy.cpp
+index 39e24f0d..01aff742 100644
+--- a/src/Ai/Raid/TOC/TocStrategy.cpp
++++ b/src/Ai/Raid/TOC/TocStrategy.cpp
+@@ -182,12 +182,13 @@ Creature* FrostSphere(PlayerbotAI* ai)
+ struct TocRouteProbe
+ {
+     uint32 type = 0, points = 0;
++    unsigned collisionStep = 0, collisionLane = 0, collisionReason = 0;
+     float length = 0.0f;
+     bool blocked = false;
+-    Position actual;
++    Position actual, collisionExpected, collisionActual;
+ };
+ 
+-bool AnubCollisionRoute(Player* bot, Position const& point, Movement::PointsArray& route)
++bool AnubCollisionRoute(Player* bot, Position const& point, Movement::PointsArray& route, TocRouteProbe* probe)
+ {
+     // The core deliberately disables mmap tiles for all of map 649 (including
+     // the unsupported upper arena floor). Do not treat its shortcut as a path.
+@@ -222,11 +223,23 @@ bool AnubCollisionRoute(Player* bot, Position const& point, Movement::PointsArra
+             float const expectedY = bot->GetPositionY() + fraction * dy + side * dx / length;
+             Position const old = previous[lane];
+             float x = expectedX, y = expectedY, z = old.GetPositionZ();
+-            if (!bot->GetMap()->CheckCollisionAndGetValidCoords(bot, old.GetPositionX(), old.GetPositionY(),
+-                                                                old.GetPositionZ(), x, y, z, true) ||
+-                std::hypot(x - expectedX, y - expectedY) > 0.1f || z < 130.0f || z > 160.0f ||
+-                std::abs(z - old.GetPositionZ()) > 0.75f || (lane && std::abs(z - previous[0].GetPositionZ()) > 0.5f))
++            bool const clear = bot->GetMap()->CheckCollisionAndGetValidCoords(
++                bot, old.GetPositionX(), old.GetPositionY(), old.GetPositionZ(), x, y, z, true);
++            unsigned const reason = !clear ? 1 : std::hypot(x - expectedX, y - expectedY) > 0.1f ? 2 :
++                z < 130.0f || z > 160.0f ? 3 : std::abs(z - old.GetPositionZ()) > 0.75f ? 4 :
++                lane && std::abs(z - previous[0].GetPositionZ()) > 0.5f ? 5 : 0;
++            if (reason)
++            {
++                if (probe)
++                {
++                    probe->collisionStep = step;
++                    probe->collisionLane = lane;
++                    probe->collisionReason = reason;
++                    probe->collisionExpected.Relocate(expectedX, expectedY, old.GetPositionZ());
++                    probe->collisionActual.Relocate(x, y, z);
++                }
+                 return false;
++            }
+             previous[lane].Relocate(x, y, z);
+         }
+         route.emplace_back(previous[0].GetPositionX(), previous[0].GetPositionY(), previous[0].GetPositionZ());
+@@ -242,6 +255,7 @@ bool CompleteRoute(Player* bot, Position const& point, Movement::PointsArray& ro
+     bool const calculated = path.CalculatePath(point.GetPositionX(), point.GetPositionY(), point.GetPositionZ());
+     if (probe)
+     {
++        *probe = {};
+         probe->type = uint32(path.GetPathType());
+         probe->points = uint32(path.GetPath().size());
+         probe->length = path.getPathLength();
+@@ -252,7 +266,8 @@ bool CompleteRoute(Player* bot, Position const& point, Movement::PointsArray& ro
+     route = path.GetPath();
+     if (!calculated ||
+         (path.GetPathType() != PATHFIND_NORMAL &&
+-         (path.GetPathType() != (PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH) || !AnubCollisionRoute(bot, point, route))))
++         (path.GetPathType() != (PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH) ||
++          !AnubCollisionRoute(bot, point, route, probe))))
+         return false;
+     if (spike)
+     {
+@@ -460,6 +475,7 @@ bool TocSpikeEscapeAction::Execute(Event /*event*/)
+         }
+     }
+     float const away = spike->GetAngle(bot);
++    std::size_t const frostDestinations = destinations.size();
+     for (float offset : {0.0f, 0.5f, -0.5f, 1.0f, -1.0f})
+     {
+         float const x = bot->GetPositionX() + SPIKE_SEPARATION * std::cos(away + offset);
+@@ -468,8 +484,9 @@ bool TocSpikeEscapeAction::Execute(Event /*event*/)
+         bot->UpdateAllowedPositionZ(x, y, z);
+         destinations.emplace_back(x, y, z);
+     }
+-    for (Position const& point : destinations)
++    for (std::size_t index = 0; index < destinations.size(); ++index)
+     {
++        Position const& point = destinations[index];
+         goal = point;
+         // Check every navmesh leg, including corners, against the pursuing spike.
+         if (bot->GetExactDist2d(point) < 1.0f || std::abs(point.GetPositionZ() - bot->GetPositionZ()) > 4.0f)
+@@ -483,6 +500,21 @@ bool TocSpikeEscapeAction::Execute(Event /*event*/)
+             ++rejected;
+             if (probe.blocked)
+                 ++blocked;
++            if (index < frostDestinations && (!_lastFrostRouteLog || GetMSTimeDiffToNow(_lastFrostRouteLog) >= 10000))
++            {
++                _lastFrostRouteLog = getMSTime();
++                LOG_WARN("playerbots",
++                         "toc_spike frost_route_refused instance={} bot={} path={} blocked={} step={} lane={} reason={}"
++                         " bot_x={} bot_y={} bot_z={} goal_x={} goal_y={} goal_z={}"
++                         " expected_x={} expected_y={} old_z={} actual_x={} actual_y={} actual_z={}",
++                         bot->GetInstanceId(), bot->GetGUID().GetCounter(), probe.type, probe.blocked,
++                         probe.collisionStep, probe.collisionLane, probe.collisionReason,
++                         bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(),
++                         point.GetPositionX(), point.GetPositionY(), point.GetPositionZ(),
++                         probe.collisionExpected.GetPositionX(), probe.collisionExpected.GetPositionY(),
++                         probe.collisionExpected.GetPositionZ(), probe.collisionActual.GetPositionX(),
++                         probe.collisionActual.GetPositionY(), probe.collisionActual.GetPositionZ());
++            }
+             continue;
+         }
+         bot->InterruptNonMeleeSpells(false);

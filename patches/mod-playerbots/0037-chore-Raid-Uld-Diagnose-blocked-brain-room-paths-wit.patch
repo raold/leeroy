@@ -1,0 +1,29 @@
+From 7860ddc2c0fe9f863d9873dffcf14334c2762d36 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 20:27:56 -0500
+Subject: [PATCH 37/63] chore(Raid/Uld): Diagnose blocked brain-room paths
+ without changing movement
+
+---
+ src/Ai/Raid/Uld/YoggBrainActions.cpp | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index fc32c963..62b5b785 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -465,8 +465,12 @@ bool YoggBrainAction::Walk(Position const& destination)
+         if (!lastPathLog || GetMSTimeDiffToNow(lastPathLog) >= 10000)
+         {
+             lastPathLog = getMSTime();
+-            LOG_WARN("playerbots", "yogg_brain path_blocked instance={} bot={} mode={} path={}",
+-                bot->GetMap()->GetInstanceId(), bot->GetGUID().GetCounter(), lastMode, unsigned(path.GetPathType()));
++            auto const& actual = path.GetActualEndPosition();
++            LOG_WARN("playerbots", "yogg_brain path_blocked instance={} bot={} mode={} path={} points={} length={}"
++                " start_x={} start_y={} start_z={} goal_x={} goal_y={} goal_z={} end_x={} end_y={} end_z={}",
++                bot->GetMap()->GetInstanceId(), bot->GetGUID().GetCounter(), lastMode, unsigned(path.GetPathType()),
++                path.GetPath().size(), path.getPathLength(), bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(),
++                destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), actual.x, actual.y, actual.z);
+         }
+         return false;
+     }

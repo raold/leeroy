@@ -1,0 +1,33 @@
+From 22016f4ca43051eddec127209e092f2a015df66c Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 22:12:27 -0500
+Subject: [PATCH 62/63] fix(Raids/Yogg): Approach within revealed tentacle
+ reach
+
+---
+ src/Ai/Raid/Uld/YoggBrainActions.cpp | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index 286bf79b..bd63140d 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -355,9 +355,17 @@ enum class Mode { None, Portal, Exit, Route, Fight, Face, Wait, Rescue };
+ 
+ bool InAttackRange(Player* bot, Unit* target)
+ {
++    bool const melee = PlayerbotAI::IsMelee(bot);
++    if (target->GetEntry() >= 33716 && target->GetEntry() <= 33720)
++    {
++        // Dragon disguises lose their large reach on the first hit. Approach
++        // within the revealed tentacle's range before ending the approach.
++        if (bot->GetExactDist(target) >= (melee ? NOMINAL_MELEE_RANGE : 25.0f))
++            return false;
++    }
+     // GetDistance subtracts both combat reaches, but its extra three yards
+     // exceed the core's melee allowance and can stop an approach out of reach.
+-    return PlayerbotAI::IsMelee(bot) ? bot->IsWithinMeleeRange(target) : bot->GetDistance(target) <= 25.0f;
++    return melee ? bot->IsWithinMeleeRange(target) : bot->GetDistance(target) <= 25.0f;
+ }
+ 
+ Position ThroughDoorway(Player* bot, Position const& destination, unsigned illusion)

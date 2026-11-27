@@ -1,0 +1,142 @@
+From 7ec6ce41f5d26e7a83950a5689855181f2c01888 Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 02:50:23 -0500
+Subject: [PATCH 49/63] fix(Raid/Yogg): Retry other targets after an
+ unreachable attack route
+
+Cache refused influence routes briefly on the bot instead of selecting the same unreachable target for the rest of the portal wave. Only a failed attack-position search marks the target; movement restrictions, complete paths and exit budgets remain unchanged.
+---
+ src/Ai/Raid/Uld/YoggBrainActions.cpp | 22 +++++++++++++++++++-
+ src/Ai/Raid/Uld/YoggBrainActions.h   |  2 ++
+ src/Ai/Raid/Uld/YoggBrainPolicy.h    | 31 ++++++++++++++++++++++++++++
+ tests/yogg_brain_test.cpp            | 12 +++++++++++
+ 4 files changed, 66 insertions(+), 1 deletion(-)
+
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index 1ead6ec5..16f76c77 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -380,6 +380,8 @@ Plan Decide(PlayerbotAI* ai)
+         for (Creature* add : adds)
+         {
+             if (!add->IsAlive() || add->GetPositionZ() >= 300.0f || !bot->IsValidAttackTarget(add)) continue;
++            if (support->RouteBlocked(add->GetGUID()))
++                continue;
+             float const score =
+                 50.0f * YoggBrain::Exposure(bot->GetAngle(add), gazes) + bot->GetExactDist2d(add) +
+                 (damageDealer && claims.Taken(add->GetGUID().GetRawValue(), bot->GetGUID().GetRawValue())
+@@ -531,6 +533,11 @@ Player* YoggBrainLinkedPartner(Player* player)
+ }
+ 
+ bool YoggBrainTrigger::IsActive() { return Decide(botAI).needsAction; }
++bool YoggBrainAction::RouteBlocked(ObjectGuid target) const
++{
++    return _influenceRoutes.Blocked(bot->GetInstanceId(), target.GetRawValue(), getMSTime());
++}
++
+ bool YoggBrainEmergencyTrigger::IsActive()
+ {
+     Plan const plan = Decide(botAI);
+@@ -586,7 +593,20 @@ bool YoggBrainAction::Execute(Event /*event*/)
+         Position point;
+         // Check routes only when executing movement, not while evaluating the
+         // trigger. A clear firing angle alone can select an unreachable point.
+-        return AttackPoint(bot, target, illusion, point, true) && Walk(point);
++        if (!AttackPoint(bot, target, illusion, point, true))
++        {
++            _influenceRoutes.Refused(bot->GetInstanceId(), target->GetGUID().GetRawValue(), getMSTime());
++            ClaimInfluence(bot, nullptr);
++            if (!lastPathLog || GetMSTimeDiffToNow(lastPathLog) >= 10000)
++            {
++                lastPathLog = getMSTime();
++                LOG_WARN("playerbots", "yogg_brain attack_route_refused instance={} bot={} target={} entry={}",
++                         bot->GetInstanceId(), bot->GetGUID().GetCounter(), target->GetGUID().GetCounter(),
++                         target->GetEntry());
++            }
++            return false;
++        }
++        return Walk(point);
+     };
+     if (plan.mode == Mode::Fight)
+     {
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.h b/src/Ai/Raid/Uld/YoggBrainActions.h
+index 906dd362..38e21590 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.h
++++ b/src/Ai/Raid/Uld/YoggBrainActions.h
+@@ -19,9 +19,11 @@ public:
+     bool Execute(Event event) override;
+     bool ShouldReactionInterruptCast() const override { return true; }
+     bool HoldExit(uint32 instance, bool below, bool required) { return _exitIntent.Update(instance, below, required); }
++    bool RouteBlocked(ObjectGuid target) const;
+ 
+ private:
+     YoggBrain::ExitIntent _exitIntent;
++    YoggBrain::InfluenceRoutes _influenceRoutes;
+     bool Walk(Position const& destination);
+     void Note(unsigned mode, Unit* target = nullptr);
+     unsigned lastMode = 0;
+diff --git a/src/Ai/Raid/Uld/YoggBrainPolicy.h b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+index dfac47bd..23ee7a41 100644
+--- a/src/Ai/Raid/Uld/YoggBrainPolicy.h
++++ b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+@@ -103,6 +103,37 @@ private:
+     std::array<std::pair<std::uint64_t, std::uint64_t>, 10> _claims{};
+ };
+ 
++class InfluenceRoutes
++{
++public:
++    bool Blocked(std::uint32_t instance, std::uint64_t target, std::uint32_t now) const
++    {
++        for (auto const& attempt : _attempts)
++            if (target && attempt.instance == instance && attempt.target == target && now - attempt.when < 1500)
++                return true;
++        return false;
++    }
++
++    void Refused(std::uint32_t instance, std::uint64_t target, std::uint32_t now)
++    {
++        if (target)
++        {
++            _attempts[_next] = {instance, target, now};
++            _next = (_next + 1) % _attempts.size();
++        }
++    }
++
++private:
++    struct Attempt
++    {
++        std::uint32_t instance;
++        std::uint64_t target;
++        std::uint32_t when;
++    };
++    std::array<Attempt, 16> _attempts{};
++    std::size_t _next = 0;
++};
++
+ inline bool BrainAllowed(unsigned illusion, bool doorOpen, bool casting, unsigned remaining, float health)
+ {
+     return illusion >= 1 && illusion <= 3 && doorOpen && casting && remaining > 12000 && health > 30.0f;
+diff --git a/tests/yogg_brain_test.cpp b/tests/yogg_brain_test.cpp
+index ae6dc780..9c3ac4ac 100644
+--- a/tests/yogg_brain_test.cpp
++++ b/tests/yogg_brain_test.cpp
+@@ -83,6 +83,18 @@ int main()
+     CHECK(!claims.Taken(102, 23));    // changing targets releases the old one
+     CHECK(choose(23, {100}) == 100);  // soft preference never stalls the last kill
+     CHECK(!claims.Taken(0, 20));
++    InfluenceRoutes routes;
++    CHECK(!routes.Blocked(1, 100, 5000));
++    routes.Refused(1, 100, 5000);
++    CHECK(routes.Blocked(1, 100, 5000));
++    CHECK(routes.Blocked(1, 100, 6499));
++    CHECK(!routes.Blocked(1, 100, 6500));
++    CHECK(!routes.Blocked(2, 100, 5000));
++    CHECK(!routes.Blocked(1, 101, 5000));
++    routes.Refused(1, 101, std::numeric_limits<std::uint32_t>::max() - 100);
++    CHECK(routes.Blocked(1, 101, 500));  // native millisecond clock wraps
++    CHECK(!routes.Blocked(1, 101, 1500));
++    CHECK(!routes.Blocked(1, 0, 5000));
+     CHECK(ExitBudget(0, 7) == 12000);
+     CHECK(ExitBudget(140, 7) == 35000);
+     CHECK(ExitBudget(140, 3.5f) > ExitBudget(140, 7));

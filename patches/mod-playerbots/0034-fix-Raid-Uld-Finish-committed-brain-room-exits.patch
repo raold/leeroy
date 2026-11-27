@@ -1,0 +1,134 @@
+From 1ac931f95418b857e8f69b56355e61d520935e2a Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 16:54:21 -0500
+Subject: [PATCH 34/63] fix(Raid/Uld): Finish committed brain-room exits
+
+---
+ src/Ai/Raid/Uld/YoggBrainActions.cpp | 21 ++++++++++++++++++---
+ src/Ai/Raid/Uld/YoggBrainActions.h   |  4 ++++
+ src/Ai/Raid/Uld/YoggBrainPolicy.h    | 16 ++++++++++++++++
+ tests/yogg_brain_test.cpp            | 13 +++++++++++++
+ 4 files changed, 51 insertions(+), 3 deletions(-)
+
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index afdd9cb8..85bf6d61 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -219,9 +219,17 @@ struct Plan
+ Plan Decide(PlayerbotAI* ai)
+ {
+     Plan plan;
+-    if (!Enabled(ai)) return plan;
++    auto* support = dynamic_cast<YoggBrainAction*>(ai->GetAiObjectContext()->GetAction("yogg brain support"));
++    if (!support)
++        return plan;
++    if (!Enabled(ai))
++    {
++        support->HoldExit(0, false, false);
++        return plan;
++    }
+     Player* bot = ai->GetBot();
+     plan.below = Below(bot);
++    support->HoldExit(bot->GetInstanceId(), plan.below, false);
+     Creature* brain = bot->GetInstanceScript()->GetCreature(761);
+     auto const gazes = Gazes(bot, plan.below);
+     plan.facing = YoggBrain::SafeFacing(bot->GetOrientation(), gazes);
+@@ -246,8 +254,12 @@ Plan Decide(PlayerbotAI* ai)
+     Spell* cast = brain ? brain->GetCurrentSpell(CURRENT_GENERIC_SPELL) : nullptr;
+     bool const inducing = cast && cast->GetSpellInfo()->Id == 64059;
+     unsigned const remaining = inducing ? std::max(0, cast->GetCastTimeRemaining()) : 0;
+-    if (!brain || !brain->IsAlive() || YoggBrain::MustExit(inducing, remaining, Sanity(bot), brain->GetHealthPct(),
+-        plan.exit ? bot->GetExactDist(plan.exit) : 1000.0f, bot->GetSpeed(MOVE_RUN)))
++    // Walking closer reduces the calculated budget; it must not cancel an exit already begun.
++    bool const exitRequired =
++        !brain || !brain->IsAlive() ||
++        YoggBrain::MustExit(inducing, remaining, Sanity(bot), brain->GetHealthPct(),
++                            plan.exit ? bot->GetExactDist(plan.exit) : 1000.0f, bot->GetSpeed(MOVE_RUN));
++    if (support->HoldExit(bot->GetInstanceId(), true, exitRequired))
+     {
+         plan.mode = Mode::Exit;
+         return plan;
+@@ -512,6 +524,9 @@ float YoggBrainMultiplier::GetValue(Action* action)
+                    ? 0.0f
+                    : 1.0f;
+     }
++    if (auto* support = dynamic_cast<YoggBrainAction*>(context->GetAction("yogg brain support"));
++        support && support->HoldExit(bot->GetInstanceId(), true, false))
++        return 0.0f;
+     // A portal/exit/deadline/gaze move must not be undone by follow, charge,
+     // assist, a legacy raid action, or a cast that automatically turns us back.
+     if (dynamic_cast<MovementAction*>(action)) return 0.0f;
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.h b/src/Ai/Raid/Uld/YoggBrainActions.h
+index 1b096a6c..906dd362 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.h
++++ b/src/Ai/Raid/Uld/YoggBrainActions.h
+@@ -4,6 +4,7 @@
+ #include "AttackAction.h"
+ #include "Multiplier.h"
+ #include "Trigger.h"
++#include "YoggBrainPolicy.h"
+ 
+ class Spell;
+ // The native Brain Link aura exists only on its owner; the second player is
+@@ -17,7 +18,10 @@ public:
+     YoggBrainAction(PlayerbotAI* ai) : AttackAction(ai, "yogg brain support") {}
+     bool Execute(Event event) override;
+     bool ShouldReactionInterruptCast() const override { return true; }
++    bool HoldExit(uint32 instance, bool below, bool required) { return _exitIntent.Update(instance, below, required); }
++
+ private:
++    YoggBrain::ExitIntent _exitIntent;
+     bool Walk(Position const& destination);
+     void Note(unsigned mode, Unit* target = nullptr);
+     unsigned lastMode = 0;
+diff --git a/src/Ai/Raid/Uld/YoggBrainPolicy.h b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+index 7d6c8e2f..d1353268 100644
+--- a/src/Ai/Raid/Uld/YoggBrainPolicy.h
++++ b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+@@ -80,6 +80,22 @@ inline bool MustExit(bool casting, unsigned remaining, unsigned sanity, float he
+ {
+     return !casting || remaining <= ExitBudget(distance, speed) || sanity <= LeaveSanity || health <= 30.0f;
+ }
++class ExitIntent
++{
++public:
++    bool Update(std::uint32_t instance, bool below, bool required)
++    {
++        if (!below || instance != _instance)
++            _leaving = false;
++        _instance = instance;
++        _leaving = below && (_leaving || required);
++        return _leaving;
++    }
++
++private:
++    std::uint32_t _instance = 0;
++    bool _leaving = false;
++};
+ inline bool CastFits(unsigned remaining, unsigned exitBudget, unsigned castTime)
+ {
+     return remaining > exitBudget && remaining - exitBudget > std::uint64_t(castTime) + 1000;
+diff --git a/tests/yogg_brain_test.cpp b/tests/yogg_brain_test.cpp
+index 3047c40f..50dc2e1a 100644
+--- a/tests/yogg_brain_test.cpp
++++ b/tests/yogg_brain_test.cpp
+@@ -75,6 +75,19 @@ int main()
+     CHECK(MustExit(true, 60000, 25, 100, 1, 7));
+     CHECK(!MustExit(true, 60000, 26, 100, 1, 7));
+     CHECK(MustExit(true, 60000, 100, 30, 1, 7));
++    ExitIntent departure;
++    CHECK(!departure.Update(42, true, MustExit(true, 40000, 90, 100, 140, 7)));
++    CHECK(departure.Update(42, true, MustExit(true, 34000, 90, 100, 140, 7)));
++    // Approaching the exit makes a fresh budget smaller; the committed route must persist.
++    CHECK(!MustExit(true, 32000, 90, 100, 100, 7));
++    CHECK(departure.Update(42, true, MustExit(true, 32000, 90, 100, 100, 7)));
++    CHECK(departure.Update(42, true, false));
++    CHECK(!departure.Update(42, false, false));
++    CHECK(!departure.Update(42, true, false));
++    CHECK(departure.Update(42, true, true));
++    CHECK(!departure.Update(43, true, false));
++    CHECK(departure.Update(43, true, true));
++    CHECK(!departure.Update(0, false, false));
+     CHECK(CastFits(20000, 12000, 6000));
+     CHECK(!CastFits(20000, 12000, 7000));
+     CHECK(!CastFits(20000, 12000, 10000));
