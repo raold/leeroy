@@ -166,6 +166,7 @@ Playerbots.SyncQuestForPlayer
 Playerbots.SyncQuestWithPlayer
 Playerbots.TellWhenAvoidAoe
 Playerbots.TellWhenMissingBuffReagents
+Playerbots.TocWormSupport
 Playerbots.TwinValkyrInteractions
 Playerbots.TwoRoundsGearInit
 Playerbots.Updates.EnableDatabases
