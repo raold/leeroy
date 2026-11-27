@@ -417,6 +417,10 @@ with the full count to expose truncation. On a failure during Harvest Soul or
 observation, `fixture_failure` preserves both actors' connection, life, world-removal,
 AI and teleport state, health, position, aura IDs and available boss state before
 cleanup resurrects or logs them out. It survives cleanup and resets at the next run.
+Native Lich King and Terenas snapshots also record engagement, combat, victim slot,
+health and current spell. A forced `IN_PROGRESS` boss state alone does not prove
+that the outside anchor actually engaged the native boss; inspect these facts when
+comparing control failures with later diagnostic runs.
 An empty death list alone cannot rule out a lost actor; use this terminal snapshot
 to distinguish a dead actor from one that is disconnected or leaving the world.
 None of these diagnostics changes a verdict or makes a failed control acceptable.

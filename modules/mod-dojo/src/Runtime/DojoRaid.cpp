@@ -148,6 +148,37 @@ struct RaidRun
         return p && p->IsInWorld() && !p->IsDuringRemoveFromWorld() && GET_PLAYERBOT_AI(p) ? p : nullptr;
     }
 
+    json LichKingState(Player* p) const
+    {
+        json result = json::object();
+        if ((scenario != "lk-terenas" && scenario != "lk-defile") || !p || !p->IsInWorld() ||
+            p->IsDuringRemoveFromWorld() || p->GetMapId() != map || p->GetInstanceId() != instance)
+            return result;
+        InstanceScript* script = p->GetInstanceScript();
+        if (!script) return result;
+        result["boss_state"] = uint32(script->GetBossState(12));
+        for (uint32 data : {12u, 39u}) // native Lich King and Terenas
+        {
+            Creature* c = p->GetMap()->GetCreature(script->GetGuidData(data));
+            json npc = {{"exists", c != nullptr}};
+            if (c)
+            {
+                Unit* victim = c->GetVictim();
+                uint32 spell = 0;
+                if (Spell* current = c->GetCurrentSpell(CURRENT_GENERIC_SPELL)) spell = current->GetSpellInfo()->Id;
+                else if (Spell* channel = c->GetCurrentSpell(CURRENT_CHANNELED_SPELL)) spell = channel->GetSpellInfo()->Id;
+                npc.update({{"entry", c->GetEntry()}, {"alive", c->IsAlive()}, {"combat", c->IsInCombat()},
+                    {"engaged", c->IsEngaged()}, {"evading", c->IsInEvadeMode()},
+                    {"immune_to_pc", c->IsImmuneToPC()}, {"react_state", uint32(c->GetReactState())},
+                    {"health", c->GetHealth()}, {"max_health", c->GetMaxHealth()}, {"spell", spell},
+                    {"x", c->GetPositionX()}, {"y", c->GetPositionY()}, {"z", c->GetPositionZ()},
+                    {"victim_slot", victim ? std::size_t(std::find(actors.begin(), actors.end(), victim->GetGUID()) - actors.begin()) : actors.size()}});
+            }
+            result[std::to_string(data)] = std::move(npc);
+        }
+        return result;
+    }
+
     void Phase(std::string const& next) { state = next; phaseMs = 0; }
     void Fail(std::string const& why)
     {
@@ -179,11 +210,7 @@ struct RaidRun
                     }
                     actor["auras"] = std::move(auras);
                     actor["aura_count"] = p->GetAppliedAuras().size();
-                    // Do not dereference the map while an actor is being removed.
-                    if (p->IsInWorld() && !p->IsDuringRemoveFromWorld() && p->GetMapId() == map &&
-                        p->GetInstanceId() == instance)
-                        if (InstanceScript* script = p->GetInstanceScript())
-                            actor["boss_state"] = uint32(script->GetBossState(12));
+                    actor["native_encounter"] = LichKingState(p);
                 }
                 fixtures.push_back(std::move(actor));
             }
@@ -713,6 +740,8 @@ struct RaidRun
             InstanceScript* script = p->GetInstanceScript();
             encounter["boss_state"] = uint32(script->GetBossState(scenario == "valithria" ? 10 : scenario == "twins" ? 3 :
                 scenario == "lk-terenas" || scenario == "lk-defile" ? 12 : 0));
+            if (scenario == "lk-terenas" || scenario == "lk-defile")
+                encounter["native_encounter"] = LichKingState(p);
             if (Player* owner = Actor(1))
             {
                 encounter["leader_distance"] = p->GetDistance(owner);
