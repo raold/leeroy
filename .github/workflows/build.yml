@@ -111,7 +111,10 @@ jobs:
 
       - name: Install requirements
         run: |
-          sudo apt-get update
+          # The image's packages.microsoft.com source intermittently answers 403, which fails
+          # apt-get update; nothing here comes from it. Ubuntu's own sources stay strict.
+          for f in $(grep -rl packages.microsoft.com /etc/apt/sources.list.d/ || true); do sudo rm -f "$f"; done
+          sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y ccache cmake make clang libmysqlclient-dev libssl-dev libbz2-dev \
             libreadline-dev libncurses-dev mysql-server libboost-all-dev
 
