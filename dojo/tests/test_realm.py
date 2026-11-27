@@ -276,6 +276,45 @@ class RulesTest(unittest.TestCase):
         self.assertTrue(any("the .dist says" in p for p in conf.check(rules, {**good, "Rate": "1"}, drifted)))
 
 
+class LogProvisionTest(unittest.TestCase):
+    def test_core_template_without_module_logger_provisions_and_stays_strict(self):
+        synthetic = Synthetic()
+        try:
+            lay = synthetic.load(ports__leeroy=13444)
+            rules_file = Path(lay.roots["source"]) / provision.RULES
+            rules_file.parent.mkdir(parents=True)
+            rules_file.write_text(RULES.read_text(encoding="utf-8"), encoding="utf-8")
+            rules = conf.load_rules(rules_file)["worldserver.conf"]
+            logging_keys = {"Appender.DungeonClear", "Logger.playerbots.dungeonclear"}
+            values = {**dict.fromkeys(rules.isolation, ""), **rules.ordinary,
+                      **{k: v for k, v in rules.training.items() if k not in logging_keys}}
+            original = "".join(f'{key} = "{value}"\n' for key, value in values.items())
+            dist = lay.build_bin / "configs" / rules.dist
+            dist.parent.mkdir(parents=True)
+            dist.write_text(original, encoding="utf-8")
+            (Path(lay.roots["build"]) / "dojo-configure.json").write_text(
+                json.dumps({"raid_acceptance": True, "offline_acceptance": True}), encoding="utf-8")
+            with mock.patch.object(mysql, "read_client_cnf", return_value={"password": "fixture-only"}), \
+                    mock.patch.object(mysql, "restrict_to_owner", return_value="fixture ACL"):
+                for _ in range(2):
+                    provision.write_configs(lay, only={"worldserver.conf"}, log=lambda _: None)
+                    text = (lay.configs / "worldserver.conf").read_text(encoding="utf-8")
+                    actual = conf.parse(text)
+                    self.assertEqual(actual["Appender.DungeonClear"], "2,4,1,DungeonClear.log")
+                    self.assertEqual(actual["Logger.playerbots.dungeonclear"], "4,DungeonClear")
+                    self.assertEqual(conf.check(rules, actual, conf.parse(original)), [])
+                    for key in logging_keys:
+                        self.assertEqual(text.count(key + " ="), 1)
+                    bad = {**actual, "Appender.DungeonClear": "2,4,0,DungeonClear.log"}
+                    self.assertTrue(conf.check(rules, bad, conf.parse(original)))
+                dist.write_text("\n".join(line for line in original.splitlines()
+                                          if not line.startswith("BindIP =")), encoding="utf-8")
+                with self.assertRaisesRegex(conf.ConfError, "BindIP"):
+                    provision.write_configs(lay, only={"worldserver.conf"}, log=lambda _: None)
+        finally:
+            synthetic.close()
+
+
 class AccountsTest(unittest.TestCase):
     def test_srp6_verifier(self):
         salt = bytes(range(32))
@@ -347,6 +386,63 @@ class RaTest(unittest.TestCase):
 
 
 class WorldTest(unittest.TestCase):
+    def stopped_layout(self):
+        synthetic = Synthetic()
+        self.addCleanup(synthetic.close)
+        candidate = synthetic.load()
+        candidate.run_dir.mkdir(parents=True)
+        candidate.tmp.mkdir(parents=True)
+        record = candidate.run_dir / "worldserver.pid"
+        record.write_text("4242\n", encoding="ascii")
+        return candidate, record
+
+    def test_stopped_pid_cannot_be_mistaken_for_a_reused_process(self):
+        candidate, record = self.stopped_layout()
+        with mock.patch.object(mysql, "port_listening", return_value=False), \
+                mock.patch.object(mysql, "pid_alive", return_value=False):
+            world.stop(candidate, log=lambda _: None)
+        self.assertFalse(record.exists())
+        with mock.patch.object(mysql, "port_listening", return_value=False), \
+                mock.patch.object(mysql, "pid_alive", side_effect=lambda pid: pid == 4242):
+            self.assertFalse(world.running(candidate))
+
+    def test_ra_shutdown_retires_its_pid_only_after_exit(self):
+        candidate, record = self.stopped_layout()
+        with mock.patch.object(mysql, "port_listening", side_effect=[True, False]), \
+                mock.patch.object(mysql, "pid_alive", return_value=False), \
+                mock.patch.object(world, "ra") as connect:
+            world.stop(candidate, log=lambda _: None)
+        connect.return_value.__enter__.return_value.command.assert_called_once_with("server shutdown 1")
+        self.assertFalse(record.exists())
+
+    def test_a_live_pid_without_ra_still_blocks_and_keeps_its_record(self):
+        candidate, record = self.stopped_layout()
+        with mock.patch.object(mysql, "port_listening", return_value=False), \
+                mock.patch.object(mysql, "pid_alive", return_value=True):
+            with self.assertRaisesRegex(world.WorldError, "RA is closed"):
+                world.stop(candidate, log=lambda _: None)
+        self.assertEqual(record.read_text(encoding="ascii"), "4242\n")
+
+    def test_shutdown_cannot_remove_a_replacement_pid_record(self):
+        candidate, record = self.stopped_layout()
+        with mock.patch.object(mysql, "port_listening", side_effect=[True, False]), \
+                mock.patch.object(mysql, "pid_alive", return_value=False), \
+                mock.patch.object(world, "ra") as connect:
+            connect.return_value.__enter__.return_value.command.side_effect = \
+                lambda _: record.write_text("4343\n", encoding="ascii")
+            with self.assertRaisesRegex(world.WorldError, "PID record changed"):
+                world.stop(candidate, log=lambda _: None)
+        self.assertEqual(record.read_text(encoding="ascii"), "4343\n")
+
+    def test_unproved_shutdown_retains_its_pid_record(self):
+        candidate, record = self.stopped_layout()
+        with mock.patch.object(mysql, "port_listening", return_value=True), \
+                mock.patch.object(mysql, "pid_alive", return_value=True), \
+                mock.patch.object(world, "ra"):
+            with self.assertRaisesRegex(world.WorldError, "still running"):
+                world.stop(candidate, timeout=0, log=lambda _: None)
+        self.assertEqual(record.read_text(encoding="ascii"), "4242\n")
+
     def test_child_env_drops_azerothcore_overrides(self):
         with mock.patch.dict(os.environ, {"AC_WORLD_DATABASE_INFO": "live", "ac_rate_health": "9", "PATH": "x"}):
             env = world.child_env()

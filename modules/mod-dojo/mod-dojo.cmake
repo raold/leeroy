@@ -23,6 +23,10 @@ if (TARGET modules)
     # this option() then does nothing.
     option(AC_ENABLE_DOJO "Build the dojo training variant of mod-dojo (never for a live server)" OFF)
     option(AC_DOJO_RAID_ACCEPTANCE "Include mod-leeroy in the isolated raid acceptance realm" OFF)
+    option(AC_DOJO_OFFLINE_ACCEPTANCE "Exercise offline jobs with isolated dungeon-clear" OFF)
+    if (AC_DOJO_OFFLINE_ACCEPTANCE AND (NOT AC_DOJO_RAID_ACCEPTANCE OR NOT ";${MODULES_MODULE_LIST};" MATCHES ";mod-dungeon-clear;"))
+        message(FATAL_ERROR "Offline acceptance requires RaidAcceptance and isolated dungeon-clear")
+    endif()
     if (AC_DOJO_RAID_ACCEPTANCE AND NOT AC_ENABLE_DOJO)
         message(FATAL_ERROR "Raid acceptance requires the isolated dojo training variant")
     endif()
@@ -38,6 +42,7 @@ if (TARGET modules)
             string(TOUPPER "${DOJO_MODULE}" DOJO_MODULE_UPPER)
             if (NOT DOJO_MODULE MATCHES "^(mod-dojo|mod-playerbots)$"
                 AND NOT (AC_DOJO_RAID_ACCEPTANCE AND DOJO_MODULE STREQUAL "mod-leeroy")
+                AND NOT (AC_DOJO_OFFLINE_ACCEPTANCE AND DOJO_MODULE STREQUAL "mod-dungeon-clear")
                 AND NOT ";${DISABLED_AC_MODULES};" MATCHES ";${DOJO_MODULE};"
                 AND NOT "${MODULE_${DOJO_MODULE_UPPER}}" STREQUAL "disabled")
                 message(FATAL_ERROR "[mod-dojo] AC_ENABLE_DOJO builds only mod-playerbots and mod-dojo; "
@@ -51,6 +56,11 @@ if (TARGET modules)
     # Only the runtime files see the switch, so flipping it recompiles them alone. They refuse to compile without it,
     # which also catches this file being skipped because the module folder is not named exactly mod-dojo.
     file(GLOB DOJO_RUNTIME_SOURCES "${CMAKE_CURRENT_LIST_DIR}/src/Runtime/*.cpp")
+    if (AC_DOJO_OFFLINE_ACCEPTANCE)
+        set_property(SOURCE ${DOJO_RUNTIME_SOURCES}
+            "${CMAKE_SOURCE_DIR}/modules/mod-leeroy/src/Guild/OfflineRaidJob.cpp"
+            APPEND PROPERTY COMPILE_DEFINITIONS DOJO_OFFLINE_ACCEPTANCE=1)
+    endif()
     set_property(SOURCE ${DOJO_RUNTIME_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS
         DOJO_TRAINING_BUILD=${DOJO_TRAINING_BUILD})
     if (AC_DOJO_RAID_ACCEPTANCE)

@@ -77,7 +77,7 @@ def fingerprint(path):
 
 def provenance(layout):
     revisions = {}
-    for name in ("source", "core", "playerbots"):
+    for name in ("source", "core", "playerbots") + (("dungeonclear",) if "dungeonclear" in layout.roots else ()):
         root = layout.roots[name]
         def git(*args):
             return subprocess.check_output(["git", "-C", root, *args], text=True, encoding="utf-8").strip()
@@ -106,6 +106,8 @@ def provenance(layout):
         raise LayoutError("staged worldserver differs from the candidate build")
     configs = {name: fingerprint(layout.configs / name) for name in (
         "worldserver.conf", "modules/playerbots.conf", "modules/mod_dojo.conf", "modules/mod_leeroy.conf")}
+    if "dungeonclear" in revisions:
+        configs["modules/mod_dungeon_clear.conf"] = fingerprint(layout.configs / "modules/mod_dungeon_clear.conf")
     return dict(revisions=revisions, worldserver_sha256=digest, layout_sha256=fingerprint(layout.path), configs=configs)
 
 

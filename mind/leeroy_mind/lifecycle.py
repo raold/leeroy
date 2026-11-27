@@ -30,6 +30,7 @@ import re
 import subprocess
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -358,23 +359,26 @@ def hold_voice(data_dir, by: str) -> None:
     down again, but not one held this way: it waits for his next login."""
     path = Path(data_dir) / VOICE_HOLD_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"by": by, "at": int(time.time())}) + "\n", encoding="utf-8")
+    path.write_text(json.dumps({"by": by, "at": int(time.time()), "generation": uuid.uuid4().hex}) + "\n", encoding="utf-8")
 
 
 def voice_hold(data_dir) -> dict | None:
-    """The hold an operator's stop left, {"by", "at"} (`at` is the file's mtime); None when there
-    is none. Unreadable content is still a hold, by "unknown"."""
+    """The stop's author, mtime and optional generation; None when no hold exists.
+    Legacy/script files have no generation. Unreadable content still holds, by "unknown"."""
     path = Path(data_dir) / VOICE_HOLD_FILE
     try:
         at = path.stat().st_mtime
     except OSError:
         return None
     try:
-        by = json.loads(path.read_text(encoding="utf-8")).get("by")
+        record = json.loads(path.read_text(encoding="utf-8"))
+        by = record.get("by")
+        generation = record.get("generation")
     except (OSError, ValueError, AttributeError):  # UnicodeDecodeError is a ValueError
-        by = None
+        by = generation = None
     return {"by": by if isinstance(by, str) and by.isalnum() and len(by) <= 20 else "unknown",
-            "at": at}
+            "at": at, "generation": generation if isinstance(generation, str)
+            and re.fullmatch(r"[0-9a-f]{32}", generation) else None}
 
 
 def release_voice_hold(data_dir) -> bool:

@@ -3,7 +3,9 @@
 # merely the HEAD that happened to exist beside an uncommitted experiment.
 function Get-DojoCleanRevisions([System.Collections.IDictionary] $Roots) {
     $result = [ordered]@{}
-    foreach ($name in @('source', 'core', 'playerbots')) {
+    $names = @('source', 'core', 'playerbots')
+    if ($Roots.Contains('dungeonclear')) { $names += 'dungeonclear' }
+    foreach ($name in $names) {
         $root = [string] $Roots[$name]
         if (-not $root) { throw "missing $name source root" }
         $status = @(& git -c core.fsmonitor=false -C $root status --porcelain --untracked-files=normal 2>$null)
@@ -20,7 +22,11 @@ function Get-DojoCleanRevisions([System.Collections.IDictionary] $Roots) {
 
 function Assert-DojoSameRevisions([System.Collections.IDictionary] $Before,
                                  [System.Collections.IDictionary] $After) {
-    foreach ($name in @('source', 'core', 'playerbots')) {
+    $names = @('source', 'core', 'playerbots')
+    if (($Before -and $Before.Contains('dungeonclear')) -or ($After -and $After.Contains('dungeonclear'))) {
+        $names += 'dungeonclear'
+    }
+    foreach ($name in $names) {
         if (-not $Before -or -not $After -or -not $Before[$name] -or $Before[$name] -cne $After[$name]) {
             throw "$name revision changed or lacks clean-source evidence; configure and build the candidate again"
         }
