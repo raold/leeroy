@@ -1,0 +1,234 @@
+From 4a05da6b068101d31424e82ebf04f57fa44664cb Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 19:12:04 -0500
+Subject: [PATCH 54/55] fix(Raid/Yogg): Route portal teams around Knock Away
+
+---
+ src/Ai/Raid/Uld/YoggBrainActions.cpp | 57 +++++++++++++++++++++++++++-
+ src/Ai/Raid/Uld/YoggBrainActions.h   |  3 +-
+ src/Ai/Raid/Uld/YoggBrainPolicy.h    | 44 +++++++++++++++++++++
+ tests/yogg_brain_test.cpp            | 49 ++++++++++++++++++++++++
+ 4 files changed, 150 insertions(+), 3 deletions(-)
+
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.cpp b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+index d168434b..3cc15ae1 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.cpp
++++ b/src/Ai/Raid/Uld/YoggBrainActions.cpp
+@@ -613,7 +613,7 @@ void YoggBrainAction::Note(unsigned mode, Unit* target)
+         bot->GetMap()->GetInstanceId(), bot->GetGUID().GetCounter(), mode, target ? target->GetEntry() : 0, Sanity(bot));
+ }
+ 
+-bool YoggBrainAction::Walk(Position const& destination)
++bool YoggBrainAction::Walk(Position const& destination, Position const* avoid, float clearance)
+ {
+     // Reject pathfinding fallbacks through closed illusion doors or the floor.
+     // No teleport and no unpathed straight line when the local mmap is missing.
+@@ -634,10 +634,63 @@ bool YoggBrainAction::Walk(Position const& destination)
+         }
+         return false;
+     }
++    if (avoid)
++    {
++        YoggBrain::PortalPoint previous{bot->GetPositionX() - avoid->GetPositionX(),
++                                       bot->GetPositionY() - avoid->GetPositionY()};
++        for (auto const& point : path.GetPath())
++        {
++            YoggBrain::PortalPoint const next{point.x - avoid->GetPositionX(), point.y - avoid->GetPositionY()};
++            // The first navmesh point can be the unchanged actor position.
++            if (previous.x == next.x && previous.y == next.y)
++                continue;
++            if (!YoggBrain::PortalSegmentSafe(previous, next, clearance))
++            {
++                if (!lastPathLog || GetMSTimeDiffToNow(lastPathLog) >= 10000)
++                {
++                    lastPathLog = getMSTime();
++                    LOG_WARN("playerbots", "yogg_brain portal_route_refused instance={} bot={} clearance={}",
++                             bot->GetInstanceId(), bot->GetGUID().GetCounter(), clearance);
++                }
++                return false;
++            }
++            previous = next;
++        }
++    }
+     return MoveTo(bot->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(),
+         false, false, true, true, MovementPriority::MOVEMENT_FORCED);
+ }
+ 
++bool YoggBrainAction::WalkToPortal(Unit* portal)
++{
++    Creature* yogg = bot->GetInstanceScript()->GetCreature(12);
++    constexpr uint32 knockAwayAura = 64022, knockAwayPulse = 64020;
++    if (!yogg || !yogg->IsAlive() || !yogg->HasAura(knockAwayAura))
++        return Walk(portal->GetPosition());
++    SpellInfo const* pulse = sSpellMgr->GetSpellInfo(knockAwayPulse);
++    if (!pulse)
++        return false;
++    float radius = 0.0f;
++    for (auto const& effect : pulse->Effects)
++        radius = std::max(radius, effect.CalcRadius(yogg));
++    if (radius <= 0.0f)
++        return false;
++    // The core's periodic spell reaches 14 yards. Include the player's body
++    // and a one-yard buffer in every segment of the ordinary movement route.
++    float const clearance = radius + bot->GetObjectSize() + 1.0f;
++    auto const waypoint = YoggBrain::PortalWaypoint(
++        {bot->GetPositionX() - yogg->GetPositionX(), bot->GetPositionY() - yogg->GetPositionY()},
++        {portal->GetPositionX() - yogg->GetPositionX(), portal->GetPositionY() - yogg->GetPositionY()}, clearance);
++    if (!waypoint)
++        return false;
++    Position point(yogg->GetPositionX() + waypoint->x, yogg->GetPositionY() + waypoint->y, bot->GetPositionZ());
++    bot->UpdateAllowedPositionZ(point.m_positionX, point.m_positionY, point.m_positionZ);
++    if (std::abs(point.GetPositionZ() - bot->GetPositionZ()) > 8.0f)
++        return false;
++    Position const center = yogg->GetPosition();
++    return Walk(point, &center, clearance);
++}
++
+ bool YoggBrainAction::Execute(Event /*event*/)
+ {
+     Plan const plan = Decide(botAI);
+@@ -686,7 +739,7 @@ bool YoggBrainAction::Execute(Event /*event*/)
+     if (plan.mode == Mode::Portal)
+     {
+         if (bot->GetExactDist(plan.target) > 3.0f || !bot->IsWithinLOSInMap(plan.target))
+-            return Walk(plan.target->GetPosition());
++            return WalkToPortal(plan.target);
+         bool const used = plan.target->ToCreature()->HandleSpellClick(bot);
+         if (used) LOG_INFO("playerbots", "yogg_brain enter instance={} bot={} sanity={}", bot->GetMap()->GetInstanceId(), bot->GetGUID().GetCounter(), Sanity(bot));
+         return used;
+diff --git a/src/Ai/Raid/Uld/YoggBrainActions.h b/src/Ai/Raid/Uld/YoggBrainActions.h
+index 38e21590..bc176c35 100644
+--- a/src/Ai/Raid/Uld/YoggBrainActions.h
++++ b/src/Ai/Raid/Uld/YoggBrainActions.h
+@@ -24,7 +24,8 @@ public:
+ private:
+     YoggBrain::ExitIntent _exitIntent;
+     YoggBrain::InfluenceRoutes _influenceRoutes;
+-    bool Walk(Position const& destination);
++    bool Walk(Position const& destination, Position const* avoid = nullptr, float clearance = 0.0f);
++    bool WalkToPortal(Unit* portal);
+     void Note(unsigned mode, Unit* target = nullptr);
+     unsigned lastMode = 0;
+     ObjectGuid lastTarget;
+diff --git a/src/Ai/Raid/Uld/YoggBrainPolicy.h b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+index d6daaa13..11aea50c 100644
+--- a/src/Ai/Raid/Uld/YoggBrainPolicy.h
++++ b/src/Ai/Raid/Uld/YoggBrainPolicy.h
+@@ -8,6 +8,7 @@
+ #include <cmath>
+ #include <cstdint>
+ #include <limits>
++#include <optional>
+ #include <utility>
+ #include <vector>
+ 
+@@ -132,6 +133,49 @@ inline std::vector<unsigned> AssignPortals(std::vector<std::vector<float>> const
+     return result;
+ }
+ 
++struct PortalPoint
++{
++    float x, y;
++};
++
++// Coordinates relative to Yogg. A member already caught inside the field may
++// escape radially, but no segment may take them farther into it.
++inline bool PortalSegmentSafe(PortalPoint start, PortalPoint finish, float radius)
++{
++    if (!std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(finish.x) ||
++        !std::isfinite(finish.y) || !std::isfinite(radius) || radius <= 0.0f)
++        return false;
++    float const dx = finish.x - start.x, dy = finish.y - start.y;
++    float const squared = dx * dx + dy * dy;
++    float const dot = start.x * dx + start.y * dy;
++    if (start.x * start.x + start.y * start.y < radius * radius)
++        return squared > 0.0f && dot >= 0.0f;
++    float const fraction = squared > 0.0f ? std::clamp(-dot / squared, 0.0f, 1.0f) : 0.0f;
++    float const x = start.x + fraction * dx, y = start.y + fraction * dy;
++    return x * x + y * y >= radius * radius;
++}
++
++// Keep short chords outside the periodic Knock Away field. This proposes only
++// the next waypoint; the action must still validate the complete navmesh path.
++inline std::optional<PortalPoint> PortalWaypoint(PortalPoint start, PortalPoint portal, float radius)
++{
++    if (!std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(portal.x) ||
++        !std::isfinite(portal.y) || !std::isfinite(radius) || radius <= 0.0f ||
++        std::hypot(portal.x, portal.y) < radius)
++        return std::nullopt;
++    if (PortalSegmentSafe(start, portal, radius))
++        return portal;
++    constexpr float step = Pi / 6.0f;
++    float const bendRadius = radius / std::cos(step / 2.0f) + 0.5f;
++    float const ring = bendRadius + 0.5f;
++    float const distance = std::hypot(start.x, start.y);
++    float const goalAngle = std::atan2(portal.y, portal.x);
++    float angle = distance > 0.0f ? std::atan2(start.y, start.x) : goalAngle;
++    if (distance >= bendRadius)
++        angle += std::clamp(std::remainder(goalAngle - angle, 2.0f * Pi), -step, step);
++    return PortalPoint{ring * std::cos(angle), ring * std::sin(angle)};
++}
++
+ inline bool Influence(std::uint32_t entry)
+ {
+     return entry == 33943 || (entry >= 33716 && entry <= 33720) || entry == 33567 || entry == 33433;
+diff --git a/tests/yogg_brain_test.cpp b/tests/yogg_brain_test.cpp
+index eaeb87f1..5b87afb5 100644
+--- a/tests/yogg_brain_test.cpp
++++ b/tests/yogg_brain_test.cpp
+@@ -24,6 +24,55 @@ int main()
+     CHECK(!InBrainArea(1980, -25, 329));
+     CHECK(!InBrainArea(0, 0, 240));
+     CHECK(!InBrainArea(1980, 500, 240));
++    // The Stormwind trial's fourth member repeatedly crossed Yogg's native
++    // 14-yard Knock Away field on this direct portal approach.
++    PortalPoint const capturedStart{1971.91f - 1980.0f, -39.17f + 25.0f};
++    PortalPoint const capturedPortal{1989.50f - 1980.0f, -6.70f + 25.0f};
++    CHECK(!PortalSegmentSafe(capturedStart, capturedPortal, 16.0f));
++    CHECK(!PortalSegmentSafe({20.0f, 0.0f}, {-20.0f, 0.0f}, 16.0f));
++    CHECK(PortalSegmentSafe({20.0f, 0.0f}, {25.0f, 0.0f}, 16.0f));
++    CHECK(PortalSegmentSafe({5.0f, 0.0f}, {20.0f, 0.0f}, 16.0f));
++    CHECK(!PortalSegmentSafe({5.0f, 0.0f}, {-20.0f, 0.0f}, 16.0f));
++    CHECK(!PortalWaypoint({20.0f, 0.0f}, {0.0f, 0.0f}, 16.0f));
++    CHECK(!PortalWaypoint({20.0f, 0.0f}, {0.0f, 20.0f}, 0.0f));
++    CHECK(!PortalWaypoint({std::numeric_limits<float>::quiet_NaN(), 0.0f}, {20.0f, 0.0f}, 16.0f));
++    auto verifyApproach = [&](PortalPoint current, PortalPoint portal)
++    {
++        bool arrived = false;
++        for (unsigned leg = 0; leg < 16; ++leg)
++        {
++            auto next = PortalWaypoint(current, portal, 16.0f);
++            CHECK(next.has_value());
++            if (!next) break;
++            // Independent dense samples check clearance and monotonically
++            // increasing distance while escaping a starting point inside it.
++            float previous = std::hypot(current.x, current.y);
++            for (unsigned sample = 1; sample <= 64; ++sample)
++            {
++                float const part = float(sample) / 64.0f;
++                float const distance = std::hypot(current.x + part * (next->x - current.x),
++                                                  current.y + part * (next->y - current.y));
++                CHECK(previous >= 16.0f ? distance >= 16.0f : distance + 0.0001f >= previous);
++                previous = distance;
++            }
++            current = *next;
++            if (std::hypot(current.x - portal.x, current.y - portal.y) < 0.001f)
++            {
++                arrived = true;
++                break;
++            }
++        }
++        CHECK(arrived);
++    };
++    verifyApproach(capturedStart, capturedPortal);
++    for (unsigned startAngle = 0; startAngle < 12; ++startAngle)
++        for (unsigned goalAngle = 0; goalAngle < 12; ++goalAngle)
++            for (float distance : {0.0f, 5.0f, 15.0f, 16.0f, 20.0f, 40.0f, 80.0f})
++            {
++                float const angle = startAngle * Pi / 6.0f, goal = goalAngle * Pi / 6.0f;
++                verifyApproach({distance * std::cos(angle), distance * std::sin(angle)},
++                               {21.0f * std::cos(goal), 21.0f * std::sin(goal)});
++            }
+     CHECK(Team({}, false).empty());
+     CHECK(AssignPortals({}).empty());
+     CHECK(AssignPortals({{}}).empty());
