@@ -10,6 +10,7 @@
 #include "CommandScript.h"
 #include "Config.h"
 #include "Creature.h"
+#include "DBCStores.h"
 #include "Guild.h"
 #include "GuildMgr.h"
 #include "Group.h"
@@ -96,6 +97,7 @@ struct OfflineFixture
     std::string state = "idle", error, token;
     uint32 elapsed = 0, guildId = 0, samples = 0;
     std::size_t rolled = 0;
+    json trainedRanks = json::array();
     uint32 map = 0;
     bool scriptedWipe = false, restartingSeen = false;
     uint32 restartsAtWipe = 0;
@@ -299,7 +301,7 @@ struct OfflineFixture
         auto why = Identify(true);
         if (!why.empty()) return why;
         for (auto guid : actors) if (ObjectAccessor::FindConnectedPlayer(guid)) return "fixture already online";
-        error.clear(); elapsed = 0; rolled = 0; state = "preparing";
+        error.clear(); elapsed = 0; rolled = 0; trainedRanks = json::array(); state = "preparing";
         for (auto guid : actors) Dojo::LoginRaidFixture(guid);
         return "started";
     }
@@ -323,6 +325,26 @@ struct OfflineFixture
                 if (!DcProvisionBudget::Take()) return;
                 DcBotProvisioning::Roll(p, 80, ITEM_QUALITY_EPIC,
                     PlayerbotFactory::CalcMixedGearScore(245, ITEM_QUALITY_EPIC), spec);
+                for (uint32 index = 0; index < sTalentStore.GetNumRows(); ++index)
+                    if (auto const* talent = sTalentStore.LookupEntry(index))
+                        for (uint32 base : talent->RankID)
+                        {
+                            if (!base || !p->HasTalent(base, p->GetActiveSpec())) continue;
+                            uint32 expected = base;
+                            while (uint32 next = sSpellMgr->GetNextSpellInChain(expected))
+                            {
+                                auto const* info = sSpellMgr->GetSpellInfo(next);
+                                // Further talent points are choices, not trainable ability ranks.
+                                if (!info || GetTalentSpellCost(next) || info->SpellLevel > p->GetLevel()) break;
+                                expected = next;
+                            }
+                            if (expected == base) continue;
+                            bool const known = p->HasSpell(expected);
+                            trainedRanks.push_back({{"slot", rolled}, {"base", base},
+                                {"expected", expected}, {"known", known}});
+                            if (!known)
+                            { error = "fixture_untrained_talent_rank"; state = "failed"; return; }
+                        }
                 p->CombatStop(true);
                 p->TeleportTo(0, -8833.0f + float(rolled), 626.f, 94.f, 0.f);
                 p->SaveToDB(false, false);
@@ -666,6 +688,7 @@ struct OfflineFixture
                 {"age_ms", clockMs - pool.firstMs}, {"last_ms", clockMs - pool.lastMs},
                 {"minimum_radius", pool.minimum}, {"maximum_radius", pool.maximum}});
         return {{"kind", "dojo-offline-observation"}, {"format", 1}, {"state", state}, {"error", error},
+            {"fixture_preparation_version", 2}, {"trained_ranks", trainedRanks},
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
             {"native", native}, {"bodies", bodies}, {"damage", damage},
             {"toc_enemies", enemies}, {"spell_damage_samples", spellSamples},

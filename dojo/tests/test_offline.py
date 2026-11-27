@@ -9,7 +9,7 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 from leeroy_dojo.realm.offline import reached, retain_runtime_logs
-from leeroy_dojo.realm.offline_fixture import FixtureCheckpoint
+from leeroy_dojo.realm.offline_fixture import FixtureCheckpoint, validate_training
 from leeroy_dojo.realm.world import WorldError
 
 
@@ -64,6 +64,39 @@ class OfflineMilestoneTest(unittest.TestCase):
 
 
 class OfflineCheckpointTest(unittest.TestCase):
+    @staticmethod
+    def trained_fixture():
+        return dict(fixture_preparation_version=2, trained_ranks=[
+            dict(slot=slot, base=11366, expected=42891, known=True) for slot in (6, 12)])
+
+    def test_training_requires_current_actual_rank_evidence_for_both_mages(self):
+        validate_training(self.trained_fixture())
+        cases = [{}, dict(fixture_preparation_version=1), dict(fixture_preparation_version=True)]
+        for change in ("unknown", "rank_one", "missing_mage", "duplicate", "invalid_slot"):
+            fixture = self.trained_fixture()
+            if change == "unknown": fixture["trained_ranks"][0]["known"] = False
+            elif change == "rank_one": fixture["trained_ranks"][0]["expected"] = 11366
+            elif change == "missing_mage": fixture["trained_ranks"].pop()
+            elif change == "duplicate": fixture["trained_ranks"].append(dict(fixture["trained_ranks"][0]))
+            else: fixture["trained_ranks"][0]["slot"] = True
+            cases.append(fixture)
+        for fixture in cases:
+            with self.subTest(fixture=fixture), self.assertRaises(WorldError):
+                validate_training(fixture)
+
+    def test_untrained_checkpoint_is_rejected_before_import(self):
+        with tempfile.TemporaryDirectory() as folder:
+            layout = SimpleNamespace(secrets=Path(folder), instance="test",
+                schemas={kind: "dojo_" + kind for kind in FixtureCheckpoint.KINDS})
+            checkpoint = FixtureCheckpoint(layout)
+            checkpoint.root.mkdir()
+            checkpoint.receipt.write_text(json.dumps(dict(format=1, instance="test",
+                schemas=dict(layout.schemas), files={}, fixture={})))
+            with patch.object(checkpoint, "_client"), patch("leeroy_dojo.realm.offline_fixture.subprocess.run") as execute:
+                with self.assertRaisesRegex(WorldError, "predates trained"):
+                    checkpoint.restore()
+                execute.assert_not_called()
+
     def test_live_world_refuses_before_database_access(self):
         with patch("leeroy_dojo.realm.offline_fixture.world.running", return_value=True), \
                 patch("leeroy_dojo.realm.offline_fixture.mysql.Client") as database:
@@ -84,7 +117,8 @@ class OfflineCheckpointTest(unittest.TestCase):
                     path = checkpoint.root / f"{kind}.sql"
                     path.write_text("SELECT 1;", encoding="utf-8")
                     files[kind] = checkpoint.digest(path)
-                data = dict(format=1, instance="test", schemas=dict(layout.schemas), files=files, fixture={})
+                data = dict(format=1, instance="test", schemas=dict(layout.schemas), files=files,
+                    fixture=self.trained_fixture())
                 if changed == "instance": data["instance"] = "somewhere-else"
                 elif changed == "schema": data["schemas"]["characters"] = "foreign_characters"
                 else: (checkpoint.root / f"{changed}.sql").write_text("SELECT 2;", encoding="utf-8")

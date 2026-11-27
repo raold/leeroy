@@ -194,6 +194,12 @@ pull restores that same guild, equipment and unbound instance state while the
 owned world is stopped. Realm identity and every dump hash must match before
 any import. These dumps contain synthetic account credentials and must remain
 private. The report records the checkpoint hash for comparison. These runs are
+prepared with version 2 talent-rank evidence: the native factory must train the
+final spec's abilities, including rank 12 Pyroblast for both fixed fire mages.
+A checkpoint without that evidence is refused before import. With the owned
+world stopped, archive the old private `secrets/offline-fixture` directory and
+run preparation again; keep its original bytes with the earlier receipts.
+Do not edit a checkpoint or grant spells to make the check pass. These runs are
 10-player normal checks; they do not certify other difficulties or enable live
 features. Automatic random population remains disabled; only `RNDBOTDOJO` gets
 the type-1 account assignment that ordinary guild pinning requires.
