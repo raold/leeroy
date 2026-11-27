@@ -13,6 +13,7 @@
 #include "PlayStyle.h"
 #include "GuildPorts.h"
 #include "LeeroyOfflineRaidPolicy.h"
+#include "LeeroyLeftoverGroupPolicy.h"
 #include "LeeroyRaidRecovery.h"
 #include "LeeroyBenchmarkLoot.h"
 #include "LeeroyIntegrations.h"
@@ -2612,18 +2613,33 @@ void SweepLeftoverGroups()
         if (!group || !group->isRaidGroup() || group->isLFGGroup() || group->isBGGroup() || group->isBFGroup()
             || !visited.insert(group->GetGUID()).second || !IsCast(group->GetLeaderGUID().GetCounter()))
             continue;
-        bool owned = true;
+        std::vector<LeftoverMember> members;
         for (auto const& slot : group->GetMemberSlots())
         {
-            if (slot.guid.GetCounter() == HumanGuid() || !IsCast(slot.guid.GetCounter())
-                || DcTestRunManager::Instance().IsReserved(slot.guid))
-                owned = false;
+            LeftoverMember state;
+            state.human = slot.guid.GetCounter() == HumanGuid();
+            state.cast = IsCast(slot.guid.GetCounter());
+            state.reserved = DcTestRunManager::Instance().IsReserved(slot.guid);
             if (Player* member = FindOnline(slot.guid.GetCounter()))
+            {
                 if (PlayerbotAI* ai = GET_PLAYERBOT_AI(member); ai && DcRun::Of(ai).enabled)
-                    owned = false; // An actively driven raid is not a leftover group from a server restart.
+                    state.driven = true; // An actively driven raid is not a leftover group from a server restart.
+                state.inCombat = member->IsInCombat();
+                { InstanceScript* script = member->IsInWorld() ? member->GetInstanceScript() : nullptr;
+                  state.inEncounter = script && script->IsEncounterInProgress(); }
+            }
+            members.push_back(state);
         }
-        if (!owned)
+        LeftoverVerdict const verdict = DecideLeftoverGroup(members);
+        if (verdict == LeftoverVerdict::KeepNotOwned)
             continue;
+        if (verdict != LeftoverVerdict::Disband)
+        {
+            // The sweep runs once a minute, so this logs once per group per minute.
+            LOG_INFO("module.leeroy", "leeroy: leftover_cast_raid_kept guid={} reason={}",
+                group->GetLeaderGUID().GetCounter(), LeftoverVerdictCode(verdict));
+            continue;
+        }
         ObjectGuid const leader = group->GetLeaderGUID();
         group->Disband();
         LOG_INFO("module.leeroy", "leeroy: disbanded leftover cast raid led by guid {}", leader.GetCounter());
