@@ -8,6 +8,26 @@ import subprocess
 from . import mysql, world
 
 
+def validate_training(fixture):
+    if (not isinstance(fixture, dict) or type(fixture.get("fixture_preparation_version")) is not int
+            or fixture["fixture_preparation_version"] != 2):
+        raise world.WorldError("synthetic fixture predates trained talent ranks; archive its checkpoint and prepare again")
+    ranks = fixture.get("trained_ranks")
+    if not isinstance(ranks, list) or not ranks:
+        raise world.WorldError("synthetic fixture has no trained talent rank evidence")
+    seen = set()
+    for rank in ranks:
+        if (not isinstance(rank, dict) or any(type(rank.get(k)) is not int for k in ("slot", "base", "expected"))
+                or rank["slot"] not in range(13) or rank["base"] <= 0 or rank["expected"] <= 0
+                or rank.get("known") is not True or (rank["slot"], rank["base"]) in seen):
+            raise world.WorldError("synthetic fixture has invalid trained talent rank evidence")
+        seen.add((rank["slot"], rank["base"]))
+    # Both fixed fire mages must have the level-80 Pyroblast learned through their trainer.
+    if any(not any(rank["slot"] == slot and rank["base"] == 11366 and rank["expected"] == 42891
+                   for rank in ranks) for slot in (6, 12)):
+        raise world.WorldError("synthetic fire mage lacks trained Pyroblast rank 12")
+
+
 class FixtureCheckpoint:
     KINDS = ("auth", "characters", "playerbots")
 
@@ -29,6 +49,7 @@ class FixtureCheckpoint:
             return hashlib.file_digest(file, "sha256").hexdigest()
 
     def save(self, fixture):
+        validate_training(fixture)
         client = self._client()
         if self.receipt.exists():
             raise world.WorldError("refusing to replace an existing fixture checkpoint")
@@ -60,6 +81,7 @@ class FixtureCheckpoint:
         schemas = {kind: self.layout.schemas[kind] for kind in self.KINDS}
         if data.get("format") != 1 or data.get("instance") != self.layout.instance or data.get("schemas") != schemas:
             raise world.WorldError("fixture checkpoint belongs to a different isolated realm")
+        validate_training(data.get("fixture"))
         # Validate every file before importing any schema. SQL dumps contain the
         # synthetic account credentials and remain under the private secrets root.
         for kind in self.KINDS:

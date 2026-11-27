@@ -1,6 +1,10 @@
 // This file is part of leeroy (mod-dojo), released under the GNU GPL v2. See LICENSE.
 #include "DojoRaid.h"
 #include "DojoOffline.h"
+#include "DojoHuman.h"
+#include "DojoLead.h"
+#include "DojoVehicle.h"
+#include "DojoYogg.h"
 
 #if DOJO_TRAINING_BUILD
 #if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
@@ -22,6 +26,7 @@
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "PathGenerator.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotsDatabase.h"
@@ -41,6 +46,7 @@
 #include "PlayerbotFactory.h"
 #include "PlayerScript.h"
 #include "Spell.h"
+#include "SpellAuraEffects.h"
 #include "SpellInfo.h"
 #include <algorithm>
 #include <array>
@@ -116,15 +122,22 @@ struct RaidRun
 {
     std::string scenario, token, state = "idle", failure;
     bool control = false;
-    bool oldTwins = false;
+    bool oldTwins = false, oldLichKing = false;
     uint32 elapsed = 0, phaseMs = 0, map = 0, instance = 0, samples = 0, maxGap = 0;
     uint32 crossings = 0, hazardsSeen = 0, lightSamples = 0, darkSamples = 0, switchMs = 0;
     uint32 heals = 0, damageHits = 0;
+    uint32 roomSamples = 0, escapeMs = 0, outsideSamples = 0, hazardStartMs = 0;
+    uint32 insideSamples = 0, lateHits = 0, encounterSamples = 0;
+    uint32 harvestSamples = 0, strangulateSamples = 0;
+    float finalHazardClearance = 0.f;
     uint64 effectiveHealing = 0;
     uint64 ownerEpoch = 0;
     float minimumClearance = 1000.f;
     bool setup = false, active = false, cleanup = false, combatObserved = false, competition = false;
     ObjectGuid target;
+    json defilePaths = json::array();
+    json damageEvidence = json::array(), deaths = json::array();
+    uint64 damageSequence = 0;
     std::array<ObjectGuid, 2> actors{};
     std::recursive_mutex events;
 
@@ -136,6 +149,27 @@ struct RaidRun
 
     void Phase(std::string const& next) { state = next; phaseMs = 0; }
     void Fail(std::string const& why) { failure = why; Phase("cleanup"); }
+
+    std::size_t DiagnosticSlot(Unit* unit) const
+    {
+        if (!active || (state != "harvest" && state != "observe") ||
+            (scenario != "lk-terenas" && scenario != "lk-defile") || !unit ||
+            unit->GetMapId() != map || unit->GetInstanceId() != instance) return actors.size();
+        auto const found = std::find(actors.begin(), actors.end(), unit->GetGUID());
+        return std::size_t(found - actors.begin());
+    }
+
+    void RecordDamage(Unit* victim, Unit* attacker, uint32 damage, uint32 spell, uint32 stage)
+    {
+        std::size_t const slot = DiagnosticSlot(victim);
+        if (slot == actors.size() || !damage) return;
+        // Calculations and OnDamage precede final application. Keep their stage
+        // separate from the actual death callback; proximity is not lethal-hit proof.
+        if (damageEvidence.size() == 32) damageEvidence.erase(damageEvidence.begin());
+        damageEvidence.push_back({{"sequence", ++damageSequence}, {"elapsed_ms", elapsed},
+            {"slot", slot}, {"stage", stage}, {"spell", spell}, {"damage", damage},
+            {"health", victim->GetHealth()}, {"attacker_entry", attacker ? attacker->GetEntry() : 0}});
+    }
 
     std::string Create()
     {
@@ -180,7 +214,8 @@ struct RaidRun
         if (active || state == "cleanup_failed") return "refused: a raid run or unproved cleanup is active";
         if (Dojo::State().plan.state != Dojo::RuntimeState::Armed || Dojo::State().manifest)
             return "refused: use an armed isolated training realm with no arena manifest";
-        if (name != "valithria" && name != "twins" && name != "poison") return "refused: unknown scenario";
+        if (name != "valithria" && name != "twins" && name != "poison" &&
+            name != "lk-terenas" && name != "lk-defile") return "refused: unknown scenario";
         if (id.empty() || id.size() > 64 || id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != std::string::npos)
             return "refused: invalid run token";
         std::string error = Create();
@@ -189,10 +224,17 @@ struct RaidRun
         scenario = name; token = id; control = negative; failure.clear();
         elapsed = phaseMs = instance = samples = maxGap = crossings = hazardsSeen = lightSamples = darkSamples = switchMs = 0;
         heals = damageHits = 0; effectiveHealing = ownerEpoch = 0; minimumClearance = 1000.f;
+        roomSamples = escapeMs = outsideSamples = hazardStartMs = 0; finalHazardClearance = 0.f;
+        insideSamples = lateHits = encounterSamples = 0;
+        harvestSamples = strangulateSamples = 0;
         setup = cleanup = combatObserved = competition = false; target.Clear();
-        map = name == "valithria" ? 631 : name == "twins" ? 649 : 533;
+        defilePaths = json::array();
+        damageEvidence = json::array(); deaths = json::array(); damageSequence = 0;
+        map = name == "valithria" || name == "lk-terenas" || name == "lk-defile" ? 631 : name == "twins" ? 649 : 533;
         oldTwins = sPlayerbotAIConfig.TwinValkyrInteractions;
         sPlayerbotAIConfig.TwinValkyrInteractions = !negative;
+        oldLichKing = sPlayerbotAIConfig.LichKingMechanics;
+        if (name == "lk-terenas" || name == "lk-defile") sPlayerbotAIConfig.LichKingMechanics = !negative;
         active = true;
         Phase("login");
         for (ObjectGuid guid : actors) Dojo::LoginRaidFixture(guid);
@@ -203,6 +245,8 @@ struct RaidRun
     {
         if (scenario == "valithria") return Position(4203.5f, 2484.0f, 364.96f, 0.f);
         if (scenario == "twins") return Position(563.5f, 139.5f, 393.84f, 0.f);
+        if (scenario == "lk-terenas") return Position(495.708f, -2523.76f, 1049.95f, 0.f);
+        if (scenario == "lk-defile") return Position(503.62f, -2124.65f, 840.857f, 0.f);
         return Position(3108.0f, -3141.0f, 293.34f, 0.f);
     }
 
@@ -260,8 +304,14 @@ struct RaidRun
         if (!group->AddMember(bot)) { group->Disband(); Fail("fixture join failed"); return false; }
         Position const point = StartPoint();
         for (std::size_t i = 0; i < actors.size(); ++i)
-            if (!Actor(i)->TeleportTo(map, point.GetPositionX(), point.GetPositionY() + float(i) * 2.f,
-                    point.GetPositionZ(), 0.f)) { Fail("fixture teleport refused"); return false; }
+        {
+            // The native intro's lower platform point is within Harvest Soul's
+            // 60-yard range of the seated boss; the platform center is not.
+            Position const destination = scenario == "lk-terenas"
+                ? Position(465.073f, -2123.470f, 840.8569f, 0.f) : point;
+            if (!Actor(i)->TeleportTo(map, destination.GetPositionX(), destination.GetPositionY() + float(i) * 2.f,
+                    destination.GetPositionZ(), 0.f)) { Fail("fixture teleport refused"); return false; }
+        }
         return true;
     }
 
@@ -318,6 +368,67 @@ struct RaidRun
             ai->ChangeStrategy("+toc", BOT_STATE_NON_COMBAT);
             ai->ChangeStrategy("+toc", BOT_STATE_COMBAT);
         }
+        else if (scenario == "lk-terenas" || scenario == "lk-defile")
+        {
+            bot->GetMap()->LoadGrid(503.62f, -2124.65f);
+            Creature* lichKing = bot->GetMap()->GetCreature(script->GetGuidData(12));
+            if (!lichKing) { Fail("native Lich King missing"); return; }
+            // Exercise the shipped ICC strategy with its ordinary follow/heal
+            // competitors intact. Only the feature switch differs in the control.
+            for (uint32 boss = 0; boss < 12; ++boss) script->SetBossState(boss, DONE);
+            // The core also requires the separately indexed Sindragosa
+            // gauntlet, not only her boss state. Otherwise JustEngagedWith
+            // evades and teleports the outside anchor to Light's Hammer.
+            script->SetBossState(13, DONE);
+            if (!script->CheckRequiredBosses(12, owner) || !lichKing->IsVisible())
+            { Fail("native_lich_king_prerequisites_missing"); return; }
+            script->SetBossState(12, IN_PROGRESS);
+            ai->ChangeStrategy("+icc", BOT_STATE_COMBAT);
+            ai->ChangeStrategy("+icc", BOT_STATE_NON_COMBAT);
+            if (scenario == "lk-terenas")
+            {
+                if (!PlayerbotAI::IsHeal(bot)) { Fail("Frostmourne healer role missing"); return; }
+                // Hold a real active encounter outside while the healer is inside.
+                // The stock control may leave the room; that must not reset the
+                // encounter and invalidate the comparison before it is measured.
+                lichKing->SetImmuneToPC(false);
+                lichKing->AI()->AttackStart(owner);
+                bot->GetMap()->LoadGrid(495.708f, -2523.76f);
+                // Use the actual hostile Harvest Soul, including its damage,
+                // native strangulate vehicle and delayed teleport. Calling only
+                // the last teleport leaves the control out of combat and lets
+                // stock follow undo the entry before it can be observed.
+                auto const cast = lichKing->CastSpell(bot, 68980, true);
+                if (cast != SPELL_CAST_OK) { Fail("native_frostmourne_entry_refused:" + std::to_string(uint32(cast))); return; }
+                Phase("harvest");
+                return;
+            }
+            else
+            {
+                // Tirion's native intro removes this flag before combat. The
+                // core also prevents an immune-to-PC caster attacking players,
+                // so a focused post-intro Defile probe must establish it too.
+                lichKing->SetImmuneToPC(false);
+                // Cast the real core spell: its summon/aura/growth are the stimulus.
+                auto const cast = lichKing->CastSpell(bot, 72762, true);
+                if (cast != SPELL_CAST_OK) { Fail("native_defile_cast_refused:" + std::to_string(uint32(cast))); return; }
+                // Read-only path evidence: identify which core geometry check
+                // rejects escape without moving the measured actor for it.
+                for (auto const& offset : std::array<std::array<float, 2>, 4>{{{16.f, 0.f}, {-16.f, 0.f}, {0.f, 16.f}, {0.f, -16.f}}})
+                {
+                    float const x = bot->GetPositionX() + offset[0], y = bot->GetPositionY() + offset[1];
+                    float z = bot->GetPositionZ();
+                    bot->UpdateAllowedPositionZ(x, y, z);
+                    PathGenerator path(bot);
+                    path.SetPathLengthLimit(96.f);
+                    bool const built = path.CalculatePath(x, y, z);
+                    json vertices = json::array();
+                    for (auto const& point : path.GetPath()) vertices.push_back({point.x, point.y, point.z});
+                    defilePaths.push_back({{"destination", {x, y, z}}, {"los", bot->IsWithinLOS(x, y, z)},
+                        {"built", built}, {"type", uint32(path.GetPathType())}, {"vertices", vertices}});
+                }
+            }
+        }
         else
         {
             Leeroy::Guild::InstallHazardFilter();
@@ -346,6 +457,8 @@ struct RaidRun
         ++samples;
         maxGap = std::max(maxGap, diff);
         combatObserved = combatObserved || bot->IsInCombat();
+        if ((scenario == "lk-terenas" || scenario == "lk-defile") &&
+            bot->GetInstanceScript()->GetBossState(12) == IN_PROGRESS) ++encounterSamples;
         // These actors are mechanic probes, not a geared raid. Keep their
         // reserves stable across instance buffs and spell stat recalculations.
         // Damage events still count, and Valithria's health is never written here.
@@ -385,6 +498,30 @@ struct RaidRun
             }
             if (phaseMs >= 40000 || darkSamples >= 10) Phase("cleanup");
         }
+        else if (scenario == "lk-terenas")
+        {
+            if (bot->GetExactDist2d(495.708f, -2523.76f) < 45.f &&
+                std::abs(bot->GetPositionZ() - 1049.95f) < 35.f) ++roomSamples;
+            competition = competition || (GET_PLAYERBOT_AI(bot)->HasStrategy("follow", BOT_STATE_NON_COMBAT) &&
+                bot->GetDistance(owner) > 100.f);
+            if (phaseMs >= 25000) Phase("cleanup");
+        }
+        else if (scenario == "lk-defile")
+        {
+            if (Creature* defile = bot->FindNearestCreature(38757, 100.f))
+            {
+                ++hazardsSeen;
+                if (!hazardStartMs) hazardStartMs = phaseMs;
+                finalHazardClearance = bot->GetExactDist2d(defile) - (10.f * defile->GetObjectScale() + 2.f);
+                if (finalHazardClearance > 0.f)
+                {
+                    ++outsideSamples;
+                    if (!escapeMs) escapeMs = phaseMs - hazardStartMs;
+                }
+                else { ++insideSamples; outsideSamples = 0; }
+            }
+            if (phaseMs >= 20000) Phase("cleanup");
+        }
         else
         {
             // The registered mod-leeroy world hook owns the production cadence.
@@ -393,7 +530,10 @@ struct RaidRun
             // ReactDelay (0.1 s); under a bot master playerbots waits 1-3 s out of combat (GetReactDelay). Between
             // teleports the held leader is a self-bot (its own master), which playerbots counts as a game client
             // master; a self-bot's teleport waits for a client's ack, so it is an ordinary bot while it moves.
-            if (!control && GET_PLAYERBOT_AI(owner)->GetMaster() != owner)
+            // Both cases need the same client-master reaction cadence. Leaving
+            // the control under a bot master adds a random 1-3 second AI delay
+            // and changes which poison wave it crosses independently of avoidance.
+            if (GET_PLAYERBOT_AI(owner)->GetMaster() != owner)
                 GET_PLAYERBOT_AI(owner)->SetMaster(owner);
             if (Creature* poison = bot->FindNearestCreature(16027, 70.f))
             {
@@ -423,9 +563,41 @@ struct RaidRun
         }
         else if (state == "arrive")
         {
+            // Let the native throne grid and its boss finish loading before
+            // selecting the encounter phase; a deferred Reset clears it.
+            if ((scenario == "lk-terenas" || scenario == "lk-defile") && phaseMs < 2000) return;
             Player* bot = Actor(0); Player* owner = Actor(1);
             if (bot && owner && !bot->IsBeingTeleported() && !owner->IsBeingTeleported() &&
                 bot->GetMapId() == map && owner->GetMap() == bot->GetMap()) Pull();
+        }
+        else if (state == "harvest")
+        {
+            Player* bot = Actor(0); Player* owner = Actor(1);
+            if (!bot || !owner || !bot->IsAlive() || !owner->IsAlive())
+            { Fail("harvest_fixture_lost"); return; }
+            // Same probe reserves as observation; the native spell and vehicle
+            // alone control the entry. No movement or combat flag is supplied.
+            for (Player* p : {bot, owner})
+            {
+                p->SetMaxHealth(100000);
+                p->SetFullHealth();
+                p->SetMaxPower(POWER_MANA, 30000);
+                p->SetPower(POWER_MANA, 30000);
+            }
+            if (bot->HasAura(68980)) ++harvestSamples;
+            if (auto* base = bot->GetVehicleBase(); base && base->GetEntry() == 36598) ++strangulateSamples;
+            if (bot->IsBeingTeleported() || bot->GetMapId() != map || bot->GetInstanceId() != instance ||
+                bot->GetExactDist2d(495.708f, -2523.76f) >= 45.f ||
+                std::abs(bot->GetPositionZ() - 1049.95f) >= 35.f) return;
+            // The native teleport sends event 23617 and creates these actors.
+            auto* script = bot->GetInstanceScript();
+            auto* terenas = script ? bot->GetMap()->GetCreature(script->GetGuidData(39)) : nullptr;
+            if (!terenas || terenas->GetEntry() != 36823 || !terenas->IsAlive() ||
+                !harvestSamples || !strangulateSamples)
+            { Fail("native_frostmourne_sequence_missing"); return; }
+            target = terenas->GetGUID();
+            setup = true;
+            Phase("observe");
         }
         else if (state == "observe") Observe(diff);
         else if (state == "cleanup")
@@ -433,6 +605,7 @@ struct RaidRun
             Leeroy::Guild::DojoHazardOwner(0);
             Leeroy::Guild::TickHazards(500);
             sPlayerbotAIConfig.TwinValkyrInteractions = oldTwins;
+            sPlayerbotAIConfig.LichKingMechanics = oldLichKing;
             for (std::size_t i = 0; i < actors.size(); ++i)
                 if (Player* p = Actor(i))
                 {
@@ -470,12 +643,19 @@ struct RaidRun
             if (Player* p = Actor(i))
             {
                 PlayerbotAI* ai = GET_PLAYERBOT_AI(p);
+                json auras = json::array();
+                for (auto const& aura : p->GetAppliedAuras())
+                {
+                    if (auras.size() == 64) break;
+                    auras.push_back(aura.second->GetBase()->GetId());
+                }
                 fixtures.push_back({{"slot", i}, {"map", p->GetMapId()}, {"instance", p->GetInstanceId()},
                     {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
                     {"health", p->GetHealth()}, {"max_health", p->GetMaxHealth()}, {"mana", p->GetPower(POWER_MANA)},
                     {"teleporting", p->IsBeingTeleported()}, {"healer", PlayerbotAI::IsHeal(p)},
                     {"icc", ai->HasStrategy("icc", BOT_STATE_COMBAT)},
                     {"combat", p->IsInCombat()}, {"self_bot", IsSelfBot(p)},
+                    {"auras", auras}, {"aura_count", p->GetAppliedAuras().size()},
                     {"controlled", ai->IsExternallyControlled()},
                     {"combat_strategies", ai->GetStrategies(BOT_STATE_COMBAT)},
                     {"idle_strategies", ai->GetStrategies(BOT_STATE_NON_COMBAT)},
@@ -485,7 +665,8 @@ struct RaidRun
         if (Player* p = Actor(0); p && p->GetInstanceScript())
         {
             InstanceScript* script = p->GetInstanceScript();
-            encounter["boss_state"] = uint32(script->GetBossState(scenario == "valithria" ? 10 : scenario == "twins" ? 3 : 0));
+            encounter["boss_state"] = uint32(script->GetBossState(scenario == "valithria" ? 10 : scenario == "twins" ? 3 :
+                scenario == "lk-terenas" || scenario == "lk-defile" ? 12 : 0));
             if (Player* owner = Actor(1))
             {
                 encounter["leader_distance"] = p->GetDistance(owner);
@@ -507,8 +688,15 @@ struct RaidRun
             {"map", map}, {"instance", instance}, {"elapsed_ms", elapsed}, {"samples", samples}, {"max_gap_ms", maxGap},
             {"combat_observed", combatObserved}, {"reach_competitor", competition}, {"effective_healing", effectiveHealing},
             {"heal_events", heals}, {"light_samples", lightSamples}, {"dark_samples", darkSamples},
+            {"room_samples", roomSamples}, {"escape_ms", escapeMs}, {"outside_samples", outsideSamples},
+            {"harvest_samples", harvestSamples}, {"strangulate_samples", strangulateSamples},
+            {"inside_samples", insideSamples}, {"late_hits", lateHits}, {"encounter_samples", encounterSamples},
+            {"final_hazard_clearance", finalHazardClearance},
             {"switch_ms", switchMs}, {"crossings", crossings}, {"hazard_samples", hazardsSeen},
-            {"minimum_clearance", minimumClearance}, {"poison_hits", damageHits}, {"fixtures", fixtures}, {"encounter", encounter}};
+            {"minimum_clearance", minimumClearance}, {"poison_hits", scenario == "poison" ? damageHits : 0},
+            {"defile_hits", scenario == "lk-defile" ? damageHits : 0}, {"defile_paths", defilePaths},
+            {"damage_sequence", damageSequence}, {"damage_evidence", damageEvidence}, {"deaths", deaths},
+            {"fixtures", fixtures}, {"encounter", encounter}};
     }
 };
 RaidRun run;
@@ -1607,7 +1795,7 @@ public:
         std::string scenario, token, mode, extra;
         in >> scenario >> token >> mode >> extra;
         if (!extra.empty() || (mode != "normal" && mode != "negative"))
-            handler->SendSysMessage("usage: dojo raid start valithria|twins|poison <token> normal|negative");
+            handler->SendSysMessage("usage: dojo raid start valithria|twins|poison|lk-terenas|lk-defile <token> normal|negative");
         else if (encounter.active) handler->SendSysMessage("dojo raid: refused: an encounter run is active");
         else handler->SendSysMessage("dojo raid: " + run.Start(scenario, token, mode == "negative"));
         return true;
@@ -1659,7 +1847,9 @@ public:
 class RaidEvents : public UnitScript
 {
 public:
-    RaidEvents() : UnitScript("DojoRaidEvents", true, {UNITHOOK_ON_HEAL, UNITHOOK_ON_DAMAGE}) { }
+    RaidEvents() : UnitScript("DojoRaidEvents", true, {UNITHOOK_ON_HEAL, UNITHOOK_ON_DAMAGE,
+        UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN, UNITHOOK_MODIFY_PERIODIC_DAMAGE_AURAS_TICK,
+        UNITHOOK_ON_UNIT_DEATH}) { }
     void OnHeal(Unit* healer, Unit* receiver, uint32& gain) override
     {
         std::lock_guard<std::recursive_mutex> lock(run.events);
@@ -1670,8 +1860,39 @@ public:
     void OnDamage(Unit* attacker, Unit* victim, uint32& damage) override
     {
         std::lock_guard<std::recursive_mutex> lock(run.events);
+        run.RecordDamage(victim, attacker, damage, 0, 0);
         if (run.state == "observe" && run.scenario == "poison" && attacker && victim &&
             attacker->GetEntry() == 16027 && victim->GetGUID() == run.actors[0] && damage > 0) ++run.damageHits;
+        if (run.state == "observe" && run.scenario == "lk-defile" && attacker && victim &&
+            attacker->GetEntry() == 38757 && victim->GetGUID() == run.actors[0] && damage > 0)
+        {
+            ++run.damageHits;
+            if (run.escapeMs && run.phaseMs > run.hazardStartMs + run.escapeMs + 1000) ++run.lateHits;
+        }
+    }
+    void ModifySpellDamageTaken(Unit* victim, Unit* attacker, int32& damage, SpellInfo const* info) override
+    {
+        if (!info || damage <= 0) return;
+        std::lock_guard<std::recursive_mutex> lock(run.events);
+        run.RecordDamage(victim, attacker, uint32(damage), info->Id, 1);
+    }
+    void ModifyPeriodicDamageAurasTick(Unit* victim, Unit* attacker, uint32& damage, SpellInfo const* info) override
+    {
+        if (!info || !damage) return;
+        std::lock_guard<std::recursive_mutex> lock(run.events);
+        run.RecordDamage(victim, attacker, damage, info->Id, 2);
+    }
+    void OnUnitDeath(Unit* victim, Unit* killer) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(run.events);
+        std::size_t const slot = run.DiagnosticSlot(victim);
+        if (slot == run.actors.size()) return;
+        if (run.deaths.size() == 8) run.deaths.erase(run.deaths.begin());
+        run.deaths.push_back({{"elapsed_ms", run.elapsed}, {"slot", slot},
+            {"killer_entry", killer ? killer->GetEntry() : 0}, {"health", victim->GetHealth()},
+            {"max_health", victim->GetMaxHealth()}, {"x", victim->GetPositionX()},
+            {"y", victim->GetPositionY()}, {"z", victim->GetPositionZ()},
+            {"damage_sequence", run.damageSequence}});
     }
 };
 }
@@ -1687,6 +1908,10 @@ void AddSC_dojo_raid()
     new EncounterAddCasts();
     new EncounterTicks();
     AddSC_dojo_offline();
+    AddSC_dojo_human();
+    AddSC_dojo_lead();
+    AddSC_dojo_vehicle();
+    AddSC_dojo_yogg();
 }
 #else
 void AddSC_dojo_raid() { }

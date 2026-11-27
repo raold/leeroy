@@ -101,6 +101,10 @@ the `cleared` terminal, cleanup and shutdown; reaching the first boss or a
 scripted restart cannot pass. These longer runs use a three-hour job limit with
 the same three-wipe caps. The terminal retains the actual encounter-state vector
 after actors return home. `--toc-worm-support` also works with `toc-full`.
+The full ToC runner pins Twins interactions and worm support on before boot,
+including when an older config snapshot has them off. Native admission refuses
+disabled Twins support, and completion additionally requires enabled samples
+and an observed essence aura on each of the ten raid members during Twins.
 
 `--target toc-anub-intro` prepares the first four ToC encounters complete,
 without earned kill credit, and lets the native Twins outro break the arena
@@ -110,6 +114,25 @@ native boss and engage him within two minutes. The receipt requires trigger
 exposure, attackability and combat state, zero wipes, restored strategies,
 cleanup and shutdown. This checks the chamber transition on either core
 version; it does not certify an Anub'arak kill or a full ToC clear.
+
+`--target toc-anub-pass` uses the same prepared arena and real floor scene,
+then requires one earned Anub'arak kill with zero wipes within fifteen minutes
+of measurement. The two-minute surface/engage deadline remains in force.
+At least one native Frost Sphere must cast Permafrost and reach the floor;
+at least one native spike must cast its failure spell, have both an idle
+movement generator and a finished spline, lose its trail and clear its living
+victim's mark. Ordinary bot actions supply all
+damage and movement. Prepared encounter states never count as earned kills.
+The 200 ms map-update bound, strategy restoration, cleanup and shutdown are
+required. This focused gate does not substitute for a full offline ToC run.
+
+`--target offline-native-stall` requests the ordinary ten-minute native stall
+limit and records a plateau by holding the ten owned synthetic bots through the
+external-control fence. It changes no clock or deadline. The actual job must
+end with `stalled` after the full interval and perform ordinary cleanup; an
+operator stop, overall timeout, early stop or unreleased hold cannot pass.
+The harness supplies no stop command to achieve this milestone. Older native
+candidates refuse the target before starting a job.
 
 Ulduar's current offline route only covers Ignis, Razorscale, XT-002, Kologarn and
 Auriaya. `--target ulduar-route` checks completion of that entire supported route
@@ -134,6 +157,17 @@ enables it only in this owned run, records active samples, and must restore the
 previous value during cleanup. Both the full Beasts target and the two Slime Pool
 cases accept the option. It never changes the runtime configuration files or a
 live feature switch.
+
+`--target icc-valithria-frontier` is a focused offline-driver check, separate from
+the full-route `icc-valithria` target. The real job must first admit the complete
+synthetic raid into a fresh instance. Before measurement, the fixture stops its
+driver, temporarily sets the actors' ordinary stay/passive strategies, selects the ten prior boss-state prerequisites without
+encounter credit, and places the raid together in Valithria's room. It then
+restores each actor's original strategies and resumes the ordinary driver. No healing, health writes,
+position changes or target completion are supplied by the fixture during
+measurement. Passing requires real raid heals, observed dragon health gain,
+native Valithria DONE, restored strategies, job cleanup and shutdown. The report
+labels this setup explicitly; it is not evidence of clearing the earlier bosses.
 
 ToC observations include at most sixteen nearby Beasts actors and pools with health,
 enrage, current cast/channel, target and position. Raid actor observations also retain
@@ -160,9 +194,168 @@ pull restores that same guild, equipment and unbound instance state while the
 owned world is stopped. Realm identity and every dump hash must match before
 any import. These dumps contain synthetic account credentials and must remain
 private. The report records the checkpoint hash for comparison. These runs are
+prepared with version 2 talent-rank evidence: the native factory must train the
+final spec's abilities, including rank 12 Pyroblast for both fixed fire mages.
+A checkpoint without that evidence is refused before import. With the owned
+world stopped, archive the old private `secrets/offline-fixture` directory and
+run preparation again; keep its original bytes with the earlier receipts.
+Do not edit a checkpoint or grant spells to make the check pass. These runs are
 10-player normal checks; they do not certify other difficulties or enable live
 features. Automatic random population remains disabled; only `RNDBOTDOJO` gets
 the type-1 account assignment that ordinary guild pinning requires.
+
+### Vehicle mechanics
+
+`realm --layout <layout> vehicle-acceptance` runs the Flame Leviathan and Malygos
+probes against the same synthetic checkpoint and OfflineAcceptance build.
+`--scenario leviathan` or `--scenario malygos` selects one encounter. Each runs
+with the ordinary raid strategy enabled and disabled. `RaidVehicleSupport` is
+enabled only within this isolated native fixture and restored at cleanup.
+
+Flame Leviathan starts from the core's post-gauntlet reset. Its real vehicle
+summons, accessories and spell-clicks supply the seats. A fixed player without
+bot AI boards first; the measured melee and ranged bots must board siege and
+demolisher driver seats themselves. Both must move, damage the actual boss while
+moving, and keep damaging it after the scripted player dies. The disabled
+strategy must leave both bots unboarded despite that same valid boarding cue.
+
+Malygos uses the core's focusing-iris event and phase transitions. Setup selects
+the phase-two health boundary and kills its six adds; the core destroys the
+platform and summons the actual drakes. Player health reserves during setup
+keep the three-player fixture alive. Observation begins only once the native
+phase-three mounts and boss are ready. It requires real drake healing, damage,
+Engulf in Flames, shielding during actual Surge of Power, an observed static
+field escape within four seconds and movement into the safe ring. The disabled strategy must show surge/field
+exposure without drake healing, damage or shielding; a resulting drake death
+is an expected control outcome, never a positive pass.
+
+The harness never moves the measured vehicles, casts their abilities or changes
+health during observation. It records native effects and positional samples,
+rejects observation gaps above 200 ms, and requires cleanup and world shutdown.
+Movement uses the map-update interval and both observed endpoint speeds, so
+expiry of a native speed aura cannot apply the slower final rate retroactively.
+The original distance margin is unchanged, and unexplained jumps still fail.
+Numeric vehicle snapshots include separate rider and vehicle positions, active Static Field positions/radii,
+current exposure timers, movement destination and spline timing, and the native
+speed aura/cooldown. These read-only diagnostics distinguish slow flight from a
+route through another field; they do not change the four-second escape verdict.
+These are mechanic probes, not full boss kills. They do not certify Leviathan's
+opening gauntlet, nested gunners, pyrite supply, hard modes or 25-player coverage.
+Adding them or passing their verdict tests does not authorize live enablement.
+
+The optional `vehicle-acceptance --scenario leviathan-reset` probe explicitly
+tests a native evade and second pull. Both controls first board and engage with
+ordinary bot strategies. The positive requests the boss's native evade, observes
+all original nested accessories disappear and an equally sized fresh set return,
+then stages a second pull. Its damage, moving-hit and human-death checks count
+only that second pull. The negative omits the evade and must show no replacement.
+This exposes the core hard-reset behavior directly; installing its commit alone
+is not a passing receipt. Reset staging is outside measured combat.
+The surviving actors withdraw to the setup point immediately after the evade;
+they cannot re-aggro a respawn before its idle state is observed. No healing,
+resurrection or boss/accessory creation is supplied at this boundary.
+Boarding waits for the map to finish removing the vehicle set retired by setup;
+the scripted human clicks the replacement on a subsequent map update. Measured
+boarding and combat retain the same cadence and effect requirements.
+
+### Yogg brain teams
+
+`realm --layout <layout> gate-campaign --gate yogg --runs 3` requires consecutive
+complete control/enabled pairs on the same committed source, built and staged
+binary, layout and configuration. It stops at the first failed pair, including
+an infrastructure failure; it never retries or replaces a failed receipt.
+Yogg and vehicle campaigns also require the same valid synthetic fixture
+checkpoint hash in every control and enabled case, across all repetitions.
+The campaign retains and hashes each fresh child report and rechecks its native
+observations, cleanup and shutdown. Reports separate infrastructure and behavior
+failures; either fails the campaign. A run count of 3-100 can be selected.
+Yogg additionally requires all three actual native rooms within that fixed run
+budget and reports their individual counts. Repeating only one room cannot pass;
+one exposure per room is not a claim of repeated coverage of every room.
+The same command accepts `valithria`, `twins`, `poison`, `lich-king`,
+`leviathan-reset` and `malygos`; Lich King includes both Terenas and Defile pairs
+in every repetition. Use campaign receipts for release acceptance; individual
+commands retain their focused diagnostic reports. A campaign never changes feature switches.
+
+`realm --layout <layout> yogg-acceptance` observes one native portal wave with
+nine synthetic bots and a scripted player outside portal-selection range. Setup
+selects Sara's phase boundary and kills a real guardian whose native death nova
+triggers the transformation. The core supplies sanity, the brain, illusion adds,
+four portals and the Induce Madness deadline. The ordinary raid strategy must
+send exactly four bots, including one healer and no tank, retain a healer above,
+kill actual influence tentacles, damage the brain and use real exit portals
+before the cast finishes. All actors must remain alive and retain sanity.
+
+The observer recognizes Killing Spree movement only with both its native spell
+and teleport callbacks, the aura at both callbacks, a valid hostile target and
+arrival at the witnessed destination. Blink requires its real Leap cast and
+native teleport callback, a destination along the cast facing within the spell's
+modified radius, and arrival at that exact destination. Both witnesses expire
+after 200 ms, apply once and require continuity before the cast and the same
+floor afterward. A recent cast alone is insufficient. Room geometry,
+actor facing and targets are recorded to diagnose failed illusion clears.
+Each actor also reports Brain Link duration, sanity, movement/control state and
+the last movement request. The eight recent casts retain target GUIDs, allowing
+link partners and failed approaches to be checked without changing tactics.
+Sampling follows the actual map-update clock. Native Charge uses the core's
+ground speed cap only with a real charge spell, charge state and matching active spline;
+ordinary movement retains the original speed bound and distance margin.
+Knockback requires the actor's native packet, a matching effect spline and
+packet-origin continuity. Its path must follow the packet direction within the
+collision-clipped range, and each position must match the native parabolic arc.
+Spline identity, duration and elapsed time remain bound across samples; a stale
+packet, replacement spline or unrelated jump cannot supply this proof.
+A constrictor grab requires its native ride-aura callback after boarding, summon and spell
+witnesses, and arrival at a witnessed seat transform. The observer retains the
+boarding destination because the base can turn before the next sample without
+relocating its passenger. The existing arrival tolerance and single-use limit
+remain unchanged.
+
+Both cases keep the Ulduar strategy, including ordinary Brain Link handling.
+The negative control blocks execution of only `yogg brain support`, through an
+engine-owned fixture listener; it never changes an action's result to success.
+The listener becomes inert before cleanup and is freed with the logged-out bot's
+engine. Both cases count actual attempts; the negative case must block every
+attempt and the enabled case must block none. The same real encounter stimulus,
+sanity, survival, portal-effect and timing requirements remain. Both cases require
+cleanup and shutdown. Reports separate
+`plumbing_problems` (receipt, exposure or observation failures)
+from `behavior_problems`; either list makes the case fail. A native encounter
+failure does not hide an observation gap in the same run. All original limits
+and required effects still apply. Optional `--profile` captures fresh native
+`playerbots pmon` JSON for each case to investigate slow actions and triggers;
+it does not alter the scenario, deadlines or verdict. Actor health
+and numeric knockback packets remain observable throughout the wave. Offline
+traces also record the active spline's next point, endpoint, speed and id so a
+replacement movement can be distinguished from the last requested move.
+Offline reports retain and hash only native logs written after that trial
+attempted boot; a pre-boot failure cannot attach the preceding run's logs.
+Actor health reserves are setup-only; the harness never heals, attacks or teleports on their
+behalf during the measured wave. The report names the randomly selected native
+illusion. One successful wave does not certify the other two illusions, later
+waves, a complete kill, keeper variants or 25-player teams. Live enablement
+requires actual passing receipts for the required coverage.
+
+### Open-world leading
+
+`realm --layout <layout> lead-acceptance` uses the same synthetic guild checkpoint
+and OfflineAcceptance build. A fixed `DOJORAID` character is loaded through the
+core login path with no playerbot AI attached. Two fixed guild bots start with
+that player as their master. The real command decoder and `lead_do` handler
+request travel from Dalaran's fountain to its bank.
+
+The enabled case requires actual leader and follower displacement, a three-second
+wait when the stationary player is over 40 yards behind, renewed walking after
+that scripted player catches up, and both bot masters restored at the end.
+The harness never moves a measured bot during observation; implausible steps or
+observation gaps above 200 ms fail. The disabled control must refuse with `off`
+after fixture readiness, leaving the master relationships intact. Both cases
+require group/session cleanup and world shutdown. The switch is changed only in
+this isolated configuration and restored afterwards.
+
+This checks native command handling and game behaviour; it does not exercise
+Discord or the mind's natural-language recognition. Reports and timestamped
+observations are saved under `<data>/runs/*-lead-*/`.
 
 The separate raid acceptance build exercises the real playerbots strategies,
 core encounter scripts and mod-leeroy hazard filter. It uses a dedicated dojo
@@ -204,8 +397,28 @@ an arena manifest; it disables `Leeroy.Enable` so no guild bridge starts.
 | Scenario | Actual runtime assertion | Negative control |
 |---|---|---|
 | Valithria | At least two effective heals on her GUID, with stock healer strategies and a distant injured raid member competing for heal reach | Remove the ICC strategy; no effective dragon heals |
-| Twin Val'kyr | Light Essence acquired from real gossip, then Dark Essence acquired in response to the core's Dark Touch spell | Disable Twin interactions; no essence acquired |
+| Twin Val'kyr | Light Essence acquired through the core interaction (SpellClick, or gossip on older cores), then Dark Essence in response to the core's Dark Touch spell | Disable Twin interactions; no essence acquired |
 | Living Poison | At least two completed hall crossings, real moving slimes present, no damage from them, sampled clearance above their 1.5-yard trigger radius | Disable the hazard group context; require a real poison hit |
+| Lich King: Terenas | At least two effective heals on the real Terenas in Frostmourne, with ordinary follow targeting a leader outside the room | Disable `LichKingMechanics`; require no effective Terenas healing |
+| Lich King: Defile | Actual exposure to a real Defile cast; leave its scaled radius within four seconds, remain outside and take no damage after a one-second escape grace | Disable `LichKingMechanics`; require real Defile damage |
+
+The default invocation keeps the original three scenarios. Select the Lich King
+probes explicitly with `raid-acceptance --scenario lk-terenas --scenario lk-defile`.
+The Terenas setup casts the actual Harvest Soul on the healer and observes its
+damage aura and native strangulate vehicle before the core teleports the actor.
+Both controls must then supply the existing room-exposure evidence; a direct
+teleport or manually summoned Terenas cannot establish this entry.
+Lich King receipts retain the last 32 damage observations with sequence, actor,
+spell and health counters: stage 0 is `OnDamage`, 1 is spell calculation and 2
+is periodic calculation. These precede final application and are not lethal-hit
+assertions. Separate native death callbacks retain the actual victim and killer
+entry, position and clock. Up to 64 aura IDs per actor accompany each snapshot,
+with the full count to expose truncation. None of these diagnostics changes a verdict.
+Each selected scenario always runs both controls. These probes establish specific
+mechanics only; they do not certify an entire Lich King kill, heroic Frostmourne,
+Val'kyr rescue or spirit handling. Release acceptance requires passing campaign
+receipts for the intended encounter scope. Existing live enablement, adding these
+gates or passing their verdict tests does not establish that runtime evidence.
 
 Every normal case and negative control must pass. A missing boss, stalled bot,
 absent slimes, insufficient samples, login failure or unproved cleanup fails the
@@ -237,7 +450,7 @@ so the case adds it. A Sludge Belcher patrol pulls the leader into combat
 about 55 s in, so the crossing under way then is made in the combat engine. The negative control keeps a bot master and neither.
 
 Reports and polled native observations go under `<data>/runs/*-raids-*/`.
-`report.json` includes candidate revisions, binary/layout hashes, all six case
+`report.json` includes candidate revisions, binary/layout hashes, all selected case
 verdicts and shutdown confirmation. The native `OnHeal` hook counts the core's
 effective health gain; neither a requested heal nor an action success counts.
 `dojo raid status` reports the current token and observations; `dojo raid abort`

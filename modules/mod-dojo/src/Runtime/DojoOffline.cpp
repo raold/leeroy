@@ -10,6 +10,7 @@
 #include "CommandScript.h"
 #include "Config.h"
 #include "Creature.h"
+#include "DBCStores.h"
 #include "Guild.h"
 #include "GuildMgr.h"
 #include "Group.h"
@@ -29,6 +30,8 @@
 #include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellInfo.h"
+#include "SpellMgr.h"
+#include "ThreatManager.h"
 #include "Timer.h"
 #include "UnitScript.h"
 #include "World.h"
@@ -38,6 +41,7 @@
 #include "Guild/OfflineRaidJob.h"
 #include "Util/DcBotProvisioning.h"
 #include "Util/DcProvisionBudget.h"
+#include "Ai/Dungeon/DungeonClear/Util/DcRun.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -47,6 +51,7 @@
 #include <sstream>
 #include "DojoNaxxPass.h"
 #include "DojoTocIntro.h"
+#include "DojoStall.h"
 
 // Older production baselines can run this harness. A worm-support trial
 // refuses unless the candidate includes that feature's policy.
@@ -92,6 +97,7 @@ struct OfflineFixture
     std::string state = "idle", error, token;
     uint32 elapsed = 0, guildId = 0, samples = 0;
     std::size_t rolled = 0;
+    json trainedRanks = json::array();
     uint32 map = 0;
     bool scriptedWipe = false, restartingSeen = false;
     uint32 restartsAtWipe = 0;
@@ -111,15 +117,129 @@ struct OfflineFixture
     uint32 slimeHits = 0, slimeLateHits = 0, slimeUnknownHits = 0;
     bool wormRequested = false, wormOverride = false, wormPrevious = false, wormRestored = true;
     uint32 wormSamples = 0;
+    uint32 twinsSamples = 0;
+    std::array<bool, 10> twinsEssenceSeen{};
     DojoNaxxPass naxxPass;
     DojoTocIntro tocIntro;
-    std::recursive_mutex mutex;
+    DojoStall stall;
 
     std::array<Player*, 10> RaidActors() const
     {
         std::array<Player*, 10> out{};
         for (std::size_t i = 0; i < out.size(); ++i) out[i] = Actor(i + 1);
         return out;
+    }
+
+    std::string frontier = "none";
+    std::array<bool, 13> frontierHeld{};
+    std::array<std::array<std::array<bool, 3>, 2>, 13> frontierStrategies{};
+    uint32 frontierMs = 0, frontierHeals = 0, frontierStartHealth = 0, frontierPeakHealth = 0;
+    uint32 frontierSetupMask = 0;
+    uint64 frontierHealing = 0;
+    ObjectGuid frontierDragon;
+    std::recursive_mutex mutex;
+
+    bool ReleaseFrontier()
+    {
+        bool clear = true;
+        for (std::size_t i = 1; i <= 10; ++i)
+            if (frontierHeld[i])
+            {
+                auto* p = Actor(i);
+                bool restored = true;
+                if (p)
+                    for (std::size_t state = 0; state < 2; ++state)
+                    {
+                        auto* ai = GET_PLAYERBOT_AI(p);
+                        auto const engine = state == 0 ? BOT_STATE_COMBAT : BOT_STATE_NON_COMBAT;
+                        std::array<char const*, 3> const names{"stay", "passive", "follow"};
+                        for (std::size_t flag = 0; flag < names.size(); ++flag)
+                        {
+                            bool const want = frontierStrategies[i][state][flag];
+                            ai->ChangeStrategy(std::string(want ? "+" : "-") + names[flag], engine);
+                            restored = restored && ai->HasStrategy(names[flag], engine) == want;
+                        }
+                    }
+                frontierHeld[i] = !restored;
+                clear = clear && restored;
+            }
+        return clear;
+    }
+
+    void PrepareFrontier(json const& native, uint32 diff)
+    {
+        if (frontier == "none" || frontier == "ready" || !error.empty()) return;
+        if (native.value("stage", "") != "running") return;
+        frontierMs += diff;
+        if (frontierMs > 10000) { error = "valithria_frontier_setup_timeout"; ReleaseFrontier(); return; }
+        auto* leader = Actor(1);
+        auto* instance = leader ? leader->GetInstanceScript() : nullptr;
+        if (!leader || leader->GetMapId() != 631 || !instance) return;
+        for (std::size_t i = 1; i <= 10; ++i)
+        {
+            auto* p = Actor(i);
+            if (!p || !p->IsAlive() || p->IsBeingTeleported() || p->GetMap() != leader->GetMap()
+                || !Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter()) || !sRandomPlayerbotMgr.IsPinned(actors[i].GetCounter())) return;
+            if (p->IsInCombat()) { error = "valithria_frontier_actor_in_combat"; ReleaseFrontier(); return; }
+        }
+        auto* ai = GET_PLAYERBOT_AI(leader);
+        auto* driver = ai->GetMaster();
+        if (!driver) { error = "valithria_frontier_driver_missing"; ReleaseFrontier(); return; }
+        if (frontier == "pending")
+        {
+            // The ordinary job has already proved a fresh instance and enabled
+            // its real driver. This separately named mechanic fixture now
+            // selects a later encounter; it is not a full-route result.
+            if (native.value("stage_ms", 0u) > 2000 || instance->GetCompletedEncounterMask() != 0)
+            { error = "valithria_frontier_not_fresh"; return; }
+            for (uint32 boss = 0; boss <= 10; ++boss)
+                if (instance->GetBossState(boss) == DONE || instance->GetBossState(boss) == IN_PROGRESS)
+                { error = "valithria_frontier_encounter_already_started"; return; }
+            ai->DoSpecificAction("dc off", Event("dc", "", driver), true);
+            if (DcRun::Of(ai).enabled) { error = "valithria_frontier_driver_not_stopped"; return; }
+            for (std::size_t i = 1; i <= 10; ++i)
+            {
+                auto* memberAI = GET_PLAYERBOT_AI(Actor(i));
+                for (std::size_t state = 0; state < 2; ++state)
+                {
+                    auto const engine = state == 0 ? BOT_STATE_COMBAT : BOT_STATE_NON_COMBAT;
+                    std::array<char const*, 3> const names{"stay", "passive", "follow"};
+                    for (std::size_t flag = 0; flag < names.size(); ++flag)
+                        frontierStrategies[i][state][flag] = memberAI->HasStrategy(names[flag], engine);
+                    memberAI->ChangeStrategy("+stay,+passive,-follow", engine);
+                }
+                frontierHeld[i] = true;
+                Actor(i)->StopMoving();
+            }
+            leader->GetMap()->LoadGrid(4203.5f, 2484.f);
+            auto* dragon = leader->GetMap()->GetCreature(instance->GetGuidData(10));
+            if (!dragon || dragon->GetEntry() != 36789 || !dragon->IsAlive())
+            { error = "valithria_frontier_dragon_missing"; ReleaseFrontier(); return; }
+            frontierDragon = dragon->GetGUID();
+            frontierStartHealth = frontierPeakHealth = dragon->GetHealth();
+            if (!frontierStartHealth || frontierStartHealth >= dragon->GetMaxHealth())
+            { error = "valithria_frontier_dragon_not_injured"; ReleaseFrontier(); return; }
+            for (uint32 boss = 0; boss < 10; ++boss) instance->SetBossState(boss, DONE);
+            for (uint32 boss = 0; boss < 10; ++boss)
+                if (instance->GetBossState(boss) != DONE)
+                { error = "valithria_frontier_prerequisite_refused"; ReleaseFrontier(); return; }
+            frontierSetupMask = instance->GetCompletedEncounterMask();
+            if (frontierSetupMask != 0 || instance->GetBossState(10) == DONE)
+            { error = "valithria_frontier_awarded_setup_credit"; ReleaseFrontier(); return; }
+            for (std::size_t i = 1; i <= 10; ++i)
+                Actor(i)->NearTeleportTo(4182.f + float(i % 3) * 2.f, 2480.f + float(i / 3) * 2.f, 364.956f, 0.f);
+            frontier = "arriving"; frontierMs = 0;
+        }
+        else if (frontierMs >= 1000)
+        {
+            for (std::size_t i = 1; i <= 10; ++i)
+                if (std::abs(Actor(i)->GetPositionZ() - 364.956f) > 8.f
+                    || std::hypot(Actor(i)->GetPositionX() - 4182.f, Actor(i)->GetPositionY() - 2484.f) > 30.f) return;
+            if (!ReleaseFrontier()) { error = "valithria_frontier_strategies_not_restored"; return; }
+            ai->DoSpecificAction("dc on", Event("dc", "", driver), true);
+            if (!DcRun::Of(ai).enabled) { error = "valithria_frontier_driver_not_resumed"; return; }
+            frontier = "ready"; frontierMs = 0;
+        }
     }
 
     void RestoreWormSupport()
@@ -181,7 +301,7 @@ struct OfflineFixture
         auto why = Identify(true);
         if (!why.empty()) return why;
         for (auto guid : actors) if (ObjectAccessor::FindConnectedPlayer(guid)) return "fixture already online";
-        error.clear(); elapsed = 0; rolled = 0; state = "preparing";
+        error.clear(); elapsed = 0; rolled = 0; trainedRanks = json::array(); state = "preparing";
         for (auto guid : actors) Dojo::LoginRaidFixture(guid);
         return "started";
     }
@@ -205,6 +325,26 @@ struct OfflineFixture
                 if (!DcProvisionBudget::Take()) return;
                 DcBotProvisioning::Roll(p, 80, ITEM_QUALITY_EPIC,
                     PlayerbotFactory::CalcMixedGearScore(245, ITEM_QUALITY_EPIC), spec);
+                for (uint32 index = 0; index < sTalentStore.GetNumRows(); ++index)
+                    if (auto const* talent = sTalentStore.LookupEntry(index))
+                        for (uint32 base : talent->RankID)
+                        {
+                            if (!base || !p->HasTalent(base, p->GetActiveSpec())) continue;
+                            uint32 expected = base;
+                            while (uint32 next = sSpellMgr->GetNextSpellInChain(expected))
+                            {
+                                auto const* info = sSpellMgr->GetSpellInfo(next);
+                                // Further talent points are choices, not trainable ability ranks.
+                                if (!info || GetTalentSpellCost(next) || info->SpellLevel > p->GetLevel()) break;
+                                expected = next;
+                            }
+                            if (expected == base) continue;
+                            bool const known = p->HasSpell(expected);
+                            trainedRanks.push_back({{"slot", rolled}, {"base", base},
+                                {"expected", expected}, {"known", known}});
+                            if (!known)
+                            { error = "fixture_untrained_talent_rank"; state = "failed"; return; }
+                        }
                 p->CombatStop(true);
                 p->TeleportTo(0, -8833.0f + float(rolled), 626.f, 94.f, 0.f);
                 p->SaveToDB(false, false);
@@ -247,11 +387,32 @@ struct OfflineFixture
             auto const native = Leeroy::Guild::DojoOfflineSnapshot();
             naxxPass.Tick(RaidActors(), native, token, error, diff);
             tocIntro.Tick(RaidActors(), native, token, error, diff);
-            if (!native.value("active", false)) RestoreWormSupport();
+            stall.Tick(RaidActors(), native, error, diff);
+            if (!native.value("active", false)) { RestoreWormSupport(); ReleaseFrontier(); }
+            PrepareFrontier(native, diff);
+            if (frontier == "ready")
+            {
+                frontierMs += diff;
+                if (auto* leader = Actor(1))
+                    if (auto* dragon = leader->GetMap()->GetCreature(frontierDragon))
+                        frontierPeakHealth = std::max(frontierPeakHealth, dragon->GetHealth());
+            }
 #if DOJO_HAS_TOC_WORM_SUPPORT
             if (wormRequested && native.value("stage", "") == "running" && sPlayerbotAIConfig.TocWormSupport)
                 ++wormSamples;
 #endif
+            if (map == 649 && native.value("stage", "") == "running")
+                if (auto* leader = Actor(1); leader && leader->GetInstanceScript()
+                    && leader->GetInstanceScript()->GetBossState(3) == IN_PROGRESS)
+                {
+                    if (sPlayerbotAIConfig.TwinValkyrInteractions) ++twinsSamples;
+                    for (std::size_t i = 1; i <= 10; ++i)
+                        if (auto* player = Actor(i); player && player->IsAlive() && player->GetMap() == leader->GetMap()
+                            && Leeroy::Guild::OfflineRaidOwns(actors[i].GetCounter()))
+                            twinsEssenceSeen[i - 1] = twinsEssenceSeen[i - 1]
+                                || player->HasAura(sSpellMgr->GetSpellIdForDifficulty(65686, player))
+                                || player->HasAura(sSpellMgr->GetSpellIdForDifficulty(65684, player));
+                }
             if (native.value("active", false) && native.value("stage", "") != "tearing_down")
                 for (auto const& body : native.value("bodies", json::array()))
                     if (!sRandomPlayerbotMgr.IsPinned(body.value("guid", uint32(0))))
@@ -302,12 +463,16 @@ struct OfflineFixture
         guildId = guild->GetId();
         bool const reserveTrial = scenario == "toc-reserves";
         bool const fullRun = scenario == "toc-full" || scenario == "toc-full-worms" || scenario == "ulduar-full";
+        if ((scenario == "toc-full" || scenario == "toc-full-worms") && !sPlayerbotAIConfig.TwinValkyrInteractions)
+            return "full ToC requires TwinValkyrInteractions";
         bool const wormTrial = scenario == "toc-worms" || scenario == "toc-full-worms";
         bool const naxxTrial = scenario == "naxx-gothik-pass" || scenario == "naxx-gothik-pass-control";
-        bool const tocIntroTrial = scenario == "toc-anub-intro";
+        bool const tocIntroTrial = scenario == "toc-anub-intro" || scenario == "toc-anub-pass";
+        bool const stallTrial = scenario == "offline-native-stall";
+        bool const valithriaTrial = scenario == "icc-valithria-frontier";
         if (wormTrial && !DOJO_HAS_TOC_WORM_SUPPORT) return "toc_worm_feature_missing_from_candidate";
-        map = scenario == "toc" || scenario == "toc-full" || reserveTrial || wormTrial || tocIntroTrial ? 649
-            : scenario == "ulduar" || scenario == "ulduar-full" ? 603 : scenario == "icc" ? 631 : naxxTrial ? 533 : 0;
+        map = scenario == "toc" || scenario == "toc-full" || reserveTrial || wormTrial || tocIntroTrial || stallTrial ? 649
+            : scenario == "ulduar" || scenario == "ulduar-full" ? 603 : scenario == "icc" || valithriaTrial ? 631 : naxxTrial ? 533 : 0;
         if (!map) return "unknown offline scenario";
         std::vector<std::size_t> requested{1, 2, 3, 4, 5, 6, 7, 8, 9};
         requested.push_back(reserveTrial ? 11 : 10);
@@ -318,6 +483,7 @@ struct OfflineFixture
             if (!sRandomPlayerbotMgr.IsPinned(actors[i].GetCounter())) return "fixture actor is not pinned";
         }
         Leeroy::Guild::OfflineRaidCmd cmd;
+        if (stallTrial && !DojoStall::Configure(cmd)) return "native_stall_candidate_missing";
         cmd.mapId = map; cmd.size = 10; cmd.leaderGuid = actors[1].GetCounter();
         cmd.lootMasterGuid = cmd.leaderGuid; cmd.minMembers = 10;
         cmd.maxWipes = cmd.maxWipesPerBoss = 3; cmd.timeoutMin = fullRun ? 180 : 45;
@@ -339,12 +505,19 @@ struct OfflineFixture
         naxxPass.control = scenario == "naxx-gothik-pass-control";
         tocIntro = {};
         tocIntro.state = tocIntroTrial ? "pending" : "none";
+        tocIntro.completeEncounter = scenario == "toc-anub-pass";
+        stall = {};
+        stall.state = stallTrial ? "pending" : "none";
         scriptedWipe = restartingSeen = false; restartsAtWipe = wipeBoss = mainTankAtWipe = 0;
         tankSwapForced = false;
         selfResSuppressed = 0;
         slimePools.clear(); clockMs = slimeGap = slimeInside = slimeEscapes = slimeOutsideMs = 0;
         slimeHits = slimeLateHits = slimeUnknownHits = 0;
         wormRequested = wormTrial; wormSamples = 0; wormRestored = !wormTrial;
+        twinsSamples = 0; twinsEssenceSeen = {};
+        frontier = valithriaTrial ? "pending" : "none"; frontierHeld = {}; frontierStrategies = {};
+        frontierMs = frontierHeals = frontierStartHealth = frontierPeakHealth = frontierSetupMask = 0;
+        frontierHealing = 0; frontierDragon.Clear();
 #if DOJO_HAS_TOC_WORM_SUPPORT
         if (wormTrial)
         {
@@ -410,16 +583,17 @@ struct OfflineFixture
     {
         std::lock_guard<std::recursive_mutex> lock(mutex);
         auto const native = Leeroy::Guild::DojoOfflineSnapshot();
-        if (!native.value("active", false)) RestoreWormSupport();
+        if (!native.value("active", false)) { RestoreWormSupport(); ReleaseFrontier(); }
         if (!native.value("active", false)) naxxPass.Release(RaidActors());
         if (!native.value("active", false)) tocIntro.Release(RaidActors());
+        if (!native.value("active", false)) stall.Release(RaidActors());
         json bodies = json::array(), damage = json::array(), pools = json::array();
         json enemies = json::array(), spellSamples = json::array();
         for (std::size_t i = 1; i < actors.size(); ++i)
             if (auto* p = Actor(i))
             {
                 json bosses = json::array(), auras = json::array();
-                for (uint32 spell : {66823u, 67618u, 67619u, 67620u, 66830u, 66869u})
+                for (uint32 spell : {66823u, 67618u, 67619u, 67620u, 66830u, 66869u, 67574u})
                     if (p->HasAura(spell)) auras.push_back(spell);
                 if (auto* script = p->GetInstanceScript())
                     for (uint32 b = 0; b < script->GetEncounterCount(); ++b) bosses.push_back(uint32(script->GetBossState(b)));
@@ -429,9 +603,20 @@ struct OfflineFixture
                 auto* ai = GET_PLAYERBOT_AI(p);
                 auto const& movement = ai->GetAiObjectContext()->GetValue<LastMovement&>("last movement")->Get();
                 auto* selected = ai->GetAiObjectContext()->GetValue<Unit*>("current target")->Get();
+                json spline = nullptr;
+                if (p->movespline && p->movespline->Initialized())
+                {
+                    auto const endpoint = p->movespline->FinalDestination();
+                    auto const next = p->movespline->CurrentDestination();
+                    spline = {{"id", p->movespline->GetId()}, {"elapsed_ms", p->movespline->timePassed()},
+                        {"duration_ms", p->movespline->Duration()}, {"speed", p->movespline->Velocity()},
+                        {"next", {next.x, next.y, next.z}}, {"end", {endpoint.x, endpoint.y, endpoint.z}}};
+                }
                 bodies.push_back({{"slot", i}, {"guid", actors[i].GetCounter()}, {"alive", p->IsAlive()},
                     {"map", p->GetMapId()}, {"instance", p->GetInstanceId()}, {"health", p->GetHealth()},
                     {"max_health", p->GetMaxHealth()}, {"mana", p->GetPower(POWER_MANA)},
+                    {"anub_expose_stacks", p->GetAuraCount(67721) + p->GetAuraCount(67847)},
+                    {"armor", p->GetArmor()}, {"facing", p->GetOrientation()},
                     {"max_mana", p->GetMaxPower(POWER_MANA)}, {"healer", PlayerbotAI::IsHeal(p)},
                     {"cast", casting ? casting->GetSpellInfo()->Id : 0u},
                     {"channel", channel ? channel->GetSpellInfo()->Id : 0u},
@@ -439,9 +624,11 @@ struct OfflineFixture
                     {"target_entry", victim ? victim->GetEntry() : 0u},
                     {"ai_target_entry", selected ? selected->GetEntry() : 0u},
                     {"ai_state", uint32(ai->GetState())}, {"can_move", ai->CanMove()},
+                    {"threat_strategy", ai->HasStrategy("threat", BOT_STATE_COMBAT)},
                     {"moving", p->isMoving()}, {"rooted", p->IsRooted()},
                     {"motion", uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType())},
                     {"spline_active", p->movespline && !p->movespline->Finalized()},
+                    {"spline", spline},
                     {"last_move", {{"age_ms", GetMSTimeDiffToNow(movement.msTime)},
                         {"priority", uint32(movement.priority)}, {"delay_ms", movement.lastdelayTime},
                         {"x", movement.lastMoveShort.GetPositionX()}, {"y", movement.lastMoveShort.GetPositionY()},
@@ -454,10 +641,10 @@ struct OfflineFixture
                     {"master", GET_PLAYERBOT_AI(p)->GetMaster() ? GET_PLAYERBOT_AI(p)->GetMaster()->GetGUID().GetCounter() : 0}});
             }
         for (auto const& [entry, value] : hits) damage.push_back({{"entry", entry}, {"hits", value.first}, {"requested", value.second}});
-        // Read only, bounded diagnostics for the actual Beasts actors. In
-        // particular, distinguish a surviving enraged worm from a cure stall.
+        // Read only, bounded diagnostics for Beasts and Anub actors: distinguish
+        // a cure stall from an enraged worm, and spike routes from permafrost.
         if (auto* leader = Actor(1); leader && map == 649 && leader->GetMapId() == map)
-            for (uint32 entry : {34796u, 34799u, 35144u, 34797u, 35176u})
+            for (uint32 entry : {34660u, 34606u, 34564u, 34605u, 34607u, 34796u, 34799u, 35144u, 34797u, 35176u})
             {
                 std::list<Creature*> found;
                 leader->GetCreatureListWithEntryInGrid(found, entry, 200.f);
@@ -467,13 +654,26 @@ struct OfflineFixture
                         auto* cast = creature->GetCurrentSpell(CURRENT_GENERIC_SPELL);
                         auto* channel = creature->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
                         auto* victim = creature->GetVictim();
+                        json threat = json::array();
+                        if (entry == 34564)
+                            for (std::size_t slot = 1; slot <= 10; ++slot)
+                                if (auto* member = Actor(slot); member && member->GetMap() == creature->GetMap())
+                                    threat.push_back({{"guid", member->GetGUID().GetCounter()},
+                                        {"amount", creature->GetThreatMgr().GetThreat(member, true)},
+                                        {"in_melee_range", creature->IsWithinMeleeRange(member)}});
                         enemies.push_back({{"entry", entry}, {"guid", creature->GetGUID().GetCounter()},
                             {"instance", creature->GetInstanceId()}, {"alive", creature->IsAlive()},
                             {"health", creature->GetHealth()}, {"max_health", creature->GetMaxHealth()},
                             {"enraged", creature->HasAura(68335)},
+                            {"berserk", creature->HasAura(26662)},
+                            {"spike_trail", creature->HasAura(65921)},
+                            {"permafrost", creature->HasAura(65882)},
+                            {"motion", uint32(creature->GetMotionMaster()->GetCurrentMovementGeneratorType())},
+                            {"spline_active", creature->movespline && !creature->movespline->Finalized()},
                             {"cast", cast ? cast->GetSpellInfo()->Id : 0u},
                             {"channel", channel ? channel->GetSpellInfo()->Id : 0u},
                             {"target", victim ? victim->GetGUID().GetCounter() : 0u},
+                            {"threat", threat},
                             {"x", creature->GetPositionX()}, {"y", creature->GetPositionY()},
                             {"z", creature->GetPositionZ()}, {"facing", creature->GetOrientation()}});
                     }
@@ -488,12 +688,20 @@ struct OfflineFixture
                 {"age_ms", clockMs - pool.firstMs}, {"last_ms", clockMs - pool.lastMs},
                 {"minimum_radius", pool.minimum}, {"maximum_radius", pool.maximum}});
         return {{"kind", "dojo-offline-observation"}, {"format", 1}, {"state", state}, {"error", error},
+            {"fixture_preparation_version", 2}, {"trained_ranks", trainedRanks},
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
             {"native", native}, {"bodies", bodies}, {"damage", damage},
             {"toc_enemies", enemies}, {"spell_damage_samples", spellSamples},
             {"naxx_pass", naxxPass.Snapshot()},
             {"toc_intro", tocIntro.Snapshot()},
+            {"native_stall", stall.Snapshot()},
             {"toc_worm_support", {{"requested", wormRequested}, {"active_samples", wormSamples}, {"restored", wormRestored}}},
+            {"toc_twins", {{"enabled", sPlayerbotAIConfig.TwinValkyrInteractions},
+                {"active_samples", twinsSamples}, {"essence_seen", twinsEssenceSeen}}},
+            {"valithria_frontier", {{"state", frontier}, {"measured_ms", frontierMs}, {"heals", frontierHeals},
+                {"healing", frontierHealing}, {"start_health", frontierStartHealth}, {"peak_health", frontierPeakHealth},
+                {"setup_completed_mask", frontierSetupMask},
+                {"setup_strategies_restored", std::none_of(frontierHeld.begin(), frontierHeld.end(), [](bool held) { return held; })}}},
             {"scripted_wipe", scriptedWipe}, {"restarting_seen", restartingSeen}, {"restarts_at_wipe", restartsAtWipe},
             {"main_tank", MainTank(Actor(1))}, {"wipe_boss", wipeBoss}, {"main_tank_at_wipe", mainTankAtWipe},
             {"tank_swap_forced", tankSwapForced},
@@ -546,7 +754,17 @@ public:
 class Damage : public UnitScript
 {
 public:
-    Damage() : UnitScript("DojoOfflineDamage", true, {UNITHOOK_ON_DAMAGE, UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN}) { }
+    Damage() : UnitScript("DojoOfflineDamage", true,
+        {UNITHOOK_ON_DAMAGE, UNITHOOK_ON_HEAL, UNITHOOK_MODIFY_SPELL_DAMAGE_TAKEN}) { }
+    void OnHeal(Unit* healer, Unit* receiver, uint32& amount) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(fixture.mutex);
+        if (fixture.state != "running" || fixture.frontier != "ready" || !healer || !receiver || !amount
+            || receiver->GetGUID() != fixture.frontierDragon
+            || std::find(fixture.actors.begin() + 1, fixture.actors.begin() + 11, healer->GetGUID()) == fixture.actors.begin() + 11
+            || !Leeroy::Guild::OfflineRaidOwns(healer->GetGUID().GetCounter())) return;
+        ++fixture.frontierHeals; fixture.frontierHealing += amount;
+    }
     void ModifySpellDamageTaken(Unit* victim, Unit* attacker, int32& calculated, SpellInfo const* info) override
     {
         if (!victim || !attacker || !info || calculated <= 0 || victim->GetMapId() != 649
@@ -595,8 +813,10 @@ public:
         std::lock_guard<std::recursive_mutex> lock(fixture.mutex);
         auto* leader = fixture.Actor(1);
         if (fixture.state != "running" || fixture.map != 649 || !leader || !spell || !caster || !info
-            || caster->GetEntry() != 35176 || caster->GetMap() != leader->GetMap() || info->Id != 66881
+            || caster->GetMap() != leader->GetMap()
             || !Leeroy::Guild::OfflineRaidOwns(leader->GetGUID().GetCounter())) return;
+        fixture.tocIntro.Cast(caster, info->Id, completed);
+        if (caster->GetEntry() != 35176 || info->Id != 66881) return;
         float radius = 0.f;
         for (SpellEffectInfo const& effect : info->Effects)
             if (effect.IsTargetingArea())

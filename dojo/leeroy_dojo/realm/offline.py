@@ -15,14 +15,17 @@ from .mechanics import MechanicConnection
 from .offline_fixture import FixtureCheckpoint
 
 TARGETS = {"toc-beasts": ("toc", 649, 0), "ulduar-xt": ("ulduar", 603, 3),
+           "offline-native-stall": ("offline-native-stall", 649, None),
            "toc-anub-intro": ("toc-anub-intro", 649, None),
+           "toc-anub-pass": ("toc-anub-pass", 649, None),
            "naxx-gothik-pass": ("naxx-gothik-pass", 533, None),
            "naxx-gothik-pass-control": ("naxx-gothik-pass-control", 533, None),
            "toc-full": ("toc-full", 649, None), "ulduar-full": ("ulduar-full", 603, None),
            "ulduar-route": ("ulduar-full", 603, None),
            "toc-slime-pools": ("toc", 649, None), "toc-slime-pools-control": ("toc", 649, None),
            "icc-deathwhisper": ("icc", 631, 1), "icc-gunship": ("icc", 631, 2),
-           "icc-valithria": ("icc", 631, 10), "offline-reserves": ("toc-reserves", 649, None),
+           "icc-valithria": ("icc", 631, 10), "icc-valithria-frontier": ("icc-valithria-frontier", 631, 10),
+           "offline-reserves": ("toc-reserves", 649, None),
            "ulduar-restart": ("ulduar", 603, None), "ulduar-tank-restart": ("ulduar", 603, None),
            "ulduar-forced-tank-restart": ("ulduar", 603, None)}
 
@@ -58,10 +61,22 @@ def reached(observation, *, target, token):
     if target == "toc-anub-intro":
         from .offline_toc import reached_intro
         return reached_intro(observation)
+    if target == "toc-anub-pass":
+        from .offline_toc import reached_anub
+        return reached_anub(observation)
+    if target == "offline-native-stall":
+        from .offline_stall import reached_stall
+        return reached_stall(observation)
     if target in FULL_ROUTES:
         count, required = FULL_ROUTES[target]
         states = native.get("boss_states")
         reason = "cleared_reachable" if target == "ulduar-route" else "cleared"
+        if target == "toc-full":
+            twins = observation.get("toc_twins", {})
+            if (twins.get("enabled") is not True or type(twins.get("active_samples")) is not int
+                    or twins["active_samples"] < 10 or twins.get("essence_seen") != [True] * 10
+                    or any(type(value) is not bool for value in twins.get("essence_seen", []))):
+                return False
         return (native.get("active") is False and native.get("cleanup") is True
                 and native.get("map") == map_id and event.get("state") == "done"
                 and event.get("reason") == reason and type(event.get("kills")) is int
@@ -73,6 +88,24 @@ def reached(observation, *, target, token):
     if native.get("stage") != "running":
         return False
     bodies = observation.get("bodies", [])
+    if target == "icc-valithria-frontier":
+        frontier = observation.get("valithria_frontier", {})
+        if (type(event.get("wipes")) is not int or event["wipes"] != 0
+                or frontier.get("state") != "ready" or frontier.get("setup_strategies_restored") is not True
+                or any(type(frontier.get(k)) is not int or frontier[k] < 0
+                       for k in ("measured_ms", "heals", "healing", "start_health", "peak_health", "setup_completed_mask"))
+                or frontier["setup_completed_mask"] != 0 or frontier["heals"] < 2 or frontier["healing"] == 0
+                or frontier["start_health"] == 0 or frontier["peak_health"] <= frontier["start_health"]
+                or frontier["measured_ms"] < 1000):
+            return False
+        actors = [b for b in bodies if b.get("slot") in range(1, 11)]
+        if (len(actors) != 10 or len({b.get("guid") for b in actors}) != 10
+                or native.get("driver") is not True or native.get("elected") != native.get("leader")
+                or type(native.get("leader")) is not int or native["leader"] <= 0
+                or any(type(b.get("guid")) is not int or b["guid"] <= 0
+                       or b.get("owned") is not True or b.get("pinned") is not True
+                       or b.get("map") != map_id or b.get("instance") != instance for b in actors)):
+            return False
     if target in {"toc-slime-pools", "toc-slime-pools-control"}:
         slime = observation.get("slime", {})
         negative = target == "toc-slime-pools-control"
@@ -149,6 +182,28 @@ def _set(layout, name, values):
     path.write_text(conf.render(path.read_text(encoding="utf-8"), values), encoding="utf-8")
 
 
+def configure_full_raid_features(layout, target):
+    """An offline full clear must exercise the candidate, even from an older config snapshot."""
+    features = {"Playerbots.TwinValkyrInteractions": "1", "Playerbots.TocWormSupport": "1"} if target == "toc-full" else {}
+    if features:
+        _set(layout, "modules/playerbots.conf", features)
+    return features
+
+
+def retain_runtime_logs(layout, out, started_at):
+    """A pre-boot failure must not attach the preceding trial's native logs."""
+    retained = {}
+    if started_at is None:
+        return retained
+    for name in ("Server.log", "DungeonClear.log", "Playerbots.log"):
+        path = layout.logs / name
+        if path.is_file() and path.stat().st_mtime >= started_at:
+            destination = out / name
+            shutil.copyfile(path, destination)
+            retained[name] = raids.fingerprint(destination)
+    return retained
+
+
 def _fixture_accounts(layout, log):
     provision.ensure_accounts(layout, "DOJORAID", log=log)
     accounts = provision.ensure_accounts(layout, "RNDBOTDOJO", log=log)
@@ -159,7 +214,33 @@ def _fixture_accounts(layout, log):
     # registers this one fixed account after startup, before ordinary pinning.
 
 
-def run(layout, *, target, toc_worm_support=False, log=print):
+def prepare_fixture(layout, log=print):
+    """Restore a proven synthetic checkpoint or prepare it through the native factory."""
+    checkpoint = FixtureCheckpoint(layout)
+    prepared = checkpoint.restore()
+    if prepared is None:
+        world.start(layout, log=log)
+        with world.ra(layout) as client:
+            if "dojo offline: started" not in client.command("dojo offline prepare"):
+                raise world.WorldError("synthetic guild preparation refused")
+            deadline = time.monotonic() + 360
+            while time.monotonic() < deadline:
+                prepared = parse_status(client.command("dojo offline status"))
+                if prepared.get("error"):
+                    raise world.WorldError(prepared["error"])
+                if prepared.get("state") == "prepared":
+                    break
+                time.sleep(0.5)
+            else:
+                raise world.WorldError("synthetic guild preparation timed out")
+        world.stop(layout, log=log)
+        checkpoint.save(prepared)
+    if type(prepared.get("guild")) is not int or prepared["guild"] <= 0 or type(prepared.get("owner")) is not int or prepared["owner"] <= 0:
+        raise world.WorldError("preparation did not identify the synthetic guild")
+    return prepared, checkpoint.digest(checkpoint.receipt)
+
+
+def run(layout, *, target, toc_worm_support=False, profile=False, log=print):
     if target not in TARGETS:
         raise LayoutError("unsupported offline target")
     if toc_worm_support and TARGETS[target][0] not in {"toc", "toc-full"}:
@@ -182,34 +263,15 @@ def run(layout, *, target, toc_worm_support=False, log=print):
     report = dict(kind="dojo-offline-acceptance", format=1, ok=False, source=source, preflight=preflight,
                   token=token, target=target, toc_worm_support=toc_worm_support,
                   out=str(out), reached=False, cleanup=False, stopped=False)
+    report["profile_requested"] = profile
     if target in FULL_ROUTES:
         count, required = FULL_ROUTES[target]
         report["route"] = dict(required_bosses=required, unverified_bosses=[i for i in range(count) if i not in required],
                                scope="supported_offline_route" if target == "ulduar-route" else "all_encounters")
     feed = None
+    runtime_started_at = None
     try:
-        checkpoint = FixtureCheckpoint(layout)
-        prepared = checkpoint.restore()
-        if prepared is None:
-            world.start(layout, log=log)
-            with world.ra(layout) as client:
-                if "dojo offline: started" not in client.command("dojo offline prepare"):
-                    raise world.WorldError("synthetic guild preparation refused")
-                deadline = time.monotonic() + 360
-                while time.monotonic() < deadline:
-                    prepared = parse_status(client.command("dojo offline status"))
-                    if prepared.get("error"):
-                        raise world.WorldError(prepared["error"])
-                    if prepared.get("state") == "prepared":
-                        break
-                    time.sleep(0.5)
-                else:
-                    raise world.WorldError("synthetic guild preparation timed out")
-            world.stop(layout, log=log)
-            checkpoint.save(prepared)
-        report["fixture_checkpoint_sha256"] = checkpoint.digest(checkpoint.receipt)
-        if type(prepared.get("guild")) is not int or prepared["guild"] <= 0 or type(prepared.get("owner")) is not int or prepared["owner"] <= 0:
-            raise world.WorldError("preparation did not identify the synthetic guild")
+        prepared, report["fixture_checkpoint_sha256"] = prepare_fixture(layout, log)
         report["fixture"] = prepared
         # The native driver creates its character, but account creation queues
         # an async write and its immediate lookup can fail. Provision the fixed
@@ -219,13 +281,15 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                                                 "Leeroy.HumanGuid": str(prepared["owner"]),
                                                 "Leeroy.Mechanics.Enable": "0" if target == "toc-slime-pools-control" else "1",
                                                 "Leeroy.Hazards.Enable": "1"})
-        if target == "icc-valithria":
+        if target in {"icc-valithria", "icc-valithria-frontier"}:
             _set(layout, "modules/mod_dungeon_clear.conf", {"DungeonClear.OfflineValithria": "1"})
+        report["candidate_features"] = configure_full_raid_features(layout, target)
         report["run_source"] = raids.provenance(layout)
         feed = MechanicConnection(layout, guild=prepared["guild"], map_id=TARGETS[target][1])
         feed.__enter__()
         # The adapter's free-port preflight must finish before the world binds
         # those ports. Its real bridge client waits for the listener to open.
+        runtime_started_at = time.time()
         world.start(layout, log=log)
         deadline = time.monotonic() + 30
         while not feed.ready and not feed.error and time.monotonic() < deadline:
@@ -234,6 +298,11 @@ def run(layout, *, target, toc_worm_support=False, log=print):
             raise world.WorldError(feed.error or "candidate mechanic feed timed out")
         report["mechanic_feed"] = dict(features=feed.features, rules=feed.rules)
         with world.ra(layout) as client:
+            profile_start = time.time()
+            if profile:
+                if read_conf(layout.configs / "modules/playerbots.conf").get("Playerbots.PerfMonEnabled", "0") == "0":
+                    client.command("playerbots pmon toggle")
+                client.command("playerbots pmon reset")
             scenario = TARGETS[target][0]
             if toc_worm_support:
                 scenario = "toc-full-worms" if target == "toc-full" else "toc-worms"
@@ -276,6 +345,13 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                             report["gate_failure"] = "naxx_pass_deadline_or_wipe"
                             report["failure_observation"] = observed
                             client.command("dojo offline stop")
+                    if (target == "icc-valithria-frontier" and not report.get("gate_failure")
+                            and native.get("event", {}).get("wipes", 0) > 0):
+                        # A restart returns to a fresh ICC instance at Marrowgar.
+                        # That unrelated full route cannot certify this prepared frontier.
+                        report["gate_failure"] = "valithria_frontier_wipe"
+                        report["failure_observation"] = observed
+                        client.command("dojo offline stop")
                     if target == "toc-slime-pools" and not report.get("gate_failure"):
                         slime = observed.get("slime", {})
                         if slime.get("late_hits", 0) > 0 or slime.get("unknown_hits", 0) > 0:
@@ -307,15 +383,19 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                             raise world.WorldError("requested worm support was not active during measurement")
                         report["reached"] = True
                         report["milestone"] = observed
-                        if target not in FULL_ROUTES:
+                        if target not in FULL_ROUTES and target not in {"offline-native-stall", "toc-anub-pass"}:
                             client.command("dojo offline stop")
                     if not native.get("active", True):
                         report["terminal"] = observed
                         report["cleanup"] = native.get("cleanup") is True
                         if target.startswith("naxx-gothik-pass"):
                             report["cleanup"] = report["cleanup"] and observed.get("naxx_pass", {}).get("strategies_restored") is True
-                        if target == "toc-anub-intro":
+                        if target in {"toc-anub-intro", "toc-anub-pass"}:
                             report["cleanup"] = report["cleanup"] and observed.get("toc_intro", {}).get("strategies_restored") is True
+                        if target == "offline-native-stall":
+                            report["cleanup"] = report["cleanup"] and observed.get("native_stall", {}).get("released") is True
+                        if target == "icc-valithria-frontier":
+                            report["cleanup"] = report["cleanup"] and observed.get("valithria_frontier", {}).get("setup_strategies_restored") is True
                         if toc_worm_support:
                             report["cleanup"] = report["cleanup"] and observed.get("toc_worm_support", {}).get("restored") is True
                         if target == "offline-reserves":
@@ -328,6 +408,16 @@ def run(layout, *, target, toc_worm_support=False, log=print):
                 else:
                     client.command("dojo offline stop")
                     raise world.WorldError("offline runtime deadline exceeded")
+            if profile:
+                client.command("playerbots pmon stack")
+                stats_path = layout.logs / "pmon_total.json"
+                stats = json.loads(stats_path.read_text(encoding="utf-8"))
+                if (stats.get("enabled") is not True or type(stats.get("generatedAt")) is not int
+                        or stats["generatedAt"] < int(profile_start)
+                        or type(stats.get("fullTickCount")) is not int or stats["fullTickCount"] <= 0):
+                    raise world.WorldError("native performance sample missing or stale")
+                report["performance_file"] = "pmon_total.json"
+                shutil.copyfile(stats_path, out / report["performance_file"])
         report["ok"] = report["reached"] and report["cleanup"]
     except (world.WorldError, RaError, OSError, ValueError) as error:
         report["error"] = str(error)
@@ -343,11 +433,8 @@ def run(layout, *, target, toc_worm_support=False, log=print):
         if report["stopped"]:
             _set(layout, "modules/mod_leeroy.conf", {"Leeroy.Enable": "0", "Leeroy.GuildId": "0", "Leeroy.HumanGuid": "0"})
             _set(layout, "modules/mod_dungeon_clear.conf", {"DungeonClear.OfflineValithria": "0"})
-            # Preserve the actual isolated native evidence before the next run rotates it.
-            for name in ("Server.log", "DungeonClear.log", "Playerbots.log"):
-                path = layout.logs / name
-                if path.is_file():
-                    shutil.copyfile(path, out / name)
+            # Preserve only native logs written after this trial attempted boot.
+            report["native_logs"] = retain_runtime_logs(layout, out, runtime_started_at)
         report["ok"] = report["ok"] and report["stopped"]
         (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report
