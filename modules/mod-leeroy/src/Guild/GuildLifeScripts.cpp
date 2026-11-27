@@ -28,7 +28,9 @@ class LeeroyGuildWorldScript : public WorldScript
 {
 public:
     LeeroyGuildWorldScript() : WorldScript("LeeroyGuildWorldScript",
-        { WORLDHOOK_ON_STARTUP, WORLDHOOK_ON_UPDATE, WORLDHOOK_ON_AFTER_CONFIG_LOAD }) { }
+        { WORLDHOOK_ON_STARTUP, WORLDHOOK_ON_UPDATE, WORLDHOOK_ON_AFTER_CONFIG_LOAD, WORLDHOOK_ON_SHUTDOWN }) { }
+
+    void OnShutdown() override { Leeroy::Guild::FlushHazardSummary(); }
 
     void OnAfterConfigLoad(bool /*reload*/) override
     {
@@ -138,5 +140,6 @@ void AddSC_leeroy_guild_life()
     new LeeroyGuildPlayerScript();
     Leeroy::Guild::AddGuildAddScripts();
     Leeroy::Guild::AddMechanicScripts();
+    Leeroy::Guild::AddHazardScripts();
     Leeroy::Guild::AddOwnerAuraScripts();
 }
