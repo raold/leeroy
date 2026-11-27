@@ -31,10 +31,12 @@ def add_parser(sub) -> None:
     vt = cmds.add_parser("valithria-encounter",
                          help="full Valithria pulls of a fixed ten-player bot raid, healer focus off and on")
     vt.add_argument("--run", action="append", dest="runs",
-                    help="difficulty:mode, 10n or 10h with before, after or noportals (repeatable; "
-                         "default the four before/after runs)")
+                    help="difficulty:mode, 10n or 10h with before, after, noportals, adds or turns (repeatable; "
+                         "default the four after/turns runs)")
     vt.add_argument("--item-level", type=int, default=245,
                     help="epic gear cap for the fixtures (default 245; the guild's raiders average 238)")
+    vt.add_argument("--owner-buffs", action="store_true",
+                    help="give the fire-mage leader the owner's auras (haste, spell power, crit); a separate variant")
     acc_run = cmds.add_parser("acceptance", help="open the training arena, verify both actors, close it, compare")
     acc_run.add_argument("--scenario", type=Path, required=True)
     acc_run.add_argument("--keep-running", action="store_true", help="leave a worldserver this command started")
@@ -158,7 +160,8 @@ def run(args: argparse.Namespace) -> int:
             return 0 if report["ok"] else 1
         elif command == "valithria-encounter":
             from .raids import ENCOUNTER_RUNS, encounter
-            report = encounter(layout, tuple(args.runs or ENCOUNTER_RUNS), item_level=args.item_level)
+            report = encounter(layout, tuple(args.runs or ENCOUNTER_RUNS), item_level=args.item_level,
+                               owner_buffs=args.owner_buffs)
             for r in report["runs"]:
                 print(f"{'ok  ' if r['ok'] else 'FAIL'} {r['name']}: {json.dumps(r['summary'])}")
                 for problem in r["problems"]:

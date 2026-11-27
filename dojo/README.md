@@ -243,9 +243,9 @@ effective health gain; neither a requested heal nor an action success counts.
 `dojo raid status` reports the current token and observations; `dojo raid abort`
 requests fixture cleanup. A failed cleanup refuses further scenarios.
 
-### Valithria encounter, before and after the healer focus
+### Valithria encounter: the healer focus and her adds
 
-`realm --layout <raid-layout.json> valithria-encounter [--run 10n:before] ...`
+`realm --layout <raid-layout.json> valithria-encounter [--run 10n:after] [--owner-buffs] ...`
 pulls the whole Valithria encounter with one fixed ten-player raid of synthetic
 bots on `DOJORAID`: a Discipline priest, a Holy paladin and a Restoration shaman
 (the 10-player healer template of the owner's guild fill, created in that order,
@@ -266,17 +266,42 @@ heal on her ends the wait, as it starts the fight in a real raid); then the real
 combat trigger zones the raid in, every 3 s until the encounter is in progress.
 Nothing then heals, damages, moves, casts or writes health for anyone: the run
 ends at her own `DONE` (healed to full), a reset or wipe, or a 15-minute cap.
-`before` pulls with `Playerbots.ValithriaHealerFocus` off, `after` with it on,
-and `noportals` with it on and `Playerbots.ValithriaPortals` off; both switches
-are restored at cleanup. The default runs four: 10-player normal and heroic,
-each before and after.
+The one thing the harness does for a fixture is what the owner's client does
+for him: the self-bot leader has no client, so the harness acknowledges his near
+teleports (his Blink). Playerbots leaves a self-bot's acknowledgement to its
+client, and while the leader waited every bot with him as master skipped its
+turn, so before this one Blink froze the whole raid for 30 s or until the wipe
+(`leader_teleport_acks` counts them; every pull up to the healer-focus proof of
+2026-11-25 ran with it).
+`before` pulls with `Playerbots.ValithriaHealerFocus` off and the adds handling
+off, `after` with the focus on and `Playerbots.ValithriaAdds` off (patch 0021
+alone), `adds` with both on (patch 0022's adds handling), `turns` like `adds`
+with `Playerbots.ValithriaPortalTurns` on (patch 0022's portal turns; every
+other mode runs with it off), and `noportals` like `after` with
+`Playerbots.ValithriaPortals` off; every switch is restored at cleanup. The
+default runs four: 10-player normal and heroic, each `after` (patch 0021) and
+`turns` (all of patch 0022).
+`two_in_dream_ms` and `none_on_her_ms` count the time with two or more healers
+in the dream and with no healer out of it in reach of her.
+`--owner-buffs` gives the fire-mage leader the owner's own auras (spells 6560,
+51040, 31750 and 23434: 200% haste, +3000 spell power, +50% spell crit) to
+approximate his raid; it is a separate variant and never replaces a plain run.
+A repeated run keeps its own files (`10h-adds`, `10h-adds-2`, ...).
 
-Each pull's `<data>/runs/*-valithria-*/` holds the polled trace, the final
-observation (her health every 10 s, deaths, and per healer: portal trips, time
-in the dream, time in reach and sight of her, effective healing on her from the
-core's `OnHeal`, mana cooldowns and potions, lowest mana, top Emerald Vigor and
-Twisted Nightmares stacks), the raid's damage taken by spell and each death's
-killer, and `report.json`. A run is `killed` only with her
+Each pull's `<data>/runs/*-valithria-*/` holds the polled trace (each poll also
+lists her living adds with position, health and victim, the raid's skull and
+cross and each fixture's target), the final observation (her health every 10 s,
+deaths, and per healer: portal trips, time in the dream, time in reach and sight
+of her, effective healing on her from the core's `OnHeal`, mana cooldowns and
+potions, lowest mana, top Emerald Vigor and Twisted Nightmares stacks), the
+raid's damage taken by spell before mitigation and each death's killer, and
+`report.json`. A full observation adds the adds' detail: per fixture the final
+damage it took by source and by spell (periodic ticks included), the healing it
+got by healer, the most adds on it at once, its casts and its damage on each kind
+of add; per add (`add_list`) when it came and went, how long it was on a tank, a
+healer, a damage dealer or her, and its damage done and taken; per death the ten
+hits before it; the adds' own casts begun, finished and cancelled (an interrupt
+cancels one); and a 10 s timeline of living adds and both tanks' health. A run is `killed` only with her
 own `DONE` and full health. The live install runs `Playerbots.BotCheats` with
 `raid` (a taunt fixes the add on the tank); the dojo's configuration keeps stock
 rules, so the pull gives the ten fixtures that one cheat to match the live raid.

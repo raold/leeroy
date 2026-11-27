@@ -169,7 +169,9 @@ Playerbots.TellWhenMissingBuffReagents
 Playerbots.TwinValkyrInteractions
 Playerbots.TwoRoundsGearInit
 Playerbots.Updates.EnableDatabases
+Playerbots.ValithriaAdds
 Playerbots.ValithriaHealerFocus
+Playerbots.ValithriaPortalTurns
 Playerbots.ValithriaPortals
 Playerbots.botActiveAloneSmartScale
 """.split())
