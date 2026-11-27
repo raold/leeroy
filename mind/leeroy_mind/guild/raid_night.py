@@ -42,7 +42,7 @@ CONSOLE_LOCK_S = 10.0  # how long a console dungeon-clear switch waits for a bus
 FORMED_GROUP_KEY = "guild:raid-night:formed-group"
 # A raid map's instance difficulty: (size, heroic).
 _DIFFICULTIES = {0: (10, False), 1: (25, False), 2: (10, True), 3: (25, True)}
-ONE_RECORD_S = 7 * 86400  # one raid record per instance within a lockout week
+RECORD_GRACE_S = 3600  # one record per instance per night: it blocks a new one while open or within an hour of its end
 
 
 class State(StrEnum):
@@ -458,8 +458,8 @@ class RaidNight:
                 and not self._instance_recorded(raid.key, instance_id))
 
     def _instance_recorded(self, raid_key, instance_id):
-        rows = self.ports.conn.execute("SELECT raid_id FROM guild_raid WHERE raid_key=? AND started>=?",
-                                       (raid_key, self.ports.clock.now() - ONE_RECORD_S)).fetchall()
+        rows = self.ports.conn.execute("SELECT raid_id FROM guild_raid WHERE raid_key=? AND (ended IS NULL OR ended>=?)",
+                                       (raid_key, self.ports.clock.now() - RECORD_GRACE_S)).fetchall()
         return any(_get(self.ports.conn, f"guild:raid:{raid_id}:instance") == instance_id for (raid_id,) in rows)
 
     def _enqueue(self, name, ev):
