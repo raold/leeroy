@@ -1010,10 +1010,12 @@ _persona_rows = _PersonaRows()
 
 def cannot_qualify(event):
     """The refusal for native evidence that no capture could make a fact, else None: an
-    achievement that is not a realm first, a duel without a winner or in a city. It reads the
+    achievement that is not a realm first, a self-kill, or a duel without a winner or in a city. It reads the
     event alone, so the caller can refuse before any receipt read or Store unit."""
     if type(event) is RealmAchievement and event.realm_first is not True:
         return Rejected('private_evidence')
+    if type(event) is PvpKill and event.killer == event.victim:
+        return Rejected('self_kill')
     if type(event) is DuelEnd and (event.city is not False or event.result not in _DUEL_RESULTS
                                    or (type(event.zone) is int and event.zone in CITY_ZONES)):
         return Rejected('private_evidence')

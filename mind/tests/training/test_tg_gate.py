@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import replace
 from functools import wraps
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -71,9 +72,49 @@ async def fight(fake, gate, run, index=0, values=(41, 41), outcome="killed"):
     await settle(fake, gate)
 
 
+@_run_async
+@pytest.mark.parametrize('values,retained', [((40, 42, 9999), 2), ((40, 9999), 1)])
+async def test_delayed_terminal_excludes_post_fight_stats_without_relaxing_sample_minimum(fake, values, retained):
+    gate, run = Gate(fake), run_for(fake)
+    await gate.on_start(run)
+    await gate.on_muster(run, 0)
+    await gate.on_boss(boss(fake))
+    await collect(fake, gate, True, values=values)
+    await gate.on_boss(boss(fake, state='killed', ts=int(fake.clock.now() * 1000) - 2500))
+    rows = perf_rows(fake.conn, kind='offline')
+    if retained == 1:
+        assert rows == []  # One real sample still cannot certify a fight.
+    else:
+        assert len(rows) == 1 and rows[0]['mean_ms'] == 41
+        assert gate._eligible(rows[0])
+        receipt = metadata(fake, f"tg_gate:perf:{rows[0]['fight']}")
+        assert receipt['count'] == 2
+        assert all(s[1] <= receipt['end_ms'] for s in receipt['samples'])
+    assert gate.verdict() == ('ab', None)
+
+
 def metadata(fake, key="tg_gate"):
     value = Store(fake.conn, clock=fake.clock).get_meta(key)
     return None if value is None else json.loads(value)
+
+
+@_run_async
+async def test_waiting_diagnostic_counts_matched_contexts_and_only_reports_changes(fake, caplog):
+    gate = Gate(fake)
+    with caplog.at_level(logging.INFO):
+        for ident in (1, 2):
+            run = run_for(fake, ident)
+            await gate.on_start(run)
+            await fight(fake, gate, run)
+        assert gate.verdict() == ('ab', None)
+        said = [r.getMessage() for r in caplog.records
+                if r.getMessage().startswith('training_gate_waiting')]
+        assert said[-1] == ('training_gate_waiting raids=2 paired_contexts=1 required_contexts=12 '
+                            'unmatched_contexts=0 rejected_fights=0')
+        count = len(caplog.records)
+        gate.verdict()
+        gate.verdict()
+        assert len(caplog.records) == count
 
 
 @_run_async

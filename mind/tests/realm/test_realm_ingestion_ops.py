@@ -1,5 +1,9 @@
 """World facts are recorded for a guild past 128 and without a speech blocklist; refusals are said."""
+import asyncio
 import logging
+import sqlite3
+
+import pytest
 
 from conftest import make_persona
 from leeroy_mind.personas.io import save_persona
@@ -86,4 +90,88 @@ def test_an_expected_refusal_is_an_info_line_and_names_where_it_stopped(
             assert len(said) == 2 and 'admission:channel_chat:' in said[1].getMessage()
             assert said[1].levelno == logging.INFO  # talk off the topic is the rule working
             assert 'unrelated' not in caplog.text
+    run(scenario())
+
+
+def test_self_kill_keeps_raw_evidence_without_claiming_a_pvp_victory(
+        tmp_path, clock, monkeypatch, caplog):
+    async def scenario():
+        async with application(tmp_path, clock, monkeypatch) as native:
+            with caplog.at_level(logging.INFO):
+                await native.deliver(envelope(PVP, killer=101, victim=101))
+            assert counts(native.app.store) == (0, 0, 0, 0, 0)
+            with native.app.store.transaction():
+                assert native.app.store.conn.execute(
+                    "SELECT count(*) FROM game_event WHERE type='pvp_kill'").fetchone()[0] == 1
+            assert not native.failures and not native.captures
+            said = rejections(caplog)
+            assert len(said) == 1 and said[0].levelno == logging.INFO
+            assert said[0].getMessage() == 'realm_source_rejected n=1 codes=event:pvp_kill:self_kill=1'
+            assert 'invalid_row' not in caplog.text
+    run(scenario())
+
+
+@pytest.mark.parametrize('outcome', ['released', 'changed_owner', 'exhausted'])
+def test_real_database_contention_retries_only_a_current_observation(
+        tmp_path, clock, monkeypatch, caplog, outcome):
+    async def scenario():
+        async with application(tmp_path, clock, monkeypatch) as native:
+            store, realm = native.app.store, native.app.realm
+            rival = sqlite3.connect(tmp_path / 'mind.db', isolation_level=None, timeout=0)
+            contended = asyncio.Event()
+            attempts = []
+            write_first, reduce = store.write_first, realm._on_source_observation
+
+            def acquire(**kwargs):
+                attempts.append(len(attempts) + 1)
+                try:
+                    return write_first(**kwargs)
+                except sqlite3.OperationalError as error:
+                    assert error.sqlite_errorcode & 0xff == sqlite3.SQLITE_BUSY
+                    contended.set()
+                    raise
+
+            async def release_writer():
+                await contended.wait()
+                # Retrying must yield only after the entire failed unit rolls back.
+                assert not store.in_unit
+                if outcome != 'exhausted':
+                    rival.execute('ROLLBACK')
+                    if outcome == 'changed_owner':
+                        realm._generation += 1
+
+            monkeypatch.setattr(store, 'write_first', acquire)
+            async def locked_reduce(observation):
+                # The raw row and qualification already committed. Another real
+                # SQLite connection now holds the lock needed by the owned reducer.
+                rival.execute('BEGIN IMMEDIATE')
+                try:
+                    return await reduce(observation)
+                finally:
+                    if rival.in_transaction:
+                        rival.execute('ROLLBACK')
+
+            monkeypatch.setattr(realm, '_on_source_observation', locked_reduce)
+            released = asyncio.create_task(release_writer())
+            try:
+                with caplog.at_level(logging.INFO):
+                    await native.deliver(envelope(PVP))
+                await released
+            finally:
+                released.cancel()
+                await asyncio.gather(released, return_exceptions=True)
+                rival.close()
+            assert attempts == list(range(1, (service.SOURCE_WRITE_ATTEMPTS if outcome == 'exhausted' else 2) + 1))
+            if outcome == 'released':
+                assert not native.failures and len(native.results) == 1
+                assert type(native.results[0]) is FactRow
+                assert counts(store)[:3] == (1, 1, 1)
+            else:
+                assert counts(store) == (0, 0, 0, 0, 0)
+                if outcome == 'changed_owner':
+                    assert native.results == [Rejected('proof_changed')] and not native.failures
+                else:
+                    assert native.failures == [sqlite3.OperationalError] and not native.results
+            assert 'realm_source_write_retry type=pvp_kill attempt=1 code=busy' in caplog.text
+            assert not any(writer.sent for writer in native.writers)
     run(scenario())
