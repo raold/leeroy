@@ -8,7 +8,7 @@ import sqlite3
 import pytest
 
 from leeroy_mind.bodies import ALL, BodyHold, BodyLedger
-from leeroy_mind.guild.protocol import BotDo, Job, JobSkip
+from leeroy_mind.guild.protocol import BotDo, Job, JobSkip, register as register_guild_protocol
 from leeroy_mind.protocol import Ack, Hello
 from leeroy_mind.realm import protocol as p
 from leeroy_mind.realm.actions import ActionContext, ActionQueue, ActionRejected
@@ -33,6 +33,8 @@ class Clock:
 
 class Harness:
     def __init__(self, store):
+        register_guild_protocol()
+        p.register()
         self.clock = Clock(); self.bodies = BodyLedger(self.clock); self.store = store
         self.current = ActionContext(True, True, True, 1, "process", 1, 50, 1)
         self.sent = []; self.waits = {}; self.settlements = set(); self.entered = asyncio.Event()

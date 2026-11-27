@@ -5,6 +5,7 @@ journal alone retain native ownership, including bodies no longer online.
 """
 
 from dataclasses import dataclass
+import json
 import logging
 import uuid
 
@@ -21,6 +22,9 @@ REARM_REFUSED = frozenset({"refused", STEP_REFUSED})
 # How long the end of a leave's hold on a member its leave did not take out (refused, skipped,
 # released unrun) is kept from handing that member back to defaults: the ledger's next poll.
 KEEP_S = 60
+REARM_RETRY_S = 15
+REARM_RETRY_LIMIT = 512
+REARM_RETRY_BATCH = 16
 
 
 @dataclass(slots=True)
@@ -48,6 +52,8 @@ class Recall:
         self._cleanup = {}
         self._handback = set()
         self._kept = {}  # guid -> until when a leave's release of it hands it no defaults
+        self._rearm_retries = {}  # guid -> (connection ticket, next retry time)
+        self._retry_tick_at = 0
         self._last_recall = None
         self._second_at = None
         self._last_defaults = clock.now()
@@ -78,6 +84,8 @@ class Recall:
         self._busy.clear()
         self._cleanup.clear()
         self._handback.clear()
+        self._rearm_retries.clear()
+        self._retry_tick_at = 0
         # Cooldown survives hello/generation invalidation; intents do not.
         self._second_at = None
         self._last_defaults = self.clock.now()
@@ -314,6 +322,8 @@ class Recall:
             chain.awaiting_terminal = True
             return
         chain.awaiting_terminal = False
+        if kind == "rearm" and ok:
+            self._remember_rearm_result(chain, command_id)
         named = leave_refusal_guids(reason, chain.members) if kind == "leave" and not ok else None
         if not named:
             if kind == "leave":
@@ -353,6 +363,51 @@ class Recall:
         if current and rest:
             self._start(rest, chain.mode)
 
+    def _remember_rearm_result(self, chain, command_id):
+        if not self._current(chain):
+            return
+        try:
+            record = self.queue.store.get(command_id)
+        except BodyEvidenceUnavailable:
+            return
+        if (record is None or record.kind != "rearm" or record.state != "completed"
+                or record.result_ok is not True):
+            return
+        skipped = set(json.loads(record.evidence).get("job", {}).get("skipped", ()))
+        now = self.clock.now()
+        overflow = 0
+        for guid in record.reserved_manifest:
+            if guid not in skipped:
+                self._rearm_retries.pop(guid, None)
+            elif guid in self._rearm_retries or len(self._rearm_retries) < REARM_RETRY_LIMIT:
+                self._rearm_retries[guid] = (chain.ticket, now + REARM_RETRY_S)
+            else:
+                overflow += 1
+        if skipped:
+            log.info("realm_rearm_retry_pending members=%d retained=%d overflow=%d",
+                     len(skipped), len(self._rearm_retries), overflow)
+
+    def _queue_rearm_retries(self, now):
+        if self.queue.off or now < self._retry_tick_at:
+            return
+        self._retry_tick_at = now + 1
+        ticket = self._ticket()
+        admitted = 0
+        for guid, (bound, due) in tuple(self._rearm_retries.items()):
+            if bound != ticket:
+                del self._rearm_retries[guid]
+                continue
+            if due > now or guid in self._busy:
+                continue
+            # This is a new scheduling wish, not a resend or an extension of
+            # the completed native job. Ordinary ownership/admission still applies.
+            self._desired.setdefault(guid, "defaults")
+            del self._rearm_retries[guid]
+            self._rearm_retries[guid] = (bound, now + REARM_RETRY_S)
+            admitted += 1
+            if admitted >= REARM_RETRY_BATCH:
+                break
+
     def _retry_released(self, chain, record, skipped):
         """A failed leave. Native's release proof says only that it no longer holds those bodies,
         not that they left PvP: a member whose step never ran is released too. So none of them
@@ -375,6 +430,11 @@ class Recall:
         until = self.clock.now() + KEEP_S
         for guid in guids:
             self._kept[guid] = until
+            # A later leave supersedes an earlier rearm's proved skip. This
+            # member may still be in PvP/LFG even though that leave released it.
+            if self._rearm_retries.pop(guid, None) is not None:
+                if self._desired.get(guid) == "defaults":
+                    del self._desired[guid]
 
     def _leave_out(self, chain, skipped):
         """Native took the others out and left these as they were (one leading its battleground
@@ -488,4 +548,5 @@ class Recall:
         if now - self._last_defaults >= 1800 and not self.ports.human_online():
             self.restore_defaults()
         if self._valid_ticket(ticket):
+            self._queue_rearm_retries(now)
             self._flush()
