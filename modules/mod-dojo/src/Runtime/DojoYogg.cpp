@@ -239,8 +239,9 @@ struct Trial
     {
         auto& proof = knockbacks[i];
         auto const* movement = p->movespline;
-        if (!proof.observed || !movement || !movement->Initialized() || movement->onTransport
-            || movement->isCyclic() || movement->isFalling() || p->GetVehicle() || p->GetTransport()
+        if (!proof.observed || !movement || !movement->Initialized()
+            || !p->GetTransGUID().IsEmpty() || p->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT)
+            || movement->isCyclic() || movement->isFalling()
             || Below(p) || wasBelow[i] || !std::isfinite(proof.horizontal) || !std::isfinite(proof.vertical)
             || proof.horizontal <= 0.1f || proof.vertical >= 0.f
             || std::abs(movement->Velocity() - Dojo::GroundChargeSpeed(proof.horizontal, speed)) > 0.1f)
