@@ -41,3 +41,7 @@ retroactively charged. Keep the Characters receipt table with database backups.
 
 No live configuration or database is changed by this PR. No mind migration is
 needed; native creates its table asynchronously on the first opted-in give.
+
+## His own group's raid record
+
+When he leads a group built with `.playerbots bot addN` into a raid instance, the mind adopts it as a raid record. An earlier record for the same raid and instance blocks a new one only while it is open or ended less than an hour ago (`RECORD_GRACE_S`), so a re-entry or a brief disband the same night never doubles a raid, while a new night on a carried-over lockout gets its own record.
