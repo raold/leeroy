@@ -21,6 +21,8 @@
 #include "InstanceSaveMgr.h"
 #include "Log.h"
 #include "Map.h"
+#include "MapMgr.h"
+#include "ModelIgnoreFlags.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
 #include "WorldSession.h"
@@ -29,6 +31,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <list>
 #include <memory>
 #include <optional>
 #endif
@@ -64,8 +67,8 @@ struct Member
     bool prepared = false, moved = false, arrived = false, attacking = false, frozen = false,
         released = true, resetDone = true, returned = false, returnIssued = false, blocked = false,
         groupReleased = true, groupReleaseStarted = false, leaderFlag = false, leaderRestored = true,
-        finalResetDone = true, abandoned = false, setUp = false, letGo = false;
-    uint32 reasserted = 0;
+        finalResetDone = true, abandoned = false, setUp = false, letGo = false, landing = false;
+    uint32 reasserted = 0, nearTeleports = 0;
     uint64 started = 0, ms = 0, damage = 0, hits = 0, retryAt = 0, setupAt = 0;
     std::optional<uint64> outsideSince;
 };
@@ -112,12 +115,64 @@ bool AtOrigin(Member const& member, Player* bot)
         && std::abs(bot->GetPositionZ() - member.origin.GetPositionZ()) <= 5.0f;
 }
 
-bool AtTrial(Job const& job, Player* bot, float range = 45.0f)
+// In the world on the trial's map, outside any instance, anywhere on it (DummyReturnState::onTrialMap).
+bool OnTrialMap(Job const& job, Player* bot)
+{
+    return bot && bot->IsInWorld() && !bot->IsBeingTeleported() && !bot->GetInstanceId()
+        && bot->GetMapId() == kDummyPlaces[job.command.place].map;
+}
+
+bool AtTrial(Job const& job, Player* bot)
 {
     auto const& place = kDummyPlaces[job.command.place];
-    return bot && bot->IsInWorld() && !bot->IsBeingTeleported() && !bot->GetInstanceId()
-        && bot->GetMapId() == place.map && bot->GetDistance2d(place.x, place.y) <= range
+    return OnTrialMap(job, bot) && bot->GetDistance2d(place.x, place.y) <= 45.0f
         && std::abs(bot->GetPositionZ() - place.z) <= 15.0f;
+}
+
+// The trial's dummy: the live one nearest the place, whichever ring the member that looks for it stands on.
+Creature* TrialDummy(Job const& job, Player* bot)
+{
+    auto const& place = kDummyPlaces[job.command.place];
+    std::list<Creature*> found;
+    bot->GetCreatureListWithEntryInGrid(found, kDummyEntry, static_cast<float>(kDummyRangedRingYd) + 15.0f);
+    Creature* best = nullptr;
+    float bestYd = 15.0f;
+    for (auto* creature : found)
+    {
+        float const yd = creature->GetDistance(place.x, place.y, place.z);
+        if (creature->IsAlive() && yd <= bestYd)
+        {
+            best = creature;
+            bestYd = yd;
+        }
+    }
+    return best;
+}
+
+// Where a member stands for the fight, facing the dummy (DummyRingRadius). A ranged spot needs ground within 5 yd of
+// the dummy's height and a clear line to it; without them the member takes its melee-ring spot, as before.
+Position RingSpot(DummyPlace const& place, std::size_t count, std::size_t index, bool ranged)
+{
+    constexpr double pi = 3.14159265358979323846;
+    double const angle = 2.0 * pi * static_cast<double>(index) / static_cast<double>(count);
+    float const facing = static_cast<float>(std::fmod(angle + pi, 2.0 * pi));
+    auto at = [&](double radius)
+    {
+        return Position(place.x + static_cast<float>(radius * std::cos(angle)),
+            place.y + static_cast<float>(radius * std::sin(angle)), place.z, facing);
+    };
+    Position const melee = at(DummyRingRadius(count, false));
+    if (!ranged) return melee;
+    Position spot = at(DummyRingRadius(count, true));
+    auto* map = sMapMgr->FindBaseNonInstanceMap(place.map);
+    if (!map) return melee;
+    float const ground = map->GetHeight(PHASEMASK_NORMAL, spot.GetPositionX(), spot.GetPositionY(), place.z + 5.0f);
+    if (!std::isfinite(ground) || ground <= INVALID_HEIGHT || std::abs(ground - place.z) > 5.0f) return melee;
+    spot.m_positionZ = ground;
+    if (!map->isInLineOfSight(place.x, place.y, place.z + 2.0f, spot.GetPositionX(), spot.GetPositionY(),
+            ground + 2.0f, PHASEMASK_NORMAL, LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
+        return melee;
+    return spot;
 }
 
 Group* OwnedGroup(Member const& member)
@@ -282,6 +337,17 @@ std::string Where(Job const& job, Member const& member, Player* bot)
         bot->GetDistance2d(place.x, place.y), bot->GetPositionZ() - place.z, member.origin.GetMapId());
 }
 
+// A near teleport in the fight (DecideDummyFightPlace: Wait), counted once per teleport: first and every 50th logged.
+void NoteNearTeleport(Job const& job, Member& member)
+{
+    if (member.landing) return;
+    member.landing = true;
+    ++member.nearTeleports;
+    if (member.nearTeleports == 1 || member.nearTeleports % 50 == 0)
+        LOG_INFO("module.leeroy", "mod-leeroy: dummy trial {} near_teleport_wait guid={} count={}", job.event.id,
+            member.guid, member.nearTeleports);
+}
+
 void NoteGroupGone(Member& member, Player* bot)
 {
     if (member.groupReleaseStarted && !member.creatingGroup && !OwnedGroup(member)
@@ -364,7 +430,7 @@ void ReturnMember(Job& job, Member& member, uint64 now)
         Reassert(job, member, bot);
         DummyReturnState state{member.prepared, connected != nullptr, SameSession(member, connected), bot != nullptr,
             connected && connected->IsBeingTeleported(), AtOrigin(member, bot),
-            member.released, member.resetDone, Owned(job, member, bot), AtTrial(job, bot, 150.0f),
+            member.released, member.resetDone, Owned(job, member, bot), OnTrialMap(job, bot),
             member.groupReleased, member.leaderRestored, member.finalResetDone,
             connected && connected->GetSession() && connected->GetSession()->IsLoggingOut()};
         auto const step = DecideDummyReturn(state);
@@ -420,7 +486,7 @@ bool LetGo(Job const& job, Member& member)
         NoteGroupGone(member, bot);
         DummyReturnState state{member.prepared, connected != nullptr, SameBody(member, connected), bot != nullptr,
             connected && connected->IsBeingTeleported(), AtOrigin(member, bot),
-            member.released, member.resetDone, Ours(job, member, bot, true), AtTrial(job, bot, 150.0f),
+            member.released, member.resetDone, Ours(job, member, bot, true), OnTrialMap(job, bot),
             member.groupReleased, member.leaderRestored, member.finalResetDone,
             connected && connected->GetSession() && connected->GetSession()->IsLoggingOut()};
         auto const step = DecideDummyLetGo(state);
@@ -439,8 +505,6 @@ void Prepare(Job& job, uint64 now)
     if (!driver) { job.life.Stop("driver_offline", now); return; }
     auto const& place = kDummyPlaces[job.command.place];
     std::size_t count = job.members.size();
-    constexpr double pi = 3.14159265358979323846;
-    double radius = count > 1 ? 2.0 / std::sin(pi / static_cast<double>(count)) : 0.0;
     for (std::size_t index = 0; index < count; ++index)
     {
         auto& member = job.members[index];
@@ -458,12 +522,12 @@ void Prepare(Job& job, uint64 now)
         member.session = Identity(bot->GetSession());
         member.prepared = true;
         // The body moves untouched: no party, no master, no reset (Setup does that at the dummy). A one-member
-        // party formed here would be disbanded by the core when the far teleport lands (see Setup).
-        double angle = 2.0 * pi * static_cast<double>(index) / static_cast<double>(count);
+        // party formed here would be disbanded by the core when the far teleport lands (see Setup). Ranged specs
+        // stand outside melee reach (RingSpot): inside it a mage's stock "blink back" fired 35 ms into the fight.
+        Position const spot = RingSpot(place, count, index, PlayerbotAI::IsRanged(bot, true));
         member.moved = true; // Record intent before a possibly partially applied/throwing core operation.
-        bool accepted = bot->TeleportTo(place.map, place.x + static_cast<float>(radius * std::cos(angle)),
-            place.y + static_cast<float>(radius * std::sin(angle)), place.z,
-            static_cast<float>(std::fmod(angle + pi, 2.0 * pi)));
+        bool accepted = bot->TeleportTo(place.map, spot.GetPositionX(), spot.GetPositionY(), spot.GetPositionZ(),
+            spot.GetOrientation());
         if (!accepted) Drop(job, member, "move_failed", now);
     }
     job.life.Moving();
@@ -568,7 +632,7 @@ void StartFight(Job& job, uint64 now)
             Drop(job, member, "ownership_changed", now);
             continue;
         }
-        if (!dummy) dummy = bot->FindNearestCreature(kDummyEntry, 15.0f, true);
+        if (!dummy) dummy = TrialDummy(job, bot);
         if (!dummy || dummy->GetMap() != bot->GetMap() || !bot->InSamePhase(dummy))
         {
             job.life.Stop("no_dummy", now);
@@ -617,28 +681,36 @@ void Fight(Job& job, uint64 now)
         auto* bot = Guild::FindOnline(member.guid);
         if (!SameSession(member, bot)) Drop(job, member, "offline", now);
         else if (Reassert(job, member, bot)) Drop(job, member, "ai_reset", now); // The reset took its trial strategies.
-        else if (!Owned(job, member, bot))
+        else if (bool const owned = Owned(job, member, bot); !owned)
         {
             Drop(job, member, "ownership_changed", now);
             Block(job, member, "ownership_changed", Missing(job, member, bot));
         }
         else if (!bot->IsAlive()) Drop(job, member, "died", now);
         else if (tap.DummyAttacked(job.slot, member.guid)) Drop(job, member, "attacked", now);
-        else if (bot->IsBeingTeleported() || bot->GetMapId() != kDummyPlaces[job.command.place].map
-            || bot->GetInstanceId())
+        else if (auto const place = DecideDummyFightPlace({owned, bot->IsBeingTeleportedNear(),
+                bot->IsBeingTeleportedFar(), bot->GetMapId() == kDummyPlaces[job.command.place].map,
+                bot->GetInstanceId() != 0});
+            place == DummyFightPlace::Block)
         {
             Drop(job, member, "moved", now);
             Block(job, member, "location_changed", Where(job, member, bot));
         }
+        else if (place == DummyFightPlace::Wait) NoteNearTeleport(job, member);
         else
         {
+            member.landing = false;
             auto* dummy = bot->GetMap()->GetCreature(job.dummy);
             if (!dummy || !dummy->IsAlive()) { job.life.Stop("no_dummy", now); break; }
             if (bot->GetDistance(dummy) > 30.0f)
             {
                 if (!member.outsideSince) member.outsideSince = now;
                 if (now >= *member.outsideSince && now - *member.outsideSince >= 5000)
+                {
+                    LOG_INFO("module.leeroy", "mod-leeroy: dummy trial {} dropped member {}: moved dummy_yd={:.0f} {}",
+                        job.event.id, member.guid, bot->GetDistance(dummy), Where(job, member, bot));
                     Drop(job, member, "moved", now);
+                }
             }
             else member.outsideSince.reset();
             Snapshot(job, member, now);
@@ -669,7 +741,7 @@ void PublishTerminal(Job& job, bool cleanupFailed)
     job.event.skipped.clear();
     for (auto const& member : job.members)
     {
-        auto dropped = !member.cleanupError.empty() ? "cleanup_failed:" + member.cleanupError : member.dropped;
+        auto dropped = DummyDropReport(member.dropped, member.cleanupError);
         LeeroyModule::Instance().Publish(EncodeEvent(NowUnixMs(), {{"type", "dummy_result"}, {"id", job.event.id},
             {"guid", member.guid}, {"damage", member.damage}, {"ms", member.ms}, {"hits", member.hits},
             {"dropped", dropped}, {"damage_basis", "requested_pre_ai"}, {"spell_basis", "best_effort_thread_pair"}}),

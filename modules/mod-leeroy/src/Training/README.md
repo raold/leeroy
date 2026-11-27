@@ -84,6 +84,14 @@ Setup first gives every member playerbots' full AI reset (`PlayerbotAI::Reset(tr
 movement, engines). Playerbots does that itself only when a bot acknowledges a worldport, so a member already on the
 dummy's map, moved by a near teleport, kept its old task: on 2026-11-23 1507, from Tanaris, never hit the dummy while
 the three members from Northrend did, and left the trial spot (`location_changed`).
+Ranged specs (`PlayerbotAI::IsRanged` by spec) stand on a 13 yd ring (`DummyRingRadius`; on ground within 5 yd of the
+dummy's height in line of sight, else the melee ring), outside the reach where a caster's stock "enemy too close for
+spell" fires: on 2026-11-27 an arcane mage's "blink back" 35 ms into the fight was blocked as `location_changed`. In
+the fight a near teleport on the trial map of a body still ours is waited out (`DecideDummyFightPlace`,
+`near_teleport_wait guid= count=`), and the return sends home an owned member from anywhere on the trial map outside
+an instance (`onTrialMap`; on 2026-11-25 one 54 yd off and 24 yd below was blocked); only another map, an instance or
+lost ownership still blocks. A `moved` drop logs `dropped member <guid>: moved dummy_yd=` with the `Where` fields, and a
+member's terminal reason keeps its first drop after the cleanup error (`cleanup_failed:<error>;dropped=<first>`).
 A blocked member logs why (`dummy trial <id> blocked member <guid>: <reason>`); an `ownership_changed` names the
 facts that failed (`missing=` session, human, cast, selfbot, guild, invite, reserved, group, master, logout, or
 body when no online bot answers), a `location_changed` where the body is (`map= zone= instance= teleporting=
