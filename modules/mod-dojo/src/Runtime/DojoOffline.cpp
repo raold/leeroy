@@ -581,6 +581,15 @@ struct OfflineFixture
                 auto* ai = GET_PLAYERBOT_AI(p);
                 auto const& movement = ai->GetAiObjectContext()->GetValue<LastMovement&>("last movement")->Get();
                 auto* selected = ai->GetAiObjectContext()->GetValue<Unit*>("current target")->Get();
+                json spline = nullptr;
+                if (p->movespline && p->movespline->Initialized())
+                {
+                    auto const endpoint = p->movespline->FinalDestination();
+                    auto const next = p->movespline->CurrentDestination();
+                    spline = {{"id", p->movespline->GetId()}, {"elapsed_ms", p->movespline->timePassed()},
+                        {"duration_ms", p->movespline->Duration()}, {"speed", p->movespline->Velocity()},
+                        {"next", {next.x, next.y, next.z}}, {"end", {endpoint.x, endpoint.y, endpoint.z}}};
+                }
                 bodies.push_back({{"slot", i}, {"guid", actors[i].GetCounter()}, {"alive", p->IsAlive()},
                     {"map", p->GetMapId()}, {"instance", p->GetInstanceId()}, {"health", p->GetHealth()},
                     {"max_health", p->GetMaxHealth()}, {"mana", p->GetPower(POWER_MANA)},
@@ -597,6 +606,7 @@ struct OfflineFixture
                     {"moving", p->isMoving()}, {"rooted", p->IsRooted()},
                     {"motion", uint32(p->GetMotionMaster()->GetCurrentMovementGeneratorType())},
                     {"spline_active", p->movespline && !p->movespline->Finalized()},
+                    {"spline", spline},
                     {"last_move", {{"age_ms", GetMSTimeDiffToNow(movement.msTime)},
                         {"priority", uint32(movement.priority)}, {"delay_ms", movement.lastdelayTime},
                         {"x", movement.lastMoveShort.GetPositionX()}, {"y", movement.lastMoveShort.GetPositionY()},

@@ -308,7 +308,12 @@ failure does not hide an observation gap in the same run. All original limits
 and required effects still apply. Optional `--profile` captures fresh native
 `playerbots pmon` JSON for each case to investigate slow actions and triggers;
 it does not alter the scenario, deadlines or verdict. Actor health
-reserves are setup-only; the harness never heals, attacks or teleports on their
+and numeric knockback packets remain observable throughout the wave. Offline
+traces also record the active spline's next point, endpoint, speed and id so a
+replacement movement can be distinguished from the last requested move.
+Offline reports retain and hash only native logs written after that trial
+attempted boot; a pre-boot failure cannot attach the preceding run's logs.
+Actor health reserves are setup-only; the harness never heals, attacks or teleports on their
 behalf during the measured wave. The report names the randomly selected native
 illusion. One successful wave does not certify the other two illusions, later
 waves, a complete kill, keeper variants or 25-player teams. Live enablement

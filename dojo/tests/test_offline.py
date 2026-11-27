@@ -2,16 +2,45 @@
 import copy
 import unittest
 import json
+import hashlib
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
-from leeroy_dojo.realm.offline import reached
+from leeroy_dojo.realm.offline import reached, retain_runtime_logs
 from leeroy_dojo.realm.offline_fixture import FixtureCheckpoint
 from leeroy_dojo.realm.world import WorldError
 
 
 class OfflineMilestoneTest(unittest.TestCase):
+    def test_preboot_failure_keeps_no_previous_runtime_logs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            logs, out = root / "logs", root / "out"
+            logs.mkdir()
+            out.mkdir()
+            for name in ("Server.log", "DungeonClear.log", "Playerbots.log"):
+                (logs / name).write_text("previous trial\n")
+            self.assertEqual(retain_runtime_logs(SimpleNamespace(logs=logs), out, None), {})
+            self.assertEqual(list(out.iterdir()), [])
+
+    def test_retained_logs_are_fresh_and_hash_the_saved_bytes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            logs, out = root / "logs", root / "out"
+            logs.mkdir()
+            out.mkdir()
+            old, fresh = logs / "DungeonClear.log", logs / "Server.log"
+            old.write_bytes(b"old milestone\n")
+            fresh.write_bytes(b"new startup\n")
+            os.utime(old, (1000, 1000))
+            os.utime(fresh, (1002, 1002))
+            expected = {"Server.log": hashlib.sha256(fresh.read_bytes()).hexdigest()}
+            self.assertEqual(retain_runtime_logs(SimpleNamespace(logs=logs), out, 1001), expected)
+            self.assertEqual([p.name for p in out.iterdir()], ["Server.log"])
+            self.assertEqual((out / "Server.log").read_bytes(), fresh.read_bytes())
+
     def test_requires_target_encounter_in_owned_running_instance(self):
         obs = dict(token="abc", error="", samples=12, native={"stage": "running",
             "event": {"id": "abc", "instance_id": 123}}, bodies=[

@@ -190,6 +190,20 @@ def configure_full_raid_features(layout, target):
     return features
 
 
+def retain_runtime_logs(layout, out, started_at):
+    """A pre-boot failure must not attach the preceding trial's native logs."""
+    retained = {}
+    if started_at is None:
+        return retained
+    for name in ("Server.log", "DungeonClear.log", "Playerbots.log"):
+        path = layout.logs / name
+        if path.is_file() and path.stat().st_mtime >= started_at:
+            destination = out / name
+            shutil.copyfile(path, destination)
+            retained[name] = raids.fingerprint(destination)
+    return retained
+
+
 def _fixture_accounts(layout, log):
     provision.ensure_accounts(layout, "DOJORAID", log=log)
     accounts = provision.ensure_accounts(layout, "RNDBOTDOJO", log=log)
@@ -255,6 +269,7 @@ def run(layout, *, target, toc_worm_support=False, profile=False, log=print):
         report["route"] = dict(required_bosses=required, unverified_bosses=[i for i in range(count) if i not in required],
                                scope="supported_offline_route" if target == "ulduar-route" else "all_encounters")
     feed = None
+    runtime_started_at = None
     try:
         prepared, report["fixture_checkpoint_sha256"] = prepare_fixture(layout, log)
         report["fixture"] = prepared
@@ -274,6 +289,7 @@ def run(layout, *, target, toc_worm_support=False, profile=False, log=print):
         feed.__enter__()
         # The adapter's free-port preflight must finish before the world binds
         # those ports. Its real bridge client waits for the listener to open.
+        runtime_started_at = time.time()
         world.start(layout, log=log)
         deadline = time.monotonic() + 30
         while not feed.ready and not feed.error and time.monotonic() < deadline:
@@ -417,11 +433,8 @@ def run(layout, *, target, toc_worm_support=False, profile=False, log=print):
         if report["stopped"]:
             _set(layout, "modules/mod_leeroy.conf", {"Leeroy.Enable": "0", "Leeroy.GuildId": "0", "Leeroy.HumanGuid": "0"})
             _set(layout, "modules/mod_dungeon_clear.conf", {"DungeonClear.OfflineValithria": "0"})
-            # Preserve the actual isolated native evidence before the next run rotates it.
-            for name in ("Server.log", "DungeonClear.log", "Playerbots.log"):
-                path = layout.logs / name
-                if path.is_file():
-                    shutil.copyfile(path, out / name)
+            # Preserve only native logs written after this trial attempted boot.
+            report["native_logs"] = retain_runtime_logs(layout, out, runtime_started_at)
         report["ok"] = report["ok"] and report["stopped"]
         (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report
