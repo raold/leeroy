@@ -7,6 +7,7 @@ import pytest
 
 from leeroy_mind.guild.config import GuildConfig
 from leeroy_mind.guild.loot import _get, _put
+from leeroy_mind.guild.store import end_raid, new_raid
 from leeroy_mind.guild.protocol import (ClearLockout, FormRaid, GuildGroup, GuildGroupAdd, JobSkip, RaidControl,
                                         SetLootMaster, Summon)
 from leeroy_mind.guild.raid_night import FORMED_GROUP_KEY, RaidNight, State
@@ -484,6 +485,65 @@ async def test_a_copy_that_already_has_a_record_takes_nothing_over(setup):
     await night.tick()
     assert len(records(ports)) == 2 and len(ports.sent) == sent
     assert night.state is State.RUNNING and night.session.raid_id == new and night.session.ctx.instance_id == 92
+
+
+def old_record(ports, instance_id, *, ended_ago_s, open_=False, raid_key="icc"):
+    """An earlier ICC record bound to `instance_id`, ended `ended_ago_s` ago (or still open)."""
+    now = ports.clock.now()
+    rid = new_raid(ports.conn, started=now - ended_ago_s - 1000, raid_key=raid_key, size=25, heroic=False,
+                   offline=False, lead_guid=1, tank_guid=101, loot_guid=104)
+    if not open_:
+        end_raid(ports.conn, rid, ended=now - ended_ago_s, kills=0, wipes=0, outcome="disbanded")
+    _put(ports.conn, f"guild:raid:{rid}:instance", instance_id)
+    return rid
+
+
+@_run_async
+async def test_a_lockout_carried_to_a_new_night_gets_its_own_record(setup):
+    ports, _, night = setup
+    old_record(ports, 77, ended_ago_s=5 * 86400)
+    await adopted(setup)
+    assert len(records(ports)) == 2 and night.state is State.RUNNING and night.session.ctx.instance_id == 77
+
+
+@_run_async
+async def test_an_instance_whose_record_is_still_open_is_not_adopted_again(setup):
+    ports, _, night = setup
+    old_record(ports, 77, ended_ago_s=5 * 86400, open_=True)
+    await adopted(setup)
+    assert len(records(ports)) == 1 and not ports.sent
+
+
+@_run_async
+async def test_an_instance_whose_record_ended_30_minutes_ago_is_not_adopted_again(setup):
+    ports, _, night = setup
+    old_record(ports, 77, ended_ago_s=1800)
+    await adopted(setup)
+    assert len(records(ports)) == 1 and not ports.sent
+
+
+@_run_async
+async def test_a_recent_record_of_another_instance_blocks_nothing(setup):
+    ports, _, night = setup
+    old_record(ports, 55, ended_ago_s=1800)
+    await adopted(setup)
+    assert len(records(ports)) == 2 and night.state is State.RUNNING and night.session.ctx.instance_id == 77
+
+
+@_run_async
+async def test_his_raid_moves_into_a_copy_whose_only_record_ended_days_ago(setup):
+    ports, _, night = setup
+    old_record(ports, 92, ended_ago_s=5 * 86400)
+    await adopted(setup)
+    [(old, *_)] = [r for r in records(ports) if r[5] is None]
+    ports.jobs["summon"].append(summoned(instance_id=92))
+    await night.on_guild_group(group_event(ports, instance_id=92))
+    await night.tick()
+    await night.tick()
+    rows = {r[0]: r for r in records(ports)}
+    assert rows[old][6] == "new_instance"
+    [new] = [r for r in rows.values() if r[5] is None]
+    assert new[0] != old and night.session.raid_id == new[0] and night.session.ctx.instance_id == 92
 
 
 @_run_async
