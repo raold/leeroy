@@ -141,7 +141,7 @@ def raid_debrief(conn, *, data: Path, native_dir: Path, raid_id=None, now=None, 
                   issues=[], evidence={**EVIDENCE,
                       "responder": "Completed responder activations. Moved counts are bots issued movement per activation, not arrivals or distinct bots across activations.",
                       "group_rez": "Rate-limited observations. Native group-rez lines lack raid, boss and member IDs; every observed reason remains unassigned.",
-                      "hazards": "Hazard logs lack map, boss or instance IDs. These are unassigned observations within the raid window, not proof of hits or successful avoidance.",
+                      "hazards": "Legacy hazard logs lack map or instance IDs; newer yield records identify each hazard source. These remain unassigned observations within the raid window, not proof of hits or successful avoidance.",
                       "clock": "Native logs have whole-second host-local timestamps; an ambiguous boundary is never assigned to a boss."})
     if raid is None:
         result["issues"] = ["raid_not_found" if raid_id is not None else "no_recorded_raid"]
@@ -238,10 +238,11 @@ def raid_debrief(conn, *, data: Path, native_dir: Path, raid_id=None, now=None, 
     for e in window_events:
         if not e["event"].startswith("hazard"):
             continue
-        key = (e["event"], e.get("guid"), e.get("reason"))
-        h = hazard_groups.setdefault(key, dict(event=key[0], guid=key[1], reason=key[2], records=0, maxima={}))
+        source = {k: e[k] for k in ("map", "instance", "spell", "kind", "entry", "hazard") if k in e}
+        key = (e["event"], e.get("guid"), e.get("reason"), *source.values())
+        h = hazard_groups.setdefault(key, dict(event=key[0], guid=key[1], reason=key[2], **source, records=0, maxima={}))
         h["records"] += 1
-        for field in ("aware", "zones", "spot_members", "detour_members", "exit_members", "readds"):
+        for field in ("aware", "zones", "spot_members", "detour_members", "exit_members", "readds", "details"):
             if field in e:
                 h["maxima"][field] = max(h["maxima"].get(field, 0), e[field])
     result["hazards"] = list(hazard_groups.values())

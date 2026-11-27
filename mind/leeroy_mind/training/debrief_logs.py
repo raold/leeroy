@@ -18,10 +18,15 @@ IDENT = r"[a-f0-9]{32}"
 STAMP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) ")
 NATIVE_FILE = re.compile(r"Server\.log(?:\.\d{4}-\d\d-\d\d \d\d-\d\d-\d\d)?\Z")
 MIND_FILE = re.compile(r"mind\.log(?:\.\d{4}-\d\d-\d\d)?\Z")
+HAZARD_SOURCE = (r"map=(?P<map>\d+) instance=(?P<instance>\d+) spell=(?P<spell>\d+) "
+                 r"kind=(?P<kind>unknown|dynamic|trap|trigger|held_aura|proximity) "
+                 r"entry=(?P<entry>\d+) hazard=(?P<hazard>\d+)")
 RULES = (
     ("mechanic_response", re.compile(rf"mechanic_response id=(?P<id>{CODE}) spell=(?P<spell>\d+) kind=(?P<kind>{CODE}) members=(?P<members>\d+) map=(?P<map>\d+) instance=(?P<instance>\d+) cancelled=(?P<cancelled>true|false|0|1)")),
     ("group_rez_blocked", re.compile(rf"group_rez_blocked reason=(?P<reason>{CODE}) dead=(?P<dead>\d+) casters=(?P<casters>\d+)(?: fence=(?P<fence>{CODE}(?:,{CODE}){{0,15}}))?")),
-    ("hazard_exit_yield", re.compile(r"hazard_exit_yield guid=(?P<guid>\d+) zones=(?P<zones>\d+)")),
+    ("hazard_exit_yield", re.compile(r"hazard_exit_yield guid=(?P<guid>\d+) zones=(?P<zones>\d+)"
+                                    rf"(?: {HAZARD_SOURCE} details=(?P<details>\d+))?")),
+    ("hazard_exit_zone", re.compile(rf"hazard_exit_zone guid=(?P<guid>\d+) {HAZARD_SOURCE}")),
     ("hazards_minute", re.compile(r"hazards_minute aware=(?P<aware>\d+) zones=(?P<zones>\d+) spot_members=(?P<spot_members>\d+) detour_members=(?P<detour_members>\d+) exit_members=(?P<exit_members>\d+)")),
     ("hazard_avoid_on", re.compile(r"hazard_avoid_on guid=(?P<guid>\d+)")),
     ("hazard_avoid_readded", re.compile(r"hazard_avoid_readded guid=(?P<guid>\d+) readds=(?P<readds>\d+)")),
@@ -36,7 +41,7 @@ MIND_RULES = (
     ("offline_raid_stop", re.compile(rf"offline_raid_stop raid_id=(?P<raid_id>\d+) reason=(?P<reason>{CODE}) cause=(?P<cause>{CODE}|-) idle_s=(?P<idle_s>\d+) inside=(?P<inside>\d+) members=(?P<members>\d+)")),
     ("offline_raid_terminal_lost", re.compile(r"offline_raid_terminal_lost raid_id=(?P<raid_id>\d+) members=(?P<members>\d+)")),
 )
-NUMERIC = frozenset("spell members map instance dead casters guid zones aware spot_members detour_members exit_members readds elapsed_ms inside restarts kills present min wipes raid_id idle_s".split())
+NUMERIC = frozenset("spell members map instance dead casters guid zones aware spot_members detour_members exit_members readds elapsed_ms inside restarts kills present min wipes raid_id idle_s entry hazard details".split())
 BOOL = frozenset(("cancelled", "leader_present", "retained", "raided"))
 
 
@@ -47,9 +52,11 @@ def _match(text, rules):
             fields = {k: v for k, v in found.groupdict().items() if v is not None}
             for k, v in fields.items():
                 if k in NUMERIC:
-                    if len(v) > 16:
+                    if len(v) > (20 if k == "hazard" else 16):
                         return None
                     fields[k] = int(v)
+                    if k == "hazard" and fields[k] > 0xffffffffffffffff:
+                        return None
                 elif k in BOOL:
                     fields[k] = v in ("true", "True", "1")
             return {"event": event, **fields}

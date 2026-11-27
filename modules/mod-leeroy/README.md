@@ -646,6 +646,18 @@ training state or pending bot command leaves the body to its owner (nothing adde
   retain the maximum height discrepancy in millimetres and rejected path-type flags. Hazard geometry is
   evaluated outside the shared memo and snapshot locks.
 
+The exit guard compares an entry with the last observed footprint, including observations while the bot
+stood clear. A growing cloud expanding over that clear position is not another mover walking the bot back
+into it. A genuine return inside the previous footprint still counts and yields on the third entry within
+20 seconds, even if the cloud is growing. The guard's threshold and yield duration are unchanged.
+
+`hazard_exit_yield` retains one record per yielded loop, now with map, instance, spell, fixed hazard kind,
+creature/gameobject entry and raw hazard GUID. The spell is the one defining the object's outer boundary;
+`spell=0` on a proximity-only zone means its entry identifies the trigger. For overlapping zones, the first
+(lowest GUID) is on the yield record and up to seven additional `hazard_exit_zone` records describe the
+others. `zones` is the total and `details` the number described. These are observations of the guard,
+not proof that a particular spell hit the bot or that another mover caused every historical yield.
+
 **Larger hazards (measured, 2026-11-14).** From the live `Spell.dbc`/`SpellRadius.dbc` and the core's raid
 scripts and world SQL for Naxxramas, Ulduar, Trial of the Crusader, Icecrown Citadel, the Obsidian Sanctum, the
 Eye of Eternity and the Vault of Archavon, the ground-effect damage spells with a radius above 15 and up to 35:

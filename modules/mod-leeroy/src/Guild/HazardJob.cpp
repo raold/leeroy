@@ -354,11 +354,17 @@ struct HazardScanner
         return object->IsInWorld() && object->GetExactDist2d(x, y) <= kScanYards;
     }
 
-    void Note(WorldObject const* object, float radius, bool held = false)
+    void Note(WorldObject const* object, float radius, std::uint32_t spell, HazardKind kind, bool held = false)
     {
         if (radius > 0.0f && seen.insert(object->GetGUID()).second)
-            zones.push_back({object->GetPositionX(), object->GetPositionY(), object->GetPositionZ(), radius,
-                object->GetGUID().GetRawValue(), object->GetPhaseMask(), held, false});
+        {
+            HazardZone zone{object->GetPositionX(), object->GetPositionY(), object->GetPositionZ(), radius,
+                object->GetGUID().GetRawValue(), object->GetPhaseMask(), held, false};
+            zone.spell = spell;
+            zone.entry = object->GetEntry();
+            zone.kind = kind;
+            zones.push_back(zone);
+        }
     }
 
     // An allow-listed npc that goes off when a player comes near: its trigger or its blast (this difficulty's
@@ -366,9 +372,11 @@ struct HazardScanner
     void NoteProximity(Creature const* unit, ProximityHazardRule const& rule)
     {
         float blast = 0.0f;
+        std::uint32_t measuredSpell = rule.blast;
         if (SpellInfo const* info = rule.blast ? sSpellMgr->GetSpellInfo(rule.blast) : nullptr)
         {
             info = sSpellMgr->GetSpellForDifficultyFromSpell(info, unit);
+            measuredSpell = info->Id;
             for (std::uint8_t i = 0; i < MAX_SPELL_EFFECTS; ++i)
                 blast = std::max(blast, info->Effects[i].CalcRadius());
         }
@@ -384,8 +392,12 @@ struct HazardScanner
             next = HazardPoint{point.x, point.y, point.z};
             speed = spline->Velocity();
         }
-        zones.push_back(HazardLeadZone({unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(), radius,
-            unit->GetGUID().GetRawValue(), unit->GetPhaseMask(), false, false}, next, speed));
+        HazardZone zone{unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ(), radius,
+            unit->GetGUID().GetRawValue(), unit->GetPhaseMask(), false, false};
+        zone.spell = measuredSpell; // 0: a proximity trigger alone, identified by its entry
+        zone.entry = unit->GetEntry();
+        zone.kind = HazardKind::Proximity;
+        zones.push_back(HazardLeadZone(zone, next, speed));
     }
 
     void Visit(DynamicObjectMapType& m)
@@ -400,7 +412,7 @@ struct HazardScanner
             if (!info || info->IsPositive() || !caster || caster->IsFriendlyTo(reference) || !DamagingArea(info))
                 continue;
             Note(area, HazardAvoidRadius(Ids(info->Id), area->GetRadius(), 0.0f, stockCap,
-                whitelist.contains(info->Id)));
+                whitelist.contains(info->Id)), info->Id, HazardKind::Dynamic);
         }
     }
 
@@ -421,7 +433,8 @@ struct HazardScanner
             if (!spell || spell->IsPositive() || !PeriodicDamageTrap(spell))
                 continue;
             float const radius = static_cast<float>(info->trap.diameter) / 2.0f + trap->GetCombatReach();
-            Note(trap, HazardAvoidRadius(Ids(spell->Id), radius, 0.0f, stockCap, whitelist.contains(spell->Id)));
+            Note(trap, HazardAvoidRadius(Ids(spell->Id), radius, 0.0f, stockCap, whitelist.contains(spell->Id)),
+                spell->Id, HazardKind::Trap);
         }
     }
 
@@ -441,6 +454,7 @@ struct HazardScanner
             // (HeldAuraHazard), which tanks stand in.
             bool const trigger = unit->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE);
             float radius = 0.0f;
+            std::uint32_t measuredSpell = 0;
             for (AuraType type : {SPELL_AURA_PERIODIC_TRIGGER_SPELL, SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE})
                 for (AuraEffect const* effect : unit->GetAuraEffectsByType(type))
                 {
@@ -459,13 +473,18 @@ struct HazardScanner
                             float const spellRadius = damage->Effects[j].CalcRadius();
                             float const reach = unit->GetCombatReach();
                             bool const whitelisted = whitelist.contains(damage->Id);
-                            radius = std::max(radius, trigger
+                            float const measured = trigger
                                 ? HazardTriggerZoneRadius(ids, spellRadius, reach, stockCap, whitelisted)
-                                : HazardHeldAuraRadius(ids, spellRadius, reach, whitelisted));
+                                : HazardHeldAuraRadius(ids, spellRadius, reach, whitelisted);
+                            if (measured > radius || (measured == radius && damage->Id < measuredSpell))
+                            {
+                                radius = measured;
+                                measuredSpell = damage->Id; // the spell defining this object's outer boundary
+                            }
                             break;
                         }
                 }
-            Note(unit, radius, !trigger);
+            Note(unit, radius, measuredSpell, trigger ? HazardKind::Trigger : HazardKind::HeldAura, !trigger);
         }
     }
 
@@ -820,8 +839,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(memoLock);
             exitMemo.erase(guid);
-            if (auto const guard = exitGuards.find(guid); guard != exitGuards.end())
-                guard->second.standing.clear(); // stood clear: whatever it steps into next is an entry
+            NoteHazardPosition(exitGuards[guid], *zones, at, reach, NowMs());
             return false;
         }
         std::uint64_t const now = NowMs();
@@ -837,7 +855,7 @@ public:
             auto const found = exitMemo.find(guid);
             // Entries count per zone, into a zone it did not stand in at its last answer and never into one that
             // moves (it walked onto the bot); an exit planned again inside the same zones counts nothing.
-            if (HazardEntry const entry = NoteHazardZoneEntry(exitGuards[guid], standing, now);
+            if (HazardEntry const entry = NoteHazardPosition(exitGuards[guid], *zones, at, reach, now);
                 entry != HazardEntry::Exit)
             {
                 yielded = true;
@@ -853,7 +871,22 @@ public:
                 goal = spot->second.answer;
         }
         if (yieldStarts)
-            LOG_INFO("module.leeroy", "hazard_exit_yield guid={} zones={}", guid, standing.size());
+        {
+            // One yield record, with bounded detail records for overlapping hazards. Never count each
+            // overlap as a separate loop failure. All fields are ids, counts or fixed kind codes.
+            std::sort(standing.begin(), standing.end(), [](auto const& a, auto const& b) { return a.id < b.id; });
+            std::size_t const details = std::min<std::size_t>(standing.size(), 8);
+            auto const& first = standing.front();
+            LOG_INFO("module.leeroy", "hazard_exit_yield guid={} zones={} map={} instance={} spell={} kind={} entry={} hazard={} details={}",
+                guid, standing.size(), bot->GetMapId(), bot->GetInstanceId(), first.spell,
+                HazardKindCode(first.kind), first.entry, first.id, details);
+            for (std::size_t i = 1; i < details; ++i)
+            {
+                auto const& zone = standing[i];
+                LOG_INFO("module.leeroy", "hazard_exit_zone guid={} map={} instance={} spell={} kind={} entry={} hazard={}",
+                    guid, bot->GetMapId(), bot->GetInstanceId(), zone.spell, HazardKindCode(zone.kind), zone.entry, zone.id);
+            }
+        }
         if (yielded)
             return false;
         if (previous && previous->moved && HazardClear(previous->answer, *zones, reach)
