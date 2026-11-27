@@ -137,6 +137,7 @@ struct RaidRun
     ObjectGuid target;
     json defilePaths = json::array();
     json damageEvidence = json::array(), deaths = json::array();
+    json fixtureFailure = json::object();
     uint64 damageSequence = 0;
     std::array<ObjectGuid, 2> actors{};
     std::recursive_mutex events;
@@ -148,7 +149,50 @@ struct RaidRun
     }
 
     void Phase(std::string const& next) { state = next; phaseMs = 0; }
-    void Fail(std::string const& why) { failure = why; Phase("cleanup"); }
+    void Fail(std::string const& why)
+    {
+        // Actor() deliberately hides actors leaving the world. Preserve raw
+        // connectivity and life state before cleanup, which resurrects and logs
+        // them out before the next status poll can distinguish these failures.
+        if (fixtureFailure.empty() && (scenario == "lk-terenas" || scenario == "lk-defile") &&
+            (state == "harvest" || state == "observe"))
+        {
+            json fixtures = json::array();
+            for (std::size_t i = 0; i < actors.size(); ++i)
+            {
+                Player* p = ObjectAccessor::FindConnectedPlayer(actors[i]);
+                json actor = {{"slot", i}, {"connected", p != nullptr}};
+                if (p)
+                {
+                    actor.update({{"alive", p->IsAlive()}, {"in_world", p->IsInWorld()},
+                        {"removing", p->IsDuringRemoveFromWorld()}, {"ai_present", GET_PLAYERBOT_AI(p) != nullptr},
+                        {"teleport_near", p->IsBeingTeleportedNear()}, {"teleport_far", p->IsBeingTeleportedFar()},
+                        {"health", p->GetHealth()}, {"max_health", p->GetMaxHealth()},
+                        {"map", p->GetMapId()}, {"instance", p->GetInstanceId()},
+                        {"x", p->GetPositionX()}, {"y", p->GetPositionY()}, {"z", p->GetPositionZ()},
+                        {"combat", p->IsInCombat()}});
+                    json auras = json::array();
+                    for (auto const& aura : p->GetAppliedAuras())
+                    {
+                        if (auras.size() == 64) break;
+                        auras.push_back(aura.second->GetBase()->GetId());
+                    }
+                    actor["auras"] = std::move(auras);
+                    actor["aura_count"] = p->GetAppliedAuras().size();
+                    // Do not dereference the map while an actor is being removed.
+                    if (p->IsInWorld() && !p->IsDuringRemoveFromWorld() && p->GetMapId() == map &&
+                        p->GetInstanceId() == instance)
+                        if (InstanceScript* script = p->GetInstanceScript())
+                            actor["boss_state"] = uint32(script->GetBossState(12));
+                }
+                fixtures.push_back(std::move(actor));
+            }
+            fixtureFailure = {{"elapsed_ms", elapsed}, {"phase_ms", phaseMs}, {"state", state},
+                {"damage_sequence", damageSequence}, {"fixtures", std::move(fixtures)}};
+        }
+        failure = why;
+        Phase("cleanup");
+    }
 
     std::size_t DiagnosticSlot(Unit* unit) const
     {
@@ -168,7 +212,8 @@ struct RaidRun
         if (damageEvidence.size() == 32) damageEvidence.erase(damageEvidence.begin());
         damageEvidence.push_back({{"sequence", ++damageSequence}, {"elapsed_ms", elapsed},
             {"slot", slot}, {"stage", stage}, {"spell", spell}, {"damage", damage},
-            {"health", victim->GetHealth()}, {"attacker_entry", attacker ? attacker->GetEntry() : 0}});
+            {"health", victim->GetHealth()}, {"max_health", victim->GetMaxHealth()},
+            {"attacker_entry", attacker ? attacker->GetEntry() : 0}});
     }
 
     std::string Create()
@@ -230,6 +275,7 @@ struct RaidRun
         setup = cleanup = combatObserved = competition = false; target.Clear();
         defilePaths = json::array();
         damageEvidence = json::array(); deaths = json::array(); damageSequence = 0;
+        fixtureFailure = json::object();
         map = name == "valithria" || name == "lk-terenas" || name == "lk-defile" ? 631 : name == "twins" ? 649 : 533;
         oldTwins = sPlayerbotAIConfig.TwinValkyrInteractions;
         sPlayerbotAIConfig.TwinValkyrInteractions = !negative;
@@ -696,6 +742,7 @@ struct RaidRun
             {"minimum_clearance", minimumClearance}, {"poison_hits", scenario == "poison" ? damageHits : 0},
             {"defile_hits", scenario == "lk-defile" ? damageHits : 0}, {"defile_paths", defilePaths},
             {"damage_sequence", damageSequence}, {"damage_evidence", damageEvidence}, {"deaths", deaths},
+            {"fixture_failure", fixtureFailure},
             {"fixtures", fixtures}, {"encounter", encounter}};
     }
 };

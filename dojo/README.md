@@ -409,11 +409,17 @@ damage aura and native strangulate vehicle before the core teleports the actor.
 Both controls must then supply the existing room-exposure evidence; a direct
 teleport or manually summoned Terenas cannot establish this entry.
 Lich King receipts retain the last 32 damage observations with sequence, actor,
-spell and health counters: stage 0 is `OnDamage`, 1 is spell calculation and 2
+spell and current/maximum health counters: stage 0 is `OnDamage`, 1 is spell calculation and 2
 is periodic calculation. These precede final application and are not lethal-hit
 assertions. Separate native death callbacks retain the actual victim and killer
 entry, position and clock. Up to 64 aura IDs per actor accompany each snapshot,
-with the full count to expose truncation. None of these diagnostics changes a verdict.
+with the full count to expose truncation. On a failure during Harvest Soul or
+observation, `fixture_failure` preserves both actors' connection, life, world-removal,
+AI and teleport state, health, position, aura IDs and available boss state before
+cleanup resurrects or logs them out. It survives cleanup and resets at the next run.
+An empty death list alone cannot rule out a lost actor; use this terminal snapshot
+to distinguish a dead actor from one that is disconnected or leaving the world.
+None of these diagnostics changes a verdict or makes a failed control acceptable.
 Each selected scenario always runs both controls. These probes establish specific
 mechanics only; they do not certify an entire Lich King kill, heroic Frostmourne,
 Val'kyr rescue or spirit handling. Release acceptance requires passing campaign
