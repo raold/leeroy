@@ -11,7 +11,7 @@ from conftest import run
 from leeroy_mind.app import has_model
 from leeroy_mind.llm.client import ChatResult, LLMError
 from leeroy_mind.llm.diagnostics import capture_response
-from leeroy_mind.nightly.llm import (INVARIANTS, JSON_PREDICT, THINK_PREDICT_MAX,
+from leeroy_mind.nightly.llm import (CTX_SLACK, INVARIANTS, JSON_PREDICT, JSON_RETRY_PREDICT, THINK_PREDICT_MAX,
                                      THINK_PREDICT_MIN, Reasoner, ReflectionError, check_schema,
                                      schema, system_prompt, think_predict)
 from leeroy_mind.text import estimate_tokens
@@ -366,3 +366,110 @@ def test_a_bad_template_names_the_prompt_the_file_and_the_field(tmp_path):
     overlay.unlink()
     with pytest.raises(ValueError) as e: system_prompt("y", "default {nope}", tmp_path, human=IDENT, **fields)
     assert "nightly_y" in str(e.value) and "'nope'" in str(e.value) and "built-in" in str(e.value)
+
+
+class JSONReplies(FakeLLM):
+    """Production request validation, with explicit model termination metadata."""
+
+    def __init__(self, replies):
+        super().__init__()
+        self.replies = iter(replies)
+
+    async def chat(self, *args, **kwargs):
+        await super().chat(*args, **kwargs)
+        text, reason = next(self.replies)
+        diagnostics = None if reason is None else capture_response({
+            "message": {"content": text}, "done": True, "done_reason": reason,
+            "eval_count": kwargs["options"]["num_predict"], "prompt_eval_count": 1700})
+        return ChatResult(text, "", 100, 1.0, diagnostics)
+
+
+def test_explicit_json_truncation_gets_one_larger_correction_and_private_diagnostics(caplog):
+    llm = JSONReplies([('{"x": "PRIVATE incomplete', "length"), ('{"x": 7}', "stop"), ('{"x": 8}', "stop")])
+    before = []
+    reasoner = Reasoner(llm, "refl")
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        assert run(reasoner.json("PRIVATE system", "PRIVATE question", S,
+                                 before_call=lambda: before.append(True))) == {"x": 7}
+        assert run(reasoner.json("s", "u", S)) == {"x": 8}
+    assert [c["options"]["num_predict"] for c in llm.calls] == [1024, 2048, 1024]
+    assert len(before) == 2 and reasoner.calls == 3 and reasoner.seconds == 3.0
+    assert all(c["options"]["num_ctx"] == 8192 and c["think"] is False and c["format"] == S for c in llm.calls)
+    assert "nightly_json_cut" in caplog.text and "eval_count=1024" in caplog.text
+    assert "PRIVATE" not in caplog.text
+
+
+def test_a_response_exceeding_the_first_output_budget_can_finish_on_the_retry():
+    expected = {"text": "synthetic private evidence " * 220}
+    payload = json.dumps(expected)
+    class BudgetedJSON(FakeLLM):
+        async def chat(self, *args, **kwargs):
+            await super().chat(*args, **kwargs)
+            # A deterministic stand-in for an answer with a known output cost.
+            # Repeating the same cap truncates both attempts and cannot pass.
+            cap = kwargs["options"]["num_predict"] * 4
+            text = payload[:cap]
+            reason = "length" if len(payload) > cap else "stop"
+            return ChatResult(text, "", 100, 1.0, capture_response({
+                "message": {"content": text}, "done": True, "done_reason": reason}))
+    llm = BudgetedJSON()
+    assert run(Reasoner(llm, "refl").json("s", "u", schema("large", {"text": {"type": "string"}}))) == expected
+    assert len(llm.calls) == 2
+
+
+@pytest.mark.parametrize("reason", [None, "stop"])
+def test_json_syntax_failure_without_length_evidence_keeps_the_existing_budget(reason):
+    llm = JSONReplies([('{"x":', reason), ('{"x": 7}', "stop")])
+    assert run(Reasoner(llm, "refl").json("s", "u", S)) == {"x": 7}
+    assert [c["options"]["num_predict"] for c in llm.calls] == [1024, 1024]
+
+
+def test_two_truncated_json_replies_still_fail_without_a_third_request(caplog):
+    llm = JSONReplies([('{"x": "PRIVATE incomplete', "length")] * 2)
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        with pytest.raises(ReflectionError) as error:
+            run(Reasoner(llm, "refl").json("s", "u", S))
+    assert not error.value.fatal and len(llm.calls) == 2
+    assert [c["options"]["num_predict"] for c in llm.calls] == [1024, 2048]
+    assert "nightly_json_failed" in caplog.text and "done_reason=length" in caplog.text
+    assert "PRIVATE" not in caplog.text + str(error.value)
+
+
+def test_json_retry_reserves_context_and_keeps_the_end_of_notes():
+    llm = JSONReplies([('{"x":', "length"), ('{"x": 7}', "stop")])
+    notes = "thinking " * 6000 + "CONCLUSION"
+    assert run(Reasoner(llm, "refl").json("system " * 300, "u", S, notes=notes)) == {"x": 7}
+    assert llm.calls[1]["options"]["num_predict"] == JSON_RETRY_PREDICT
+    for call in llm.calls:
+        assert "CONCLUSION" in call["messages"][-1]["content"]
+        assert sum(estimate_tokens(m["content"]) for m in call["messages"]) + call["options"]["num_predict"] + CTX_SLACK <= 8192
+
+
+def test_json_retry_uses_only_the_context_room_left_by_required_evidence():
+    llm = JSONReplies([('{"x":', "length"), ('{"x": 7}', "stop")])
+    assert run(Reasoner(llm, "refl").json("s", "u" * 25000, S)) == {"x": 7}
+    retry = llm.calls[1]
+    assert JSON_PREDICT < retry["options"]["num_predict"] < JSON_RETRY_PREDICT
+    assert sum(estimate_tokens(m["content"]) for m in retry["messages"]) + retry["options"]["num_predict"] + CTX_SLACK <= 8192
+
+
+def test_json_rejects_oversize_required_evidence_before_request_and_releases_slot():
+    llm = JSONReplies([('{"x": 7}', "stop")])
+    reasoner = Reasoner(llm, "refl", parallel=1)
+    async def go():
+        with pytest.raises(ReflectionError, match="context budget") as error:
+            await reasoner.json("s", "PRIVATE " * 5000, S)
+        assert not error.value.fatal and not llm.calls
+        assert await asyncio.wait_for(reasoner.json("s", "u", S), 5) == {"x": 7}
+    run(go())
+
+
+def test_json_transport_failure_is_reported_without_its_content(caplog):
+    class Broken(FakeLLM):
+        async def chat(self, *args, **kwargs):
+            raise LLMError("PRIVATE response text")
+    with caplog.at_level(logging.WARNING, logger="leeroy_mind"):
+        with pytest.raises(ReflectionError) as error:
+            run(Reasoner(Broken(), "refl").json("s", "u", S))
+    assert "LLMError" in str(error.value) and not error.value.fatal
+    assert "PRIVATE" not in caplog.text + str(error.value)

@@ -137,3 +137,22 @@ encounters and the romance arc's weekend and visit memories (meetings by design)
 touched. Receipts: meta `life_contact:retired:<id>` and `life_contact:rescoped:<id>` with the
 earlier status or scope. Chat and extraction memories that repeated an invented contact ("you
 texted me about my sandwich") stay active: the step does not reach them.
+
+# Structured reflection replies
+
+The JSON answer pass starts with 1,024 output tokens. If an invalid answer's
+model diagnostics explicitly report `done_reason=length`, the existing correction
+attempt can use up to 2,048 tokens. Other validation failures retain the original
+budget. There are still at most two requests, with the same model context,
+timeout, concurrency limit and per-request budget callback.
+
+Long reasoning notes keep their concluding end while reserving space for the
+correction. The existing token estimate is checked against each complete request,
+including its correction suffix, answer budget and template margin; required
+evidence that exceeds that estimate fails the unit before a model request.
+
+`nightly_json_cut` records attempt number and token/character counts.
+`nightly_json_failed` records failure class and the last reply's termination
+reason and counts. Neither carries the answer, notes or model error text. These
+diagnostics distinguish confirmed truncation from malformed replies; older
+`ReflectionError` records alone do not establish that truncation caused them.
