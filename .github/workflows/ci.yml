@@ -144,7 +144,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: libatomic for pedalboard
-        run: sudo apt-get update && sudo apt-get install -y libatomic1
+        run: |
+          # The image's packages.microsoft.com source intermittently answers 403 and fails apt-get update; unused here.
+          for f in $(grep -rl packages.microsoft.com /etc/apt/sources.list.d/ || true); do sudo rm -f "$f"; done
+          sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y libatomic1
       - run: python -m pip install -e ".[test]"
       - run: python -m pytest -q
 
@@ -201,7 +204,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: libatomic for pedalboard
-        run: sudo apt-get update && sudo apt-get install -y libatomic1
+        run: |
+          # The image's packages.microsoft.com source intermittently answers 403 and fails apt-get update; unused here.
+          for f in $(grep -rl packages.microsoft.com /etc/apt/sources.list.d/ || true); do sudo rm -f "$f"; done
+          sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y libatomic1
       - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
