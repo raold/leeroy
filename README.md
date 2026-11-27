@@ -102,6 +102,13 @@ to run is not merged. A switch is off only by an explicit owner ruling, kept as
 an explicit `false` with a comment (today `[heat] public_cap`,
 `[talk] coherence_length`, `[talk] dm_own_time` and `[lab] promote`). An invalid
 setting still means off, and the console's Ops tab shows each switch's state.
+Known exceptions pending patch re-export: `Playerbots.LichKingMechanics`,
+`Playerbots.YoggBrainSupport`, `Playerbots.RaidVehicleSupport`,
+`Playerbots.RaidVehicleDiagnostics`, `Playerbots.TwinValkyrInteractions` and
+`DungeonClear.OfflineValithria` are on in this install's live config but still
+default off in their patches (`patches/`), until the patches are re-exported
+with the new defaults. The package sections below that call them opt-in describe
+those patch defaults.
 Personas, memories, prompts, photos and logs stay in the ignored `mind-data/`.
 
 ## The mind
@@ -452,6 +459,42 @@ output in `patches/`:
   = 0` restores the earlier allocation and portal handling. The dojo's
   `valithria-encounter` pulls her with a fixed ten-player bot raid on 10-player
   normal and heroic with the switches off and on ([dojo](dojo/README.md)).
+- **Valithria's adds** (playerbots patch 0022, `Playerbots.ValithriaAdds`,
+  default `1`): in a 10-player raid the bot tanks within 80 yards of her split
+  her adds. The first by guid holds the abominations and faces their Gut Spray
+  away from the raid, the second holds the archmages, skeletons and blistering
+  zombies, and both share the rot worms (a tank takes another stray worm only
+  while it holds no more than the other; a lone bot tank, or one whose partner
+  is a human, dead or far away, holds them all, and leaves an add that is on a
+  human or out-of-reach tank with him); a ranked tank's own target leaves out
+  the adds it does not hold. One skull marks the kill order there: a
+  skeleton (Lay Waste reaches the whole room), a zombie, the worms, the
+  suppressers, the archmages and a lone abomination last (with two up, one of
+  them right after the worms), with worms and suppressers marked where the most
+  stand; melee never takes a zombie and, while the skull is one, fights the
+  best target nearest to itself and clear of zombies. In any raid size
+  warriors, rogues, mages, shamans, hunters and death knights interrupt a
+  Frostbolt Volley in reach, and a tank under her adds uses its own defensive
+  cooldowns (stock Shield Wall sat under the rotation); a 25-player raid
+  otherwise tanks and marks as before. `valithria_watch` lines carry `adds=`.
+  `Playerbots.ValithriaPortalTurns` (default `1`) sends the bot healers on her
+  through 10-player heroic's Nightmare portals one at a time: at most one
+  healer, a bot or a human, is in the dream or on the way to a portal, never so
+  many that fewer than one (two with four or more healers) stay on her, and the
+  turn goes to the free bot healer with the fewest trips (live on 2026-11-26
+  both went through every wave together and she stalled); one a zombie or worm
+  chases, or below half health, is passed over, and a human healer takes his
+  own portals and is never given a turn. On normal they all still go: the
+  Dream clouds hurt nobody and their Emerald Vigor stacks are the healing. A
+  25-player raid keeps the earlier portals. A healer back from a heroic dream
+  carrying Twisted Nightmares (200 Nature a second per stack for 40 s, the
+  largest damage either healer on her takes) heals itself first below 70% and
+  steps out of Mana Voids even while stacked, and the walk to a portal steps
+  out of Columns of Frost and Mana Voids. `valithria_watch` lines carry
+  `turns=`. Both switches at `0` restore the patch 0021 behaviour exactly;
+  `ValithriaAdds = 0` alone still takes heroic portals in turns, and
+  `ValithriaPortalTurns = 0` alone sends the healers on her through each heroic
+  wave together.
 - **Speaker filter** (mod-ollama-chat): lets another module keep chosen bots
   out of the LLM chat, so the guild speaks only through its own mind. A queued
   reply asks the filter again before it is delivered.
@@ -488,7 +531,7 @@ Apply them to a checkout of each module with
 
 | Path | What |
 |---|---|
-| `scripts/` | Update, backup, build, release, start/stop, health, voice, guild-backup and snapshot scripts (Git Bash on Windows), and `scripts/dojo/` (PowerShell, for the dojo's isolated build) |
+| `scripts/` | Update, backup, build, release, start/stop, health, voice, guild-backup and snapshot scripts (Git Bash on Windows), and `scripts/dojo/` (PowerShell, for the dojo's isolated build); `scripts/pr-ready.sh <pr> [--json]` is the pre-merge gate: base main, not a draft, merge state CLEAN, the ruleset's required checks green, every review thread resolved, and a review of the last non-merge commit, either Codex's or a `claude-local reviewed <sha>` PR comment from a maintainer (exit 0 ready, 1 not ready, 2 tool error; stub tests in `scripts/tests/pr-ready.sh`) |
 | `config/` | Snapshots of the live server and module configs, secrets masked |
 | `patches/mod-playerbots/` | Local playerbots commits, as `git format-patch` output |
 | `patches/mod-ollama-chat/` | Local mod-ollama-chat commits, same format |
