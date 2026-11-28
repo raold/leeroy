@@ -1,0 +1,102 @@
+From 58c52856478c726fb191923d46fc82694d249933 Mon Sep 17 00:00:00 2001
+From: raold <oldham@hey.com>
+Date: Sat, 28 Nov 2026 07:46:22 -0500
+Subject: [PATCH 9/9] Keep Razorscale commander objective through encounter
+ recovery
+
+---
+ .../DungeonClear/Data/Events/UlduarEvents.cpp | 10 ++++-
+ t/TestUlduar.cpp                              | 38 ++++++++++++++++++-
+ 2 files changed, 45 insertions(+), 3 deletions(-)
+
+diff --git a/src/Ai/Dungeon/DungeonClear/Data/Events/UlduarEvents.cpp b/src/Ai/Dungeon/DungeonClear/Data/Events/UlduarEvents.cpp
+index b0fd81d..5736c54 100644
+--- a/src/Ai/Dungeon/DungeonClear/Data/Events/UlduarEvents.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Data/Events/UlduarEvents.cpp
+@@ -95,8 +95,10 @@ void RegisterUlduarEvents(std::vector<DungeonEvent>& out)
+     // option 0): she then flies in and engages, and the fight is mod-playerbots'
+     // `ulduar` strategy's (harpoons, ground phases). So: the raid muster at the
+     // commander, the click, and a hold on the runway until her slot reads
+-    // IN_PROGRESS (or DONE), so the objective cannot finish on a click that did not
+-    // start her. PERSISTENT: her adds can start a fight before her slot moves.
++    // IN_PROGRESS (or DONE), then keep the objective until DONE. A wipe resets
++    // her slot and must re-arm the commander, not latch this objective cleared
++    // and route to her unreachable airborne spawn. PERSISTENT keeps the fight
++    // hold across combat gaps; the normal ulduar strategy still owns combat.
+     out.push_back(
+         EventBuilder(MAP_ID, EVENT_RAZORSCALE, "Razorscale: the Expedition Commander")
+             .Anchored(ORDER_RAZORSCALE)
+@@ -107,6 +109,10 @@ void RegisterUlduarEvents(std::vector<DungeonEvent>& out)
+             .MoveToHoldUntilBossState(RUNWAY_X, RUNWAY_Y, RUNWAY_Z, /*radius*/ 20.0f, BOSS_RAZORSCALE,
+                                       DcBossStateBit(IN_PROGRESS) | DcBossStateBit(DONE))
+                 .Timeout(COMMANDER_TIMEOUT_MS)
++            .MoveToHoldUntilBossState(RUNWAY_X, RUNWAY_Y, RUNWAY_Z, /*radius*/ 20.0f, BOSS_RAZORSCALE,
++                                      DcBossStateBit(DONE))
++                .RestartOnBossState(DcBossStateBit(FAIL) | DcBossStateBit(NOT_STARTED))
++                .Timeout(1800000)
+             .Build());
+ }
+ 
+diff --git a/t/TestUlduar.cpp b/t/TestUlduar.cpp
+index c8e7233..bf51c65 100644
+--- a/t/TestUlduar.cpp
++++ b/t/TestUlduar.cpp
+@@ -28,6 +28,7 @@
+ #include "Ai/Dungeon/DungeonClear/Overrides/ObjectiveHookRegistry.h"
+ #include "Ai/Dungeon/DungeonClear/Util/DcEncounterChests.h"
+ #include "Ai/Dungeon/DungeonClear/Util/DcUlduarPassDecision.h"
++#include "Ai/Dungeon/DungeonClear/Util/DungeonEventExecutor.h"
+ 
+ using namespace DcUlduar;
+ 
+@@ -219,7 +220,7 @@ TEST(Ulduar, EventFlagsAreAsAuthored)
+     EXPECT_TRUE(rz->persistent);
+     EXPECT_TRUE(rz->required);
+     EXPECT_FALSE(rz->stepsOwnMovement);
+-    ASSERT_EQ(rz->steps.size(), 3u);
++    ASSERT_EQ(rz->steps.size(), 4u);
+     EXPECT_EQ(rz->steps[0].kind, EventStepKind::Custom);
+     EXPECT_EQ(rz->steps[0].hookId, DC_HOOK_RAID_MUSTER) << "the raid musters before her fight";
+     EXPECT_EQ(rz->steps[1].kind, EventStepKind::Gossip);
+@@ -231,6 +232,41 @@ TEST(Ulduar, EventFlagsAreAsAuthored)
+         << "the objective must not finish on a click that did not start her";
+     EXPECT_EQ(rz->steps[2].restartOnBossStateMask, 0u)
+         << "she reads NOT_STARTED for the seconds she flies in after the click";
++
++    EventStep const& fight = rz->steps[3];
++    EXPECT_EQ(fight.kind, EventStepKind::MoveTo);
++    EXPECT_EQ(fight.bossStateId, static_cast<int32>(BOSS_RAZORSCALE));
++    EXPECT_EQ(fight.bossStateClearMask, DcBossStateBit(DONE));
++    EXPECT_EQ(fight.restartOnBossStateMask, DcBossStateBit(FAIL) | DcBossStateBit(NOT_STARTED));
++    EXPECT_FLOAT_EQ(fight.z, RUNWAY_Z);
++    EXPECT_FALSE(rz->drivesInCombat) << "stock harpoons, positioning and damage own the fight";
++}
++
++TEST(Ulduar, StartingRazorscaleDoesNotClearTheCommanderObjective)
++{
++    DungeonEvent const* rz = Ev(EVENT_RAZORSCALE);
++    ASSERT_NE(rz, nullptr);
++    DungeonEventProgress progress;
++    progress.BeginEvent(EVENT_RAZORSCALE, 1000);
++    for (uint32 step = 0; step < 3; ++step)
++        ASSERT_EQ(DungeonEventExecutor::Advance(*rz, progress, StepResult::Done, 1000 + step, 30000),
++                  EventDriveOutcome::Running)
++            << "muster, gossip and observing IN_PROGRESS must not latch ClearedAnchors";
++
++    ASSERT_LT(progress.stepIndex, rz->steps.size());
++    EventStep const& fight = rz->steps[progress.stepIndex];
++    for (uint32 state : { uint32(NOT_STARTED), uint32(FAIL) })
++        EXPECT_EQ(DecideBossStateGate(state, fight.bossStateClearMask, fight.restartOnBossStateMask),
++                  BossStateGateVerdict::Restart)
++            << "a same-instance wipe must return to muster and commander gossip";
++    EXPECT_EQ(DecideBossStateGate(IN_PROGRESS, fight.bossStateClearMask, fight.restartOnBossStateMask),
++              BossStateGateVerdict::Hold);
++    EXPECT_EQ(DungeonEventExecutor::Advance(*rz, progress, StepResult::Running, 2000, 30000),
++              EventDriveOutcome::Running);
++    EXPECT_EQ(DecideBossStateGate(DONE, fight.bossStateClearMask, fight.restartOnBossStateMask),
++              BossStateGateVerdict::Clear);
++    EXPECT_EQ(DungeonEventExecutor::Advance(*rz, progress, StepResult::Done, 3000, 30000),
++              EventDriveOutcome::Completed);
+ }
+ 
+ TEST(Ulduar, KologarnsCacheIsLooted)
