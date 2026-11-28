@@ -590,7 +590,7 @@ struct OfflineFixture
         if (!native.value("active", false)) stall.Release(RaidActors());
         json bodies = json::array(), damage = json::array(), pools = json::array();
         json enemies = json::array(), spellSamples = json::array();
-        json ulduarBosses = json::array(), ulduarHarpoons = json::array();
+        json ulduarBosses = json::array(), ulduarHarpoons = json::array(), ulduarSupport = json::array();
         for (std::size_t i = 1; i < actors.size(); ++i)
             if (auto* p = Actor(i))
             {
@@ -710,6 +710,21 @@ struct OfflineFixture
                             {"flags", harpoon->GetUInt32Value(GAMEOBJECT_FLAGS)},
                             {"x", harpoon->GetPositionX()}, {"y", harpoon->GetPositionY()},
                             {"z", harpoon->GetPositionZ()}});
+                // Losing the engineers stops repairs. An empty harpoon list
+                // alone cannot distinguish that from a normal rebuild phase.
+                for (uint32 entry : {33210u, 33287u, 33282u}) // Commander, engineers, repair markers.
+                {
+                    std::list<Creature*> found;
+                    leader->GetCreatureListWithEntryInGrid(found, entry, 200.f);
+                    for (auto* creature : found)
+                        if (ulduarSupport.size() < 8)
+                            ulduarSupport.push_back({{"entry", entry}, {"guid", creature->GetGUID().GetCounter()},
+                                {"instance", creature->GetInstanceId()}, {"alive", creature->IsAlive()},
+                                {"health", creature->GetHealth()}, {"max_health", creature->GetMaxHealth()},
+                                {"burning", creature->HasAura(62696)},
+                                {"x", creature->GetPositionX()}, {"y", creature->GetPositionY()},
+                                {"z", creature->GetPositionZ()}});
+                }
             }
         for (auto const& sample : spellDamage)
             if (sample.sequence)
@@ -725,7 +740,7 @@ struct OfflineFixture
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
             {"native", native}, {"bodies", bodies}, {"damage", damage},
             {"toc_enemies", enemies}, {"spell_damage_samples", spellSamples},
-            {"ulduar", {{"bosses", ulduarBosses}, {"harpoons", ulduarHarpoons}}},
+            {"ulduar", {{"bosses", ulduarBosses}, {"harpoons", ulduarHarpoons}, {"support", ulduarSupport}}},
             {"naxx_pass", naxxPass.Snapshot()},
             {"toc_intro", tocIntro.Snapshot()},
             {"native_stall", stall.Snapshot()},

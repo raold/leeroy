@@ -143,6 +143,9 @@ that all Ulduar bosses work.
 Offline Ulduar observations include `ulduar.bosses` for Ignis and Razorscale
 (health, position, encounter state, casts and selected mechanic auras) and
 `ulduar.harpoons` for the four harpoon entries (object state, flags and position).
+`ulduar.support` records at most eight commander, engineer and repair-marker
+creatures, including health and burning state, to distinguish lost engineers
+from a normal rebuild phase.
 The bounded `spell_damage_samples` ring also covers Ulduar's synthetic raid
 members. These are pre-application damage calculations, not confirmed lethal
 hits. The existing `damage` counters measure incoming damage by attacker entry;
