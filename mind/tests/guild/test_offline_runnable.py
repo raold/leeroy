@@ -95,7 +95,7 @@ def test_default_rotation_holds_only_raids_the_runner_can_run():
 
 @pytest.mark.parametrize(("dc", "inside", "cause"), [
     ("door", 23, "dc_door_blocked"), ("paused", 23, "dc_paused"), ("off", 23, "dc_off"),
-    ("door", 10, "dc_door_blocked"), ("on", 22, "members_out"), ("on", 23, "no_boss_reached"),
+    ("door", 10, "dc_door_blocked"), ("on", 22, "members_out"), ("on", 23, "dc_no_progress"),
     ("stalled", 23, "dc_unreachable"), ("stalled", 10, "dc_unreachable"),
     (None, 23, "unknown"), (None, 20, "members_out")])
 def test_stall_cause_reads_dungeon_clear_first(dc, inside, cause):
@@ -153,7 +153,7 @@ async def heartbeat(setup, *, age=0, inside=25, engaged=False, **changes):
 
 
 @pytest.mark.parametrize(("dc", "inside", "cause"), [
-    ("door", 25, "dc_door_blocked"), ("on", 25, "no_boss_reached"), ("on", 21, "members_out"),
+    ("door", 25, "dc_door_blocked"), ("on", 25, "dc_no_progress"), ("on", 21, "members_out"),
     ("stalled", 25, "dc_unreachable"), (None, 25, "unknown"), ("garbage", 25, "unknown")])
 @_run_async
 async def test_a_stall_names_its_cause_in_the_log_and_the_day_receipt(setup, caplog, dc, inside, cause):
@@ -176,6 +176,26 @@ async def test_a_stall_names_its_cause_in_the_log_and_the_day_receipt(setup, cap
     assert ports.conn.execute("SELECT outcome FROM guild_raid WHERE raid_id=?", (raid_id,)).fetchone()[0] == "stalled"
     assert controller._day_state()["stall_cause"] == cause
     assert not controller.active
+
+
+@pytest.mark.parametrize("kills", [0, 1])
+@_run_async
+async def test_stall_after_an_engaged_pull_and_wipe_does_not_claim_no_boss_reached(setup, caplog, kills):
+    ports, _, controller = setup
+    await start(setup)
+    await heartbeat(setup, dc_state="on", engaged=True, kills=kills)
+    await advance(ports, 60)
+    await heartbeat(setup, dc_state="on", wipes=1, kills=kills)
+    await advance(ports, 1800)
+    with caplog.at_level("INFO"):
+        await heartbeat(setup, dc_state="on", age=1800, wipes=1, kills=kills)
+        assert controller._owned["stop"]["cause"] == "dc_no_progress"
+        await controller.on_job(event(controller, state="done", stage="", reason="stopped", wipes=1, kills=kills))
+        await controller.tick()
+    assert controller._day_state()["stall_cause"] == "dc_no_progress"
+    ended, = offline_log(caplog, "offline_raid_ended")
+    assert f"outcome=stalled cause=dc_no_progress kills={kills} wipes=1" in ended
+    assert "no_boss_reached" not in ended
 
 
 @_run_async
