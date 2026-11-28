@@ -303,8 +303,9 @@ class LogProvisionTest(unittest.TestCase):
                     actual = conf.parse(text)
                     self.assertEqual(actual["Appender.DungeonClear"], "2,4,1,DungeonClear.log")
                     self.assertEqual(actual["Logger.playerbots.dungeonclear"], "4,DungeonClear")
-                    self.assertEqual(actual["Appender.WormRoute"], "2,2,1,WormRoutes.log,w")
-                    self.assertEqual(actual["Logger.playerbots.toc_worm"], "2,WormRoute")
+                    # AzerothCore LogCommon.h: ERROR=2, INFO=4, DEBUG=5.
+                    self.assertEqual(actual["Appender.WormRoute"], "2,5,1,WormRoutes.log,w")
+                    self.assertEqual(actual["Logger.playerbots.toc_worm"], "5,WormRoute")
                     self.assertEqual(actual["Logger.playerbots"], "4,Console Playerbots")
                     self.assertEqual(conf.check(rules, actual, conf.parse(original)), [])
                     for key in logging_keys:
@@ -312,7 +313,9 @@ class LogProvisionTest(unittest.TestCase):
                     bad = {**actual, "Appender.DungeonClear": "2,4,0,DungeonClear.log"}
                     self.assertTrue(conf.check(rules, bad, conf.parse(original)))
                     for key, value in (("Logger.playerbots", "2,Console Playerbots"),
-                                       ("Logger.playerbots.toc_worm", "2,Console"),
+                                       ("Logger.playerbots.toc_worm", "5,Console"),
+                                       ("Logger.playerbots.toc_worm", "2,WormRoute"),
+                                       ("Appender.WormRoute", "2,2,1,WormRoutes.log,w"),
                                        ("Logger.unreviewed", "2,WormRoute")):
                         self.assertTrue(conf.check(rules, {**actual, key: value}, conf.parse(original)))
                 dist.write_text("\n".join(line for line in original.splitlines()
