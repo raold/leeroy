@@ -1,17 +1,17 @@
-From 57c41a85af8337cca2c69e02409a7145d4cdad02 Mon Sep 17 00:00:00 2001
+From 91c7b77bc54f4239e7720d7fd8b221cc2941c89a Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Fri, 27 Nov 2026 09:54:24 -0500
 Subject: [PATCH 66/66] fix(Raid/TOC): Keep worm cure moves clear of growing
  pools
 
 ---
- src/Ai/Raid/TOC/TocStrategy.cpp | 231 +++++++++++++++++++++++++++-----
- src/Ai/Raid/TOC/TocWormPolicy.h | 158 ++++++++++++++++++++++
+ src/Ai/Raid/TOC/TocStrategy.cpp | 237 +++++++++++++++++++++++++++-----
+ src/Ai/Raid/TOC/TocWormPolicy.h | 158 +++++++++++++++++++++
  tests/toc_worm_test.cpp         |  88 ++++++++++++
- 3 files changed, 441 insertions(+), 36 deletions(-)
+ 3 files changed, 447 insertions(+), 36 deletions(-)
 
 diff --git a/src/Ai/Raid/TOC/TocStrategy.cpp b/src/Ai/Raid/TOC/TocStrategy.cpp
-index 01aff742..3500353e 100644
+index 01aff742..ac24d8c8 100644
 --- a/src/Ai/Raid/TOC/TocStrategy.cpp
 +++ b/src/Ai/Raid/TOC/TocStrategy.cpp
 @@ -21,6 +21,8 @@
@@ -137,7 +137,7 @@ index 01aff742..3500353e 100644
  {
      Player* bot = ai->GetBot();
      if (route.size() < 2 || !bot->CanFreeMove() || !ai->CanMove() || bot->HasUnitFlag(UNIT_FLAG_DISABLE_MOVE))
-@@ -325,6 +335,137 @@ bool MoveAnubRoute(PlayerbotAI* ai, Movement::PointsArray& route, MovementPriori
+@@ -325,6 +335,143 @@ bool MoveAnubRoute(PlayerbotAI* ai, Movement::PointsArray& route, MovementPriori
      return true;
  }
  
@@ -254,19 +254,25 @@ index 01aff742..3500353e 100644
 +    return true;
 +}
 +
-+void TraceWormRoute(PlayerbotAI* ai, Movement::PointsArray const& route, std::vector<TocWorms::Pool> const& pools,
-+                    bool detour, unsigned kind)
++void TraceWormRoute(PlayerbotAI* ai, Player* target, std::vector<TocWorms::Pool> const& pools, bool detour,
++                    unsigned kind)
 +{
 +    // Dedicated content-free debug channel, enabled only for runtime acceptance.
 +    if (!sLog->ShouldLog("playerbots.toc_worm", LOG_LEVEL_DEBUG))
 +        return;
 +    Player* bot = ai->GetBot();
 +    uint32 const move = ai->GetAiObjectContext()->GetValue<LastMovement&>("last movement")->Get().msTime;
-+    LOG_DEBUG("playerbots.toc_worm", "worm_move guid={} instance={} move={} kind={} detour={} points={} pools={}",
-+              bot->GetGUID().GetCounter(), bot->GetInstanceId(), move, kind, detour, route.size(), pools.size());
-+    for (std::size_t i = 0; i < route.size(); ++i)
++    auto const& spline = bot->movespline->_Spline();
++    LOG_DEBUG("playerbots.toc_worm",
++              "worm_move guid={} target={} instance={} move={} spline={} kind={} detour={} points={} pools={}",
++              bot->GetGUID().GetCounter(), target->GetGUID().GetCounter(), bot->GetInstanceId(), move,
++              bot->movespline->GetId(), kind, detour, spline.last() - spline.first() + 1, pools.size());
++    for (int32 i = spline.first(); i <= spline.last(); ++i)
++    {
++        auto const& p = spline.getPoint(i);
 +        LOG_DEBUG("playerbots.toc_worm", "worm_point guid={} move={} i={} x={} y={} z={}", bot->GetGUID().GetCounter(),
-+                  move, i, route[i].x, route[i].y, route[i].z);
++                  move, i - spline.first(), p.x, p.y, p.z);
++    }
 +    for (std::size_t i = 0; i < pools.size(); ++i)
 +        LOG_DEBUG("playerbots.toc_worm", "worm_pool guid={} move={} i={} x={} y={} radius={}",
 +                  bot->GetGUID().GetCounter(), move, i, pools[i].center.x, pools[i].center.y, pools[i].radius);
@@ -275,7 +281,7 @@ index 01aff742..3500353e 100644
  class TocAnubarakMultiplier : public Multiplier
  {
  public:
-@@ -520,7 +661,7 @@ bool TocSpikeEscapeAction::Execute(Event /*event*/)
+@@ -520,7 +667,7 @@ bool TocSpikeEscapeAction::Execute(Event /*event*/)
          bot->InterruptNonMeleeSpells(false);
          bot->AttackStop();
          UpdateMovementState();
@@ -284,7 +290,7 @@ index 01aff742..3500353e 100644
          if (moving)
              _lastEscape = getMSTime();
          else
-@@ -555,7 +696,7 @@ bool TocFrostSphereAction::Execute(Event /*event*/)
+@@ -555,7 +702,7 @@ bool TocFrostSphereAction::Execute(Event /*event*/)
          if (std::abs(z - bot->GetPositionZ()) > 4.0f || !CompleteRoute(bot, point, route))
              return false;
          UpdateMovementState();
@@ -293,7 +299,7 @@ index 01aff742..3500353e 100644
      }
      return Attack(sphere);
  }
-@@ -574,21 +715,27 @@ bool TocToxinCureAction::Execute(Event /*event*/)
+@@ -574,21 +721,27 @@ bool TocToxinCureAction::Execute(Event /*event*/)
      if (!target || !bot->IsWithinLOSInMap(target))
          return false;
      float const distance = bot->GetExactDist2d(target);
@@ -318,7 +324,7 @@ index 01aff742..3500353e 100644
 +    UpdateMovementState();
 +    if (!MoveTocRoute(botAI, route, MovementPriority::MOVEMENT_COMBAT))
 +        return false;
-+    TraceWormRoute(botAI, route, pools, detour, 1);
++    TraceWormRoute(botAI, target, pools, detour, 1);
 +    // Rejected, duplicate or waiting moves must not cancel casts/Auto Shot.
      bot->InterruptNonMeleeSpells(false);
 -    // A cure must still respect Slime Pools. Forced movement bypasses the mechanic guard
@@ -330,7 +336,7 @@ index 01aff742..3500353e 100644
  }
  
  bool TocBileSpacingAction::Execute(Event /*event*/)
-@@ -596,8 +743,20 @@ bool TocBileSpacingAction::Execute(Event /*event*/)
+@@ -596,8 +749,20 @@ bool TocBileSpacingAction::Execute(Event /*event*/)
      Player* target = WormTarget(botAI, true);
      if (!target)
          return false;
@@ -344,7 +350,7 @@ index 01aff742..3500353e 100644
 +    UpdateMovementState();
 +    if (!MoveTocRoute(botAI, route, MovementPriority::MOVEMENT_COMBAT))
 +        return false;
-+    TraceWormRoute(botAI, route, pools, detour, 2);
++    TraceWormRoute(botAI, target, pools, detour, 2);
      bot->InterruptNonMeleeSpells(false);
 -    return MoveAway(target, std::max(3.0f, BILE_SEPARATION - bot->GetExactDist2d(target)));
 +    SetDuration(500);
