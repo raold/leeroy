@@ -1,0 +1,43 @@
+From fe85de5c148353b84f27d098af8508ab460ae89a Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 06:32:05 -0500
+Subject: [PATCH 68/68] fix(Movement): Stop the action tick after a trigger
+ hazard escape
+
+---
+ src/Ai/Base/Actions/MovementActions.cpp | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/Ai/Base/Actions/MovementActions.cpp b/src/Ai/Base/Actions/MovementActions.cpp
+index c3d3011d..bfb6b2bf 100644
+--- a/src/Ai/Base/Actions/MovementActions.cpp
++++ b/src/Ai/Base/Actions/MovementActions.cpp
+@@ -2063,7 +2063,7 @@ bool AvoidAoeAction::AvoidUnitWithDamageAura()
+         }
+         if (!unit->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
+         {
+-            return false;
++            continue;
+         }
+         Unit::AuraEffectList const& aurasPeriodicTriggerSpell =
+             unit->GetAuraEffectsByType(SPELL_AURA_PERIODIC_TRIGGER_SPELL);
+@@ -2083,7 +2083,7 @@ bool AvoidAoeAction::AvoidUnitWithDamageAura()
+                     continue;
+                 if (sPlayerbotAIConfig.AoeAvoidSpellWhitelist.find(triggerSpellInfo->Id) !=
+                     sPlayerbotAIConfig.AoeAvoidSpellWhitelist.end())
+-                    return false;
++                    continue;
+                 for (int j = 0; j < MAX_SPELL_EFFECTS; j++)
+                 {
+                     if (triggerSpellInfo->Effects[j].Effect == SPELL_EFFECT_SCHOOL_DAMAGE)
+@@ -2108,6 +2108,10 @@ bool AvoidAoeAction::AvoidUnitWithDamageAura()
+                                     << " Radius " << radius << " - [Unit Trigger]";
+                                 bot->Say(out.str(), LANG_UNIVERSAL);
+                             }
++                            // The escape owns this tick, just like dynamic
++                            // areas and traps. Returning failure lets another
++                            // trigger or stock action replace its movement.
++                            return true;
+                         }
+                     }
+                 }
