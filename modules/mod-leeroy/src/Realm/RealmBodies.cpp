@@ -187,7 +187,9 @@ RealmStep Move(Queued& entry, std::uint32_t guid)
         bot->GetMotionMaster()->MovePoint(0x4c5259, x, y, z);
         return Pending(state); // Completion requires arrival, not a void MovePoint return.
     }
-    if (auto why = Eligible(entry, guid, Purpose::Move); !why.empty()) return Refuse(why);
+    // No step has been recorded and no body mutation has started. Tick still
+    // checks the exact lease before publishing this whole-job no-change proof.
+    if (auto why = Eligible(entry, guid, Purpose::Move); !why.empty()) return UnchangedRefusal(why);
     auto* bot = FindOnline(guid);
     if (entry.payload.value("social", false)
         && (!SocialReady(FindOnline(HumanGuid())) || !SocialReady(bot) || !IsCast(guid)))
@@ -197,10 +199,10 @@ RealmStep Move(Queued& entry, std::uint32_t guid)
     auto const placeName = entry.payload.at("place").get<std::string>();
     if (placeName == "near_human")
     {
-        if (!IsCast(guid)) return Refuse("near_human");
+        if (!IsCast(guid)) return UnchangedRefusal("near_human");
         auto* human = FindOnline(HumanGuid());
-        if (!human) return Refuse("human offline");
-        if (human->GetMap()->Instanceable() || human->InBattleground()) return Refuse("near_human");
+        if (!human) return UnchangedRefusal("human offline");
+        if (human->GetMap()->Instanceable() || human->InBattleground()) return UnchangedRefusal("near_human");
         zone = human->GetZoneId();
         bool found = false;
         for (unsigned i = 0; i < 8; ++i)
@@ -220,13 +222,13 @@ RealmStep Move(Queued& entry, std::uint32_t guid)
             if (!human->GetMap()->isInLineOfSight(human->GetPositionX(), human->GetPositionY(), human->GetPositionZ() + 2,
                     x, y, z + 2, human->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing)) break;
         }
-        if (!found) return Refuse("ground_unavailable");
+        if (!found) return UnchangedRefusal("ground_unavailable");
     }
     else
     {
         auto const& places = RealmModule::Instance().Places();
         auto it = std::find_if(places.begin(), places.end(), [&](Place const& place) { return place.name == placeName; });
-        if (it == places.end()) return Refuse("unknown_place");
+        if (it == places.end()) return UnchangedRefusal("unknown_place");
         if (entry.payload.value("social", false) && it->kind != "inn") return UnchangedRefusal("unknown_place");
         zone = it->zone;
         destination = {it->map, it->x, it->y, it->z, it->o};
@@ -240,10 +242,10 @@ RealmStep Move(Queued& entry, std::uint32_t guid)
         }
     }
     if (!GroundMap(destination.map) || !MapMgr::IsValidMapCoord(destination.map, destination.x, destination.y,
-            destination.z, destination.o)) return Refuse("invalid_place_map");
+            destination.z, destination.o)) return UnchangedRefusal("invalid_place_map");
     if (sMapMgr->GetZoneId(PHASEMASK_NORMAL, destination.map, destination.x, destination.y, destination.z) != zone)
-        return Refuse("place_zone_mismatch");
-    if (RealmModule::Instance().Gankers().contains(guid) && !GankerMoveAllowed(Human(), zone)) return Refuse("unflagged");
+        return UnchangedRefusal("place_zone_mismatch");
+    if (RealmModule::Instance().Gankers().contains(guid) && !GankerMoveAllowed(Human(), zone)) return UnchangedRefusal("unflagged");
     Json state{{"at", NowMs()}, {"walk", false}};
     SetTransition(state, bot, destination, GroupId(bot));
     entry.payload["step"] = state; // Save intended destination before any native mutation.
