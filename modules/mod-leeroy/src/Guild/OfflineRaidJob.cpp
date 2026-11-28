@@ -585,6 +585,10 @@ void RaidStrategies(Job const& job, Player* player, PlayerbotAI* ai)
 {
     ai->ChangeStrategy("-follow", BOT_STATE_NON_COMBAT);
     ai->ChangeStrategy("-follow", BOT_STATE_COMBAT);
+    // A synthetic driver has no game client, so stock ResetStrategies omits
+    // avoidance. Install it at initial setup as well as after a master repair.
+    if (DC_PB_CONFIG(AutoAvoidAoe, autoAvoidAoe) && !ai->HasStrategy("avoid aoe", BOT_STATE_COMBAT))
+        ai->ChangeStrategy("+avoid aoe", BOT_STATE_COMBAT);
     if (!PlayerbotAI::IsTank(player, true) && !PlayerbotAI::IsHeal(player, true))
     {
         ai->ChangeStrategy("+wait for attack", BOT_STATE_COMBAT);
@@ -634,8 +638,6 @@ void ReassertMasters(Job& job)
         if (!ReassertDriverMaster(facts)) continue;
         ai->SetMaster(driver);
         RaidStrategies(job, player, ai);
-        if (DC_PB_CONFIG(AutoAvoidAoe, autoAvoidAoe) && !ai->HasStrategy("avoid aoe", BOT_STATE_COMBAT))
-            ai->ChangeStrategy("+avoid aoe", BOT_STATE_COMBAT); // Stock adds it only with a client master.
         if (player->IsInWorld()) DcStrategyGate::Reconcile(player);
         if (++member.masterRepairs == 1 || member.masterRepairs % 50 == 0)
             LOG_INFO("module.leeroy", "leeroy: raid {} master_reasserted guid={} stage={} repairs={}",
