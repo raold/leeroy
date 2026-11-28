@@ -195,7 +195,7 @@ def retain_runtime_logs(layout, out, started_at):
     retained = {}
     if started_at is None:
         return retained
-    for name in ("Server.log", "DungeonClear.log", "Playerbots.log"):
+    for name in ("Server.log", "DungeonClear.log", "Playerbots.log", "WormRoutes.log"):
         path = layout.logs / name
         if path.is_file() and path.stat().st_mtime >= started_at:
             destination = out / name

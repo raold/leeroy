@@ -1,0 +1,635 @@
+From 91c7b77bc54f4239e7720d7fd8b221cc2941c89a Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 09:54:24 -0500
+Subject: [PATCH 66/66] fix(Raid/TOC): Keep worm cure moves clear of growing
+ pools
+
+---
+ src/Ai/Raid/TOC/TocStrategy.cpp | 237 +++++++++++++++++++++++++++-----
+ src/Ai/Raid/TOC/TocWormPolicy.h | 158 +++++++++++++++++++++
+ tests/toc_worm_test.cpp         |  88 ++++++++++++
+ 3 files changed, 447 insertions(+), 36 deletions(-)
+
+diff --git a/src/Ai/Raid/TOC/TocStrategy.cpp b/src/Ai/Raid/TOC/TocStrategy.cpp
+index 01aff742..ac24d8c8 100644
+--- a/src/Ai/Raid/TOC/TocStrategy.cpp
++++ b/src/Ai/Raid/TOC/TocStrategy.cpp
+@@ -21,6 +21,8 @@
+ #include "RaidInteractionPolicy.h"
+ #include "RaidTocStrategy.h"
+ #include "Spell.h"
++#include "SpellAuraEffects.h"
++#include "SpellMgr.h"
+ #include "Timer.h"
+ #include "TocWormPolicy.h"
+ #include "WorldSession.h"
+@@ -42,6 +44,9 @@ constexpr std::array<uint32, 4> SPELL_PARALYTIC_TOXIN{66823, 67618, 67619, 67620
+ constexpr uint32 SPELL_BURNING_BILE = 66869;
+ constexpr float BILE_CONTACT_RANGE = 8.0f;
+ constexpr float BILE_SEPARATION = 13.0f;
++constexpr uint32 NPC_SLIME_POOL = 35176;
++constexpr uint32 SPELL_SLIME_POOL_AURA = 66882;
++constexpr uint32 SPELL_SLIME_POOL_DAMAGE = 66881;
+ constexpr uint32 BOSS_ANUBARAK = 4;
+ constexpr uint32 NPC_FROST_SPHERE = 34606;
+ constexpr uint32 NPC_PURSUING_SPIKE = 34660;
+@@ -112,8 +117,9 @@ Colour NeededEssence(PlayerbotAI* ai)
+ 
+ bool WormHeld(PlayerbotAI* ai)
+ {
+-    return ai && (ai->HasStrategy("stay", BOT_STATE_COMBAT) || ai->HasStrategy("stay", BOT_STATE_NON_COMBAT) ||
+-                  ai->HasStrategy("passive", BOT_STATE_COMBAT));
++    return ai &&
++           TocWorms::Held(ai->GetBot()->IsInCombat(), ai->HasStrategy("stay", BOT_STATE_COMBAT),
++                          ai->HasStrategy("stay", BOT_STATE_NON_COMBAT), ai->HasStrategy("passive", BOT_STATE_COMBAT));
+ }
+ 
+ bool AnubarakActive(PlayerbotAI* ai)
+@@ -188,46 +194,51 @@ struct TocRouteProbe
+     Position actual, collisionExpected, collisionActual;
+ };
+ 
+-bool AnubCollisionRoute(Player* bot, Position const& point, Movement::PointsArray& route, TocRouteProbe* probe)
++bool TocCollisionRoute(Player* bot, Position const& point, Movement::PointsArray& route, TocRouteProbe* probe,
++                       uint32 encounter, float floorMin, float floorMax, Position const* start = nullptr)
+ {
+     // The core deliberately disables mmap tiles for all of map 649 (including
+     // the unsupported upper arena floor). Do not treat its shortcut as a path.
+-    // In Anub's lower chamber only, prove a short walking route with
++    // In the selected encounter's floor band, prove a short walking route with
+     // the core's static/dynamic collision and ground checks at one-yard steps.
+     auto* instance = bot->GetInstanceScript();
+-    float const length = bot->GetExactDist2d(point);
+-    if (bot->GetMapId() != MAP_TRIAL_OF_THE_CRUSADER || !instance ||
+-        instance->GetBossState(BOSS_ANUBARAK) != IN_PROGRESS || DisableMgr::IsPathfindingEnabled(bot->GetMap()) ||
++    Position const origin = start ? *start : bot->GetPosition();
++    float const length = origin.GetExactDist2d(point);
++    if (bot->GetMapId() != MAP_TRIAL_OF_THE_CRUSADER || !instance || instance->GetBossState(encounter) != IN_PROGRESS ||
++        DisableMgr::IsPathfindingEnabled(bot->GetMap()) ||
+         !bot->GetMap()->GetMapCollisionData().GetStaticTreeSharedPtr() || !std::isfinite(length) || length <= 0.0f ||
+-        length > ANUB_SEARCH_RANGE || bot->GetPositionZ() < 130.0f || bot->GetPositionZ() > 160.0f ||
+-        point.GetPositionZ() < 130.0f || point.GetPositionZ() > 160.0f)
++        length > ANUB_SEARCH_RANGE || origin.GetPositionZ() < floorMin || origin.GetPositionZ() > floorMax ||
++        point.GetPositionZ() < floorMin || point.GetPositionZ() > floorMax)
+         return false;
+     unsigned const steps = std::max(2u, unsigned(std::ceil(length)));
+-    float const dx = point.GetPositionX() - bot->GetPositionX();
+-    float const dy = point.GetPositionY() - bot->GetPositionY();
++    float const dx = point.GetPositionX() - origin.GetPositionX();
++    float const dy = point.GetPositionY() - origin.GetPositionY();
+     float const radius = bot->GetObjectSize();
+     std::array<float, 3> const sides{0.0f, -radius, radius};
+     std::array<Position, 3> previous;
+     for (unsigned lane = 0; lane < sides.size(); ++lane)
+-        previous[lane].Relocate(bot->GetPositionX() - sides[lane] * dy / length,
+-                                bot->GetPositionY() + sides[lane] * dx / length, bot->GetPositionZ());
++        previous[lane].Relocate(origin.GetPositionX() - sides[lane] * dy / length,
++                                origin.GetPositionY() + sides[lane] * dx / length, origin.GetPositionZ());
+     route.clear();
+-    route.emplace_back(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
++    route.emplace_back(origin.GetPositionX(), origin.GetPositionY(), origin.GetPositionZ());
+     for (unsigned step = 1; step <= steps; ++step)
+     {
+         float const fraction = float(step) / float(steps);
+         for (unsigned lane = 0; lane < sides.size(); ++lane)
+         {
+             float const side = sides[lane];
+-            float const expectedX = bot->GetPositionX() + fraction * dx - side * dy / length;
+-            float const expectedY = bot->GetPositionY() + fraction * dy + side * dx / length;
++            float const expectedX = origin.GetPositionX() + fraction * dx - side * dy / length;
++            float const expectedY = origin.GetPositionY() + fraction * dy + side * dx / length;
+             Position const old = previous[lane];
+             float x = expectedX, y = expectedY, z = old.GetPositionZ();
+             bool const clear = bot->GetMap()->CheckCollisionAndGetValidCoords(
+                 bot, old.GetPositionX(), old.GetPositionY(), old.GetPositionZ(), x, y, z, true);
+-            unsigned const reason = !clear ? 1 : std::hypot(x - expectedX, y - expectedY) > 0.1f ? 2 :
+-                z < 130.0f || z > 160.0f ? 3 : std::abs(z - old.GetPositionZ()) > 0.75f ? 4 :
+-                lane && std::abs(z - previous[0].GetPositionZ()) > 0.5f ? 5 : 0;
++            unsigned const reason = !clear                                                    ? 1
++                                    : std::hypot(x - expectedX, y - expectedY) > 0.1f         ? 2
++                                    : z < floorMin || z > floorMax                            ? 3
++                                    : std::abs(z - old.GetPositionZ()) > 0.75f                ? 4
++                                    : lane && std::abs(z - previous[0].GetPositionZ()) > 0.5f ? 5
++                                                                                              : 0;
+             if (reason)
+             {
+                 if (probe)
+@@ -264,10 +275,9 @@ bool CompleteRoute(Player* bot, Position const& point, Movement::PointsArray& ro
+         probe->blocked = false;
+     }
+     route = path.GetPath();
+-    if (!calculated ||
+-        (path.GetPathType() != PATHFIND_NORMAL &&
+-         (path.GetPathType() != (PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH) ||
+-          !AnubCollisionRoute(bot, point, route, probe))))
++    if (!calculated || (path.GetPathType() != PATHFIND_NORMAL &&
++                        (path.GetPathType() != (PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH) ||
++                         !TocCollisionRoute(bot, point, route, probe, BOSS_ANUBARAK, 130.0f, 160.0f))))
+         return false;
+     if (spike)
+     {
+@@ -292,7 +302,7 @@ bool CompleteRoute(Player* bot, Position const& point, Movement::PointsArray& ro
+     return true;
+ }
+ 
+-bool MoveAnubRoute(PlayerbotAI* ai, Movement::PointsArray& route, MovementPriority priority)
++bool MoveTocRoute(PlayerbotAI* ai, Movement::PointsArray& route, MovementPriority priority)
+ {
+     Player* bot = ai->GetBot();
+     if (route.size() < 2 || !bot->CanFreeMove() || !ai->CanMove() || bot->HasUnitFlag(UNIT_FLAG_DISABLE_MOVE))
+@@ -325,6 +335,143 @@ bool MoveAnubRoute(PlayerbotAI* ai, Movement::PointsArray& route, MovementPriori
+     return true;
+ }
+ 
++std::vector<TocWorms::Pool> WormPools(Player* bot)
++{
++    std::list<Creature*> creatures;
++    bot->GetCreatureListWithEntryInGrid(creatures, NPC_SLIME_POOL, 250.0f);
++    std::vector<TocWorms::Pool> pools;
++    for (Creature* pool : creatures)
++    {
++        if (!pool->IsAlive() || !pool->InSamePhase(bot))
++            continue;
++        float baseRadius = 0.0f;
++        if (SpellInfo const* pulse =
++                sSpellMgr->GetSpellInfo(sSpellMgr->GetSpellIdForDifficulty(SPELL_SLIME_POOL_DAMAGE, pool)))
++            for (SpellEffectInfo const& effect : pulse->Effects)
++                if (effect.IsTargetingArea())
++                    baseRadius = std::max(baseRadius, effect.CalcRadius(pool));
++        float radius = std::max(baseRadius, 30.0f) + bot->GetCombatReach() + 2.0f;
++        // A just-created pool without its aura/data yet is conservatively full-sized.
++        for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
++            if (AuraEffect const* aura = pool->GetAuraEffect(SPELL_SLIME_POOL_AURA, i);
++                aura && aura->IsPeriodic() && baseRadius > 0.0f)
++                radius = TocWorms::PoolClearance(baseRadius, aura->GetTickNumber(), bot->GetCombatReach());
++        pools.push_back({{pool->GetPositionX(), pool->GetPositionY()}, radius});
++    }
++    return pools;
++}
++
++bool WormRoute(Player* bot, std::array<TocWorms::Point, 8> const& contacts, float contactZ,
++               std::vector<TocWorms::Pool> const& pools, Movement::PointsArray& route, bool& detour)
++{
++    auto* guard = PlayerbotMechanicGuard::Get();
++    auto const refused = [&](float x, float y, float z)
++    { return guard && guard->Active() && guard->MechanicRefuses(bot, x, y, z); };
++    std::vector<TocWorms::Point> goals;
++    for (auto const& p : contacts)
++        if (TocWorms::Clear(p, pools) && !refused(p.x, p.y, contactZ))
++            goals.push_back(p);
++    std::vector<TocWorms::Leg> rejected;
++    bool proved = false;
++    for (unsigned attempt = 0; attempt < 12 && !proved; ++attempt)
++    {
++        auto const plan = TocWorms::Detour({bot->GetPositionX(), bot->GetPositionY()}, goals, pools, rejected);
++        if (plan.size() < 2)
++            return false;
++        detour = plan.size() > 2;
++        route.clear();
++        route.emplace_back(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
++        float length = 0.0f;
++        proved = true;
++        for (std::size_t i = 1; i < plan.size(); ++i)
++        {
++            auto const& previous = route.back();
++            Position const origin(previous.x, previous.y, previous.z);
++            float z = i + 1 == plan.size() ? contactZ : previous.z;
++            if (i + 1 != plan.size())
++                bot->UpdateAllowedPositionZ(plan[i].x, plan[i].y, z);
++            Position const point(plan[i].x, plan[i].y, z);
++            Movement::PointsArray leg;
++            bool clear = std::isfinite(z) && z >= 390.0f && z <= 410.0f;
++            if (clear && DisableMgr::IsPathfindingEnabled(bot->GetMap()))
++            {
++                PathGenerator path(bot);
++                path.SetPathLengthLimit(160.0f);
++                clear = path.CalculatePath(previous.x, previous.y, previous.z, point.GetPositionX(),
++                                           point.GetPositionY(), point.GetPositionZ(), false) &&
++                        path.GetPathType() == PATHFIND_NORMAL;
++                leg = path.GetPath();
++            }
++            else if (clear)
++                clear = TocCollisionRoute(bot, point, leg, nullptr, BOSS_BEASTS, 390.0f, 410.0f, &origin);
++            clear = clear && leg.size() >= 2 && (leg.front() - previous).length() <= 0.1f &&
++                    std::hypot(leg.back().x - point.GetPositionX(), leg.back().y - point.GetPositionY()) <= 0.1f &&
++                    std::abs(leg.back().z - z) <= 0.5f;
++            // Check the actual ground/navmesh polyline, not just graph vertices.
++            for (std::size_t j = 1; clear && j < leg.size(); ++j)
++            {
++                auto const& p = leg[j];
++                auto const& a = leg[j - 1];
++                length += (p - a).length();
++                clear =
++                    length <= 160.0f && TocWorms::ClearLeg({a.x, a.y}, {p.x, p.y}, pools) && !refused(p.x, p.y, p.z);
++            }
++            if (!clear)
++            {
++                rejected.push_back({plan[i - 1], plan[i]});
++                proved = false;
++                break;
++            }
++            route.insert(route.end(), leg.begin() + 1, leg.end());
++        }
++    }
++    if (!proved)
++        return false;
++    // Commit only half a second of this checked route. Recheck growing pools
++    // before the next leg, including when no mod-leeroy responder is installed.
++    float remaining = std::clamp(bot->GetSpeed(MOVE_RUN) * 0.5f, 0.1f, 3.0f);
++    for (std::size_t i = 1; i < route.size(); ++i)
++    {
++        float const length = (route[i] - route[i - 1]).length();
++        if (length > remaining)
++        {
++            route[i] = route[i - 1] + (route[i] - route[i - 1]) * (remaining / length);
++            route.resize(i + 1);
++            break;
++        }
++        remaining -= length;
++    }
++    // EscortMovementGenerator recalculates a two-point path with MoveTo.
++    // Keep the proved segment explicit, including a heavily slowed victim.
++    if (route.size() == 2)
++        route.insert(route.begin() + 1, (route.front() + route.back()) * 0.5f);
++    return true;
++}
++
++void TraceWormRoute(PlayerbotAI* ai, Player* target, std::vector<TocWorms::Pool> const& pools, bool detour,
++                    unsigned kind)
++{
++    // Dedicated content-free debug channel, enabled only for runtime acceptance.
++    if (!sLog->ShouldLog("playerbots.toc_worm", LOG_LEVEL_DEBUG))
++        return;
++    Player* bot = ai->GetBot();
++    uint32 const move = ai->GetAiObjectContext()->GetValue<LastMovement&>("last movement")->Get().msTime;
++    auto const& spline = bot->movespline->_Spline();
++    LOG_DEBUG("playerbots.toc_worm",
++              "worm_move guid={} target={} instance={} move={} spline={} kind={} detour={} points={} pools={}",
++              bot->GetGUID().GetCounter(), target->GetGUID().GetCounter(), bot->GetInstanceId(), move,
++              bot->movespline->GetId(), kind, detour, spline.last() - spline.first() + 1, pools.size());
++    for (int32 i = spline.first(); i <= spline.last(); ++i)
++    {
++        auto const& p = spline.getPoint(i);
++        LOG_DEBUG("playerbots.toc_worm", "worm_point guid={} move={} i={} x={} y={} z={}", bot->GetGUID().GetCounter(),
++                  move, i - spline.first(), p.x, p.y, p.z);
++    }
++    for (std::size_t i = 0; i < pools.size(); ++i)
++        LOG_DEBUG("playerbots.toc_worm", "worm_pool guid={} move={} i={} x={} y={} radius={}",
++                  bot->GetGUID().GetCounter(), move, i, pools[i].center.x, pools[i].center.y, pools[i].radius);
++}
++
+ class TocAnubarakMultiplier : public Multiplier
+ {
+ public:
+@@ -520,7 +667,7 @@ bool TocSpikeEscapeAction::Execute(Event /*event*/)
+         bot->InterruptNonMeleeSpells(false);
+         bot->AttackStop();
+         UpdateMovementState();
+-        bool const moving = MoveAnubRoute(botAI, route, MovementPriority::MOVEMENT_FORCED);
++        bool const moving = MoveTocRoute(botAI, route, MovementPriority::MOVEMENT_FORCED);
+         if (moving)
+             _lastEscape = getMSTime();
+         else
+@@ -555,7 +702,7 @@ bool TocFrostSphereAction::Execute(Event /*event*/)
+         if (std::abs(z - bot->GetPositionZ()) > 4.0f || !CompleteRoute(bot, point, route))
+             return false;
+         UpdateMovementState();
+-        return MoveAnubRoute(botAI, route, MovementPriority::MOVEMENT_COMBAT);
++        return MoveTocRoute(botAI, route, MovementPriority::MOVEMENT_COMBAT);
+     }
+     return Attack(sphere);
+ }
+@@ -574,21 +721,27 @@ bool TocToxinCureAction::Execute(Event /*event*/)
+     if (!target || !bot->IsWithinLOSInMap(target))
+         return false;
+     float const distance = bot->GetExactDist2d(target);
+-    if (distance <= BILE_CONTACT_RANGE)
++    auto const pools = WormPools(bot);
++    if (distance <= BILE_CONTACT_RANGE && TocWorms::Clear({bot->GetPositionX(), bot->GetPositionY()}, pools))
+     {
+         bot->StopMoving();
+         SetDuration(500);  // Wait for the real periodic Bile effect; do not remove the toxin.
+         return true;
+     }
+-    float const x =
+-        target->GetPositionX() + (bot->GetPositionX() - target->GetPositionX()) * BILE_CONTACT_RANGE / distance;
+-    float const y =
+-        target->GetPositionY() + (bot->GetPositionY() - target->GetPositionY()) * BILE_CONTACT_RANGE / distance;
++    auto const contacts = TocWorms::ContactPoints({bot->GetPositionX(), bot->GetPositionY()},
++                                                  {target->GetPositionX(), target->GetPositionY()});
++    Movement::PointsArray route;
++    bool detour = false;
++    if (!WormRoute(bot, contacts, target->GetPositionZ(), pools, route, detour))
++        return false;
++    UpdateMovementState();
++    if (!MoveTocRoute(botAI, route, MovementPriority::MOVEMENT_COMBAT))
++        return false;
++    TraceWormRoute(botAI, target, pools, detour, 1);
++    // Rejected, duplicate or waiting moves must not cancel casts/Auto Shot.
+     bot->InterruptNonMeleeSpells(false);
+-    // A cure must still respect Slime Pools. Forced movement bypasses the mechanic guard
+-    // and makes its escape action yield, leaving a poisoned bot standing in another hazard.
+-    return MoveTo(bot->GetMapId(), x, y, target->GetPositionZ(), false, false, false, false,
+-                  MovementPriority::MOVEMENT_COMBAT, true);
++    SetDuration(500);
++    return true;
+ }
+ 
+ bool TocBileSpacingAction::Execute(Event /*event*/)
+@@ -596,8 +749,20 @@ bool TocBileSpacingAction::Execute(Event /*event*/)
+     Player* target = WormTarget(botAI, true);
+     if (!target)
+         return false;
++    auto const pools = WormPools(bot);
++    auto const contacts = TocWorms::ContactPoints({bot->GetPositionX(), bot->GetPositionY()},
++                                                  {target->GetPositionX(), target->GetPositionY()}, BILE_SEPARATION);
++    Movement::PointsArray route;
++    bool detour = false;
++    if (!WormRoute(bot, contacts, bot->GetPositionZ(), pools, route, detour))
++        return false;
++    UpdateMovementState();
++    if (!MoveTocRoute(botAI, route, MovementPriority::MOVEMENT_COMBAT))
++        return false;
++    TraceWormRoute(botAI, target, pools, detour, 2);
+     bot->InterruptNonMeleeSpells(false);
+-    return MoveAway(target, std::max(3.0f, BILE_SEPARATION - bot->GetExactDist2d(target)));
++    SetDuration(500);
++    return true;
+ }
+ 
+ bool TocEssenceAction::isUseful() { return NeededEssence(botAI) != Colour::None; }
+diff --git a/src/Ai/Raid/TOC/TocWormPolicy.h b/src/Ai/Raid/TOC/TocWormPolicy.h
+index 686fdbf7..7764dc80 100644
+--- a/src/Ai/Raid/TOC/TocWormPolicy.h
++++ b/src/Ai/Raid/TOC/TocWormPolicy.h
+@@ -7,13 +7,171 @@
+ #define PLAYERBOTS_TOCWORMPOLICY_H
+ 
+ #include <algorithm>
++#include <array>
+ #include <cmath>
+ #include <cstdint>
++#include <limits>
+ #include <tuple>
+ #include <vector>
+ 
+ namespace TocWorms
+ {
++struct Point
++{
++    float x = 0, y = 0;
++};
++struct Pool
++{
++    Point center;
++    float radius = 0;
++};
++
++inline bool Held(bool combat, bool combatStay, bool idleStay, bool passive)
++{
++    return combatStay || (!combat && idleStay) || passive;
++}
++
++// SpellAuraEffects.cpp, periodic aura 66882. Include the next two ticks
++// and a further two yards so waiting for the cure does not stop at the edge.
++inline float PoolClearance(float baseRadius, std::uint32_t tick, float reach)
++{
++    float const scale = ((float(tick) + 2.0f) / 60.0f * 0.9f + 0.1f) * 2.0f / 3.0f;
++    return baseRadius * scale + reach + 2.0f;
++}
++
++inline bool Clear(Point p, std::vector<Pool> const& pools)
++{
++    return std::all_of(pools.begin(), pools.end(), [&](Pool const& pool)
++                       { return std::hypot(p.x - pool.center.x, p.y - pool.center.y) > pool.radius; });
++}
++
++inline bool ClearLeg(Point from, Point to, std::vector<Pool> const& pools)
++{
++    float const dx = to.x - from.x, dy = to.y - from.y;
++    float const lengthSq = dx * dx + dy * dy;
++    for (Pool const& pool : pools)
++    {
++        float const sx = from.x - pool.center.x, sy = from.y - pool.center.y;
++        float const startSq = sx * sx + sy * sy;
++        float const outward = sx * dx + sy * dy;
++        if (startSq <= pool.radius * pool.radius)
++        {
++            // An actor already inside the safety margin may leave it, never
++            // walk farther inward or end a cure route inside it.
++            if (outward < 0.0f || lengthSq <= 0.0f)
++                return false;
++        }
++        else
++        {
++            float const t = lengthSq > 0 ? std::clamp(-outward / lengthSq, 0.0f, 1.0f) : 0.0f;
++            if (std::hypot(sx + t * dx, sy + t * dy) <= pool.radius)
++                return false;
++        }
++    }
++    return true;
++}
++
++inline std::array<Point, 8> ContactPoints(Point self, Point target, float radius = 8.0f)
++{
++    float const angle = std::atan2(self.y - target.y, self.x - target.x);
++    constexpr float quarter = 0.7853981633974483f;
++    std::array<Point, 8> points{};
++    std::array<int, 8> const offsets{0, 1, -1, 2, -2, 3, -3, 4};
++    for (unsigned i = 0; i < points.size(); ++i)
++        points[i] = {target.x + radius * std::cos(angle + offsets[i] * quarter),
++                     target.y + radius * std::sin(angle + offsets[i] * quarter)};
++    return points;
++}
++
++struct Leg
++{
++    Point from, to;
++};
++
++// Small visibility graph outside circumscribed pool polygons. Ground/navmesh
++// validation may reject an edge; callers can then ask for another route.
++inline std::vector<Point> Detour(Point from, std::vector<Point> const& goals, std::vector<Pool> const& pools,
++                                 std::vector<Leg> const& rejected = {})
++{
++    constexpr unsigned maxPools = 12, sides = 12;
++    constexpr float maxLength = 160.0f, pi = 3.14159265358979323846f;
++    auto const finite = [](Point p) { return std::isfinite(p.x) && std::isfinite(p.y); };
++    if (!finite(from) || goals.empty() || goals.size() > 8 || pools.size() > maxPools || rejected.size() > 12 ||
++        std::any_of(goals.begin(), goals.end(), [&](Point p) { return !finite(p); }) ||
++        std::any_of(pools.begin(), pools.end(), [&](Pool const& pool)
++                    { return !finite(pool.center) || !std::isfinite(pool.radius) || pool.radius <= 0.0f; }))
++        return {};
++    std::vector<Point> nodes{from};
++    for (Point goal : goals)
++        if (Clear(goal, pools) && std::hypot(goal.x - from.x, goal.y - from.y) <= maxLength)
++            nodes.push_back(goal);
++    std::size_t const goalEnd = nodes.size();
++    if (goalEnd == 1)
++        return {};
++    auto const allowed = [&](Point a, Point b)
++    {
++        return ClearLeg(a, b, pools) &&
++               std::none_of(rejected.begin(), rejected.end(), [&](Leg const& leg)
++                            { return a.x == leg.from.x && a.y == leg.from.y && b.x == leg.to.x && b.y == leg.to.y; });
++    };
++    // The nearest clear direct contact is already the shortest possible route.
++    std::size_t closest = 1;
++    for (std::size_t i = 2; i < goalEnd; ++i)
++        if (std::hypot(nodes[i].x - from.x, nodes[i].y - from.y) <
++            std::hypot(nodes[closest].x - from.x, nodes[closest].y - from.y))
++            closest = i;
++    if (allowed(from, nodes[closest]))
++        return {from, nodes[closest]};
++    for (Pool const& pool : pools)
++    {
++        // Chords between neighbours stay at least half a yard beyond the
++        // already expanded clearance radius, including overlapping pools.
++        float const radius = (pool.radius + 0.5f) / std::cos(pi / float(sides));
++        for (unsigned i = 0; i < sides; ++i)
++        {
++            float const angle = 2.0f * pi * float(i) / float(sides);
++            Point const point{pool.center.x + radius * std::cos(angle), pool.center.y + radius * std::sin(angle)};
++            if (Clear(point, pools) && std::hypot(point.x - from.x, point.y - from.y) <= maxLength)
++                nodes.push_back(point);
++        }
++    }
++    std::vector<float> distance(nodes.size(), std::numeric_limits<float>::infinity());
++    std::vector<std::size_t> parent(nodes.size(), nodes.size());
++    std::vector<bool> visited(nodes.size(), false);
++    distance[0] = 0.0f;
++    for (std::size_t step = 0; step < nodes.size(); ++step)
++    {
++        std::size_t current = nodes.size();
++        for (std::size_t i = 0; i < nodes.size(); ++i)
++            if (!visited[i] && distance[i] <= maxLength && (current == nodes.size() || distance[i] < distance[current]))
++                current = i;
++        if (current == nodes.size())
++            return {};
++        if (current > 0 && current < goalEnd)
++        {
++            std::vector<Point> route;
++            for (std::size_t i = current; i != nodes.size(); i = parent[i])
++                route.push_back(nodes[i]);
++            std::reverse(route.begin(), route.end());
++            return route;
++        }
++        visited[current] = true;
++        for (std::size_t next = 1; next < nodes.size(); ++next)
++        {
++            if (visited[next])
++                continue;
++            float const candidate =
++                distance[current] + std::hypot(nodes[next].x - nodes[current].x, nodes[next].y - nodes[current].y);
++            if (candidate <= maxLength && candidate < distance[next] && allowed(nodes[current], nodes[next]))
++            {
++                distance[next] = candidate;
++                parent[next] = current;
++            }
++        }
++    }
++    return {};
++}
++
+ struct Member
+ {
+     std::uint64_t guid = 0;
+diff --git a/tests/toc_worm_test.cpp b/tests/toc_worm_test.cpp
+index 98b3b56d..913302a1 100644
+--- a/tests/toc_worm_test.cpp
++++ b/tests/toc_worm_test.cpp
+@@ -59,6 +59,94 @@ int main()
+     check(Avoid(healer, group) == tank.guid);
+     std::reverse(group.begin(), group.end());
+     check(Avoid(tank, group) == 0 && Avoid(healer, group) == tank.guid);
++    check(!Held(true, false, true, false));  // Idle stay must not prevent a combat cure.
++    check(Held(false, false, true, false));
++    check(Held(true, true, false, false));
++    check(Held(true, false, false, true));
++
++    // A growing native pool, including the next two ticks and the waiting margin.
++    float const clearance = PoolClearance(30.0f, 10, 1.5f);
++    check(std::abs(clearance - 9.1f) < 0.001f);
++    check(PoolClearance(30.0f, 60, 1.5f) > 23.5f);
++    std::vector<Pool> pools{{{0, 0}, clearance}};
++    check(!Clear({7.2f, 0}, pools));  // Outside the current damage edge still isn't a safe wait.
++    check(!Clear({clearance, 0}, pools));
++    check(Clear({clearance + 0.1f, 0}, pools));
++    check(!ClearLeg({-20, 0}, {20, 0}, pools));  // Safe endpoints can cross a pool.
++    check(ClearLeg({-20, 12}, {20, 12}, pools));
++    check(ClearLeg({4, 0}, {10, 0}, pools));  // Outward escape from an already unsafe point.
++    check(!ClearLeg({4, 0}, {-10, 0}, pools));
++    check(!ClearLeg({4, 0}, {4, 0}, pools));
++
++    auto const contacts = ContactPoints({40, 0}, {0, 0});
++    std::vector<Pool> blockedContact{{{8, 0}, 3.0f}};
++    check(!Clear(contacts.front(), blockedContact));
++    auto const alternate = std::find_if(contacts.begin(), contacts.end(), [&](Point p)
++                                        { return Clear(p, blockedContact) && ClearLeg({40, 0}, p, blockedContact); });
++    check(alternate != contacts.end());
++    for (Point p : contacts)
++        check(std::abs(std::hypot(p.x, p.y) - 8.0f) < 0.001f);
++    check(!Clear(contacts.front(), {{{0, 0}, 10.0f}}));  // No pretend cure when all contacts are covered.
++
++    // Recorded carrier and paralysed victims at 265321 ms in the failed
++    // 20261127_143357 runtime. Every direct contact is blocked by two pools.
++    Point const carrier{524.52734375f, 179.13671875f};
++    std::vector<Pool> const recordedPools{{{535.39453125f, 170.21875f}, 5.59800005f + 4.1f},
++                                          {{550.16015625f, 163.55859375f}, 9.19799995f + 4.1f}};
++    std::array<Point, 5> const victims{{{564.98864746f, 143.43057251f},
++                                        {550.19000244f, 153.40675354f},
++                                        {550.21502686f, 151.50404358f},
++                                        {556.744140625f, 151.775390625f},
++                                        {553.669921875f, 150.8359375f}}};
++    auto audit = [&](std::vector<Point> const& path, std::vector<Pool> const& obstacles)
++    {
++        check(path.size() >= 2);
++        float length = 0.0f;
++        for (std::size_t i = 1; i < path.size(); ++i)
++        {
++            double const dx = double(path[i].x) - path[i - 1].x, dy = double(path[i].y) - path[i - 1].y;
++            double const squared = dx * dx + dy * dy;
++            check(squared > 0);
++            length += float(std::sqrt(squared));
++            for (auto const& pool : obstacles)
++            {
++                double const ox = double(pool.center.x) - path[i - 1].x;
++                double const oy = double(pool.center.y) - path[i - 1].y;
++                double const t = squared > 0 ? std::clamp((ox * dx + oy * dy) / squared, 0.0, 1.0) : 0;
++                check(std::hypot(ox - t * dx, oy - t * dy) > pool.radius);
++            }
++        }
++        check(length <= 160.0f);
++    };
++    for (Point recipient : victims)
++    {
++        auto const choices = ContactPoints(carrier, recipient);
++        check(std::none_of(choices.begin(), choices.end(),
++                           [&](Point p) { return Clear(p, recordedPools) && ClearLeg(carrier, p, recordedPools); }));
++        std::vector<Point> const goals(choices.begin(), choices.end());
++        auto const path = Detour(carrier, goals, recordedPools);
++        check(path.size() > 2);
++        audit(path, recordedPools);
++        if (path.size() > 2)
++        {
++            check(std::abs(std::hypot(path.back().x - recipient.x, path.back().y - recipient.y) - 8.0f) < 0.001f);
++            // A terrain refusal must find a different safe leg, not reuse it.
++            auto const alternatePath = Detour(carrier, goals, recordedPools, {{path[0], path[1]}});
++            audit(alternatePath, recordedPools);
++            if (alternatePath.size() >= 2)
++                check(alternatePath[1].x != path[1].x || alternatePath[1].y != path[1].y);
++        }
++    }
++    check(Detour({0, 0}, {{10, 0}}, {}).size() == 2);
++    check(Detour({-20, 0}, {{0, 0}}, {{{0, 0}, 10}}).empty());
++    check(Detour({0, 0}, {{161, 0}}, {}).empty());
++    check(Detour({0, 0}, {{10, 0}}, std::vector<Pool>(13, {{30, 0}, 1})).empty());
++    check(Detour({std::numeric_limits<float>::infinity(), 0}, {{10, 0}}, {}).empty());
++    check(Detour({0, 0}, {{10, 0}}, {{{20, 0}, std::numeric_limits<float>::quiet_NaN()}}).empty());
++    check(Detour({4, 0}, {{15, 0}}, {{{0, 0}, 10}}).size() == 2);
++    auto const around = Detour({-20, 0}, {{20, 0}}, {{{-3, 0}, 8}, {{3, 0}, 8}});
++    check(around.size() > 2);
++    audit(around, {{{-3, 0}, 8}, {{3, 0}, 8}});
+     std::cout << "ToC worm policy failures: " << failures << '\n';
+     return failures ? 1 : 0;
+ }
