@@ -1,12 +1,14 @@
-From fe85de5c148353b84f27d098af8508ab460ae89a Mon Sep 17 00:00:00 2001
+From 4d1a34c7c01568d5a87b4a3b6a74cfc56e4d3abe Mon Sep 17 00:00:00 2001
 From: raold <868138+raold@users.noreply.github.com>
 Date: Sat, 28 Nov 2026 06:32:05 -0500
 Subject: [PATCH 68/68] fix(Movement): Stop the action tick after a trigger
  hazard escape
 
 ---
- src/Ai/Base/Actions/MovementActions.cpp | 8 ++++++--
- 1 file changed, 6 insertions(+), 2 deletions(-)
+ src/Ai/Base/Actions/MovementActions.cpp |   8 +-
+ tests/trigger_avoidance_test.py         | 236 ++++++++++++++++++++++++
+ 2 files changed, 242 insertions(+), 2 deletions(-)
+ create mode 100644 tests/trigger_avoidance_test.py
 
 diff --git a/src/Ai/Base/Actions/MovementActions.cpp b/src/Ai/Base/Actions/MovementActions.cpp
 index c3d3011d..bfb6b2bf 100644
@@ -41,3 +43,245 @@ index c3d3011d..bfb6b2bf 100644
                          }
                      }
                  }
+diff --git a/tests/trigger_avoidance_test.py b/tests/trigger_avoidance_test.py
+new file mode 100644
+index 00000000..cdfd6b48
+--- /dev/null
++++ b/tests/trigger_avoidance_test.py
+@@ -0,0 +1,236 @@
++"""Compile the production trigger-avoidance method with narrow world adapters.
++
++Usage: python tests/trigger_avoidance_test.py [--compiler /path/to/c++]
++MSVC also works from a developer shell. This proves action selection and return
++values, not path safety or raid gameplay; those still require the dojo.
++"""
++import argparse
++import os
++from pathlib import Path
++import shutil
++import subprocess
++import tempfile
++
++PREAMBLE = r'''
++#include <array>
++#include <cstdint>
++#include <ctime>
++#include <deque>
++#include <iostream>
++#include <map>
++#include <set>
++#include <sstream>
++#include <stdexcept>
++#include <string>
++#include <vector>
++using uint32 = std::uint32_t;
++using ObjectGuid = unsigned;
++using GuidVector = std::vector<ObjectGuid>;
++constexpr int UNIT_FLAG_NOT_SELECTABLE = 1;
++constexpr int SPELL_AURA_PERIODIC_TRIGGER_SPELL = 1;
++constexpr int SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE = 2;
++constexpr int SPELL_EFFECT_SCHOOL_DAMAGE = 1;
++constexpr int MAX_SPELL_EFFECTS = 3;
++constexpr int LOCALE_enUS = 0;
++constexpr int LANG_UNIVERSAL = 0;
++uint32 getMSTime() { return 1000; }
++struct Position { unsigned id; };
++struct EffectData
++{
++    int Effect = 0;
++    uint32 TriggerSpell = 0;
++    float radius = 0;
++    float CalcRadius() const { return radius; }
++};
++struct SpellInfo
++{
++    uint32 Id = 0;
++    std::array<EffectData, MAX_SPELL_EFFECTS> Effects{};
++    std::array<char const*, 1> SpellName{"fixture"};
++};
++struct AuraEffect
++{
++    SpellInfo const* info;
++    SpellInfo const* GetSpellInfo() const { return info; }
++    int GetEffIndex() const { return 0; }
++};
++struct Unit
++{
++    using AuraEffectList = std::vector<AuraEffect*>;
++    bool inWorld = true, unselectable = true;
++    float distance = 1;
++    unsigned id = 0;
++    AuraEffectList periodic, withValue;
++    bool IsInWorld() const { return inWorld; }
++    bool HasUnitFlag(int flag) const
++    { if (flag != UNIT_FLAG_NOT_SELECTABLE) throw std::logic_error("flag"); return unselectable; }
++    AuraEffectList const& GetAuraEffectsByType(int type) const
++    {
++        if (type == SPELL_AURA_PERIODIC_TRIGGER_SPELL) return periodic;
++        if (type == SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE) return withValue;
++        throw std::logic_error("aura type");
++    }
++    Position GetPosition() const { return {id}; }
++};
++struct Bot
++{
++    float GetDistance(Unit const* unit) const { return unit->distance; }
++    void Say(std::string const&, int language)
++    { if (language != LANG_UNIVERSAL) throw std::logic_error("language"); }
++};
++struct BotAI
++{
++    std::map<ObjectGuid, Unit*> units;
++    Unit* GetUnit(ObjectGuid guid) const
++    { auto it = units.find(guid); return it == units.end() ? nullptr : it->second; }
++};
++struct SpellManager
++{
++    std::map<uint32, SpellInfo const*> spells;
++    SpellInfo const* GetSpellInfo(uint32 id) const
++    { auto it = spells.find(id); return it == spells.end() ? nullptr : it->second; }
++} spellManager;
++auto* sSpellMgr = &spellManager;
++struct Config
++{
++    std::set<uint32> AoeAvoidSpellWhitelist;
++    float MaxAoeAvoidRadius = 10;
++    bool TellWhenAvoidAoe = false;
++} sPlayerbotAIConfig;
++class AvoidAoeAction
++{
++public:
++    Bot* bot;
++    BotAI* botAI;
++    GuidVector possible;
++    std::deque<bool> accepted;
++    std::vector<unsigned> attempts;
++    bool moved = false;
++    std::time_t lastTellTimer = 0;
++    uint32 lastMoveTimer = 0;
++    bool AvoidUnitWithDamageAura();
++    bool FleePosition(Position position, float radius)
++    {
++        if (radius <= 0) throw std::logic_error("invalid radius");
++        attempts.push_back(position.id);
++        // Production FleePosition's recent-flee interval rejects another move
++        // in this same tick after one succeeds. Preserve that restriction.
++        if (moved) return false;
++        if (accepted.empty()) throw std::logic_error("unexpected move");
++        bool result = accepted.front(); accepted.pop_front(); moved = result; return result;
++    }
++};
++#define AI_VALUE(type, name) possible
++'''
++
++TESTS = r'''
++struct Fixture
++{
++    Bot bot;
++    BotAI ai;
++    std::array<SpellInfo, 3> auras{}, damage{};
++    std::array<AuraEffect, 3> effects{};
++    std::array<Unit, 3> units{};
++    AvoidAoeAction action;
++    Fixture()
++    {
++        sPlayerbotAIConfig = Config{};
++        spellManager.spells.clear();
++        action.bot = &bot; action.botAI = &ai;
++        action.possible = {1, 2, 3}; action.accepted = {true, true, true};
++        for (unsigned i = 0; i < 3; ++i)
++        {
++            auras[i].Id = 10+i; auras[i].Effects[0].TriggerSpell = 100+i;
++            damage[i].Id = 100+i; damage[i].Effects[0].Effect = SPELL_EFFECT_SCHOOL_DAMAGE;
++            damage[i].Effects[0].radius = 3;
++            spellManager.spells[100+i] = &damage[i];
++            effects[i].info = &auras[i]; units[i].id = i+1;
++            units[i].periodic = {&effects[i]}; ai.units[i+1] = &units[i];
++        }
++    }
++};
++int failures = 0, checks = 0;
++#define CHECK(x) do { ++checks; if (!(x)) { ++failures; std::cerr << "failed line " << __LINE__ << '\n'; } } while (false)
++int main()
++{
++    for (bool tell : {false, true})
++    {
++        Fixture f; sPlayerbotAIConfig.TellWhenAvoidAoe = tell;
++        CHECK(f.action.AvoidUnitWithDamageAura());
++        CHECK(f.action.attempts == std::vector<unsigned>{1});
++    }
++    {
++        Fixture f; f.action.accepted = {false, true, true};
++        CHECK(f.action.AvoidUnitWithDamageAura());
++        CHECK((f.action.attempts == std::vector<unsigned>{1,2}));
++    }
++    for (unsigned skipped = 0; skipped < 7; ++skipped)
++    {
++        Fixture f;
++        if (skipped == 0) f.units[0].unselectable = false;
++        if (skipped == 1) sPlayerbotAIConfig.AoeAvoidSpellWhitelist.insert(100);
++        if (skipped == 2) f.units[0].inWorld = false;
++        if (skipped == 3) f.ai.units.erase(1);
++        if (skipped == 4) spellManager.spells.erase(100);
++        if (skipped == 5) f.units[0].distance = 20;
++        if (skipped == 6) f.damage[0].Effects[0].radius = 20;
++        CHECK(f.action.AvoidUnitWithDamageAura());
++        CHECK(f.action.attempts == std::vector<unsigned>{2});
++    }
++    {
++        Fixture f; f.action.accepted = {false, false, false};
++        CHECK(!f.action.AvoidUnitWithDamageAura());
++        CHECK(f.action.attempts.size() == 3);
++    }
++    {
++        Fixture f; f.action.possible.clear();
++        CHECK(!f.action.AvoidUnitWithDamageAura()); CHECK(f.action.attempts.empty());
++    }
++    {
++        Fixture f; f.units[0].periodic.insert(f.units[0].periodic.begin(), &f.effects[2]);
++        sPlayerbotAIConfig.AoeAvoidSpellWhitelist.insert(102);
++        CHECK(f.action.AvoidUnitWithDamageAura());
++        CHECK(f.action.attempts == std::vector<unsigned>{1});
++    }
++    std::cout << checks << " trigger avoidance checks, " << failures << " failures\n";
++    return failures ? 1 : 0;
++}
++'''
++
++
++def method(source):
++    text = source.read_text(encoding="utf-8")
++    start = text.index("bool AvoidAoeAction::AvoidUnitWithDamageAura()")
++    body = text.index("{", start)
++    depth = 0
++    for index in range(body, len(text)):
++        depth += (text[index] == "{") - (text[index] == "}")
++        if depth == 0:
++            return text[start:index+1]
++    raise ValueError("production method is incomplete")
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--compiler", default=os.environ.get("CXX"))
++    parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[1]
++                        / "src/Ai/Base/Actions/MovementActions.cpp")
++    args = parser.parse_args()
++    compiler = args.compiler or shutil.which("c++") or shutil.which("clang++") or shutil.which("cl")
++    if not compiler:
++        parser.error("a C++ compiler or an MSVC developer shell is required")
++    with tempfile.TemporaryDirectory(prefix="trigger-avoidance-") as directory:
++        work = Path(directory).resolve()
++        assert work.is_relative_to(Path(tempfile.gettempdir()).resolve())
++        source = work / "test.cpp"
++        binary = work / ("test.exe" if os.name == "nt" else "test")
++        source.write_text(PREAMBLE + method(args.source) + TESTS, encoding="utf-8")
++        flags = (["/nologo", "/std:c++20", "/EHsc", "/W4", "/WX", str(source), "/Fe:"+str(binary)]
++                 if Path(compiler).stem.lower() == "cl" else
++                 ["-std=c++20", "-Wall", "-Wextra", "-Werror", str(source), "-o", str(binary)])
++        built = subprocess.run([compiler, *flags], cwd=work)
++        return built.returncode or subprocess.run([str(binary)], cwd=work).returncode
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
