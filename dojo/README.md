@@ -1367,3 +1367,24 @@ directories with junctions on Windows and symlinks elsewhere, so CI (Linux)
 covers the symlink paths only. After changing a golden case, run
 `python modules/mod-dojo/tests/fixtures/make_dojo_protocol.py`; a test
 fails when the committed fixture differs from its generator.
+
+The queue admission probe is `realm --layout <layout> queue-acceptance` on a
+stopped OfflineAcceptance build. It restores only the fixed synthetic fixture,
+proves that an eligible bot enters and leaves the actual WSG queue, then attempts
+entry in raid, pinned-solo, pinned-party and dungeon contexts. Every protected
+context must retain its group and stay out of every queue; action return values
+are not evidence. The final queue packet gets a full second to settle. Missing
+control, sparse observations or unproved logout makes the gate fail.
+
+Select `raid-acceptance --scenario trigger-flame --scenario coldflame` for the
+focused hazard probes. The first summons Razorscale's real Devouring Flame,
+including its native periodic damage aura. The second uses Marrowgar's real
+spreading Coldflame script and tracks its first stationary ground area. The
+Coldflame observation ends at 2.4 seconds, before that area's native 3-second
+expiry; it requires escape within 2 seconds. The trigger probe observes eight
+seconds and requires escape within four. Both require initial exposure, actual
+movement beyond the radius, twenty consecutive outside samples, no late hits,
+stock healing/follow competitors, and a disabled-avoidance control that takes
+real damage. These are mechanic probes, not full boss kills. Keep the load
+receipt alongside each case; `raids.run(..., before_case=...)` admits an external
+load check before each control and enabled run without changing their verdicts.

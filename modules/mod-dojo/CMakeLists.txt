@@ -5,3 +5,4 @@
 # targets; target settings live in mod-dojo.cmake. tests/ is a standalone
 # project of its own and never part of a core build.
 AC_ADD_SCRIPT("${CMAKE_CURRENT_LIST_DIR}/src")
+# Runtime/DojoQueue.cpp: bounded real-queue admission probe for synthetic actors.

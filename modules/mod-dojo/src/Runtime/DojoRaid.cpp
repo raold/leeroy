@@ -5,6 +5,7 @@
 #include "DojoLead.h"
 #include "DojoVehicle.h"
 #include "DojoYogg.h"
+#include "DojoQueue.h"
 
 #if DOJO_TRAINING_BUILD
 #if defined(DOJO_RAID_ACCEPTANCE) && DOJO_RAID_ACCEPTANCE
@@ -18,6 +19,7 @@
 #include "CommandScript.h"
 #include "Creature.h"
 #include "CreatureAI.h"
+#include "DynamicObject.h"
 #include "Engine.h"
 #include "Group.h"
 #include "GroupMgr.h"
@@ -48,6 +50,7 @@
 #include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellInfo.h"
+#include "SpellMgr.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -133,11 +136,15 @@ struct RaidRun
     uint32 anchorCombatSamples = 0, anchorArmor = 0;
     float anchorItemLevel = 0.f;
     float finalHazardClearance = 0.f;
+    float triggerRadius = 0.f, triggerDisplacement = 0.f;
+    Position triggerOrigin;
+    uint32 triggerAuraSamples = 0;
     uint64 effectiveHealing = 0;
     uint64 ownerEpoch = 0;
     float minimumClearance = 1000.f;
     bool setup = false, active = false, cleanup = false, combatObserved = false, competition = false;
     ObjectGuid target;
+    ObjectGuid hazardObject;
     json defilePaths = json::array();
     json damageEvidence = json::array(), deaths = json::array();
     json fixtureFailure = json::object();
@@ -292,7 +299,7 @@ struct RaidRun
         if (Dojo::State().plan.state != Dojo::RuntimeState::Armed || Dojo::State().manifest)
             return "refused: use an armed isolated training realm with no arena manifest";
         if (name != "valithria" && name != "twins" && name != "poison" &&
-            name != "lk-terenas" && name != "lk-defile") return "refused: unknown scenario";
+            name != "lk-terenas" && name != "lk-defile" && name != "trigger-flame" && name != "coldflame") return "refused: unknown scenario";
         if (id.empty() || id.size() > 64 || id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != std::string::npos)
             return "refused: invalid run token";
         std::string error = Create();
@@ -303,13 +310,17 @@ struct RaidRun
         heals = damageHits = 0; effectiveHealing = ownerEpoch = 0; minimumClearance = 1000.f;
         roomSamples = escapeMs = outsideSamples = hazardStartMs = 0; finalHazardClearance = 0.f;
         insideSamples = lateHits = encounterSamples = 0;
+        triggerRadius = triggerDisplacement = 0.f; triggerAuraSamples = 0;
         harvestSamples = strangulateSamples = 0;
         anchorCombatSamples = anchorArmor = 0; anchorItemLevel = 0.f;
         setup = cleanup = combatObserved = competition = false; target.Clear();
+        hazardObject.Clear();
         defilePaths = json::array();
         damageEvidence = json::array(); deaths = json::array(); damageSequence = 0;
         fixtureFailure = json::object();
         map = name == "valithria" || name == "lk-terenas" || name == "lk-defile" ? 631 : name == "twins" ? 649 : 533;
+        if (name == "trigger-flame") map = 603;
+        if (name == "coldflame") map = 631;
         oldTwins = sPlayerbotAIConfig.TwinValkyrInteractions;
         sPlayerbotAIConfig.TwinValkyrInteractions = !negative;
         oldLichKing = sPlayerbotAIConfig.LichKingMechanics;
@@ -326,6 +337,8 @@ struct RaidRun
         if (scenario == "twins") return Position(563.5f, 139.5f, 393.84f, 0.f);
         if (scenario == "lk-terenas") return Position(495.708f, -2523.76f, 1049.95f, 0.f);
         if (scenario == "lk-defile") return Position(503.62f, -2124.65f, 840.857f, 0.f);
+        if (scenario == "trigger-flame") return Position(586.f, -125.f, 391.6f, 0.f);
+        if (scenario == "coldflame") return Position(-450.f, 2211.f, 42.5f, 0.f);
         return Position(3108.0f, -3141.0f, 293.34f, 0.f);
     }
 
@@ -549,6 +562,43 @@ struct RaidRun
                 }
             }
         }
+        else if (scenario == "trigger-flame" || scenario == "coldflame")
+        {
+            // Native Razorscale fire: Reset applies 64709, whose periodic
+            // trigger 64704 deals real area damage. This exercises the unit-
+            // trigger branch changed by #524, not Coldflame's dynamic aura.
+            bool const cold = scenario == "coldflame";
+            auto const* spell = sSpellMgr->GetSpellInfo(cold ? 69146 : 64704);
+            triggerRadius = spell ? spell->Effects[0].CalcRadius() : 0.f;
+            if (triggerRadius <= 0.f || triggerRadius > sPlayerbotAIConfig.MaxAoeAvoidRadius)
+            { Fail("native_trigger_radius_invalid"); return; }
+            ai->ChangeStrategy(control ? "-avoid aoe" : "+avoid aoe", BOT_STATE_COMBAT);
+            ai->ChangeStrategy(control ? "-avoid aoe" : "+avoid aoe", BOT_STATE_NON_COMBAT);
+            if (cold)
+            {
+                ai->ChangeStrategy("+icc", BOT_STATE_COMBAT);
+                ai->ChangeStrategy("+icc", BOT_STATE_NON_COMBAT);
+            }
+            triggerOrigin.Relocate(bot->GetPosition());
+            auto* flame = bot->SummonCreature(cold ? 36672 : 34188, triggerOrigin, TEMPSUMMON_TIMED_DESPAWN, 30000);
+            if (!flame || (!cold && !flame->HasAura(64709)) || !flame->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE))
+            { Fail("native_trigger_aura_missing"); return; }
+            target = flame->GetGUID();
+            if (cold)
+            {
+                // Start at the real spreading NPC's first native cast. Track
+                // this exact stationary area, not the NPC moving away from us.
+                flame->CastSpell(flame, 69147, true);
+                auto* area = flame->GetDynObject(69146);
+                if (!area || area->GetDuration() < 2500) { Fail("native_coldflame_area_missing"); return; }
+                hazardObject = area->GetGUID();
+                triggerRadius = area->GetRadius();
+            }
+            owner->SetHealth(owner->GetMaxHealth() * 65 / 100);
+            // Match a game-client master's reaction cadence without steering
+            // the tested bot. The held support actor remains inside the fire.
+            GET_PLAYERBOT_AI(owner)->SetMaster(owner);
+        }
         else
         {
             Leeroy::Guild::InstallHazardFilter();
@@ -649,6 +699,29 @@ struct RaidRun
             }
             if (phaseMs >= 20000) Phase("cleanup");
         }
+        else if (scenario == "trigger-flame" || scenario == "coldflame")
+        {
+            bool const cold = scenario == "coldflame";
+            auto* flame = bot->GetMap()->GetCreature(target);
+            auto* area = cold ? ObjectAccessor::GetDynamicObject(*bot, hazardObject) : nullptr;
+            if (!flame || !flame->IsAlive() || (cold ? !area : !flame->HasAura(64709)))
+            { Fail("native_trigger_disappeared"); return; }
+            ++hazardsSeen; ++triggerAuraSamples;
+            if (!hazardStartMs) hazardStartMs = phaseMs;
+            finalHazardClearance = (cold ? bot->GetExactDist2d(area) : bot->GetExactDist2d(flame)) - triggerRadius;
+            triggerDisplacement = bot->GetExactDist2d(&triggerOrigin);
+            if (finalHazardClearance > 0.f)
+            {
+                ++outsideSamples;
+                if (!escapeMs) escapeMs = phaseMs - hazardStartMs;
+            }
+            else { ++insideSamples; outsideSamples = 0; }
+            owner->SetHealth(owner->GetMaxHealth() * 65 / 100);
+            auto* ai = GET_PLAYERBOT_AI(bot);
+            competition = competition || (ai->HasStrategy("heal", BOT_STATE_COMBAT) &&
+                ai->HasStrategy("follow", BOT_STATE_NON_COMBAT) && owner->GetHealthPct() < 70.f);
+            if (phaseMs >= (cold ? 2400u : 8000u)) Phase("cleanup");
+        }
         else
         {
             // The registered mod-leeroy world hook owns the production cadence.
@@ -729,6 +802,9 @@ struct RaidRun
         else if (state == "observe") Observe(diff);
         else if (state == "cleanup")
         {
+            if (scenario == "trigger-flame" || scenario == "coldflame")
+                if (auto* p = Actor(0))
+                    if (auto* flame = p->GetMap()->GetCreature(target)) flame->DespawnOrUnsummon();
             Leeroy::Guild::DojoHazardOwner(0);
             Leeroy::Guild::TickHazards(500);
             sPlayerbotAIConfig.TwinValkyrInteractions = oldTwins;
@@ -823,6 +899,9 @@ struct RaidRun
             {"anchor_combat_samples", anchorCombatSamples}, {"anchor_armor", anchorArmor}, {"anchor_item_level", anchorItemLevel},
             {"inside_samples", insideSamples}, {"late_hits", lateHits}, {"encounter_samples", encounterSamples},
             {"final_hazard_clearance", finalHazardClearance},
+            {"trigger_radius", triggerRadius}, {"trigger_displacement", triggerDisplacement},
+            {"trigger_aura_samples", triggerAuraSamples},
+            {"trigger_hits", scenario == "trigger-flame" || scenario == "coldflame" ? damageHits : 0},
             {"switch_ms", switchMs}, {"crossings", crossings}, {"hazard_samples", hazardsSeen},
             {"minimum_clearance", minimumClearance}, {"poison_hits", scenario == "poison" ? damageHits : 0},
             {"defile_hits", scenario == "lk-defile" ? damageHits : 0}, {"defile_paths", defilePaths},
@@ -2001,6 +2080,12 @@ public:
             ++run.damageHits;
             if (run.escapeMs && run.phaseMs > run.hazardStartMs + run.escapeMs + 1000) ++run.lateHits;
         }
+        if (run.state == "observe" && (run.scenario == "trigger-flame" || run.scenario == "coldflame") && attacker && victim &&
+            attacker->GetGUID() == run.target && victim->GetGUID() == run.actors[0] && damage > 0)
+        {
+            ++run.damageHits;
+            if (run.escapeMs && run.phaseMs > run.hazardStartMs + run.escapeMs + 1000) ++run.lateHits;
+        }
     }
     void ModifySpellDamageTaken(Unit* victim, Unit* attacker, int32& damage, SpellInfo const* info) override
     {
@@ -2044,6 +2129,7 @@ void AddSC_dojo_raid()
     AddSC_dojo_lead();
     AddSC_dojo_vehicle();
     AddSC_dojo_yogg();
+    AddSC_dojo_queue();
 }
 #else
 void AddSC_dojo_raid() { }
