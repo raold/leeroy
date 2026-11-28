@@ -140,6 +140,15 @@ with the native `cleared_reachable` terminal. Its receipt explicitly lists the
 nine unverified encounters. A route pass cannot pass `ulduar-full` or establish
 that all Ulduar bosses work.
 
+Offline Ulduar observations include `ulduar.bosses` for Ignis and Razorscale
+(health, position, encounter state, casts and selected mechanic auras) and
+`ulduar.harpoons` for the four harpoon entries (object state, flags and position).
+The bounded `spell_damage_samples` ring also covers Ulduar's synthetic raid
+members. These are pre-application damage calculations, not confirmed lethal
+hits. The existing `damage` counters measure incoming damage by attacker entry;
+they do not measure raid DPS. These read-only fields add evidence without
+changing any completion rule.
+
 Run both `--target toc-slime-pools-control` and `--target toc-slime-pools` to check
 Slime Pool avoidance during the actual Northrend Beasts pull. The control disables
 only the isolated mechanic responder and must take real pool damage. The enabled

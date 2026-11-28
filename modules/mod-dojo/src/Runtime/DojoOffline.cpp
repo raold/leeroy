@@ -14,6 +14,7 @@
 #include "Guild.h"
 #include "GuildMgr.h"
 #include "Group.h"
+#include "GameObject.h"
 #include "InstanceScript.h"
 #include "LastMovementValue.h"
 #include "Map.h"
@@ -589,6 +590,7 @@ struct OfflineFixture
         if (!native.value("active", false)) stall.Release(RaidActors());
         json bodies = json::array(), damage = json::array(), pools = json::array();
         json enemies = json::array(), spellSamples = json::array();
+        json ulduarBosses = json::array(), ulduarHarpoons = json::array();
         for (std::size_t i = 1; i < actors.size(); ++i)
             if (auto* p = Actor(i))
             {
@@ -678,6 +680,37 @@ struct OfflineFixture
                             {"z", creature->GetPositionZ()}, {"facing", creature->GetOrientation()}});
                     }
             }
+        // The first full Ulduar run reached a Razorscale wipe at the enrage
+        // boundary, then lost its commander objective during recovery. Record
+        // the actual encounter and harpoon states so another failure can say
+        // whether the raid failed to ground her, failed to damage her, or reset.
+        // Fixed entries/slots only; no names, mutations or acceptance shortcuts.
+        if (auto* leader = Actor(1); leader && map == 603 && leader->GetMapId() == map)
+            if (auto* script = leader->GetInstanceScript())
+            {
+                for (uint32 slot : {1u, 2u}) // Ignis and Razorscale in ulduar.h.
+                    if (auto* boss = script->GetCreature(slot); boss && boss->GetMap() == leader->GetMap())
+                    {
+                        json auras = json::array();
+                        for (uint32 spell : {47008u, 62794u, 49679u, 49682u, 49683u, 49684u})
+                            if (boss->HasAura(spell)) auras.push_back(spell);
+                        auto* cast = boss->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+                        ulduarBosses.push_back({{"slot", slot}, {"state", uint32(script->GetBossState(slot))},
+                            {"entry", boss->GetEntry()}, {"guid", boss->GetGUID().GetCounter()},
+                            {"instance", boss->GetInstanceId()}, {"alive", boss->IsAlive()},
+                            {"health", boss->GetHealth()}, {"max_health", boss->GetMaxHealth()},
+                            {"combat", boss->IsInCombat()}, {"auras", auras},
+                            {"cast", cast ? cast->GetSpellInfo()->Id : 0u},
+                            {"x", boss->GetPositionX()}, {"y", boss->GetPositionY()}, {"z", boss->GetPositionZ()}});
+                    }
+                for (uint32 entry : {194519u, 194541u, 194542u, 194543u})
+                    if (auto* harpoon = leader->FindNearestGameObject(entry, 200.f))
+                        ulduarHarpoons.push_back({{"entry", entry}, {"guid", harpoon->GetGUID().GetCounter()},
+                            {"instance", harpoon->GetInstanceId()}, {"state", uint32(harpoon->GetGoState())},
+                            {"flags", harpoon->GetUInt32Value(GAMEOBJECT_FLAGS)},
+                            {"x", harpoon->GetPositionX()}, {"y", harpoon->GetPositionY()},
+                            {"z", harpoon->GetPositionZ()}});
+            }
         for (auto const& sample : spellDamage)
             if (sample.sequence)
                 spellSamples.push_back({{"sequence", sample.sequence}, {"at_ms", sample.atMs},
@@ -692,6 +725,7 @@ struct OfflineFixture
             {"token", token}, {"guild", guildId}, {"owner", actors[0].GetCounter()}, {"samples", samples},
             {"native", native}, {"bodies", bodies}, {"damage", damage},
             {"toc_enemies", enemies}, {"spell_damage_samples", spellSamples},
+            {"ulduar", {{"bosses", ulduarBosses}, {"harpoons", ulduarHarpoons}}},
             {"naxx_pass", naxxPass.Snapshot()},
             {"toc_intro", tocIntro.Snapshot()},
             {"native_stall", stall.Snapshot()},
@@ -767,10 +801,11 @@ public:
     }
     void ModifySpellDamageTaken(Unit* victim, Unit* attacker, int32& calculated, SpellInfo const* info) override
     {
-        if (!victim || !attacker || !info || calculated <= 0 || victim->GetMapId() != 649
+        if (!victim || !attacker || !info || calculated <= 0
+            || (victim->GetMapId() != 649 && victim->GetMapId() != 603)
             || attacker->GetMap() != victim->GetMap()) return;
         std::lock_guard<std::recursive_mutex> lock(fixture.mutex);
-        if (fixture.state != "running" || fixture.map != 649) return;
+        if (fixture.state != "running" || fixture.map != victim->GetMapId()) return;
         auto found = std::find(fixture.actors.begin() + 1, fixture.actors.begin() + 11, victim->GetGUID());
         if (found == fixture.actors.begin() + 11) return;
         // This hook precedes final damage application. These are diagnostic
