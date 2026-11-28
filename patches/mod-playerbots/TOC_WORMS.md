@@ -38,6 +38,22 @@ Routes use navmesh paths when enabled, or the core's collision and ground checks
 on the encounter's floor when map 649 disables navmesh. Only half a second of a
 checked route is committed before pools are checked again.
 
+When all direct contacts are blocked, a bounded visibility graph searches around
+expanded pools. It selects a shortest safe contact route, then proves each leg
+against the core's ground/collision checks or complete navmesh paths. A refused
+terrain leg is excluded before trying another route. The search admits at most
+12 pools, eight contacts, 12 terrain attempts and 160 yards; exceeding those bounds
+refuses movement. The final short spline retains an explicit midpoint so the
+core cannot replace a checked two-point route with its own path calculation.
+
+The recorded two-pool blockage from `20261127_143357` is a regression fixture:
+all direct approaches to five paralysed victims fail, while the detours clear
+both expanded pools. This is geometry proof only. Runtime acceptance must also
+show actual detours and cures without a pool-crossing cure path. The dedicated
+`playerbots.toc_worm` debug logger records only actor/move ids, route coordinates,
+pool geometry and counts; acceptance enables it in the isolated config only.
+The failed first pull remains evidence, even though a later pull cleared Beasts.
+
 This follow-up needs its own isolated worm encounter and before/after performance
 receipt before release. Portable policy tests and a production-header MSVC check
 pass; they do not replace that runtime gate. The current-main full ToC release
