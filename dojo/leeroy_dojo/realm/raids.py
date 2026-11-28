@@ -16,7 +16,7 @@ from .ra import RaError
 
 SCENARIOS = ("valithria", "twins", "poison")
 LICH_KING_SCENARIOS = ("lk-terenas", "lk-defile")
-ALL_SCENARIOS = SCENARIOS + LICH_KING_SCENARIOS
+ALL_SCENARIOS = SCENARIOS + LICH_KING_SCENARIOS + ("trigger-flame", "coldflame")
 
 
 def verdict(observation, *, scenario, token, negative=False):
@@ -42,7 +42,7 @@ def verdict(observation, *, scenario, token, negative=False):
     if type(o.get("minimum_clearance")) not in (float, int) or not math.isfinite(o["minimum_clearance"]) or o["minimum_clearance"] < 0:
         plumbing.append("invalid clearance")
         return result()
-    if o.get("map") != {"valithria": 631, "twins": 649, "poison": 533, "lk-terenas": 631, "lk-defile": 631}.get(scenario) or o.get("instance", 0) <= 0:
+    if o.get("map") != {"valithria": 631, "twins": 649, "poison": 533, "lk-terenas": 631, "lk-defile": 631, "trigger-flame": 603, "coldflame": 631}.get(scenario) or o.get("instance", 0) <= 0:
         plumbing.append("wrong or absent raid instance")
     if o.get("samples", 0) < 10:
         plumbing.append("insufficient runtime observations")
@@ -96,6 +96,27 @@ def verdict(observation, *, scenario, token, negative=False):
                 problems.append("disabled Defile control did not take real damage")
             elif not negative and (not 0 < o["escape_ms"] <= 4000 or o["outside_samples"] < 20 or o["late_hits"] != 0):
                 problems.append("Defile escape was late, unstable, or followed by further damage")
+    elif scenario in ("trigger-flame", "coldflame"):
+        for key in ("trigger_aura_samples", "trigger_hits", "inside_samples", "outside_samples", "escape_ms", "late_hits"):
+            if type(o.get(key)) is not int or o[key] < 0:
+                plumbing.append("invalid trigger observation counter")
+        for key in ("trigger_radius", "trigger_displacement", "final_hazard_clearance"):
+            if type(o.get(key)) not in (int, float) or not math.isfinite(o[key]):
+                plumbing.append("invalid trigger geometry")
+        if plumbing:
+            return result()
+        if (o["trigger_radius"] <= 0 or o["trigger_aura_samples"] < 20 or o["hazard_samples"] < 20 or
+                o["inside_samples"] < 1 or o["max_gap_ms"] > 200 or o.get("reach_competitor") is not True):
+            plumbing.append("native fire exposure, stock competitors or cadence not proved")
+        if negative:
+            if o["trigger_hits"] < 1:
+                problems.append("disabled avoidance control did not take native fire damage")
+        # Coldflame's real area lasts three seconds. Its probe ends at 2.4 s,
+        # while that exact object remains active; expiry must never be escape.
+        elif (not 0 < o["escape_ms"] <= (2000 if scenario == "coldflame" else 4000) or
+              o["outside_samples"] < 20 or o["late_hits"] != 0 or
+              o["final_hazard_clearance"] <= 0 or o["trigger_displacement"] <= o["trigger_radius"]):
+            problems.append("trigger escape was late, unstable, stationary or followed by damage")
     elif scenario == "poison":
         if o.get("hazard_samples", 0) < 20:
             plumbing.append("Living Poison was not present long enough")
@@ -159,7 +180,7 @@ def provenance(layout):
     return dict(revisions=revisions, worldserver_sha256=digest, layout_sha256=fingerprint(layout.path), configs=configs)
 
 
-def run(layout, *, scenarios=SCENARIOS, log=print):
+def run(layout, *, scenarios=SCENARIOS, log=print, before_case=None):
     # Refuse to adopt another experiment's process. All commands below pass the
     # ordinary dojo root, marker, live-path, port and MySQL identity checks.
     if not scenarios or len(set(scenarios)) != len(scenarios) or any(s not in ALL_SCENARIOS for s in scenarios):
@@ -189,6 +210,8 @@ def run(layout, *, scenarios=SCENARIOS, log=print):
                 for negative in (True, False):
                     token = uuid.uuid4().hex
                     name = scenario + ("-negative" if negative else "-normal")
+                    if before_case is not None:
+                        before_case(name, out)
                     log(f"raid check {name}: starting")
                     reply = client.command(f"dojo raid start {scenario} {token} {'negative' if negative else 'normal'}")
                     if "dojo raid: started" not in reply:

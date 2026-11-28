@@ -1,0 +1,111 @@
+From 326de0e1da34ae6170cd932de15d140f66d2dd3b Mon Sep 17 00:00:00 2001
+From: raold <868138+raold@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 06:24:21 -0500
+Subject: [PATCH 67/67] fix(Battleground): Keep pinned raid bodies out of
+ random queues
+
+---
+ .../Base/Actions/BattleGroundJoinAction.cpp   | 42 ++++++++++++++++---
+ 1 file changed, 36 insertions(+), 6 deletions(-)
+
+diff --git a/src/Ai/Base/Actions/BattleGroundJoinAction.cpp b/src/Ai/Base/Actions/BattleGroundJoinAction.cpp
+index b4592d8b..76195f37 100644
+--- a/src/Ai/Base/Actions/BattleGroundJoinAction.cpp
++++ b/src/Ai/Base/Actions/BattleGroundJoinAction.cpp
+@@ -21,10 +21,33 @@
+ namespace
+ {
+     constexpr uint32 BG_JOIN_LOGIN_DELAY_MS = 120 * IN_MILLISECONDS;
++
++    // These actions are random/RPG queue admission, not the owner's explicit
++    // battlemaster request. A pinned body or a dungeon/raid group is already
++    // committed to another activity, including while recovering from a wipe.
++    bool ProtectedFromRandomQueue(Player* player)
++    {
++        if (!player || sRandomPlayerbotMgr.IsPinned(player->GetGUID().GetCounter()))
++            return true;
++        if (Map* map = player->GetMap(); map && map->IsDungeon())
++            return true;
++        if (Group* group = player->GetGroup())
++        {
++            if (group->isRaidGroup())
++                return true;
++            for (auto const& slot : group->GetMemberSlots())
++                if (sRandomPlayerbotMgr.IsPinned(slot.guid.GetCounter()))
++                    return true;
++        }
++        return false;
++    }
+ }
+ 
+ bool BGJoinAction::Execute(Event /*event*/)
+ {
++    // Recheck after trigger evaluation, before arena gathering can alter groups.
++    if (ProtectedFromRandomQueue(bot))
++        return false;
+     uint32 queueType = AI_VALUE(uint32, "bg type");
+     if (!queueType)  // force join to fill bg
+     {
+@@ -67,6 +90,8 @@ bool BGJoinAction::Execute(Event /*event*/)
+ 
+ bool BGJoinAction::gatherArenaTeam(ArenaType type)
+ {
++    if (ProtectedFromRandomQueue(bot))
++        return false;
+     ArenaTeam* arenateam = sArenaTeamMgr->GetArenaTeamByCaptain(bot->GetGUID(), type);
+ 
+     if (!arenateam)
+@@ -81,8 +106,14 @@ bool BGJoinAction::gatherArenaTeam(ArenaType type)
+     for (ArenaTeam::MemberList::iterator itr = arenateam->GetMembers().begin(); itr != arenateam->GetMembers().end();
+          ++itr)
+     {
++        // Also fence offline candidates before a random arena login, and fence
++        // live candidates before removing them from their existing group.
++        if (sRandomPlayerbotMgr.IsPinned(itr->Guid.GetCounter()))
++            continue;
+         bool offline = false;
+         Player* member = ObjectAccessor::FindConnectedPlayer(itr->Guid);
++        if (member && ProtectedFromRandomQueue(member))
++            continue;
+         if (!member)
+         {
+             offline = true;
+@@ -172,7 +203,7 @@ bool BGJoinAction::gatherArenaTeam(ArenaType type)
+             break;
+ 
+         Player* member = ObjectAccessor::FindConnectedPlayer(*i);
+-        if (!member)
++        if (!member || ProtectedFromRandomQueue(member))
+             continue;
+ 
+         if (!group->AddMember(member))
+@@ -324,6 +355,8 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
+ 
+ bool BGJoinAction::isUseful()
+ {
++    if (ProtectedFromRandomQueue(bot))
++        return false;
+     // do not try if BG bots disabled
+     if (!sPlayerbotAIConfig.RandomBotJoinBG)
+         return false;
+@@ -365,11 +398,6 @@ bool BGJoinAction::isUseful()
+     if (!bot->HasFreeBattlegroundQueueId())
+         return false;
+ 
+-    // do not try if in dungeon
+-    // Map* map = bot->GetMap();
+-    // if (map && map->Instanceable())
+-    //     return false;
+-
+     bgList.clear();
+     ratedList.clear();
+ 
+@@ -396,6 +424,8 @@ bool BGJoinAction::isUseful()
+ 
+ bool BGJoinAction::JoinQueue(uint32 type)
+ {
++    if (ProtectedFromRandomQueue(bot))
++        return false;
+     // ignore if player is already in BG, is logging out, or already being teleport
+     if (!bot || (!bot->IsInWorld() && !bot->IsBeingTeleported()) || bot->InBattleground())
+         return false;

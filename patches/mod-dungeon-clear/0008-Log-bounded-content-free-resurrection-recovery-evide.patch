@@ -1,0 +1,63 @@
+From f1260b2a5846833593a30a4d226d26ffa2053650 Mon Sep 17 00:00:00 2001
+From: raold <oldham@hey.com>
+Date: Sat, 28 Nov 2026 06:24:22 -0500
+Subject: [PATCH 8/8] Log bounded content-free resurrection recovery evidence
+
+---
+ src/Ai/Dungeon/DungeonClear/DcRunState.h      |  1 +
+ .../DungeonClear/Util/DcRezRecovery.cpp       | 23 +++++++++++++++++++
+ 2 files changed, 24 insertions(+)
+
+diff --git a/src/Ai/Dungeon/DungeonClear/DcRunState.h b/src/Ai/Dungeon/DungeonClear/DcRunState.h
+index 7c0ec90..8e71768 100644
+--- a/src/Ai/Dungeon/DungeonClear/DcRunState.h
++++ b/src/Ai/Dungeon/DungeonClear/DcRunState.h
+@@ -178,6 +178,7 @@ struct DcRunState
+     // DcRezDecision.h); 0 = the spell is castable. Cleared the moment the block
+     // lifts, so a boss mid-reset gets a fresh wait rather than a stale verdict.
+     uint32 rezBlockedSinceMs    = 0;
++    uint32 rezDiagnosticMs      = 0; // bounded content-free evidence while recovery is evaluated
+ 
+     // === raid boss stand-down (leader-owned, read cross-bot) ======================
+     // The hysteresis state + per-tick memo behind DcBossStandDown::IsActive: while
+diff --git a/src/Ai/Dungeon/DungeonClear/Util/DcRezRecovery.cpp b/src/Ai/Dungeon/DungeonClear/Util/DcRezRecovery.cpp
+index 1280708..a8fbad0 100644
+--- a/src/Ai/Dungeon/DungeonClear/Util/DcRezRecovery.cpp
++++ b/src/Ai/Dungeon/DungeonClear/Util/DcRezRecovery.cpp
+@@ -315,6 +315,7 @@ namespace
+             {
+                 run.noRezzerSinceMs = 0;
+                 run.noRezzerQuietSinceMs = 0;
++                run.rezDiagnosticMs = 0;
+             }
+             return plan;  // None / NoDeaths
+         }
+@@ -467,6 +468,28 @@ namespace
+ 
+         plan.verdict = DcRezDecision::Decide(in, members);
+ 
++        // The chat announcement below is intentionally once per episode. It
++        // cannot show whether a long hold is still ticking or which condition
++        // keeps resetting its timeout. Log bounded facts, never names or text.
++        if (mutate && (!run.rezDiagnosticMs || getMSTimeDiff(run.rezDiagnosticMs, now) >= 15000))
++        {
++            run.rezDiagnosticMs = now ? now : 1;
++            uint32 deadCount = 0;
++            for (Member const& member : members)
++                if (member.isDead)
++                    ++deadCount;
++            auto elapsed = [now](uint32 since) { return since ? getMSTimeDiff(since, now) : 0u; };
++            LOG_INFO("playerbots.dungeonclear",
++                     "dc_rez_state owner={} map={} instance={} outcome={} reason={} dead={} total={} "
++                     "engaged={} combat_flag={} blocked={} all_unsafe={} pending_ms={} budget_ms={} "
++                     "blocked_ms={} no_rezzer_ms={} quiet_ms={}",
++                     owner->GetGUID().GetCounter(), owner->GetMapId(), owner->GetInstanceId(),
++                     static_cast<uint32>(plan.verdict.outcome), static_cast<uint32>(plan.verdict.reason),
++                     deadCount, members.size(), partyEngaged, anySurvivorCombatFlagged, rezBlocked,
++                     allCorpsesUnsafe, elapsed(run.rezPendingSinceMs), in.timeoutMs,
++                     elapsed(run.rezBlockedSinceMs), elapsed(run.noRezzerSinceMs), elapsed(run.noRezzerQuietSinceMs));
++        }
++
+         // Advance the floor's clocks from the verdict we just got. They can only be
+         // stamped after the fact — whether a rezzer is left is precisely what the
+         // kernel decides — so both run a tick behind, which is immaterial against

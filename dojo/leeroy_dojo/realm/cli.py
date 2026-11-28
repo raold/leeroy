@@ -22,8 +22,9 @@ def add_parser(sub) -> None:
     cmds.add_parser("db-status", help="report whether the dojo MySQL instance runs and is the dojo's")
     cmds.add_parser("db-check", help="check the instance's identity, schema set and the restricted user's grants")
     raids = cmds.add_parser("raid-acceptance", help="run real raid mechanics in a dedicated stopped dojo realm")
-    raids.add_argument("--scenario", action="append", choices=("valithria", "twins", "poison", "lk-terenas", "lk-defile"),
+    raids.add_argument("--scenario", action="append", choices=("valithria", "twins", "poison", "lk-terenas", "lk-defile", "trigger-flame", "coldflame"),
                        help="repeat to select gates; defaults to Valithria, Twins and Living Poison")
+    cmds.add_parser("queue-acceptance", help="observe synthetic bots entering a real queue and rejecting protected contexts")
     offline = cmds.add_parser("offline-acceptance", help="prepare a synthetic guild and observe a real offline raid job")
     offline.add_argument("--target", required=True, choices=("toc-beasts", "toc-full", "ulduar-full", "ulduar-route", "toc-slime-pools", "toc-slime-pools-control",
         "ulduar-xt", "ulduar-restart", "ulduar-tank-restart", "ulduar-forced-tank-restart",
@@ -164,6 +165,11 @@ def run(args: argparse.Namespace) -> int:
             from .raids import SCENARIOS, run as run_raids
             report = run_raids(layout, scenarios=tuple(args.scenario) if args.scenario else SCENARIOS)
             print(f"Raid acceptance: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
+            return 0 if report["ok"] else 1
+        elif command == "queue-acceptance":
+            from .queue_guard import run as run_queue
+            report = run_queue(layout)
+            print(f"Queue acceptance: {'passed' if report['ok'] else 'NOT passed'} ({report['out']})")
             return 0 if report["ok"] else 1
         elif command == "offline-acceptance":
             from .offline import run as run_offline
