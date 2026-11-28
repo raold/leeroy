@@ -15,6 +15,8 @@
         "Logger.playerbots": {"value": "4,Console Playerbots", "why": "match production INFO logging during measurements; retain numeric encounter diagnostics without per-action DEBUG tracing"},
         "Appender.DungeonClear": {"value": "2,4,1,DungeonClear.log", "why": "register timestamped module milestones before core logging initializes"},
         "Logger.playerbots.dungeonclear": {"value": "4,DungeonClear", "why": "route the offline raid milestones to their timestamped file from startup"},
+        "Appender.WormRoute": {"value": "2,2,1,WormRoutes.log,w", "why": "retain numeric launched-spline and pool geometry for isolated worm-cure acceptance"},
+        "Logger.playerbots.toc_worm": {"value": "2,WormRoute", "why": "enable only the content-free worm route audit without broad playerbots debug logging"},
         "BindIP": {"value": "127.0.0.1", "why": "loopback only; the training realm takes no outside client"},
         "MapUpdate.Threads": {"value": "0", "why": "D11: map updates stay on the world thread for the first worker"},
         "Console.Enable": {"value": "0", "why": "a hidden process has no console; it is driven through RA on loopback"},

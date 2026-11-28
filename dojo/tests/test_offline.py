@@ -20,7 +20,7 @@ class OfflineMilestoneTest(unittest.TestCase):
             logs, out = root / "logs", root / "out"
             logs.mkdir()
             out.mkdir()
-            for name in ("Server.log", "DungeonClear.log", "Playerbots.log"):
+            for name in ("Server.log", "DungeonClear.log", "Playerbots.log", "WormRoutes.log"):
                 (logs / name).write_text("previous trial\n")
             self.assertEqual(retain_runtime_logs(SimpleNamespace(logs=logs), out, None), {})
             self.assertEqual(list(out.iterdir()), [])
@@ -40,6 +40,21 @@ class OfflineMilestoneTest(unittest.TestCase):
             self.assertEqual(retain_runtime_logs(SimpleNamespace(logs=logs), out, 1001), expected)
             self.assertEqual([p.name for p in out.iterdir()], ["Server.log"])
             self.assertEqual((out / "Server.log").read_bytes(), fresh.read_bytes())
+
+    def test_worm_route_evidence_is_retained_only_from_this_boot(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            logs, out = root / "logs", root / "out"
+            logs.mkdir()
+            out.mkdir()
+            trace = logs / "WormRoutes.log"
+            trace.write_bytes(b"worm_move guid=1 move=2 spline=3\n")
+            os.utime(trace, (1000, 1000))
+            self.assertEqual(retain_runtime_logs(SimpleNamespace(logs=logs), out, 1001), {})
+            os.utime(trace, (1002, 1002))
+            expected = {"WormRoutes.log": hashlib.sha256(trace.read_bytes()).hexdigest()}
+            self.assertEqual(retain_runtime_logs(SimpleNamespace(logs=logs), out, 1001), expected)
+            self.assertEqual((out / trace.name).read_bytes(), trace.read_bytes())
 
     def test_requires_target_encounter_in_owned_running_instance(self):
         obs = dict(token="abc", error="", samples=12, native={"stage": "running",

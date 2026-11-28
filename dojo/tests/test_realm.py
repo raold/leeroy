@@ -285,7 +285,8 @@ class LogProvisionTest(unittest.TestCase):
             rules_file.parent.mkdir(parents=True)
             rules_file.write_text(RULES.read_text(encoding="utf-8"), encoding="utf-8")
             rules = conf.load_rules(rules_file)["worldserver.conf"]
-            logging_keys = {"Appender.DungeonClear", "Logger.playerbots.dungeonclear"}
+            logging_keys = {"Appender.DungeonClear", "Logger.playerbots.dungeonclear",
+                            "Appender.WormRoute", "Logger.playerbots.toc_worm"}
             values = {**dict.fromkeys(rules.isolation, ""), **rules.ordinary,
                       **{k: v for k, v in rules.training.items() if k not in logging_keys}}
             original = "".join(f'{key} = "{value}"\n' for key, value in values.items())
@@ -302,11 +303,18 @@ class LogProvisionTest(unittest.TestCase):
                     actual = conf.parse(text)
                     self.assertEqual(actual["Appender.DungeonClear"], "2,4,1,DungeonClear.log")
                     self.assertEqual(actual["Logger.playerbots.dungeonclear"], "4,DungeonClear")
+                    self.assertEqual(actual["Appender.WormRoute"], "2,2,1,WormRoutes.log,w")
+                    self.assertEqual(actual["Logger.playerbots.toc_worm"], "2,WormRoute")
+                    self.assertEqual(actual["Logger.playerbots"], "4,Console Playerbots")
                     self.assertEqual(conf.check(rules, actual, conf.parse(original)), [])
                     for key in logging_keys:
                         self.assertEqual(text.count(key + " ="), 1)
                     bad = {**actual, "Appender.DungeonClear": "2,4,0,DungeonClear.log"}
                     self.assertTrue(conf.check(rules, bad, conf.parse(original)))
+                    for key, value in (("Logger.playerbots", "2,Console Playerbots"),
+                                       ("Logger.playerbots.toc_worm", "2,Console"),
+                                       ("Logger.unreviewed", "2,WormRoute")):
+                        self.assertTrue(conf.check(rules, {**actual, key: value}, conf.parse(original)))
                 dist.write_text("\n".join(line for line in original.splitlines()
                                           if not line.startswith("BindIP =")), encoding="utf-8")
                 with self.assertRaisesRegex(conf.ConfError, "BindIP"):
