@@ -211,8 +211,8 @@ def stall_cause(progress, members: int) -> str:
     """Why a run made no boss progress, from its last fresh heartbeat (a code, never text).
 
     dungeon-clear's state comes first: it drives the run. With it on, members out of the instance
-    come next, then a run that walked and fought without reaching a boss. An older worldserver sends
-    no state: unknown.
+    come next. An on-state heartbeat does not say whether a boss was pulled or why progress stopped;
+    report only the lack of progress. An older worldserver sends no state: unknown.
     """
     dc = progress.get("dc")
     if dc == "door":
@@ -225,7 +225,7 @@ def stall_cause(progress, members: int) -> str:
         return "dc_off"
     if progress["inside"] < members:
         return "members_out"
-    return "no_boss_reached" if dc == "on" else "unknown"
+    return "dc_no_progress" if dc == "on" else "unknown"
 
 
 class OfflineRaids:

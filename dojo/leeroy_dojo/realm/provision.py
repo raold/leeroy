@@ -118,11 +118,12 @@ def write_configs(layout: Layout, manifest: tuple[Path, str] | None = None, only
         dist_text = dist_path.read_text(encoding="utf-8")
         if name == "worldserver.conf":
             # Module loggers are valid core logging registrations, but do not
-            # appear in the core .dist. Add only these two reviewed slots;
+            # appear in the core .dist. Add only these reviewed slots;
             # conf.render still refuses every other missing override.
             present = conf.parse(dist_text)
-            for key in ("Appender.DungeonClear", "Logger.playerbots.dungeonclear"):
-                if key not in present:
+            for key in ("Appender.DungeonClear", "Logger.playerbots.dungeonclear",
+                        "Appender.WormRoute", "Logger.playerbots.toc_worm"):
+                if key not in present and key in file_rules.training:
                     dist_text = dist_text.rstrip() + f'\n{key} = ""\n'
         overrides = dict(file_rules.training)
         overrides.update(values[name])
