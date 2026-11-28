@@ -486,6 +486,36 @@ def test_failed_job_with_positive_ack_remains_unknown_and_conflicting_jobs_hold(
     assert store.holds()
 
 
+@pytest.mark.parametrize("guid", [91, 139, 165])
+@pytest.mark.parametrize("changed", [False, None, True])
+@pytest.mark.parametrize("job_first", [False, True])
+def test_bank_move_combat_refusal_requires_explicit_native_no_change_proof(store, guid, changed, job_first):
+    from leeroy_mind.protocol import PROTOCOL_VERSION, parse_event
+
+    p.register()
+    # The three retained November 27 moves. An older peer's identical failure
+    # has no proof; a failed move which may already have started must stay held.
+    dispatch(store, prepare(store, p.RealmMove("move", guid, "uc_bank")))
+    wire = dict(v=PROTOCOL_VERSION, type="realm_job", ts=0, id="move", kind="realm_move",
+                state="failed", reason="busy:combat", guid=guid, value=0)
+    if changed is not None:
+        wire["changed"] = changed
+    receipt = parse_event(json.dumps(wire))
+    handlers = [lambda: store.observe_ack(Ack(0, "move", True, ""), now=2),
+                lambda: store.observe_realm_job(receipt, now=3)]
+    if job_first:
+        handlers.reverse()
+    handlers[0]()
+    handlers[1]()
+    state, reason = ("completed", "step_refused") if changed is False else ("unknown", "job_failed")
+    record = store.get("move")
+    assert (record.state, record.result_ok, record.result_reason) == (state, False, reason)
+    assert sorted(g for hold in store.holds() for g in hold.guids) == ([] if changed is False else [guid])
+    store.recover(process_id="restarted", now=4)
+    assert store.get("move").state == state
+    assert sorted(g for hold in store.holds() for g in hold.guids) == ([] if changed is False else [guid])
+
+
 CAST = tuple(range(101, 207))
 
 
